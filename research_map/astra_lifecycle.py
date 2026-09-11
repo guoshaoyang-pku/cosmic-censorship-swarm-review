@@ -439,14 +439,20 @@ def findings_merge(m: dict, pub: dict, hashes: dict, soft: list, cov: dict,
                       "runtime/bin/classsep_regression.py"]},
         {"id": "CF-10", "severity": "info", "status": "verified",
          "finding": ("numerics_lock verified locked; N1 queued and numerics/spherical_solver absent; "
-                     "lock guard numerics/tests/selfgravity_lock_guard.py present. C8 is met by the "
-                     "rev3 protocol review (accept 4.5) and the N0 node verdict on disk is revise "
-                     "(reviews/N0-review-lead-audit.json, stop-rule items open), so N0 stays "
-                     "active/unverified and G-NUM stays pending."),
-         "action": "G-NUM withheld; lock unchanged; N1 work remains forbidden.",
+                     "lock guard numerics/tests/selfgravity_lock_guard.py present. C8: the rev3 "
+                     "protocol review accept 4.5 binds protocol 1e6cdf04d7a2 but two revise verdicts "
+                     "contest the evidence basis at the same hash; the basis has since been re-based, "
+                     "so astra-life05-gnum-protocol-adjudication must settle the operative verdict. "
+                     "The N0 node verdict on disk is still revise and N0 rev3 stop-rule evidence "
+                     "exists; G-NUM stays pending until an N0 accept at one hash."),
+         "action": ("G-NUM withheld; lock unchanged; N1 work remains forbidden. C4 registration "
+                    "repaired this pass (registry scan roots now cover numerics/, "
+                    "artifacts/numerics/ and evaluation_rubric.yaml)."),
          "evidence": ["numerics/tests/selfgravity_lock_guard.py",
+                      "numerics/CONVERGENCE_PROTOCOL.md#1e6cdf04d7a2",
                       "reviews/G-NUM-protocol-review.json",
-                      "reviews/N0-review-lead-audit.json"]},
+                      "numerics/results/flat_wave_convergence_rev3.json",
+                      "runtime/state/artifact_hashes.json"]},
         {"id": "CF-11", "severity": "info", "status": "recorded",
          "finding": (f"Lifecycle pass measured canonical hashes {h('F0')}/{h('F1')}/{h('F2a')}/"
                      f"{h('F2b')}/{h('L0')}/{h('L1')} and recorded them in the map; declared-vs-measured "
@@ -509,24 +515,29 @@ def findings_merge(m: dict, pub: dict, hashes: dict, soft: list, cov: dict,
                      f"L0 {len(acc('L0'))}; L1 spot checks at the measured hash: "
                      f"{len(l1_spotchecks(h('L1')))}; solver_absent={guard['solver_absent']}, "
                      f"guard_present={guard['guard_present']}"),
-         "action": ("All gates remain pending; numerics_lock remains locked. Reviewers must cite measured "
-                    "canonical hashes; superseded-hash verdicts are advisory only."),
+         "action": ("G-F0 passed at the measured hash on four distinct accepts; G-FORM/G-LIT/G-NUM/"
+                    "G-AUDIT remain pending. Reviewers must cite measured canonical hashes; "
+                    "superseded-hash verdicts are advisory only."),
          "evidence": ["research_map/research_map.json", "reviews/",
                       "runtime/state/artifact_hashes.json"]},
-        {"id": "CF-16", "severity": "minor", "status": "adjudicated-false-positive",
+        {"id": "CF-16", "severity": "minor", "status": "calibration-assigned",
          "finding": ("audit_evidence.py reports hard CLASSSEP failures on claims whose statements "
-                     "quote the merged-case probe labels 'TC-F0-N14 C0/C2 merge' and 'TC-F0-N15 "
-                     "WCC/SCC merge' (claims[36] first; claims[94,96,97,101,112,127,144] as of pass " 
-                     "04). The claims state those cases are merged-case probes that 'need no new "
-                     "class' and their class_ids are the frozen four: a metalinguistic mention, not "
-                     "a composite class assertion."),
-         "action": ("Adjudicated false positive; the raw hard-failure count stays visible in the "
-                    "checkpoint until the claim prose is rephrased by its author or the checker exempts "
-                    "quoted case labels (audit-lead calibration under astra-life01-a1-rebind). "
-                    "Controller does not edit another agent's claim text (CF-4 policy)."),
-         "evidence": ["research_map/class_separation.py:73-94",
-                      "artifacts/flash-02/open_case_disposition.json",
-                      "research_map/research_map.json claims[36]"]},
+                     "quote, negate, split or audit the merged-case token (claims[36,94,96,97,101,"
+                     "112,127,144,152,180,187,192] as of pass 05, 17 hits). The claims state those "
+                     "cases are merged-case probes that 'need no new class' and their class_ids are "
+                     "the frozen four: a metalinguistic mention, not a composite class assertion. "
+                     "Traffic ABOUT the finding reproduces the token, so per-author rewording is an "
+                     "unbounded loop."),
+         "action": ("Adjudicated false positive pattern; the raw hard-failure count stays visible in "
+                    "the checkpoint until the detector is calibrated or the claim prose is retired. "
+                    "astra-life05-classsep-calibration (audit lead) must deliver a measured TP/FP/FN "
+                    "census and an adopt/reject decision for the staged candidate detector "
+                    "(proposed/class_separation.py e2d24b927ee8) plus a claims-retirement policy; "
+                    "the controller does not edit another agent's claim text (CF-4 policy)."),
+         "evidence": ["research_map/class_separation.py",
+                      "artifacts/worker-085/candidate_diff/report.json",
+                      "artifacts/formulation/proposals/classsep_prose_precision_patch.md",
+                      "runtime/state/controller_verification/astra-lifecycle-05-decisions.json"]},
         {"id": "CF-17", "severity": "major", "status": "adjudicated",
          "finding": ("F0 publication adjudication (REC-3). Assignment astra-life02-publish-f0 required "
                      "byte-identical publication of research_map/formulation_taxonomy.yaml and "
@@ -566,24 +577,108 @@ def findings_merge(m: dict, pub: dict, hashes: dict, soft: list, cov: dict,
                       "comms/outbox/astra-lead-audit.jsonl",
                       "reviews/G-NUM-protocol-review.json",
                       "research_map/research_map.json"]},
-        {"id": "CF-19", "severity": "major", "status": "directive-issued",
+        {"id": "CF-19", "severity": "major", "status": "resolved-by-reconciliation",
          "finding": ("Freeze breach on L0: ledger/theorems.jsonl was rewritten at 2026-09-12T00:35:19 "
                      f"(measured {h('L0')}) after the literature lead's L4 lifecycle closed with an "
                      "exit hash of 3e3d35531421 and after FROZEN-equivalent review dispatch. No "
-                     "artifact event in the accepted stream announces the new bytes (worker-073 "
-                     "observed the move mid-task and failed closed against the archived rev-3 copy). "
-                     "This is the same moving-target defect as audit-blocker-final-01, on a canonical "
-                     "path owned by one agent."),
-         "action": ("No controller edit to another agent's artifact. astra-life04-l0-freeze-reconcile "
-                    "issued to the literature lead: reconcile the live bytes against the rev-3 archive "
-                    "(content preservation + claim-lowering diff), emit the artifact event with a "
-                    "wall-clock stamp, and hold; the two-reviewer verdict round binds the reconciled "
-                    "hash only. IF the write is not the owner's, it must be reverted/published from "
-                    "the archive and reported as an authority violation."),
-         "evidence": ["ledger/theorems.jsonl",
-                      "artifacts/literature/archive/theorems.rev3-handpatch-20260912T003026.jsonl",
-                      "artifacts/worker-073/l0_hf14_postrepair/report.json",
+                     "artifact event in the accepted stream announced the new bytes at the time "
+                     "(worker-073 observed the move mid-task and failed closed against the archived "
+                     "rev-3 copy). Pass-05 measurement: the live bytes are now announced by the owner "
+                     "as rev3 FINAL (build product regenerated from the repaired sources), so the "
+                     "breach is reconciled at this hash."),
+         "action": ("REC-13 (astra-lifecycle-05): CF-19/REC-10 closed by the owner's announced "
+                    "source-of-truth rebuild at " + h('L0') + " with a per-file content-preservation "
+                    "record; the earlier 3e3d3553 pin and all ce42d205 verdicts are void. Two blind "
+                    "accepts at the announced hash are required before G-LIT is proposable "
+                    "(astra-life05-verify-l0-final). Any further ledger write re-opens the finding."),
+         "evidence": ["ledger/theorems.jsonl#" + h('L0'),
+                      "artifacts/literature/tools/build_literature.py",
+                      "artifacts/literature/reviews/rev3-axis-split.json",
                       "research_map/research_map.json#controller_gate_audit"]},
+        {"id": "CF-20", "severity": "major", "status": "repair-assigned",
+         "finding": ("Evidence-binding chain is stale at the frozen formulation bytes: "
+                     "schemas/taxonomy_cases.jsonl has 36/36 rows still bound to the superseded "
+                     "taxonomy hash 66bf917bd368 while its meta points at rev5, and all three rev12 "
+                     "schemas declare consistency_evidence_sha256 675a99d0 while the live "
+                     "artifacts/formulation/evidence/taxonomy_consistency.json is 9e335e9ba1bf. "
+                     "The schemas' own binding rule forbids a gate verdict until the evidence is "
+                     "refreshed, so a rev12 accept would not be reproducible gate evidence."),
+         "action": ("astra-life05-evidence-binding-repair (formulation lead, bounded to four items, "
+                    "no class-semantics change, F0 canonical untouchable) must publish rev13 + "
+                    "FROZEN rev29 and emit artifact events; astra-life05-verify-gform-r3 then binds "
+                    "fresh verdicts at the rev29 pins. The rev12 pins of astra-life04-verify-gform-r2 "
+                    "are void on repair."),
+         "evidence": ["schemas/taxonomy_cases.jsonl",
+                      "artifacts/formulation/evidence/taxonomy_consistency.json",
+                      "reviews/closefind-verify-094.json",
+                      "artifacts/worker-095/f2b_rev12_binding_integrity/verdict.json"]},
+        {"id": "CF-21", "severity": "minor", "status": "recorded-open",
+         "finding": ("AF-WCC-SCALAR-SPH axes.genericity_kind is 'unresolved' / "
+                     "genericity_value_status 'unresolved_pending_L1' while its rev5 conclusion "
+                     "explicitly quantifies over 'a comeager set G of data'. Four reviewers split: "
+                     "three non-blocking (worker-025, worker-038, deepseek-flash-19 soft), one major "
+                     "(worker-094 F-094C-1: 'the exact-genericity record cannot be both'). No "
+                     "declared checker compares the field, so the suites pass either way."),
+         "action": ("G-F0 passed on the content criteria with this finding recorded, NOT discharged. "
+                    "The conclusion text is authoritative for the class predicate; the axis token is "
+                    "stale metadata. F0 canonical bytes 0abb9ed8a961 are frozen by REC-11: any write "
+                    "voids the gate and requires fresh accepts. If a future revision repairs the "
+                    "axis, it must re-run the F0 review round."),
+         "evidence": ["research_map/formulation_taxonomy.yaml#0abb9ed8a961:393,414",
+                      "reviews/F0-conformance-038-rev28.json",
+                      "reviews/closefind-verify-094.json",
+                      "runtime/state/controller_verification/astra-lifecycle-05-decisions.json"]},
+        {"id": "CF-22", "severity": "minor", "status": "repaired",
+         "finding": ("Worker task-status leaked onto node status: worker-081's withdrawal of task "
+                     "W081-N0-FDT-02 (status=rejected, last_status 00:42:19) set numerics node N0 to "
+                     "rejected, even though the worker's own summary says the task was re-scoped and "
+                     "the N0 stop-rule deliverable exists. Worker events describe tasks; node status "
+                     "is a controller/lead field."),
+         "action": ("Controller repair (idempotent, in astra_lifecycle.controller_repairs): N0 "
+                    "restored to active; the repair is recorded in map.controller_repairs. Leads "
+                    "must not let a worker status event stand as a node verdict; only controller/"
+                    "lead status events move node state."),
+         "evidence": ["comms/outbox/worker-081.jsonl",
+                      "numerics/results/flat_wave_convergence_rev3.json",
+                      "research_map/research_map.json#controller_repairs"]},
+        {"id": "CF-23", "severity": "minor", "status": "assigned",
+         "finding": ("A0 detector scope defect (literature lead, 00:44): the HF-14/HF-03 detectors "
+                     "report corpus-level hits on archive/, incoming/ and worker snapshot paths that "
+                     "are historical records, not live artifacts (8 files after the rev-3 repair). "
+                     "A measurement ambiguity in A0, not a ledger defect."),
+         "action": ("astra-life05-a0-detector-scope (audit lead) must scope the detectors to "
+                    "canonical artifacts + live build inputs or define an explicit historical-marker "
+                    "exclusion, with a measured before/after list at pinned hashes; archives are not "
+                    "patched."),
+         "evidence": ["artifacts/audit/reports/audit-20260912T003820.json",
+                      "evaluation_rubric.yaml:244-252",
+                      "comms/outbox/astra-lead-literature.jsonl"]},
+        {"id": "CF-24", "severity": "info", "status": "recorded",
+         "finding": ("G-F0 is the first gate to pass: declared F0 taxonomy 0abb9ed8a961 rev5 with "
+                     "companion supplement d7419b4e8963 under FROZEN rev28 2f358f6722d9, four "
+                     "distinct independent accepts at the measured hash, 6/6 disjointness pairs. "
+                     "F0 promoted to done/passed by controller repair with PROTOCOL-rule-2 evidence. "
+                     "No numerics consequence: G-NUM additionally requires G-FORM + G-AUDIT, which "
+                     "remain pending; the lock is untouched."),
+         "action": ("F0 canonical bytes are frozen; any write voids G-F0. G-FORM awaits the "
+                    "evidence-binding repair and rev29 re-review; L0 awaits two accepts; N0 awaits "
+                    "the protocol adjudication and node verdict; A0/A1 await calibration and "
+                    "coverage."),
+         "evidence": ["research_map/research_map.json#gates.G-F0",
+                      "reviews/F0-review-025.json", "reviews/F0-conformance-038-rev28.json",
+                      "runtime/state/controller_verification/astra-lifecycle-05-decisions.json"]},
+        {"id": "CF-25", "severity": "minor", "status": "repaired",
+         "finding": ("Done-node status volatility: the 15-minute auto-cycle "
+                     "(research_map/run_cycle.py, which applies traffic between controller passes) "
+                     "applied a worker status event on F0 at 00:50:08 that reverted the controller's "
+                     "F0 done/passed promotion (applied 00:49:19) back to active. Worker status "
+                     "events describe their task, not node state."),
+         "action": ("Tool repair landed: apply_events.py ignores non-authority status events on a "
+                    "done node (recorded in status_events_ignored), and "
+                    "astra_lifecycle.controller_repairs re-asserts the F0 promotion every pass. No "
+                    "artifact, hash or gate verdict changed."),
+         "evidence": ["research_map/apply_events.py", "research_map/run_cycle.py",
+                      "research_map/research_map.json#controller_repairs"]},
     ]
     for f in want:
         old = by_id.get(f["id"], {})
@@ -593,6 +688,119 @@ def findings_merge(m: dict, pub: dict, hashes: dict, soft: list, cov: dict,
         if f["id"] not in order:
             order.append(f["id"])
     return [by_id[i] for i in order if i in by_id]
+
+
+AUTHORITY_ACTORS = {"astra", "lead-formulation", "lead-literature", "lead-numerics", "lead-audit",
+                    "astra-lead-formulation", "astra-lead-literature", "astra-lead-numerics",
+                    "astra-lead-audit"}
+
+
+def controller_repairs(m: dict, hashes: dict, cov: dict, guard: dict) -> list:
+    """Bounded, idempotent controller repairs, one record per (kind, target).
+
+    Pass-05 scope: (1) promote F0 to done/passed once G-F0 has passed and the measured
+    canonical hash carries >=2 distinct accepts (PROTOCOL rule 2); (2) restore a node
+    status that a worker task-status leaked onto a node; (3) refresh the stale
+    numerics/gates.py evidence pin on G-NUM; (4) record the audit_evidence.py registry
+    scan-root repair. It never edits another agent's artifact or claim text.
+    """
+    reps = m.setdefault("controller_repairs", [])
+    ts = now()
+    added = []
+
+    def rec(kind, target, detail, evidence):
+        if any(r.get("kind") == kind and r.get("target") == target for r in reps):
+            return
+        entry = {"at": ts, "by": "astra", "kind": kind, "target": target,
+                 "detail": detail, "evidence": evidence}
+        reps.append(entry)
+        added.append(entry)
+
+    nodes = {n["id"]: n for g in m.get("groups", []) for n in g.get("nodes", [])}
+    gates = {g["gate_id"]: g for g in m.get("gates", [])}
+
+    # 1. F0 promotion: gate pass + >=2 distinct accepts at the measured canonical hash.
+    # Enforced every pass (not only on first record): worker status events used to revert
+    # a done node between controller passes (CF-25), so the promoted state is re-asserted.
+    f0 = nodes.get("F0")
+    f0h = hashes.get("F0", {}).get("sha256")
+    accs = cov.get("F0", {}).get("distinct_accept_reviewers", [])
+    if f0 and gates.get("G-F0", {}).get("verdict") == "pass" and f0h and len(accs) >= 2:
+        f0["status"] = "done"
+        f0["validation_status"] = "passed"
+        f0["artifact_sha256"] = f0h
+        f0["artifact_exists"] = True
+        refs = list(f0.get("evidence_refs") or [])
+        for r in ("reviews/F0-review-025.json", "reviews/F0-conformance-038-rev28.json",
+                  "reviews/F0-review-18.json", "reviews/F0-review-19.json",
+                  "artifacts/formulation/FROZEN.json",
+                  "runtime/state/controller_verification/astra-lifecycle-05-decisions.json"):
+            if r not in refs:
+                refs.append(r)
+        f0["evidence_refs"] = refs
+        rec("node_promotion", "F0",
+            ("G-F0 passed at " + f0h[:12] + " with " + str(len(accs)) + " distinct accepts ("
+             + ", ".join(accs) + "); node promoted on artifact + review evidence (PROTOCOL rule 2). "
+             "Any write to the canonical taxonomy voids the verdict and needs fresh accepts."),
+            ["research_map/formulation_taxonomy.yaml#" + f0h[:12],
+             "research_map/research_map.json#gates.G-F0"])
+
+    # 2. Restore a node status that a worker task-status event leaked onto the node.
+    for nid in ("N0",):
+        n = nodes.get(nid)
+        if not n:
+            continue
+        last_by = str((n.get("last_status") or {}).get("by", ""))
+        if n.get("status") == "rejected" and last_by not in AUTHORITY_ACTORS:
+            n["status"] = "active"
+            rec("node_status_restore", nid,
+                ("worker event by " + last_by + " set node status=rejected for a withdrawn TASK; "
+                 "restored to active. The node is not rejected: lock-compatible flat-space work "
+                 "continues and the stop-rule deliverable numerics/results/"
+                 "flat_wave_convergence_rev3.json is on disk."),
+                ["comms/outbox/" + last_by + ".jsonl",
+                 "research_map/research_map.json#numerics_lock"])
+
+    # 3. Re-pin the stale numerics/gates.py evidence ref on G-NUM.
+    gnum = gates.get("G-NUM")
+    gpath = ROOT / "numerics" / "gates.py"
+    if gnum and gpath.is_file():
+        new_ref = "numerics/gates.py#" + sha256(gpath)[:12]
+        stale = {"numerics/gates.py#907a88b141bf4394"}
+        refs = gnum.get("evidence_refs", [])
+        if any(r in stale for r in refs):
+            gnum["evidence_refs"] = sorted({r for r in refs if r not in stale} | {new_ref})
+            rec("map_pin_refresh", "G-NUM",
+                ("replaced the stale evidence ref numerics/gates.py#907a88b141bf4394 with "
+                 + new_ref + " (lead-numerics 00:37 blocker: the guard was fixed to bind target_id "
+                 "G-NUM-protocol; the old ref is historical)."),
+                [new_ref, "comms/outbox/astra-lead-numerics.jsonl"])
+
+    # 4. Tool repair record: registry scan roots (C4).
+    rec("tool_repair", "research_map/audit_evidence.py",
+        ("registry scan roots extended to numerics/, artifacts/numerics/ and the repo-root "
+         "evaluation_rubric.yaml; __pycache__/.pyc excluded. Closes the C4 registration gap: "
+         "protocol 1e6cdf04d7a2, artifacts/numerics/n0/* and the N0 rev3 stop-rule deliverable "
+         "are registered for PROTOCOL rule 2."),
+        ["runtime/state/artifact_hashes.json",
+         "artifacts/worker-14/registration_audit/registration_coverage.json"])
+
+    # 5. Tool repair record: validator base path (latent done-node check bug).
+    rec("tool_repair", "research_map/validate_map.py",
+        ("validate_map() default base corrected from this module's directory to the repo root, so "
+         "declared repo-root-relative artifact paths resolve. The bug was latent until the first "
+         "done-with-artifact node (F0) and produced a false 'declared artifact missing on disk'."),
+        ["research_map/validate_map.py:16-22", "research_map/formulation_taxonomy.yaml"])
+
+    # 6. Tool repair record: done-node status protection (CF-25).
+    rec("tool_repair", "research_map/apply_events.py",
+        ("a node already done (promoted on artifact + review evidence) is no longer demoted by a "
+         "non-authority status event; the event is recorded in status_events_ignored. The "
+         "15-minute auto-cycle (run_cycle.py) applies traffic between controller passes and "
+         "silently reverted the F0 promotion at 00:50:08, one minute after it was applied."),
+        ["research_map/apply_events.py", "research_map/run_cycle.py",
+         "research_map/research_map.json#controller_repairs"])
+    return added
 
 
 def main(label: str) -> dict:
@@ -614,6 +822,7 @@ def main(label: str) -> dict:
             m["publication_status"] = pub
             m["controller_gate_audit"] = gate_audit(m, hashes, pub, soft, cov, clock, guard)
             m["controller_findings"] = findings_merge(m, pub, hashes, soft, cov, clock, guard)
+            m["controller_repairs_log"] = controller_repairs(m, hashes, cov, guard)
             m["legacy_artifacts"] = [{
                 "path": "schemas/af_scc_regularities.yaml",
                 "sha256": digest("schemas/af_scc_regularities.yaml")["sha256"],

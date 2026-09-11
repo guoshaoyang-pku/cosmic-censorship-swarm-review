@@ -164,13 +164,27 @@ def audit(map_path: Path) -> dict:
     # registry: hash every artifact in the key deliverable directories (measured, not claimed).
     # runtime/state/controller_verification is included so controller-generated evidence (e.g.
     # the N0 replication run 6542db93eebc) is registered for PROTOCOL rule 2 (numerics C4).
+    # pass-05 repair (worker-14 registration_coverage blocker + lead-numerics C4 blocker): the
+    # scan roots now cover all of numerics/ (protocol, results, top-level docs and tools),
+    # artifacts/numerics/ and the repo-root evaluation_rubric.yaml, so the C8 protocol accept
+    # (1e6cdf04d7a2), the N0 stop-rule evidence (numerics/results/*) and the A0 rubric are
+    # registered. __pycache__/.pyc are build debris, never evidence.
     registry = {}
-    for d in ("schemas", "ledger", "numerics/tests", "numerics/protocol", "reviews", "evaluation",
-              "runtime/state/controller_verification"):
+
+    def _register(f: Path) -> None:
+        registry[str(f.relative_to(ROOT))] = {"sha256": sha256(f), "bytes": f.stat().st_size}
+
+    for d in ("schemas", "ledger", "numerics", "reviews", "evaluation",
+              "artifacts/numerics", "runtime/state/controller_verification"):
         dp = ROOT / d
         if dp.is_dir():
-            for f in sorted(x for x in dp.rglob("*") if x.is_file() and not x.name.startswith("._")):
-                registry[str(f.relative_to(ROOT))] = {"sha256": sha256(f), "bytes": f.stat().st_size}
+            for f in sorted(x for x in dp.rglob("*")
+                            if x.is_file() and not x.name.startswith("._")
+                            and "__pycache__" not in x.parts and x.suffix != ".pyc"):
+                _register(f)
+    rubric = ROOT / "evaluation_rubric.yaml"
+    if rubric.is_file():
+        _register(rubric)
 
     return {"hard": hard, "soft": soft, "hashes": hashes, "registry": registry,
             "checked_at": datetime.now(CST).isoformat(timespec="seconds")}

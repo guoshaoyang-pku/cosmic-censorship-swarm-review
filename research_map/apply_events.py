@@ -252,7 +252,17 @@ def apply_one(m, ev, idx, applied):
                     {"at": ev.get("created_at"), "by": actor, "summary": ev.get("summary"),
                      "evidence_refs": ev.get("evidence_refs", [])})
                 st = "active" if n.get("status") not in {"blocked", "killed"} else n.get("status")
-            n["status"] = st
+            # pass-05 controller repair (CF-25): a node promoted to done on artifact + review
+            # evidence is not demoted by a later worker status event. The 15-minute auto-cycle
+            # applies traffic between controller passes, so without this guard any worker
+            # "status=active" on a done node silently reverted the promotion.
+            if n.get("status") == "done" and actor not in AUTHORITY:
+                n.setdefault("status_events_ignored", []).append(
+                    {"at": ev.get("created_at"), "by": actor, "rejected_status": st,
+                     "reason": "node is done (promoted with artifact + review evidence); worker "
+                               "status events cannot demote it"})
+            else:
+                n["status"] = st
             n["hours"] = max(n.get("hours", 0), float(ev.get("hours", 0) or 0))
             for k in ("eta_days",):
                 if ev.get(k) is not None:

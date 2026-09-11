@@ -9,7 +9,17 @@ TAXONOMY = ROOT / "formulation_taxonomy.yaml"
 
 def load(path): return json.loads(Path(path).read_text())
 
-def validate_map(m):
+def _real_entries(p):
+    return [c for c in p.iterdir() if c.name != ".DS_Store" and not c.name.startswith("._")]
+
+
+def validate_map(m, base=None):
+    # integrated from worker-19's proposed patch (artifacts/audit/flash19_validate_map_gate.patch)
+    # pass-05 controller repair: declared artifact paths are repo-root-relative (e.g.
+    # research_map/formulation_taxonomy.yaml), so the default base must be the repo root,
+    # not this module's directory. The previous default made every done node with a
+    # declared artifact look missing on disk (latent until the first gate pass).
+    base = Path(base) if base else ROOT.parent
     errors=[]; groups={g["id"]:g for g in m.get("groups",[])}; nodes={}
     for g in groups.values():
         for n in g.get("nodes",[]):
@@ -24,6 +34,16 @@ def validate_map(m):
             errors.append(f"{gid}: done node has no artifact")
         if n.get("status") == "done" and not n.get("validation_status", n.get("validated", False)):
             errors.append(f"{gid}: done node lacks validation_status/validated=true")
+        if n.get("status") == "done":
+            art = n.get("artifact")
+            if art:
+                p = base / art
+                if not p.exists():
+                    errors.append(f"{gid}: declared artifact missing on disk: {art}")
+                elif p.is_dir() and not _real_entries(p):
+                    errors.append(f"{gid}: declared artifact directory is empty: {art}")
+            if not n.get("evidence_refs"):
+                errors.append(f"{gid}: done node has no evidence_refs")
     for e in m.get("cross_group_edges",[]):
         if e.get("from") not in nodes or e.get("to") not in nodes: errors.append(f"unknown cross edge {e}")
         else: edges.append((e["from"],e["to"]))
