@@ -6,14 +6,15 @@
   `comms/PROTOCOL.md`. Pull accepted traffic: `python3 research_map/comms.py ingest`. Report with
   `status` / `claim` / `artifact` / `blocker` / `direction_update` / `resource_request` events in
   `comms/outbox/<agent>.jsonl`.
-- **Sole global state** is `research_map/research_map.json` (map sha at pass end `c0d7977a8359`;
+- **Sole global state** is `research_map/research_map.json` (map sha at pass end `50ca14345ed8`;
   re-measure before citing). It carries `gates`, `numerics_lock`, `assignments`, `claims`,
   `reviews`, `publication_status`, `controller_gate_audit`, `controller_findings`, and per-node
   `artifact_sha256_measured` + `declared_hash_matches_measured`.
 - **All five gates are `pending` with hash-bound reasons** in `controller_gate_audit`. Latest
-  lifecycle report: `runtime/state/controller_verification/lifecycle_20260912-000901.json`
+  lifecycle report: `runtime/state/controller_verification/lifecycle_20260912-000929.json`
   (validator VALID, 0 hard audit failures, 8 soft: 4 class-separation annotation flags + 4
-  canonical/authoring divergences).
+  canonical/authoring divergences). Outbox traffic newer than 00:09:29 (flash-13/14/19, workers)
+  is un-ingested; the next `run_cycle.py`/lifecycle pass must apply it.
 - **Canonical-path policy (controller decision, 2026-09-12):** the canonical path is authoritative
   (`schemas/*.yaml`, `research_map/formulation_taxonomy.yaml`); `artifacts/formulation/**` is the
   authoring tree and must be published byte-identically before review verdicts bind.
