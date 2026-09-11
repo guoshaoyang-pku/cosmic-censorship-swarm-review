@@ -1,5 +1,42 @@
 # Astra controller handoff
 
+## LIVE CONTROLLER STATE — read this before doing anything (2026-09-12T00:10+08:00, pass astra-lifecycle-01b)
+
+- **Your assignment is in `comms/inbox/<your-agent-id>.jsonl`.** Read it first. Message schema:
+  `comms/PROTOCOL.md`. Pull accepted traffic: `python3 research_map/comms.py ingest`. Report with
+  `status` / `claim` / `artifact` / `blocker` / `direction_update` / `resource_request` events in
+  `comms/outbox/<agent>.jsonl`.
+- **Sole global state** is `research_map/research_map.json` (map sha at pass end `c0d7977a8359`;
+  re-measure before citing). It carries `gates`, `numerics_lock`, `assignments`, `claims`,
+  `reviews`, `publication_status`, `controller_gate_audit`, `controller_findings`, and per-node
+  `artifact_sha256_measured` + `declared_hash_matches_measured`.
+- **All five gates are `pending` with hash-bound reasons** in `controller_gate_audit`. Latest
+  lifecycle report: `runtime/state/controller_verification/lifecycle_20260912-000901.json`
+  (validator VALID, 0 hard audit failures, 8 soft: 4 class-separation annotation flags + 4
+  canonical/authoring divergences).
+- **Canonical-path policy (controller decision, 2026-09-12):** the canonical path is authoritative
+  (`schemas/*.yaml`, `research_map/formulation_taxonomy.yaml`); `artifacts/formulation/**` is the
+  authoring tree and must be published byte-identically before review verdicts bind.
+  FORM-MAP-PATCH-002 is superseded — do not repoint the map at the authoring tree.
+  `schemas/af_scc_regularities.yaml` is a non-class aggregator (recorded under `legacy_artifacts`);
+  F2 was split into F2a (`AF-SCC-C2-VAC-GEN`) and F2b (`AF-SCC-C0-VAC-GEN`).
+- **Open assignments issued 00:09, deadline 01:30:** `astra-life01-publish-frozen`
+  (lead-formulation), `astra-life01-a1-rebind` (lead-audit), `astra-life01-l0-revise`
+  (lead-literature), `astra-life01-n0-proposal` (lead-numerics). Each has an acceptance test,
+  falsifier, and stop rule in `map.assignments`; a message is not a result until the artifact
+  hash is recorded.
+- **`numerics_lock` remains LOCKED:** N1 queued, `numerics/spherical_solver` absent, lock guard
+  `numerics/tests/selfgravity_lock_guard.py` present. N0 is `active/unverified`; the replication
+  verdict on disk is PROVISIONAL. Only G-FORM + G-AUDIT pass *plus* a measured and independently
+  replicated N0 order releases N1 — a proposal alone does not.
+- **Authority:** worker events cannot set `status=done`, `validation_status=passed`, or a gate
+  verdict. Only the controller and group leads can move those, with artifact + review evidence.
+- **Checkpoints:** `runtime/state/current_checkpoint.json` and `checkpoint_log.jsonl`;
+  `runtime/state/artifact_hashes.json` holds measured hashes. Fluent text is never promoted.
+- Controller tools for the next pass: `python3 research_map/astra_lifecycle.py --label <label>`
+  (locked ingest → apply → repair → audit → checkpoint) and
+  `python3 research_map/astra_lifecycle_events.py` (idempotent gate/assignment events).
+
 ## Mission
 
 Own the cosmic-censorship research map and improve epistemic quality before increasing parallelism. The map is the shared state for Human PI, Astra, group leads, and execution agents. Do not claim a theorem, counterexample, or numerical result from fluent text alone.
