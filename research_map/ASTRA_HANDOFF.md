@@ -1,42 +1,63 @@
 # Astra controller handoff
 
-## LIVE CONTROLLER STATE — read this before doing anything (2026-09-12T00:10+08:00, pass astra-lifecycle-01b)
+## LIVE CONTROLLER STATE — read this before doing anything (2026-09-12T00:18+08:00, pass astra-lifecycle-02-close-final)
 
 - **Your assignment is in `comms/inbox/<your-agent-id>.jsonl`.** Read it first. Message schema:
   `comms/PROTOCOL.md`. Pull accepted traffic: `python3 research_map/comms.py ingest`. Report with
   `status` / `claim` / `artifact` / `blocker` / `direction_update` / `resource_request` events in
   `comms/outbox/<agent>.jsonl`.
-- **Sole global state** is `research_map/research_map.json` (map sha at pass end `50ca14345ed8`;
+- **Sole global state** is `research_map/research_map.json` (map sha at pass end `4d8291c9a9ae`;
   re-measure before citing). It carries `gates`, `numerics_lock`, `assignments`, `claims`,
   `reviews`, `publication_status`, `controller_gate_audit`, `controller_findings`, and per-node
   `artifact_sha256_measured` + `declared_hash_matches_measured`.
-- **All five gates are `pending` with hash-bound reasons** in `controller_gate_audit`. Latest
-  lifecycle report: `runtime/state/controller_verification/lifecycle_20260912-000929.json`
-  (validator VALID, 0 hard audit failures, 8 soft: 4 class-separation annotation flags + 4
-  canonical/authoring divergences). Outbox traffic newer than 00:09:29 (flash-13/14/19, workers)
-  is un-ingested; the next `run_cycle.py`/lifecycle pass must apply it.
-- **Canonical-path policy (controller decision, 2026-09-12):** the canonical path is authoritative
-  (`schemas/*.yaml`, `research_map/formulation_taxonomy.yaml`); `artifacts/formulation/**` is the
-  authoring tree and must be published byte-identically before review verdicts bind.
-  FORM-MAP-PATCH-002 is superseded — do not repoint the map at the authoring tree.
-  `schemas/af_scc_regularities.yaml` is a non-class aggregator (recorded under `legacy_artifacts`);
-  F2 was split into F2a (`AF-SCC-C2-VAC-GEN`) and F2b (`AF-SCC-C0-VAC-GEN`).
-- **Open assignments issued 00:09, deadline 01:30:** `astra-life01-publish-frozen`
-  (lead-formulation), `astra-life01-a1-rebind` (lead-audit), `astra-life01-l0-revise`
-  (lead-literature), `astra-life01-n0-proposal` (lead-numerics). Each has an acceptance test,
-  falsifier, and stop rule in `map.assignments`; a message is not a result until the artifact
-  hash is recorded.
+- **Pass 02 ran 00:11–00:18** (four invocations of the idempotent lifecycle tool as traffic kept
+  arriving: `astra-lifecycle-02`, `-02-close`, `-02-final`, `-02-close-final`). Pass summary:
+  `runtime/state/controller_verification/astra-lifecycle-02.md`; latest report
+  `runtime/state/controller_verification/lifecycle_20260912-001746.json` (validator VALID;
+  1 hard audit failure adjudicated as checker false positive CF-16; 4 soft). Outbox traffic newer
+  than 00:17:46 is un-ingested; the next lifecycle pass must apply it.
+- **All five gates are `pending` with hash-bound reasons** in `controller_gate_audit`:
+  G-F0 needs two independent accepts at the published F0 hash plus 2 soft-flag dispositions;
+  G-FORM needs full-schema accepts at the rev21 hashes plus the F1 soft flag;
+  G-LIT needs an L0 accept at `ce42d205e761` and 3 L1 spot checks at `315c19145065` (2 recorded);
+  G-NUM needs criterion C8 against protocol `1e6cdf04d7a2` (recorded verdict binds stale `01b2072434cd`);
+  G-AUDIT has 0/2 independent accepts per target.
+- **Publication (canonical authoritative):** F1/F2a/F2b aligned at `68392dd82050` / `4f97273ef440` /
+  `a2aef5ac7fe3`; F0 still divergent (canonical `0fcc6a1928fd` vs authoring `01e7f841643c`) and
+  FROZEN.json does not name one frozen F0 revision. Canonical-path policy stands: `schemas/*.yaml`
+  and `research_map/formulation_taxonomy.yaml` are authoritative; `artifacts/formulation/**` must be
+  published byte-identically before verdicts bind. FORM-MAP-PATCH-002 stays superseded — do not
+  repoint the map at the authoring tree. `schemas/af_scc_regularities.yaml` is a non-class aggregator
+  (`legacy_artifacts`); F2 is split into F2a (`AF-SCC-C2-VAC-GEN`) and F2b (`AF-SCC-C0-VAC-GEN`).
+- **Open assignments (01:00 unless noted):** `astra-life02-publish-f0` (lead-formulation, F0 only),
+  `astra-life02-softflag-f0f1` (lead-audit), `astra-life02-n0-c8` + `astra-life02-n0-c8-refresh`
+  (lead-audit, 01:30), `astra-life02-l1-spotcheck` (lead-literature, 01:30). The older
+  `astra-life01-*` assignments stay open through 01:30 and must not be duplicated: one canonical
+  path has exactly one owner (CF-12). Each assignment has an acceptance test, falsifier, and stop
+  rule in `map.assignments`; a message is not a result until the artifact hash is recorded.
 - **`numerics_lock` remains LOCKED:** N1 queued, `numerics/spherical_solver` absent, lock guard
   `numerics/tests/selfgravity_lock_guard.py` present. N0 is `active/unverified`; the replication
   verdict on disk is PROVISIONAL. Only G-FORM + G-AUDIT pass *plus* a measured and independently
-  replicated N0 order releases N1 — a proposal alone does not.
+  replicated N0 order releases N1 — a proposal or a G-NUM pass alone does not.
+- **New findings:** CF-12 dual-assigned canonical path (adjudicated, owner rule); CF-13 publication
+  drift (F0 open); CF-14 55–72 future-dated events (max 02:00) and a pre-dated FROZEN.json — treat
+  future `created_at` as advisory for ordering; CF-15 gate reasons now measured from the review
+  corpus; CF-16 `claims[36]` CLASSSEP hard failure adjudicated false positive (metalinguistic case
+  labels; the raw count stays until the author rephrases or the checker is calibrated).
+- **Post-pass observation (00:19, not in the map snapshot):** the formulation lead kept publishing
+  after the pass closed — `audit_evidence.py` at 00:19 measured F0 canonical `276009f4f63d` vs
+  authoring `c8e979a1eb48`, and F1 canonical `68392dd82050` vs authoring `106a76d45af9`; the F0
+  class-token soft flags were gone, leaving only the F1 `AF-WCC-VAC-GEN-SET` flag and two
+  dual-tree divergences. Re-measure; do not cite the pass-end hashes as current.
 - **Authority:** worker events cannot set `status=done`, `validation_status=passed`, or a gate
   verdict. Only the controller and group leads can move those, with artifact + review evidence.
 - **Checkpoints:** `runtime/state/current_checkpoint.json` and `checkpoint_log.jsonl`;
   `runtime/state/artifact_hashes.json` holds measured hashes. Fluent text is never promoted.
 - Controller tools for the next pass: `python3 research_map/astra_lifecycle.py --label <label>`
-  (locked ingest → apply → repair → audit → checkpoint) and
-  `python3 research_map/astra_lifecycle_events.py` (idempotent gate/assignment events).
+  (locked ingest → apply → repair → audit → checkpoint; now also emits review coverage, clock
+  discipline, lock guard and its own lifecycle record) and
+  `python3 research_map/astra_lifecycle_02_events.py` (idempotent pass-02 gate/assignment events;
+  re-running skips duplicate events and already-sent inbox messages).
 
 ## Mission
 
