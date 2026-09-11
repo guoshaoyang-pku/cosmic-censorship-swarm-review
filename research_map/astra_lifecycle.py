@@ -41,11 +41,15 @@ CST = timezone(timedelta(hours=8))
 # Canonical path <- authoring path. The canonical path is authoritative
 # (assignments + audit_evidence.py); the authoring tree must be published
 # byte-identically. Keep in sync with audit_evidence.MIRRORS.
+# mode="mirror": two trees of one artifact, byte-identity required.
+# mode="companion": two DISTINCT artifacts (declared taxonomy vs its class-contract
+# supplement, astra-life04 adjudication REC-3); byte-identity is not required, but
+# each path must be pinned and consistency-checked.
 MIRRORS = [
-    ("research_map/formulation_taxonomy.yaml", "artifacts/formulation/formulation_taxonomy.yaml"),
-    ("schemas/af_wcc_vacuum.yaml", "artifacts/formulation/schemas/af_wcc_vacuum.yaml"),
-    ("schemas/af_scc_c2_vacuum.yaml", "artifacts/formulation/schemas/af_scc_c2_vacuum.yaml"),
-    ("schemas/af_scc_c0_vacuum.yaml", "artifacts/formulation/schemas/af_scc_c0_vacuum.yaml"),
+    ("research_map/formulation_taxonomy.yaml", "artifacts/formulation/formulation_taxonomy.yaml", "companion"),
+    ("schemas/af_wcc_vacuum.yaml", "artifacts/formulation/schemas/af_wcc_vacuum.yaml", "mirror"),
+    ("schemas/af_scc_c2_vacuum.yaml", "artifacts/formulation/schemas/af_scc_c2_vacuum.yaml", "mirror"),
+    ("schemas/af_scc_c0_vacuum.yaml", "artifacts/formulation/schemas/af_scc_c0_vacuum.yaml", "mirror"),
 ]
 
 
@@ -99,20 +103,32 @@ def measured_hashes(m: dict) -> dict:
 
 def publication_status() -> dict:
     pairs = []
-    for canonical, authoring in MIRRORS:
+    for canonical, authoring, mode in MIRRORS:
         cp, ap = ROOT / canonical, ROOT / authoring
-        rec = {"canonical": canonical, "authoring": authoring,
+        rec = {"canonical": canonical, "authoring": authoring, "classification": mode,
                "canonical_sha256": None, "authoring_sha256": None, "status": "missing"}
         if cp.is_file() and ap.is_file():
             ch, ah = sha256(cp), sha256(ap)
-            rec.update(canonical_sha256=ch, authoring_sha256=ah,
-                       status="aligned" if ch == ah else "divergent")
+            if mode == "mirror":
+                status = "aligned" if ch == ah else "divergent"
+            else:
+                status = "companion-pinned"
+            rec.update(canonical_sha256=ch, authoring_sha256=ah, status=status)
+        if mode == "companion":
+            rec["note"] = ("distinct artifacts per FROZEN.logical_artifacts: canonical is the "
+                           "declared F0 taxonomy, authoring is the class-contract supplement "
+                           "(F0-R). Byte-identity is not a publication requirement for this pair "
+                           "(astra-life04 adjudication REC-3); each path must be hash-pinned and "
+                           "consistency-checked.")
         pairs.append(rec)
     return {"checked_at": now(),
-            "policy": "canonical path is authoritative; the authoring tree must be published "
-                      "byte-identically to it before review verdicts bind",
+            "policy": ("mirror pairs (same artifact in two trees) must be published byte-identically "
+                       "to the canonical path; companion pairs are distinct artifacts that must each "
+                       "be hash-pinned (FROZEN.logical_artifacts) and consistency-checked, not "
+                       "byte-identical. Review verdicts bind to the canonical hash."),
             "pairs": pairs,
-            "divergent": sum(1 for p in pairs if p["status"] == "divergent")}
+            "divergent": sum(1 for p in pairs if p["status"] == "divergent"),
+            "companion_pairs": sum(1 for p in pairs if p["classification"] == "companion")}
 
 
 VERDICT_KINDS = ("accept", "revise", "reject", "inconclusive")
@@ -253,12 +269,30 @@ def gate_audit(m: dict, hashes: dict, pub: dict, soft: list, cov: dict,
     proto = ROOT / "numerics" / "CONVERGENCE_PROTOCOL.md"
     proto_h = sha256(proto)[:12] if proto.is_file() else "absent"
     proto_review = ROOT / "reviews" / "G-NUM-protocol-review.json"
-    proto_rev_h = "absent"
+    proto_verdict, proto_rev_h, proto_score = "absent", "absent", None
     if proto_review.is_file():
         try:
-            proto_rev_h = str(json.loads(proto_review.read_text()).get("artifact_sha256") or "unbound")[:12]
+            prd = json.loads(proto_review.read_text())
+            proto_verdict = str(prd.get("verdict") or "unknown")
+            proto_score = prd.get("score")
+            bound = prd.get("reviewed_sha256") or prd.get("artifact_sha256")
+            proto_rev_h = str(bound)[:12] if bound else "unbound"
         except Exception:
-            proto_rev_h = "unreadable"
+            proto_verdict, proto_rev_h = "unreadable", "unreadable"
+    c8_met = (proto_verdict == "accept" and proto_rev_h == proto_h)
+    # N0 node-level verdict: newest reviews/*.json targeting N0 (protocol review excluded).
+    n0_verdicts = []
+    for rp in sorted((ROOT / "reviews").glob("*.json")):
+        try:
+            rd = json.loads(rp.read_text())
+        except Exception:
+            continue
+        if str(rd.get("target_id")) != "N0" or "protocol" in rp.name.lower():
+            continue
+        n0_verdicts.append((str(rd.get("created_at") or ""), rp.name,
+                            str(rd.get("verdict") or "?"), rd.get("score")))
+    n0_verdicts.sort()
+    n0_latest = n0_verdicts[-1] if n0_verdicts else None
 
     def h(nid: str) -> str:
         return (hashes.get(nid, {}).get("sha256") or "absent")[:12]
@@ -274,14 +308,20 @@ def gate_audit(m: dict, hashes: dict, pub: dict, soft: list, cov: dict,
         v = cov.get(t, {}).get("verdicts", [])
         return ", ".join(f"{x['reviewer']}:{x['verdict']}" for x in v) or "none"
 
+    f0_pair = div.get("research_map/formulation_taxonomy.yaml", {})
+    if f0_pair.get("classification") == "companion":
+        f0_pub = ("the canonical declared-F0 taxonomy and the authoring class-contract supplement are "
+                  "distinct pinned artifacts (REC-3; byte-identity is not required for this pair)")
+    else:
+        f0_pub = f"publication pair F0 is {f0_pair.get('status', 'unknown')}"
+
     audit = {
         "G-F0": {
             "verdict": gates.get("G-F0", {}).get("verdict", "pending"),
             "checked_at": now(),
             "reason": (f"canonical taxonomy {h('F0')}; review scan at this hash: {accs('F0')} "
-                       f"[{verd('F0')}]; criterion needs two distinct independent accepts. "
-                       "Publication pair F0 is "
-                       f"{div.get('research_map/formulation_taxonomy.yaml', {}).get('status', 'unknown')}."
+                       f"[{verd('F0')}]; criterion needs two distinct independent accepts; "
+                       f"{f0_pub}."
                        + (f" {len(f0_flags)} class-separation soft flag(s) on F0 await disposition "
                           "(checker cannot see candidate annotations)." if f0_flags else "")),
         },
@@ -313,9 +353,19 @@ def gate_audit(m: dict, hashes: dict, pub: dict, soft: list, cov: dict,
             "checked_at": now(),
             "reason": ("self-gravitating numerics remain locked "
                        f"(solver_absent={guard['solver_absent']}, guard_present={guard['guard_present']}); "
-                       f"protocol measured {proto_h}; the recorded protocol verdict "
-                       f"reviews/G-NUM-protocol-review.json binds {proto_rev_h} (stale), so criterion "
-                       "C8 is the exact unmet requirement. N0 replication verdict on disk is PROVISIONAL."),
+                       f"protocol measured {proto_h}; "
+                       + (f"criterion C8 is MET (review verdict accept score {proto_score} binds "
+                          f"{proto_rev_h}). " if c8_met else
+                          f"criterion C8 is unmet: review verdict '{proto_verdict}' binds "
+                          f"{proto_rev_h}. ")
+                       + (f"N0 node verdict on disk: {n0_latest[2]} score {n0_latest[3]} "
+                          f"({n0_latest[1]}); the stop-rule items (4th resolution / F0 re-bind / "
+                          "independent replication verdict) are the open requirement. "
+                          if n0_latest else "No N0 node verdict found in reviews/. ")
+                       + "C4 registration is repaired at this pass (the controller checkpoint "
+                         "registers runtime/state/controller_verification/). G-NUM stays pending "
+                         "until the N0 node verdict is an accept at one hash; N1 remains locked "
+                         "regardless (it additionally requires G-FORM and G-AUDIT)."),
         },
         "G-AUDIT": {
             "verdict": gates.get("G-AUDIT", {}).get("verdict", "pending"),
@@ -348,18 +398,26 @@ def findings_merge(m: dict, pub: dict, hashes: dict, soft: list, cov: dict,
     aligned = [p["canonical"] for p in pub["pairs"] if p["status"] == "aligned"]
     divergent = [(p["canonical"], p.get("canonical_sha256") or "absent",
                   p.get("authoring_sha256") or "absent")
-                 for p in pub["pairs"] if p["status"] != "aligned"]
+                 for p in pub["pairs"] if p["status"] == "divergent"]
+    companions = [p for p in pub["pairs"] if p.get("classification") == "companion"]
     want = [
-        {"id": "CF-7", "severity": "major", "status": "directive-issued",
-         "finding": ("Four formulation artifacts remain dual-tree divergent "
-                     "(canonical schemas/ + research_map/ vs authoring artifacts/formulation/); "
-                     "review verdicts bind to superseded hashes, so G-F0 and G-FORM cannot be judged."),
-         "action": ("assigned PUBLISH-FROZEN-01 to lead-formulation: publish the frozen revision "
-                    "byte-identically to canonical paths, re-emit artifact events, reconcile FROZEN.json; "
-                    "gates recorded pending with hash-bound reasons. FORM-MAP-PATCH-002 superseded: "
-                    "the canonical path stays authoritative."),
-         "evidence": ["runtime/state/artifact_hashes.json", "artifacts/formulation/FROZEN.json",
-                      "artifacts/formulation/proposals/map_patch_F0_F1_F2.json"]},
+        {"id": "CF-7", "severity": "major", "status": "resolved-by-adjudication",
+         "finding": ("Four formulation artifacts were dual-tree divergent (canonical schemas/ + "
+                     "research_map/ vs authoring artifacts/formulation/). Adjudicated at pass 04: "
+                     "F1/F2a/F2b are byte-identical mirror pairs (aligned); the F0 pair is NOT a "
+                     "mirror pair but two distinct artifacts - the declared F0 taxonomy "
+                     "(research_map/formulation_taxonomy.yaml) and its class-contract supplement "
+                     "(artifacts/formulation/formulation_taxonomy.yaml, F0-R) - so byte-identity in "
+                     "either direction would destroy a frozen input (REC-3)."),
+         "action": ("F0 pair reclassified as a companion pair: canonical path remains the declared "
+                    "F0 artifact; the supplement must be hash-pinned where referenced and "
+                    "consistency-checked. Remaining repair: the three schemas' class_contract_pointer "
+                    "values still lack an explicit supplement sha256 pin "
+                    "(astra-life04-freeze-repair)."),
+         "evidence": ["artifacts/formulation/evidence/f0_mirror_conflict.json#7e3a7bc89a75",
+                      "artifacts/formulation/FROZEN.json#logical_artifacts",
+                      "runtime/state/artifact_hashes.json",
+                      "research_map/research_map.json#publication_status"]},
         {"id": "CF-8", "severity": "minor",
          "status": "resolved-by-revision" if ledger_clear else "directive-issued",
          "finding": ("At 00:04-00:07 the L0 status summary claimed '4-class compliant with 0 extension "
@@ -381,12 +439,14 @@ def findings_merge(m: dict, pub: dict, hashes: dict, soft: list, cov: dict,
                       "runtime/bin/classsep_regression.py"]},
         {"id": "CF-10", "severity": "info", "status": "verified",
          "finding": ("numerics_lock verified locked; N1 queued and numerics/spherical_solver absent; "
-                     "lock guard numerics/tests/selfgravity_lock_guard.py present; N0 replication "
-                     "verdict is PROVISIONAL, so N0 stays active/unverified."),
-         "action": "G-NUM withheld pending lead-numerics proposal; lock unchanged.",
+                     "lock guard numerics/tests/selfgravity_lock_guard.py present. C8 is met by the "
+                     "rev3 protocol review (accept 4.5) and the N0 node verdict on disk is revise "
+                     "(reviews/N0-review-lead-audit.json, stop-rule items open), so N0 stays "
+                     "active/unverified and G-NUM stays pending."),
+         "action": "G-NUM withheld; lock unchanged; N1 work remains forbidden.",
          "evidence": ["numerics/tests/selfgravity_lock_guard.py",
-                      "numerics/protocol/fixed_replication_verdict.json",
-                      "numerics/protocol/scheme_independence_review.md"]},
+                      "reviews/G-NUM-protocol-review.json",
+                      "reviews/N0-review-lead-audit.json"]},
         {"id": "CF-11", "severity": "info", "status": "recorded",
          "finding": (f"Lifecycle pass measured canonical hashes {h('F0')}/{h('F1')}/{h('F2a')}/"
                      f"{h('F2b')}/{h('L0')}/{h('L1')} and recorded them in the map; declared-vs-measured "
@@ -406,24 +466,28 @@ def findings_merge(m: dict, pub: dict, hashes: dict, soft: list, cov: dict,
          "evidence": ["numerics/tests/n0_gate_proposal.json",
                       "artifacts/numerics/n0/n0_gate_proposal_lead.json",
                       "comms/outbox/astra-lead-numerics.jsonl"]},
-        {"id": "CF-13", "severity": "major", "status": "partially-resolved",
+        {"id": "CF-13", "severity": "major", "status": "resolved-by-adjudication",
          "finding": ("Dual-tree publication measured at this pass: "
-                     + (f"{len(aligned)}/{len(pub['pairs'])} mirror pair(s) aligned "
-                        f"({', '.join(aligned)}); " if aligned else "0 pairs aligned; ")
+                     + (f"{len(aligned)} mirror pair(s) aligned "
+                        f"({', '.join(aligned)}); " if aligned else "0 mirror pairs aligned; ")
                      + (("divergent: " + "; ".join(f"{c} canonical={ch[:12]} authoring={ah[:12]}"
                                                    for c, ch, ah in divergent) + ". ")
-                        if divergent else "no divergent pairs. ")
-                     + "One frozen revision per artifact is required: canonical == authoring == "
-                       "FROZEN pin, with a re-emitted artifact event."),
-         "action": ("PUBLISH-FROZEN-02 issued to lead-formulation for F0 only (astra-life02-publish-f0): "
-                    "one frozen revision with canonical == authoring == FROZEN pin and a re-emitted "
-                    "artifact event; F0 verdicts must then rebind to the published hash. "
-                    "FORM-MAP-PATCH-002 stays superseded (do not repoint the map at the authoring tree)."),
+                        if divergent else "no divergent mirror pairs. ")
+                     + (f"{len(companions)} companion pair(s) recorded as distinct artifacts "
+                        f"({', '.join(c['canonical'] for c in companions)}). " if companions else "")
+                     + "Mirror pairs require canonical == authoring == FROZEN pin; companion pairs "
+                       "require each path pinned and consistency-checked, not byte-identical."),
+         "action": ("REC-3 (astra-life04) closes astra-life02-publish-f0 as impossible-as-written: "
+                    "the F0 pair is two distinct artifacts (declared taxonomy + class-contract "
+                    "supplement), so no byte-identical publication exists that preserves both. "
+                    "The remaining F0-side repair is the missing supplement sha256 pin inside the "
+                    "three schemas (astra-life04-freeze-repair)."),
          "evidence": ["research_map/formulation_taxonomy.yaml",
                       "artifacts/formulation/formulation_taxonomy.yaml",
+                      "artifacts/formulation/evidence/f0_mirror_conflict.json#7e3a7bc89a75",
                       "artifacts/formulation/FROZEN.json",
                       "runtime/state/artifact_hashes.json"]},
-        {"id": "CF-14", "severity": "major", "status": "open",
+        {"id": "CF-14", "severity": "major", "status": "partially-repaired",
          "finding": (f"Clock discipline: controller measured {clock['future_dated']} accepted event(s) "
                      f"with created_at after the measurement instant (max "
                      f"{clock.get('max_future_created_at')}, skew up to {clock['max_skew_seconds']}s). "
@@ -432,8 +496,11 @@ def findings_merge(m: dict, pub: dict, hashes: dict, soft: list, cov: dict,
                      "ordering unreliable."),
          "action": ("Authors must stamp created_at with wall-clock at write time; controller treats "
                     "future-dated events as advisory for ordering and re-measures the audit lead's "
-                    "clock_discipline matrix (reviews/A1-rebind-coverage.json) each pass."),
+                    "clock_discipline matrix (reviews/A1-rebind-coverage.json) each pass. Tooling "
+                    "repair at pass 04: apply_events.py's resource-request approval matcher no longer "
+                    "stops at the first colon, so ids containing ':' bind by exact token."),
          "evidence": ["research_map/events.jsonl", "reviews/A1-rebind-coverage.json",
+                      "research_map/apply_events.py:263-284",
                       "artifacts/formulation/FROZEN.json"]},
         {"id": "CF-15", "severity": "info", "status": "recorded",
          "finding": ("Gate audit reasons are derived from the measured review corpus and publication "
@@ -447,11 +514,11 @@ def findings_merge(m: dict, pub: dict, hashes: dict, soft: list, cov: dict,
          "evidence": ["research_map/research_map.json", "reviews/",
                       "runtime/state/artifact_hashes.json"]},
         {"id": "CF-16", "severity": "minor", "status": "adjudicated-false-positive",
-         "finding": ("audit_evidence.py reports a hard CLASSSEP failure on claims[36].statement "
-                     "(deepseek-flash-02 open-case disposition claim) because the checker reads the "
-                     "test-case labels 'TC-F0-N14 C0/C2 merge' and 'TC-F0-N15 WCC/SCC merge' as merge "
-                     "assertions. The claim states those cases are merged-case probes that 'need no "
-                     "new class' and its class_ids are the frozen four: a metalinguistic mention, not "
+         "finding": ("audit_evidence.py reports hard CLASSSEP failures on claims whose statements "
+                     "quote the merged-case probe labels 'TC-F0-N14 C0/C2 merge' and 'TC-F0-N15 "
+                     "WCC/SCC merge' (claims[36] first; claims[94,96,97,101,112,127,144] as of pass " 
+                     "04). The claims state those cases are merged-case probes that 'need no new "
+                     "class' and their class_ids are the frozen four: a metalinguistic mention, not "
                      "a composite class assertion."),
          "action": ("Adjudicated false positive; the raw hard-failure count stays visible in the "
                     "checkpoint until the claim prose is rephrased by its author or the checker exempts "
@@ -460,6 +527,63 @@ def findings_merge(m: dict, pub: dict, hashes: dict, soft: list, cov: dict,
          "evidence": ["research_map/class_separation.py:73-94",
                       "artifacts/flash-02/open_case_disposition.json",
                       "research_map/research_map.json claims[36]"]},
+        {"id": "CF-17", "severity": "major", "status": "adjudicated",
+         "finding": ("F0 publication adjudication (REC-3). Assignment astra-life02-publish-f0 required "
+                     "byte-identical publication of research_map/formulation_taxonomy.yaml and "
+                     "artifacts/formulation/formulation_taxonomy.yaml. Measured: these are two DIFFERENT "
+                     "artifacts (canonical 276009f4: class_ids/classes/disjointness, 35145 b; authoring "
+                     "c8e979a1: class_contracts/axis_registry/implication_ledger, 20937 b; the three "
+                     "frozen schemas' class_contract_pointer targets the supplement's #class_contracts "
+                     "subtree). Byte-identical publication in either direction destroys a frozen input."),
+         "action": ("Ruled: the F0 pair is a COMPANION pair, not a mirror pair. The canonical path "
+                    "remains the declared F0 artifact for G-F0; the authoring path is the class-contract "
+                    "supplement (F0-R) and must be hash-pinned where referenced plus consistency-checked. "
+                    "astra-life02-publish-f0 is closed as impossible-as-written; astra-life04-freeze-repair "
+                    "adds the missing supplement sha256 pin to the three schemas. Falsifier: any frozen "
+                    "consumer that requires the two files to be byte-identical, or a canonical F0 change "
+                    "that invalidates the four class ids / disjointness tests."),
+         "evidence": ["artifacts/formulation/evidence/f0_mirror_conflict.json#7e3a7bc89a75",
+                      "artifacts/formulation/FROZEN.json#logical_artifacts",
+                      "research_map/formulation_taxonomy.yaml",
+                      "artifacts/formulation/formulation_taxonomy.yaml"]},
+        {"id": "CF-18", "severity": "info", "status": "recorded",
+         "finding": ("Pass-04 controller rulings on open lead requests: (a) literature BL-2 - rev 3 is "
+                     "deferred until two independent verdicts bind the frozen L0 hash ce42d205, then "
+                     "authorized as one bounded metadata patch (source_meta, conclusion_type/"
+                     "artifact_refs, locator annotations; no claim or class changes); (b) BL-3 - "
+                     "abstract-level evidence is sufficient for G-LIT provided verification_status is "
+                     "honest and T-101/T-102 stay provisional; no paywalled full text is required for "
+                     "the gate; (c) lit-l4-006 - evidence_url is the locator column and exact_locator is "
+                     "query-provenance, so no hash-moving metadata patch is authorized now; (d) numerics "
+                     "C4 - the replication evidence is registered in artifact_hashes.json via the "
+                     "controller registry; C8 is met at protocol 1e6cdf04 but G-NUM stays pending on the "
+                     "N0 node verdict; (e) F2b map-field report - adjudicated stale: the declared "
+                     "F2b.artifact_sha256 at this pass is the 64-hex measured canonical hash "
+                     "1bb78ce9b357, so no zero-padded value remains to repair."),
+         "action": ("Rulings recorded here; operational assignment astra-life04-l0-rev3 carries the "
+                    "literature scope. No gate verdict is changed by this finding."),
+         "evidence": ["comms/outbox/astra-lead-literature.jsonl",
+                      "comms/outbox/astra-lead-audit.jsonl",
+                      "reviews/G-NUM-protocol-review.json",
+                      "research_map/research_map.json"]},
+        {"id": "CF-19", "severity": "major", "status": "directive-issued",
+         "finding": ("Freeze breach on L0: ledger/theorems.jsonl was rewritten at 2026-09-12T00:35:19 "
+                     f"(measured {h('L0')}) after the literature lead's L4 lifecycle closed with an "
+                     "exit hash of 3e3d35531421 and after FROZEN-equivalent review dispatch. No "
+                     "artifact event in the accepted stream announces the new bytes (worker-073 "
+                     "observed the move mid-task and failed closed against the archived rev-3 copy). "
+                     "This is the same moving-target defect as audit-blocker-final-01, on a canonical "
+                     "path owned by one agent."),
+         "action": ("No controller edit to another agent's artifact. astra-life04-l0-freeze-reconcile "
+                    "issued to the literature lead: reconcile the live bytes against the rev-3 archive "
+                    "(content preservation + claim-lowering diff), emit the artifact event with a "
+                    "wall-clock stamp, and hold; the two-reviewer verdict round binds the reconciled "
+                    "hash only. IF the write is not the owner's, it must be reverted/published from "
+                    "the archive and reported as an authority violation."),
+         "evidence": ["ledger/theorems.jsonl",
+                      "artifacts/literature/archive/theorems.rev3-handpatch-20260912T003026.jsonl",
+                      "artifacts/worker-073/l0_hf14_postrepair/report.json",
+                      "research_map/research_map.json#controller_gate_audit"]},
     ]
     for f in want:
         old = by_id.get(f["id"], {})
