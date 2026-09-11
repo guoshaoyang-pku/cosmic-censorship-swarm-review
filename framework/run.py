@@ -15,6 +15,7 @@ import sys, os, json, time, random, threading, argparse, importlib
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from core import Archive, Ledger, DeadEnds, Metrics, Candidate
 from pool import Pool
+from policy import POLICIES
 
 
 def load_task(name):
@@ -24,7 +25,8 @@ def load_task(name):
     return cls()
 
 
-def run(task_name, calls, islands, families, seed, outdir, concurrency, parents_per_prompt):
+def run(task_name, calls, islands, families, seed, outdir, concurrency, parents_per_prompt,
+        policy='islands'):
     os.makedirs(outdir, exist_ok=True)
     task = load_task(task_name)
     pool = Pool(families=families, concurrency=concurrency)
@@ -53,9 +55,9 @@ def run(task_name, calls, islands, families, seed, outdir, concurrency, parents_
                 counter[0] += 1
             island = i % islands
             fam = pool.pick(r, live)
-            parents = arch.sample_parents(island, parents_per_prompt, r)
+            parents, de = POLICIES[policy](arch, dead, island, parents_per_prompt, r)
             raw = pool.chat(fam, [{"role": "user",
-                                   "content": task.prompt(parents, dead.recent())}])
+                                   "content": task.prompt(parents, de)}])
             payload = task.parse(raw) if raw else None
             if payload is None:
                 met.note(fam)
@@ -87,6 +89,7 @@ def run(task_name, calls, islands, families, seed, outdir, concurrency, parents_
         t.join()
 
     snap = met.snapshot(arch, dead)
+    snap['policy'] = policy
     snap['usage'] = pool.report()
     bs, bc = arch.best()
     snap['best_score'] = bs
@@ -111,7 +114,10 @@ if __name__ == '__main__':
     ap.add_argument('--concurrency', type=int, default=6)
     ap.add_argument('--parents', type=int, default=2)
     ap.add_argument('--out', default=None)
+    ap.add_argument('--policy', default='islands', choices=list(__import__('policy').POLICIES))
     a = ap.parse_args()
-    out = a.out or f'/Users/bytedance/ai4math-swarm/runs/{a.task}_{a.families.replace(",","+")}_s{a.seed}_{int(time.time())}'
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    out = a.out or os.path.join(root, 'runs',
+                                f'{a.task}_{a.families.replace(",", "+")}_s{a.seed}_{int(time.time())}')
     run(a.task, a.calls, a.islands, a.families.split(','), a.seed, out,
-        a.concurrency, a.parents)
+        a.concurrency, a.parents, a.policy)

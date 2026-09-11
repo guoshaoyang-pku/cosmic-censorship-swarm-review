@@ -20,7 +20,8 @@ against three graphs with published cycle spectra (K4, K_{3,3}, Petersen) before
 from __future__ import annotations
 import sys, os, re, multiprocessing as mp
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-sys.path.insert(0, '/Users/bytedance/ai4math-swarm/erdos64')
+sys.path.insert(0, os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'erdos64'))
 from core import Task, Verdict, Candidate
 from search import count_cycles_of_length          # the audited counter
 
