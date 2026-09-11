@@ -28,6 +28,8 @@ def load_task(name):
 def run(task_name, calls, islands, families, seed, outdir, concurrency, parents_per_prompt,
         policy='islands'):
     os.makedirs(outdir, exist_ok=True)
+    # Optional research-map binding: the run remains usable standalone.
+    map_node = os.environ.get('RESEARCH_MAP_NODE')
     task = load_task(task_name)
     pool = Pool(families=families, concurrency=concurrency)
     live = [f for f, s in pool.probe().items() if s == 'ok']
@@ -97,6 +99,16 @@ def run(task_name, calls, islands, families, seed, outdir, concurrency, parents_
         snap['best_note'] = bc.payload.get('note', '')
         json.dump(bc.payload, open(os.path.join(outdir, 'best.json'), 'w'), indent=1)
     json.dump(snap, open(os.path.join(outdir, 'metrics.json'), 'w'), indent=1)
+    if map_node:
+        try:
+            from pathlib import Path
+            import subprocess
+            project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            map_path = os.environ.get('RESEARCH_MAP_PATH', os.path.join(project_root, 'research_map', 'research_map.json'))
+            sync = os.path.join(project_root, 'research_map', 'sync_run.py')
+            subprocess.run([sys.executable, sync, outdir, '--node', map_node, '--map', map_path], check=True)
+        except Exception as exc:
+            print(f'warning: research-map sync failed: {exc}', file=sys.stderr)
     print('\n=== run summary ===')
     print(json.dumps({k: v for k, v in snap.items() if k != 'usage'}, indent=1,
                      ensure_ascii=False))
