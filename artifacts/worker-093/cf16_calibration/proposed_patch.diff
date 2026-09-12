@@ -1,0 +1,58 @@
+--- a/research_map/class_separation.py	2026-09-12 00:27:16.709090048 +0800
++++ b/research_map/class_separation.py	2026-09-12 00:27:16.713089971 +0800
+@@ -62,6 +62,44 @@
+ # tokens that make a slash/and legitimate even without an explicit split word
+ _BENIGN = re.compile(r"c0\s*-?\s*vs\.?\s*-?\s*c2|c2\s*-?\s*vs\.?\s*-?\s*c0", re.I)
+ 
++# --- CF-16 calibration (worker-093, W093-CF16-CALIBRATION-01) -----------------
++# A merge word that is itself a *label noun* ("... C0/C2 merge, ...") and sits in
++# a case-label context -- a case id adjacent before it, or a parenthesised list
++# carrying a case id -- names a test case; it does not assert that C0 and C2 are
++# one class.  The mention reading is abandoned when the label noun is predicated
++# ("... C0/C2 merge is our design") or when any non-label merge assertion appears
++# in the same window.
++_CASE_ID = re.compile(r"\b(?:TC|FX|CASE|ROW|FIXTURE)-[A-Za-z0-9-]+\b")
++_CASE_ID_BEFORE = re.compile(r"(?:^|[\s(\[,;])(?:TC|FX|CASE|ROW|FIXTURE)-[A-Za-z0-9-]+\s*$", re.I)
++_LABEL_WORD = re.compile(
++    r"^\s*(?:merge|merger|case|fixture|row|label|name|test|disposition|request)\s*$", re.I)
++_PREDICATED_AFTER = re.compile(
++    r"^[\s,:-]{1,4}(?:\w+\s+){0,2}?(?:is|are|was|were|be|becomes?|means?|entails?|"
++    r"adopts?|adopted|requires?|required|declares?|declared|asserts?|asserted|"
++    r"as\s+one|into\s+(?:one|a\s+single))\b", re.I)
++
++
++def _in_case_label_list(t: str, pos: int) -> bool:
++    open_idx = t.rfind("(", 0, pos)
++    if open_idx == -1:
++        return False
++    close_idx = t.find(")", pos)
++    if close_idx == -1:
++        return False
++    return bool(_CASE_ID.search(t[open_idx:close_idx]))
++
++
++def _is_case_label_mention(t: str, comp_start: int, start: int, end: int) -> bool:
++    """True iff the merge word at t[start:end] is part of a case/fixture label.
++
++    `comp_start` is the start of the composite expression the merge word refers
++    to; the case-label context is measured around the composite, not the word."""
++    if not _LABEL_WORD.match(t[start:end]):
++        return False
++    if _PREDICATED_AFTER.match(t[end:]):
++        return False
++    return bool(_CASE_ID_BEFORE.search(t[:comp_start]) or _in_case_label_list(t, comp_start))
++
+ 
+ def _class_tokens(text: str):
+     return re.findall(r"AF-[A-Z0-9]+-[A-Z0-9]+-[A-Z0-9]+-[A-Z0-9]+", text.upper())
+@@ -85,6 +123,10 @@
+             before = ctx[:assert_match.start()]
+             if _NEG_BEFORE_ASSERT.search(before):
+                 continue  # "no merged 'C0 or C2'", "not unified"
++            if mode == "prose":
++                spans = [(lo + a.start(), lo + a.end()) for a in _MERGE_ASSERT.finditer(ctx)]
++                if spans and all(_is_case_label_mention(t, m.start(), s, e) for s, e in spans):
++                    continue  # CF-16: every merge word in this window is a case label
+             out.append(f"CLASSSEP: composite C0/C2 asserted as one class in {where}: ...{ctx.strip()!r}")
+         elif _PROHIBIT.search(ctx):
+             continue
