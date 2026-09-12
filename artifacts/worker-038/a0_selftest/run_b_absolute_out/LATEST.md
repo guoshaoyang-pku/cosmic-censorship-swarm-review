@@ -1,0 +1,72 @@
+# Audit tick 20260912T002342
+
+- elapsed since swarm start: 4111.2s
+- map sha256: `7f8792f85f0cfcde83997cd0fc1eb4a17d6be15393a520dbc63912619460fa3a`
+- rubric sha256: `d748a9e3574ebe0c34c22b608ba0bf018d525a644ebff815371c6dcfca055885`
+- corpus: {'files': 1204, 'claims': 175, 'artifacts': 1429, 'citations': 218, 'results': 0, 'records': 312}
+- violations: 109 (critical 44) {'HF-06': 24, 'HF-02': 62, 'HF-13': 21, 'HF-03': 1, 'HF-14': 1}
+- citations: n=218 score=0.6078 unresolved=4
+- duplication: n=132 cluster_rate=0.4848 mean_novelty=0.20072500000000001
+- gates: {'G-FORM': 'pending', 'G-LIT': 'fail', 'G-AUDIT': 'fail', 'G-NUM': 'pending'}
+
+## Violations
+- **HF-06** (major) `lit-20260912-016`: statement uses a smallness/nearness hypothesis absent from assumptions
+- **HF-06** (major) `lit-20260911-016`: statement uses a smallness/nearness hypothesis absent from assumptions
+- **HF-02** (critical) `flash02-rebind-claim-0006-20260912T0010`: class_id 'AF-WCC-VAC-GEN;AF-SCC-C2-VAC-GEN;AF-SCC-C0-VAC-GEN;AF-WCC-SCALAR-SPH' is not in the frozen class registry
+- **HF-02** (critical) `w03-20260912T000930-claim-binding`: statement mentions a second frozen class AF-SCC-C2-VAC-GEN
+- **HF-02** (critical) `w03-20260912T000930-claim-binding`: statement mentions a second frozen class AF-SCC-C0-VAC-GEN
+- **HF-02** (critical) `flash02-opencase-claim-0010b-20260912T0015`: class_id 'AF-WCC-VAC-GEN;AF-SCC-C2-VAC-GEN;AF-SCC-C0-VAC-GEN;AF-WCC-SCALAR-SPH' is not in the frozen class registry
+- **HF-02** (critical) `w07-hf01-claim-repair-20260912T0018`: class_id 'AF-WCC-VAC-GEN;AF-SCC-C2-VAC-GEN;AF-SCC-C0-VAC-GEN;AF-WCC-SCALAR-SPH' is not in the frozen class registry
+- **HF-02** (critical) `w002-20260912T0020-claim-softflag`: class_id 'AF-WCC-VAC-GEN;AF-SCC-C2-VAC-GEN;AF-SCC-C0-VAC-GEN;AF-WCC-SCALAR-SPH' is not in the frozen class registry
+- **HF-02** (major) `<claim>`: unknown conclusion_type None
+- **HF-06** (major) `<claim>`: empty assumptions field
+- **HF-02** (major) `<claim>`: unknown conclusion_type None
+- **HF-06** (major) `<claim>`: statement asserts genericity of the result but assumptions do not define it
+- **HF-06** (major) `<claim>`: empty assumptions field
+- **HF-02** (major) `<claim>`: unknown conclusion_type None
+- **HF-06** (major) `<claim>`: empty assumptions field
+- **HF-02** (major) `<claim>`: unknown conclusion_type None
+- **HF-06** (major) `<claim>`: empty assumptions field
+- **HF-02** (major) `<claim>`: unknown conclusion_type None
+- **HF-06** (major) `<claim>`: empty assumptions field
+- **HF-02** (major) `<claim>`: unknown conclusion_type None
+- **HF-06** (major) `<claim>`: statement asserts genericity of the result but assumptions do not define it
+- **HF-06** (major) `<claim>`: empty assumptions field
+- **HF-02** (major) `<claim>`: unknown conclusion_type None
+- **HF-06** (major) `<claim>`: empty assumptions field
+- **HF-02** (major) `<claim>`: unknown conclusion_type None
+- **HF-06** (major) `<claim>`: statement asserts genericity of the result but assumptions do not define it
+- **HF-06** (major) `<claim>`: empty assumptions field
+- **HF-02** (major) `<claim>`: unknown conclusion_type None
+- **HF-06** (major) `<claim>`: empty assumptions field
+- **HF-02** (major) `<claim>`: unknown conclusion_type None
+- **HF-06** (major) `<claim>`: statement asserts genericity of the result but assumptions do not define it
+- **HF-06** (major) `<claim>`: empty assumptions field
+- **HF-02** (major) `<claim>`: unknown conclusion_type None
+- **HF-06** (major) `<claim>`: empty assumptions field
+- **HF-02** (major) `<claim>`: unknown conclusion_type None
+- **HF-06** (major) `<claim>`: empty assumptions field
+- **HF-02** (major) `<claim>`: unknown conclusion_type None
+- **HF-06** (major) `<claim>`: statement asserts genericity of the result but assumptions do not define it
+- **HF-06** (major) `<claim>`: empty assumptions field
+- **HF-02** (major) `<claim>`: unknown conclusion_type None
+- **HF-06** (major) `<claim>`: empty assumptions field
+- **HF-02** (major) `<claim>`: unknown conclusion_type None
+- **HF-06** (major) `<claim>`: empty assumptions field
+- **HF-02** (major) `<claim>`: unknown conclusion_type None
+- **HF-06** (major) `<claim>`: empty assumptions field
+- **HF-02** (critical) `<claim>`: class_id None is not in the frozen class registry
+- **HF-02** (critical) `<claim>`: class_id None is not in the frozen class registry
+- **HF-02** (critical) `<claim>`: class_id None is not in the frozen class registry
+- **HF-02** (critical) `<claim>`: class_id None is not in the frozen class registry
+- **HF-02** (critical) `<claim>`: class_id None is not in the frozen class registry
+- **HF-02** (critical) `<claim>`: class_id None is not in the frozen class registry
+- **HF-02** (critical) `<claim>`: class_id None is not in the frozen class registry
+- **HF-02** (critical) `<claim>`: class_id None is not in the frozen class registry
+- **HF-02** (critical) `<claim>`: class_id None is not in the frozen class registry
+- **HF-02** (critical) `<claim>`: class_id None is not in the frozen class registry
+- **HF-02** (critical) `<claim>`: class_id None is not in the frozen class registry
+- **HF-02** (critical) `<claim>`: class_id None is not in the frozen class registry
+- **HF-02** (critical) `<claim>`: class_id None is not in the frozen class registry
+- **HF-02** (critical) `<claim>`: class_id None is not in the frozen class registry
+- **HF-02** (critical) `<claim>`: class_id None is not in the frozen class registry

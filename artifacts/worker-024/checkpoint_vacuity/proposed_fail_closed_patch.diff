@@ -1,0 +1,138 @@
+--- a/research_map/checkpoint.py
++++ b/research_map/checkpoint.py
+@@ -6,7 +6,16 @@
+   runtime/state/current_checkpoint.json         latest record
+   runtime/state/agent_hours.json                measured swarm process hours
+ 
+-Usage: python3 research_map/checkpoint.py [--label auto]
++PROPOSED fail-closed patch (worker-024, proposal only):
++  - non-vacuity block: a checkpoint is DEFECTIVE (exit 1, REASON lines) when the
++    event stream is absent/empty/corrupt, the map is INVALID, the class-separation
++    corpus is empty, the registry scan is empty, canonical gates are missing or the
++    numerics lock is absent;
++  - never clobber a non-empty artifact_hashes.json with an empty scan;
++  - --dry-run performs no writes (including ingest);
++  - checkpoint ids carry microseconds so two runs in one second do not overwrite.
++
++Usage: python3 research_map/checkpoint.py [--label auto] [--dry-run]
+ """
+ from __future__ import annotations
+ 
+@@ -27,10 +36,42 @@
+ ROOT = Path(__file__).resolve().parent.parent
+ CST = timezone(timedelta(hours=8))
+ CKDIR = ROOT / "runtime" / "state" / "checkpoints"
++CANONICAL_GATES = ("G-F0", "G-FORM", "G-LIT", "G-NUM", "G-AUDIT")
+ 
+ 
+ def stamp() -> str:
+-    return datetime.now(CST).strftime("%Y%m%d-%H%M%S")
++    # microseconds: two runs in the same wall-clock second must not share a file name
++    return datetime.now(CST).strftime("%Y%m%d-%H%M%S-%f")
++
++
++def nonvacuity_reasons(rec: dict) -> list:
++    """A record is a certificate only if the structures it certifies are present.
++
++    Presence-driven checks cannot distinguish 'clean' from 'absent'; each reason
++    here names a structure whose absence makes the record vacuous.
++    """
++    reasons = []
++    ev = ROOT / "research_map" / "events.jsonl"
++    if not ev.exists():
++        reasons.append("MISSING_EVENT_STREAM")
++    elif rec["events_total"] == 0:
++        reasons.append("EMPTY_EVENT_STREAM")
++    if rec["event_stream_errors"]:
++        reasons.append("EVENT_STREAM_ERRORS")
++    if rec["map_validator"] != "VALID":
++        reasons.append("MAP_INVALID")
++    csr = rec.get("classsep_regression") or {}
++    if int(csr.get("corpus_size", 0) or 0) == 0:
++        reasons.append("CLASSSEP_CORPUS_EMPTY")
++    if int(rec.get("registry_scan_size", 0) or 0) == 0:
++        reasons.append("REGISTRY_EMPTY")
++    gates = rec.get("gates") or {}
++    missing = [g for g in CANONICAL_GATES if g not in gates]
++    if missing:
++        reasons.append("GATES_MISSING:" + ",".join(missing))
++    if not rec.get("numerics_lock"):
++        reasons.append("NUMERICS_LOCK_ABSENT")
++    return reasons
+ 
+ 
+ def measure_agents() -> dict:
+@@ -72,8 +113,8 @@
+     return out
+ 
+ 
+-def main(label: str) -> dict:
+-    ing = comms.ingest(dry_run=False, verbose=True)
++def main(label: str, dry_run: bool = False) -> dict:
++    ing = comms.ingest(dry_run=dry_run, verbose=not dry_run)
+     map_path = ROOT / "research_map" / "research_map.json"
+     m = load(map_path)
+     map_errs = validate_map(m)
+@@ -120,25 +161,49 @@
+         "spent_agent_hours_map": sum(g.get("spent_agent_hours", 0) for g in m.get("groups", [])),
+         "budget_agent_hours_map": sum(g.get("budget_agent_hours", 0) for g in m.get("groups", [])),
+     }
+-    CKDIR.mkdir(parents=True, exist_ok=True)
+-    path = CKDIR / f"{rec['checkpoint_id']}.json"
+-    path.write_text(json.dumps(rec, indent=2, sort_keys=True))
+-    with (ROOT / "runtime" / "state" / "checkpoint_log.jsonl").open("a") as f:
+-        f.write(json.dumps({k: rec[k] for k in
+-                            ("checkpoint_id", "created_at", "map_validator", "evidence_hard_failures",
+-                             "comms", "events_pending_application", "gates", "numerics_lock")}) + "\n")
+-    (ROOT / "runtime" / "state" / "current_checkpoint.json").write_text(json.dumps(rec, indent=2, sort_keys=True))
+-    (ROOT / "runtime" / "state" / "agent_hours.json").write_text(json.dumps(rec["agents"], indent=2, sort_keys=True))
+-    (ROOT / "runtime" / "state" / "artifact_hashes.json").write_text(
+-        json.dumps({"hashes": ev["hashes"], "registry": ev.get("registry", {})}, indent=2, sort_keys=True))
++    # never clobber a non-empty registry with an empty scan
++    rec["registry_scan_size"] = len(ev.get("registry", {}))
++    reg_path = ROOT / "runtime" / "state" / "artifact_hashes.json"
++    prev = None
++    if reg_path.exists():
++        try:
++            prev = json.loads(reg_path.read_text())
++        except ValueError:
++            prev = None
++    if not ev.get("registry") and not ev["hashes"] and prev and (prev.get("registry") or prev.get("hashes")):
++        rec["artifact_hashes"] = prev.get("hashes", {})
++        rec["artifact_registry"] = prev.get("registry", {})
++        rec["registry_source"] = "preserved-previous (fresh scan empty)"
++    else:
++        rec["registry_source"] = "fresh-scan"
++    rec["dry_run"] = dry_run
++    reasons = nonvacuity_reasons(rec)
++    rec["nonvacuity"] = {"verdict": "PASS" if not reasons else "DEFECTIVE", "reasons": reasons}
++    if not dry_run:
++        CKDIR.mkdir(parents=True, exist_ok=True)
++        path = CKDIR / f"{rec['checkpoint_id']}.json"
++        path.write_text(json.dumps(rec, indent=2, sort_keys=True))
++        with (ROOT / "runtime" / "state" / "checkpoint_log.jsonl").open("a") as f:
++            f.write(json.dumps({k: rec[k] for k in
++                                ("checkpoint_id", "created_at", "map_validator", "evidence_hard_failures",
++                                 "comms", "events_pending_application", "gates", "numerics_lock",
++                                 "nonvacuity")}) + "\n")
++        (ROOT / "runtime" / "state" / "current_checkpoint.json").write_text(json.dumps(rec, indent=2, sort_keys=True))
++        (ROOT / "runtime" / "state" / "agent_hours.json").write_text(json.dumps(rec["agents"], indent=2, sort_keys=True))
++        (ROOT / "runtime" / "state" / "artifact_hashes.json").write_text(
++            json.dumps({"hashes": rec["artifact_hashes"], "registry": rec["artifact_registry"]}, indent=2, sort_keys=True))
+     print(json.dumps({k: rec[k] for k in ("checkpoint_id", "map_validator", "evidence_hard_failures",
+-                                          "classsep_regression",
++                                          "classsep_regression", "nonvacuity",
+                                           "comms", "events_pending_application", "gates", "numerics_lock")}, indent=2))
++    for r in reasons:
++        print(f"REASON {r}")
+     return rec
+ 
+ 
+ if __name__ == "__main__":
+     ap = argparse.ArgumentParser()
+     ap.add_argument("--label", default="auto-15min")
++    ap.add_argument("--dry-run", action="store_true")
+     a = ap.parse_args()
+-    main(a.label)
++    _rec = main(a.label, a.dry_run)
++    sys.exit(1 if _rec["nonvacuity"]["reasons"] else 0)

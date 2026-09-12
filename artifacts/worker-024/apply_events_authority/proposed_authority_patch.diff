@@ -1,0 +1,195 @@
+--- a/research_map/comms.py
++++ b/research_map/comms.py
+@@ -35,6 +35,11 @@
+ REJECTS = ROOT / "comms" / "rejected.jsonl"
+ SEEN = ROOT / "runtime" / "state" / "ingested_ids.json"
+ CST = timezone(timedelta(hours=8))
++
++# W024 proposed: sources that may carry authority, and explicit non-canonical aliases.
++KNOWN_AGENT = re.compile(r"^(astra|astra-lead-(formulation|literature|numerics|audit)|"
++                         r"deepseek-flash-\d{1,3}|worker-\d{1,3})$")
++SOURCE_ACTOR_ALIASES = {"lead-literature.events": "astra-lead-literature"}
+ 
+ 
+ def now() -> str:
+@@ -315,6 +320,20 @@
+                                  "event_type": doc.get("event_type"), "reason": str(e),
+                                  "raw": raw[:600], "rejected_at": now()})
+                 continue
++            # ---- W024 proposed authority binding (proposal only) --------------
++            # The declared actor must be backed by the source outbox file (stem or a
++            # controller-registered alias).  A mismatch is preserved for audit as
++            # actor_claimed and the event is downgraded to an unattributed actor, so
++            # apply_events' actor-string authority test can never be forged.
++            stem = path.stem
++            src_role = SOURCE_ACTOR_ALIASES.get(stem, stem)
++            if not KNOWN_AGENT.match(src_role):
++                src_role = "unattributed:" + stem
++            if doc.get("actor") != src_role:
++                doc["actor_claimed"] = doc.get("actor")
++                doc["actor"] = "unattributed:" + stem
++            doc["_source_file"] = str(path.relative_to(ROOT))
++            # -------------------------------------------------------------------
+             accepted.append(doc)
+             seen.add(eid)
+     if not dry_run:
+--- a/research_map/apply_events.py
++++ b/research_map/apply_events.py
+@@ -26,6 +26,35 @@
+ # Only the controller and group leads may move a node to done or set a gate verdict.
+ AUTHORITY = {"astra", "lead-formulation", "lead-literature", "lead-numerics", "lead-audit",
+              "astra-lead-formulation", "astra-lead-literature", "astra-lead-numerics", "astra-lead-audit"}
++
++
++def _source_role(ev) -> str:
++    src = str(ev.get("_source_file", ""))
++    if not src:
++        return ""
++    name = Path(src).name
++    if name.endswith(".jsonl"):
++        return name[: -len(".jsonl")]
++    return name.split(".")[0]
++
++
++def is_authority(ev) -> bool:
++    """W024 proposed: authority requires actor in AUTHORITY, a source that backs it,
++    and no declared/actual actor mismatch."""
++    actor = str(ev.get("actor", ""))
++    if actor not in AUTHORITY:
++        return False
++    if ev.get("actor_claimed"):
++        return False
++    role = _source_role(ev)
++    if not role:
++        return False  # no provenance -> no authority
++    if role == actor:
++        return True
++    return SOURCE_ACTOR_ALIASES.get(role) == actor
++
++
++SOURCE_ACTOR_ALIASES = {"lead-literature.events": "astra-lead-literature"}
+ 
+ 
+ def now() -> str:
+@@ -246,21 +275,31 @@
+                     {"at": ev.get("created_at"), "by": actor, "rejected_status": st,
+                      "reason": "numerics_lock is locked; use N1-BLOCK for contract work"})
+                 st = "queued"
+-            if st == "done" and actor not in AUTHORITY:
++            auth = is_authority(ev)
++            assignee = any(x.get("node_id") == ev["node_id"] and x.get("assignee") == actor
++                           for x in m.get("assignments", []))
++            if not (auth or assignee):
++                n.setdefault("status_proposals", []).append(
++                    {"at": ev.get("created_at"), "by": actor, "proposed_status": st,
++                     "reason": "actor is neither authority nor assignee (W024 authority binding)"})
++                applied.append(eid); return
++            if st == "done" and not auth:
+                 # a cheap agent may not promote; record the claim, keep the node honest
+                 n.setdefault("completion_claims", []).append(
+                     {"at": ev.get("created_at"), "by": actor, "summary": ev.get("summary"),
+                      "evidence_refs": ev.get("evidence_refs", [])})
+-                st = "active" if n.get("status") not in {"blocked", "killed"} else n.get("status")
+-            # pass-05 controller repair (CF-25): a node promoted to done on artifact + review
+-            # evidence is not demoted by a later worker status event. The 15-minute auto-cycle
+-            # applies traffic between controller passes, so without this guard any worker
+-            # "status=active" on a done node silently reverted the promotion.
+-            if n.get("status") == "done" and actor not in AUTHORITY:
++                st = "active" if n.get("status") not in {"blocked", "killed", "done"} else n.get("status")
++            # pass-05 controller repair (CF-25), retained: a node promoted to done on
++            # artifact + review evidence is not demoted by a later worker status event.
++            if n.get("status") == "done" and not auth:
+                 n.setdefault("status_events_ignored", []).append(
+                     {"at": ev.get("created_at"), "by": actor, "rejected_status": st,
+                      "reason": "node is done (promoted with artifact + review evidence); worker "
+                                "status events cannot demote it"})
++            elif n.get("status") in {"done", "killed"} and not auth and st != n.get("status"):
++                n.setdefault("status_proposals", []).append(
++                    {"at": ev.get("created_at"), "by": actor, "proposed_status": st,
++                     "reason": "non-authority actor may not move a terminal node"})
+             else:
+                 n["status"] = st
+             n["hours"] = max(n.get("hours", 0), float(ev.get("hours", 0) or 0))
+@@ -276,7 +315,8 @@
+         # token and strip a trailing separator rather than stopping at the first colon
+         # (CF-14: the previous non-greedy matcher could not bind colon-bearing ids).
+         summary = str(ev.get("summary", ""))
+-        if "resource_request" in summary and ("APPROVED" in summary or "DENIED" in summary):
++        if (is_authority(ev) and "resource_request" in summary
++                and ("APPROVED" in summary or "DENIED" in summary)):
+             import re as _re
+             tok = _re.search(r"resource_request\s+(\S+)", summary)
+             rid_s = tok.group(1).rstrip(":,;.") if tok else None
+@@ -351,6 +391,10 @@
+                     gate["last_verdict_event"] = eid
+                     gate["updated_at"] = now()
+     elif t == "direction_update":
++        if not is_authority(ev):
++            m.setdefault("authority_proposals", []).append(
++                {**ev, "status": "unauthorized", "received_at": now()})
++            applied.append(eid); return
+         for g in m["groups"]:
+             if g["id"] == ev["group_id"]:
+                 g.setdefault("direction_history", []).append(
+@@ -361,11 +405,19 @@
+     elif t == "resource_request":
+         m["resource_requests"].append({**ev, "status": "pending", "received_at": now()})
+     elif t == "budget":
++        if not is_authority(ev):
++            m.setdefault("authority_proposals", []).append(
++                {**ev, "status": "unauthorized", "received_at": now()})
++            applied.append(eid); return
+         for g in m["groups"]:
+             if g["id"] == ev["group_id"]:
+                 g["budget_agent_hours"] = g.get("budget_agent_hours", 0) + float(ev["delta_agent_hours"])
+                 g.setdefault("budget_history", []).append({"at": now(), "delta": ev["delta_agent_hours"], "reason": ev["reason"]})
+     elif t == "assignment":
++        if not is_authority(ev):
++            m.setdefault("authority_proposals", []).append(
++                {**ev, "status": "unauthorized", "received_at": now()})
++            applied.append(eid); return
+         known = {a.get("event_id") for a in m["assignments"]}
+         if eid not in known:
+             m["assignments"].append({k: ev[k] for k in
+@@ -373,6 +425,10 @@
+                                       "acceptance", "budget_agent_hours", "expected_information_gain",
+                                       "falsifier", "stop_rule", "deadline") if k in ev})
+     elif t in {"kill", "revive"}:
++        if not is_authority(ev):
++            m.setdefault("authority_proposals", []).append(
++                {**ev, "status": "unauthorized", "received_at": now()})
++            applied.append(eid); return
+         g, n = idx.get(ev["target_id"], (None, None))
+         if n:
+             n["status"] = "killed" if t == "kill" else "active"
+@@ -380,7 +436,7 @@
+     applied.append(eid)
+ 
+ 
+-def main(dry_run=False):
++def main(dry_run=False, force=False):
+     m = json.loads(MAP.read_text())
+     events = comms.load_events()
+     demoted = reconcile_structure(m, events)
+@@ -405,6 +461,12 @@
+                     n["validation_status"] = "unverified"
+                     demoted.append(n["id"])
+     errs = validate_map(m)
++    if errs and not force:
++        print(json.dumps({"refused": True, "reason": "map invalid; refusing to write",
++                          "map_errors": errs[:20], "applied": len(applied),
++                          "skipped": len(skipped), "events_total": len(events)}, indent=2))
++        return {"refused": True, "map_errors": errs, "applied": len(applied),
++                "skipped": len(skipped), "demoted": demoted, "events_total": len(events)}
+     if demoted:
+         m["portfolio_events"].append({"time": now(), "actor": "astra", "event":
+             f"demoted unbacked done nodes: {', '.join(sorted(set(demoted)))} (artifact absent on disk)"})
+@@ -430,5 +492,7 @@
+     ap = argparse.ArgumentParser()
+     ap.add_argument("--dry-run", action="store_true")
+     ap.add_argument("--report", action="store_true")
++    ap.add_argument("--force", action="store_true")
+     a = ap.parse_args()
+-    main(dry_run=a.dry_run)
++    rc = main(dry_run=a.dry_run, force=a.force)
++    sys.exit(2 if isinstance(rc, dict) and rc.get("refused") else 0)

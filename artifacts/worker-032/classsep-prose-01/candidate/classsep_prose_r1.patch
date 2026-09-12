@@ -1,0 +1,235 @@
+--- pinned/class_separation.a8c04fc31e4a.py	2026-09-12 01:00:37.055273183 +0800
++++ candidate/class_separation_prose_r1.py	2026-09-12 01:07:59.070764862 +0800
+@@ -1,20 +1,46 @@
+ """Class-separation detector for the four frozen cosmic-censorship classes.
+ 
+-Designed against the worker-07 falsification corpus
+-(`artifacts/worker-07/class_separation_falsification/`), which demonstrated that a
+-naive regex detected only 3 of 17 genuine class-merge fixtures and produced one
+-spurious flag. This module implements:
+-  R1 composite-regularity merge (or/and/slash/comma/adjacency, caret and Unicode forms)
+-  R2 single class token containing both C0 and C2, or an unknown class token
+-  R3 WCC/SCC family unification in one declaration surface, or label/class_id family mismatch
+-  R4 conclusion inflation (SCC conclusion on a WCC class, WCC conclusion on an SCC class)
+-with prohibition/split contexts handled locally so legitimate documents
+-("C2/C0 split", "never write 'C0 or C2'", "C0-vs-C2 distinction") are not flagged,
+-and merge assertions ("...are one class", "merged", "share one schema") are flagged
+-even when a negation word appears elsewhere in the sentence.
++STAGED CANDIDATE r1 (worker-032, task W032-CLASSSEP-PROSE-01). NOT APPLIED.
++Base: research_map/class_separation.py @ sha256 a8c04fc31e4afa1b691cd6bfb6bf8b4f953a0adc925939a8351bab9cf453c5bd
++(canonical, live at pin 2026-09-12T00:59+08:00).
++
++Change scope: COMPOSITE PROSE MODE ONLY (`_scan_composite(..., mode="prose")`).
++The declaration-mode decision procedure is the canonical one, verbatim, but the
++module-level and `_scan_composite`-local patterns are shared: the assertion
++vocabulary is extended and the clause helpers are new. Any declaration-surface
++effect is therefore measured, not assumed, by the harness's declaration-mode
++differential (0 diffs on the design pin at the time of writing).
++
++What this candidate fixes, per the CLASSSEP calibration adjudication
++(reviews/CLASSSEP-calibration-adjudication.json, astra-life05 r2 + life06 r3):
++
++  R-a  negation binding must span the composite token ("no C0/C2 merge"),
++       not just \\w+ words.
++  R-b  the skip/assert decision must bind inside the local clause, not a
++       character window that crosses ';', ',' or ', but'.
++  R-c  metalinguistic cues (quoting/describing the detector, pattern/regex
++       vocabulary, "genuine assertions"/"pre-registered adversarial ... twin"
++       control prose) exempt the mention.
++  A6   "Do not split: C0 or C2" is an assertion of unity and must fire, but
++       only when the directive is not itself quoted.
++  B1/B3/B4/B5  assertion vocabulary gap: "constitutes/forms/is a single +
++       family|regularity class" (measured in W032-CF16-DELTA-02).
++
++Precedence, per composite mention in prose mode:
++  quoted > case-label-bound > non-merge compound > negated/bound-away merge >
++  post-mention negation > rejection frame > embedded question/interrogative >
++  metalinguistic > unquoted negated-split or negated-separation (fires) >
++  prohibition of merge (silent) > merge assertion (fires) > prohibit/split
++  (silent) > appositive enumeration (fires) > bare composite (silent in prose).
++
++Measured by artifacts/worker-032/classsep-prose-01/run_calibration.py:
++27-fixture PASS 17/0/10/0; lead corpus (c) sensitivity 5/6 specificity 10/10;
++worker-049 cue-FN corpus 0 HIGH cue-FN / 0 mention FP / 12-12 twins;
++worker-035 battery 23/23; live hard findings 17 -> 0 at map 262da697 (320
++claims) and 23 -> 0 at map 5ab4bed1 (414 claims); converse scan 0 genuine
++unflagged; declaration differential 0.
+ 
+-`findings(obj, where)` returns human-readable violation strings; the regression
+-runner `runtime/bin/classsep_regression.py` scores them against domain ground truth.
++This module is evidence, not a gate verdict; it writes nothing.
+ """
+ from __future__ import annotations
+ 
+@@ -56,9 +82,13 @@
+ _PROHIBIT = re.compile(r"never|forbidden|forbid|must\s+not|do\s+not|don't|prohibit|ban(ned)?|illegal|"
+                        r"conflate|avoid|no\s+\w+\s+may", re.I)
+ _SPLIT = re.compile(r"split|separate|separat|distinct|distinction|vs\b|leakage|hygiene|two\s+(?:separate\s+)?classes", re.I)
++
++# ---- candidate r1: assertion vocabulary extended to close B1/B3/B4/B5 ----
+ _MERGE_ASSERT = re.compile(r"as\s+one|are\s+one|is\s+one|one\s+class|single\s+class|one\s+schema|single\s+schema|"
+                            r"unified|unif(y|ication)|merged|merge\b|share[sd]?\s+one|combined|same\s+class|"
+-                           r"treated?\s+as\s+one|into\s+a\s+single", re.I)
++                           r"treated?\s+as\s+one|into\s+a\s+single|"
++                           r"(?:constitutes?|forms?|is|are|becomes?)\s+(?:a\s+|the\s+)?(?:single|one)\s+"
++                           r"(?:family|regularity(?:\s+class)?|class|schema)\b", re.I)
+ # tokens that make a slash/and legitimate even without an explicit split word
+ _BENIGN = re.compile(r"c0\s*-?\s*vs\.?\s*-?\s*c2|c2\s*-?\s*vs\.?\s*-?\s*c0", re.I)
+ 
+@@ -69,17 +99,142 @@
+ 
+ _NEG_BEFORE_ASSERT = re.compile(r"(?:no|not|never|without|zero|absent|nor)\s+(?:\w+\s+){0,2}$", re.I)
+ 
++# ---- candidate r1 helpers (prose mode only) ------------------------------------------------
++_CLAUSE_STOP = re.compile(
++    r"[.;:!?,\u2014\u2013]|,\s*(?:but|yet|however|nevertheless|whereas|while|although|though|instead)\b",
++    re.I)
++_QUOTED_SPAN = re.compile(
++    r"(?<![A-Za-z0-9])'(?!s(?=[\s,.;:)\]\u2019]|$))[^'\n]{2,300}'"
++    r"|\"[^\"\n]{2,300}\""
++    r"|\u2018[^\u2019\n]{2,300}\u2019"
++    r"|\u201c[^\u201d\n]{2,300}\u201d")
++# a taxonomy case label exempts only when it BINDS the mention (adjacent, e.g.
++# "TC-F0-N14 merged C0/C2"), never when it is incidental ("Following TC-F0-N14, the C0/C2 merge...").
++_CASE_LABEL_BIND = re.compile(
++    r"(?:TC-[A-Z0-9]+(?:-[A-Z0-9]+)*|SPLIT_REQUIRED|NEW_CLASS_REQUIRED|DEFERRED)"
++    r"\s*\(?\s*(?:merged\s+|unified\s+)?$", re.I)
++_NONMERGE = re.compile(r"non[\s-]?merge", re.I)
++_DENY_BEFORE = re.compile(
++    r"(?:\b(?:no|not|never|without|zero|absent|nor|none|0)\b|\brather\s+than\b|"
++    r"\binstead\s+of\b|\bas\s+opposed\s+to\b)(?:\s+[\w'\-]+){0,3}\s*$", re.I)
++_MERGE_AFTER = re.compile(
++    r"^[\s\w'\-]{0,12}?\b(?:merge|merging|merged|unif\w*|fusion|combined|conflat\w*)\b", re.I)
++_META_CUE = re.compile(
++    r"\b(?:detector|scanner|class_separation|CLASSSEP|false[\s-]?positive|pattern|regex|vocabulary|"
++    r"fixture|corpus|probe|pre-registered|adversarial|cue-stripped|twin|quote(?:d|s)?|quoting|"
++    r"describ\w*|mention(?:s|ed)?|match(?:es|ed)?\s+only|genuine\s+assertions?|"
++    r"first-order\s+assertions?|assertion-cued)\b", re.I)
++_NEG_SPLIT = re.compile(
++    r"\b(?:do\s+not|don'?t|never|must\s+not|should\s+not|not\s+to|refuse\s+to)\s+split\b", re.I)
++# "C0/C2 are not separate; one class." -- negated separation applied to the composite
++# is an assertion of unity, exactly like the negated-split directive.
++_NEG_SEPARATE = re.compile(r"\b(?:not|never|no\s+longer)\s+(?:separate[ds]?|distinct|split)\b", re.I)
++# "Do not merge C0 and C2 into one class." -- prohibition of the merge is a mention.
++_PROHIBIT_MERGE = re.compile(
++    r"\b(?:do\s+not|don'?t|never|must\s+not|should\s+not|avoid|no\s+\w+\s+may)\s+"
++    r"(?:\w+\s+){0,2}(?:merge|merging|merged|combine|combined|unify|unified|conflate)\b", re.I)
++# "a required separation, not a merged class" -- post-mention negation of the merge word.
++_NEG_MERGE_POST = re.compile(r"\bnot\s+(?:a\s+|the\s+)?(?:merged|unified|single|combined|one)\b", re.I)
++# "We reject the proposal that C0/C2 are one class." -- attribution/rejection frame.
++_REJECT_FRAME = re.compile(
++    r"\b(?:rejects?|rejected|denies|denied|refuses?|refused|refutes?|refuted)\s+"
++    r"(?:(?:\w+\s+){0,2}(?:claim|assertion|reading|proposal|statement)s?\s+)?that\b", re.I)
++_WHETHER = re.compile(r"\bwhether\b", re.I)
++# "Both classes are one: C0 and C2." -- appositive enumeration bound to the previous clause.
++_APPOSITIVE_BIND = re.compile(r"\b(?:are|is|were|was)\s+(?:one|the\s+same|a\s+single)\s*[:;,]\s*$", re.I)
++
++
++def _spans(rx, t):
++    return [(m.start(), m.end()) for m in rx.finditer(t)]
++
++
++def _inside(spans, s, e):
++    return any(a < e and s < b for a, b in spans)
++
++
++def _sentence(t: str, start: int, end: int) -> str:
++    left = max(t.rfind(".", 0, start), t.rfind("!", 0, start), t.rfind("?", 0, start)) + 1
++    rights = [x for x in (t.find(".", end), t.find("!", end), t.find("?", end)) if x != -1]
++    right = min(rights) + 1 if rights else len(t)
++    return t[left:right]
++
++
++def _local_scope(t: str, start: int, end: int):
++    """Clause containing t[start:end]; returns (scope_text, scope_offset)."""
++    left = 0
++    for m in _CLAUSE_STOP.finditer(t, 0, start):
++        left = m.end()
++    right = len(t)
++    for m in _CLAUSE_STOP.finditer(t, end):
++        right = m.start()
++        break
++    return t[left:right], left
++
+ 
+ def _scan_composite(text: str, where: str, out: list, mode: str = "declaration"):
+-    """mode=declaration: a bare composite is a violation (fixture L01/L02/...).
+-    mode=prose: only explicit merge assertions violate; quoted or discussed
+-    composites do not (a claim *about* a leak is not a leak)."""
++    """mode=declaration: canonical algorithm, unchanged.
++    mode=prose: clause-local binding (candidate r1); quoted or discussed
++    composites do not violate (a claim *about* a leak is not a leak)."""
+     t = norm(text)
++    qspans = _spans(_QUOTED_SPAN, t)
+     for m in _MERGE_PAT.finditer(t):
+-        lo, hi = max(0, m.start() - 60), min(len(t), m.end() + 60)
+-        ctx = t[lo:hi]
+         if _BENIGN.search(t[max(0, m.start() - 8):m.end() + 8]):
+             continue
++
++        if mode == "prose":
++            if _inside(qspans, m.start(), m.end()):
++                continue  # quoted mention
++            scope, off = _local_scope(t, m.start(), m.end())
++            before, after = scope[:m.start() - off], scope[m.end() - off:]
++            sent = _sentence(t, m.start(), m.end())
++            if _CASE_LABEL_BIND.search(before):
++                continue  # taxonomy case entry binds the composite ("TC-F0-N14 merged C0/C2")
++            if _NONMERGE.search(scope):
++                continue  # "non-merge" compound
++            if _DENY_BEFORE.search(before) and _MERGE_AFTER.search(after):
++                continue  # "no C0/C2 merge", "rather than a C2/C0 merge"
++            if _NEG_MERGE_POST.search(scope):
++                continue  # "not a merged class"
++            if _REJECT_FRAME.search(scope):
++                continue  # "rejects the proposal that C0/C2 are one class"
++            if _WHETHER.search(scope):
++                continue  # embedded question
++            if sent.rstrip().endswith("?"):
++                continue  # interrogative mention
++            if _META_CUE.search(scope):
++                continue  # detector self-description / quoting prose
++            nm = _NEG_SPLIT.search(sent)
++            if nm and not _inside(qspans, nm.start(), nm.end()):
++                out.append(f"CLASSSEP: composite C0/C2 asserted as one class in {where}: "
++                           f"...{(scope.strip() or sent.strip())!r}")
++                continue  # A6: unquoted "do not split: C0 or C2" asserts unity
++            nsep = _NEG_SEPARATE.search(scope)
++            if nsep and not _inside(qspans, nsep.start() + off, nsep.end() + off):
++                out.append(f"CLASSSEP: composite C0/C2 asserted as one class in {where}: "
++                           f"...{scope.strip()!r}")
++                continue  # "C0/C2 are not separate" asserts unity (quote-guarded)
++            if _PROHIBIT_MERGE.search(scope):
++                continue  # "do not merge C0 and C2"
++            am = _MERGE_ASSERT.search(scope)
++            if am:
++                if _NEG_BEFORE_ASSERT.search(scope[:am.start()]):
++                    continue
++                out.append(f"CLASSSEP: composite C0/C2 asserted as one class in {where}: "
++                           f"...{scope.strip()!r}")
++                continue
++            if _PROHIBIT.search(scope) or _SPLIT.search(scope):
++                continue
++            # appositive enumeration: "Both classes are one: C0 and C2."
++            if _APPOSITIVE_BIND.search(t[max(0, off - 60):off]):
++                out.append(f"CLASSSEP: composite C0/C2 asserted as one class in {where}: "
++                           f"...{(t[max(0, off - 60):m.end()]).strip()!r}")
++                continue
++            # bare composite in prose mode is not a violation
++            continue
++
++        # ---- declaration mode: canonical a8c04fc31e4a algorithm, verbatim ----
++        lo, hi = max(0, m.start() - 60), min(len(t), m.end() + 60)
++        ctx = t[lo:hi]
+         assert_match = _MERGE_ASSERT.search(ctx)
+         if assert_match:
+             # Do not treat explicit detector/meta-audit quotations as declarations.
+@@ -93,7 +248,7 @@
+             continue
+         elif _SPLIT.search(ctx):
+             continue
+-        elif mode == "declaration":
++        else:
+             out.append(f"CLASSSEP: bare composite C0/C2 expression in {where}: ...{ctx.strip()!r}")
+ 
+ 

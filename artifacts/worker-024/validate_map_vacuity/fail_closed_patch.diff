@@ -1,0 +1,48 @@
+--- research_map/validate_map.py@aa4bd61c55cb
++++ artifacts/worker-024/validate_map_vacuity/patched/validate_map.patched.py
+@@ -14,9 +14,31 @@
+ 
+ 
+ def validate_map(m, base=None):
+-    # integrated from worker-19's proposed patch (artifacts/audit/flash19_validate_map_gate.patch)
+-    base = Path(base) if base else ROOT
+-    errors=[]; groups={g["id"]:g for g in m.get("groups",[])}; nodes={}
++    # W024-VALIDATE-MAP-VACUITY-01 proposed patch (owner decision to apply):
++    #  (1) non-vacuity block -- a structurally stripped map must not validate;
++    #  (2) map artifact paths are repo-root-relative (apply_events.py:19,393),
++    #      so the default base is the repo root, not the research_map/ dir.
++    base = Path(base) if base else ROOT.parent
++    errors=[]
++    groups_raw=m.get("groups")
++    if not isinstance(groups_raw,list) or not groups_raw:
++        errors.append("vacuity guard: map has no groups")
++    if not any(isinstance(g,dict) and g.get("nodes") for g in (groups_raw or [])):
++        errors.append("vacuity guard: map has no nodes")
++    for _key in ("gates","claims","reviews","assignments","numerics_lock"):
++        if _key not in m:
++            errors.append(f"vacuity guard: missing required section {_key}")
++    if isinstance(m.get("gates"),list) and not m["gates"]:
++        errors.append("vacuity guard: gates list is empty")
++    _lock=m.get("numerics_lock") or {}
++    if isinstance(_lock,dict) and _lock.get("state")=="locked":
++        _locked=set(_lock.get("locked_nodes") or [])
++        for _g in groups_raw or []:
++            if not isinstance(_g,dict): continue
++            for _n in _g.get("nodes",[]) or []:
++                if isinstance(_n,dict) and _n.get("id") in _locked and _n.get("status") in {"active","done"}:
++                    errors.append(f"locked node {_n['id']} status {_n['status']} while numerics_lock=locked (hard decision 2)")
++    groups={g["id"]:g for g in (groups_raw or [])}; nodes={}
+     for g in groups.values():
+         for n in g.get("nodes",[]):
+             if n["id"] in nodes: errors.append(f"duplicate node {n['id']}")
+@@ -65,8 +87,8 @@
+     return errors
+ 
+ if __name__ == "__main__":
+-    ap=argparse.ArgumentParser(); ap.add_argument("--map",default=str(ROOT/"research_map.json")); ap.add_argument("events",nargs="*"); a=ap.parse_args()
+-    errs=validate_map(load(a.map))+validate_events(a.events)
++    ap=argparse.ArgumentParser(); ap.add_argument("--map",default=str(ROOT/"research_map.json")); ap.add_argument("--base",default=None); ap.add_argument("events",nargs="*"); a=ap.parse_args()
++    errs=validate_map(load(a.map), base=a.base)+validate_events(a.events)
+     if errs:
+         print('INVALID'); print('\n'.join('- '+e for e in errs)); sys.exit(1)
+     print('VALID')
