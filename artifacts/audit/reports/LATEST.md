@@ -1,0 +1,72 @@
+# Audit tick 20260912T004836
+
+- elapsed since swarm start: 5605.5s
+- map sha256: `11311ab3600514cd34ca7332714a4aa27b97e4fdc124f29179122e11f844974d`
+- rubric sha256: `d748a9e3574ebe0c34c22b608ba0bf018d525a644ebff815371c6dcfca055885`
+- corpus: {'files': 3767, 'claims': 1400, 'artifacts': 8225, 'citations': 412, 'results': 0, 'records': 1699}
+- violations: 1031 (critical 514) {'HF-02': 680, 'HF-06': 287, 'HF-13': 62, 'HF-03': 1, 'HF-14': 1}
+- citations: n=412 score=0.6032 unresolved=4
+- duplication: n=1012 cluster_rate=2.3043 mean_novelty=0.03277154150197629
+- gates: {'G-FORM': 'pending', 'G-LIT': 'fail', 'G-AUDIT': 'fail', 'G-NUM': 'pending'}
+
+## Violations
+- **HF-02** (major) `<claim>`: unknown conclusion_type None
+- **HF-06** (major) `<claim>`: empty assumptions field
+- **HF-02** (major) `<claim>`: unknown conclusion_type None
+- **HF-06** (major) `<claim>`: statement asserts genericity of the result but assumptions do not define it
+- **HF-06** (major) `<claim>`: empty assumptions field
+- **HF-02** (major) `<claim>`: unknown conclusion_type None
+- **HF-06** (major) `<claim>`: empty assumptions field
+- **HF-02** (major) `<claim>`: unknown conclusion_type None
+- **HF-06** (major) `<claim>`: empty assumptions field
+- **HF-02** (major) `<claim>`: unknown conclusion_type None
+- **HF-06** (major) `<claim>`: empty assumptions field
+- **HF-02** (major) `<claim>`: unknown conclusion_type None
+- **HF-06** (major) `<claim>`: statement asserts genericity of the result but assumptions do not define it
+- **HF-06** (major) `<claim>`: empty assumptions field
+- **HF-02** (major) `<claim>`: unknown conclusion_type None
+- **HF-06** (major) `<claim>`: empty assumptions field
+- **HF-02** (major) `<claim>`: unknown conclusion_type None
+- **HF-06** (major) `<claim>`: statement asserts genericity of the result but assumptions do not define it
+- **HF-06** (major) `<claim>`: empty assumptions field
+- **HF-02** (major) `<claim>`: unknown conclusion_type None
+- **HF-06** (major) `<claim>`: empty assumptions field
+- **HF-02** (major) `<claim>`: unknown conclusion_type None
+- **HF-06** (major) `<claim>`: statement asserts genericity of the result but assumptions do not define it
+- **HF-06** (major) `<claim>`: empty assumptions field
+- **HF-02** (major) `<claim>`: unknown conclusion_type None
+- **HF-06** (major) `<claim>`: empty assumptions field
+- **HF-02** (major) `<claim>`: unknown conclusion_type None
+- **HF-06** (major) `<claim>`: empty assumptions field
+- **HF-02** (major) `<claim>`: unknown conclusion_type None
+- **HF-06** (major) `<claim>`: statement asserts genericity of the result but assumptions do not define it
+- **HF-06** (major) `<claim>`: empty assumptions field
+- **HF-02** (major) `<claim>`: unknown conclusion_type None
+- **HF-06** (major) `<claim>`: empty assumptions field
+- **HF-02** (major) `<claim>`: unknown conclusion_type None
+- **HF-06** (major) `<claim>`: empty assumptions field
+- **HF-02** (major) `<claim>`: unknown conclusion_type None
+- **HF-06** (major) `<claim>`: empty assumptions field
+- **HF-02** (critical) `<claim>`: class_id None is not in the frozen class registry
+- **HF-02** (critical) `<claim>`: class_id None is not in the frozen class registry
+- **HF-02** (critical) `<claim>`: class_id None is not in the frozen class registry
+- **HF-02** (critical) `<claim>`: class_id None is not in the frozen class registry
+- **HF-02** (critical) `<claim>`: class_id None is not in the frozen class registry
+- **HF-02** (critical) `<claim>`: class_id None is not in the frozen class registry
+- **HF-02** (critical) `<claim>`: class_id None is not in the frozen class registry
+- **HF-02** (critical) `<claim>`: class_id None is not in the frozen class registry
+- **HF-02** (critical) `<claim>`: class_id None is not in the frozen class registry
+- **HF-02** (critical) `<claim>`: class_id None is not in the frozen class registry
+- **HF-02** (critical) `<claim>`: class_id None is not in the frozen class registry
+- **HF-02** (critical) `<claim>`: class_id None is not in the frozen class registry
+- **HF-02** (critical) `<claim>`: class_id None is not in the frozen class registry
+- **HF-02** (critical) `<claim>`: class_id None is not in the frozen class registry
+- **HF-02** (critical) `<claim>`: class_id None is not in the frozen class registry
+- **HF-02** (critical) `<claim>`: class_id None is not in the frozen class registry
+- **HF-02** (critical) `<claim>`: class_id None is not in the frozen class registry
+- **HF-02** (critical) `<claim>`: class_id None is not in the frozen class registry
+- **HF-02** (critical) `<claim>`: class_id None is not in the frozen class registry
+- **HF-02** (critical) `<claim>`: class_id None is not in the frozen class registry
+- **HF-06** (major) `lit-20260912-016`: statement uses a smallness/nearness hypothesis absent from assumptions
+- **HF-06** (major) `lit-20260911-016`: statement uses a smallness/nearness hypothesis absent from assumptions
+- **HF-02** (critical) `flash02-rebind-claim-0006-20260912T0010`: class_id 'AF-WCC-VAC-GEN;AF-SCC-C2-VAC-GEN;AF-SCC-C0-VAC-GEN;AF-WCC-SCALAR-SPH' is not in the frozen class registry

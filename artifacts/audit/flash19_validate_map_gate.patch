@@ -1,0 +1,65 @@
+--- a/research_map/validate_map.py
++++ b/research_map/validate_map.py
+@@ -1,4 +1,10 @@
+-"""Validate research_map.json and event streams before Astra accepts state."""
++"""Validate research_map.json and event streams before Astra accepts state.
++
++PROPOSED PATCH (flash19, T19-01) — NOT APPLIED to the shared validator.
++Adds artifact-existence, evidence and dependency-gate checks so that a done
++node without an existing, evidence-backed artifact makes the map INVALID.
++Diff: artifacts/audit/flash19_validate_map_gate.patch
++"""
+ from __future__ import annotations
+ import argparse, json, sys
+ from pathlib import Path
+@@ -9,7 +15,11 @@
+ 
+ def load(path): return json.loads(Path(path).read_text())
+ 
+-def validate_map(m):
++def _real_entries(p):
++    return [c for c in p.iterdir() if c.name != ".DS_Store" and not c.name.startswith("._")]
++
++def validate_map(m, base=None):
++    base = Path(base) if base else ROOT
+     errors=[]; groups={g["id"]:g for g in m.get("groups",[])}; nodes={}
+     for g in groups.values():
+         for n in g.get("nodes",[]):
+@@ -24,6 +34,25 @@
+             errors.append(f"{gid}: done node has no artifact")
+         if n.get("status") == "done" and not n.get("validation_status", n.get("validated", False)):
+             errors.append(f"{gid}: done node lacks validation_status/validated=true")
++    # ---- PROPOSED ADDITION: artifact/evidence gate -------------------------
++    ungated=set()
++    for nid,(gid,n) in nodes.items():
++        if n.get("status") != "done": continue
++        art=n.get("artifact")
++        if art:
++            p=base/art
++            if not p.exists():
++                errors.append(f"{nid}: declared artifact missing on disk: {art}"); ungated.add(nid)
++            elif p.is_dir() and not _real_entries(p):
++                errors.append(f"{nid}: declared artifact directory is empty: {art}"); ungated.add(nid)
++        if not n.get("evidence_refs"):
++            errors.append(f"{nid}: done node has no evidence_refs"); ungated.add(nid)
++    for nid,(gid,n) in nodes.items():
++        if n.get("status") in {"active","queued"}:
++            for dep in n.get("depends_on",[]):
++                if dep in ungated:
++                    errors.append(f"{nid}: depends on ungated done node {dep}")
++    # ---- end addition ------------------------------------------------------
+     for e in m.get("cross_group_edges",[]):
+         if e.get("from") not in nodes or e.get("to") not in nodes: errors.append(f"unknown cross edge {e}")
+         else: edges.append((e["from"],e["to"]))
+@@ -49,8 +78,9 @@
+     return errors
+ 
+ if __name__ == "__main__":
+-    ap=argparse.ArgumentParser(); ap.add_argument("--map",default=str(ROOT/"research_map.json")); ap.add_argument("events",nargs="*"); a=ap.parse_args()
+-    errs=validate_map(load(a.map))+validate_events(a.events)
++    ap=argparse.ArgumentParser(); ap.add_argument("--map",default=str(ROOT/"research_map.json")); ap.add_argument("--base",default=None); ap.add_argument("events",nargs="*"); a=ap.parse_args()
++    base=Path(a.base).resolve() if a.base else Path(a.map).resolve().parent.parent
++    errs=validate_map(load(a.map), base=base)+validate_events(a.events)
+     if errs:
+         print('INVALID'); print('\n'.join('- '+e for e in errs)); sys.exit(1)
+     print('VALID')
