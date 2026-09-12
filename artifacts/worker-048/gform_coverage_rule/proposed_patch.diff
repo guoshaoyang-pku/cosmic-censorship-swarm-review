@@ -1,0 +1,124 @@
+--- a/research_map/astra_lifecycle.py
++++ b/research_map/astra_lifecycle.py (proposed, UNAPPLIED)
+@@ -141,35 +141,109 @@
+ }
+ 
+ 
++# --- R3 proposal: path/<node>@hash target aliases (W48-GFORM-COVERAGE-RULE-CHARACTERIZATION-01)
++TARGET_PATH_ALIASES = {
++    "research_map/formulation_taxonomy.yaml": "F0",
++    "artifacts/formulation/formulation_taxonomy.yaml": "F0",
++    "schemas/af_wcc_vacuum.yaml": "F1",
++    "artifacts/formulation/schemas/af_wcc_vacuum.yaml": "F1",
++    "schemas/af_scc_c2_vacuum.yaml": "F2a",
++    "artifacts/formulation/schemas/af_scc_c2_vacuum.yaml": "F2a",
++    "schemas/af_scc_c0_vacuum.yaml": "F2b",
++    "artifacts/formulation/schemas/af_scc_c0_vacuum.yaml": "F2b",
++}
++
++
++def _collect_hash_strings(v, out=None):
++    """R3: recursively collect raw strings from str/dict/list values."""
++    if out is None:
++        out = []
++    if isinstance(v, str):
++        out.append(v.lower())
++    elif isinstance(v, dict):
++        for vv in v.values():
++            _collect_hash_strings(vv, out)
++    elif isinstance(v, list):
++        for vv in v:
++            _collect_hash_strings(vv, out)
++    return out
++
++
++def _norm_targets(t: str) -> set:
++    """R3: normalise one target string (including comma/semicolon lists and
++    path#hash / node@hash forms) to node ids."""
++    out = set()
++    for piece in re.split(r"[,;]", t):
++        piece = piece.strip()
++        if not piece:
++            continue
++        if piece in TARGET_ALIASES:
++            out.add(TARGET_ALIASES[piece])
++            continue
++        if piece.upper() in TARGET_ALIASES:
++            out.add(TARGET_ALIASES[piece.upper()])
++            continue
++        base = piece.split("#", 1)[0].split("@", 1)[0].strip()
++        if base in TARGET_ALIASES:
++            out.add(TARGET_ALIASES[base])
++            continue
++        if base.upper() in TARGET_ALIASES:
++            out.add(TARGET_ALIASES[base.upper()])
++            continue
++        if base in TARGET_PATH_ALIASES:
++            out.add(TARGET_PATH_ALIASES[base])
++            continue
++        name = base.rsplit("/", 1)[-1]
++        if name in TARGET_PATH_ALIASES:
++            out.add(TARGET_PATH_ALIASES[name])
++    return out
++
++
+ def _targets_in_review(d: dict) -> set:
+     out = set()
+-    for key in ("target_id", "target", "target_subnode"):
++    for key in ("target_id", "target", "target_subnode", "class_id"):
+         v = d.get(key)
+         if isinstance(v, str):
+             out.add(v)
+         elif isinstance(v, dict):
+-            for k2 in ("target_id", "target_subnode", "subnode", "node_id"):
+-                if isinstance(v.get(k2), str):
+-                    out.add(v[k2])
++            for k2 in ("target_id", "target_subnode", "subnode", "node_id", "class_id"):
++                v2 = v.get(k2)
++                if isinstance(v2, str):
++                    out.add(v2)
++                elif isinstance(v2, dict):
++                    for k3 in ("target_id", "subnode", "node_id"):
++                        if isinstance(v2.get(k3), str):
++                            out.add(v2[k3])
+     norm = set()
+     for t in out:
+-        norm.add(TARGET_ALIASES.get(t, TARGET_ALIASES.get(t.upper(), t)))
++        norm |= _norm_targets(t)
+     return norm
+ 
+ 
+ def _explicit_pins(d: dict) -> list:
+-    """Hashes a review explicitly pins (not hashes merely mentioned in prose)."""
++    """R3: hashes a review explicitly pins (not hashes merely mentioned in prose).
++    Adds recursive flattening of dict/list-valued pins, the recognised target
++    sha256 keys, and hex fragments carried by target strings (# and @ forms)."""
+     pins = []
+-    for key in ("artifact_sha256", "reviewed_sha256", "sha256", "cited_sha256"):
+-        v = d.get(key)
+-        if isinstance(v, str):
+-            pins.append(v.lower())
++    for key in ("artifact_sha256", "reviewed_sha256", "sha256", "cited_sha256",
++                "target_sha256"):
++        for s in _collect_hash_strings(d.get(key)):
++            if re.fullmatch(r"[0-9a-f]{8,64}", s):
++                pins.append(s)
++            else:
++                pins.extend(m.group(0) for m in re.finditer(r"[0-9a-f]{8,64}", s))
+     for key in ("target", "artifact"):
+         v = d.get(key)
+         if isinstance(v, dict):
+             for k2 in ("sha256", "artifact_sha256", "reviewed_sha256"):
+-                if isinstance(v.get(k2), str):
+-                    pins.append(v[k2].lower())
++                for s in _collect_hash_strings(v.get(k2)):
++                    pins.extend(m.group(0) for m in re.finditer(r"[0-9a-f]{8,64}", s))
++    for key in ("target_id", "target", "target_subnode"):
++        v = d.get(key)
++        if isinstance(v, str):
++            for part in re.split(r"[#,@\s]+", v):
++                if re.fullmatch(r"[0-9a-f]{8,64}", part):
++                    pins.append(part)
+     return pins
+ 
+ 

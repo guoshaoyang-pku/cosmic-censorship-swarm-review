@@ -1,0 +1,72 @@
+# Audit tick 20260912T010815
+
+- elapsed since swarm start: 6784.8s
+- map sha256: `5ab4bed181071461f107404fab6e22892fc162e5424907786633be9bd624634d`
+- rubric sha256: `d748a9e3574ebe0c34c22b608ba0bf018d525a644ebff815371c6dcfca055885`
+- corpus: {'files': 8, 'claims': 1, 'artifacts': 0, 'citations': 0, 'results': 0, 'records': 62}
+- violations: 147 (critical 1) {'HF-05': 1, 'HF-06': 2, 'HF-01': 1, 'HF-13': 143}
+- citations: n=0 score=None unresolved=0
+- duplication: n=1 cluster_rate=0.0 mean_novelty=1.0
+- gates: {'G-FORM': 'pending', 'G-LIT': 'pending', 'G-AUDIT': 'fail', 'G-NUM': 'pending'}
+
+## Violations
+- **HF-05** (major) `formulation/F0`: done node artifact 'research_map/formulation_taxonomy.yaml' has no recorded sha256
+- **HF-06** (major) `formulation/F0`: done node has no falsifier field
+- **HF-01** (critical) `PROBE-POS-W055`: theorem conclusion without artifact_refs
+- **HF-06** (major) `PROBE-POS-W055`: empty assumptions field
+- **HF-13** (minor) `artifacts/flash-04/n0_acceptance/SPEC.md`: base-project token 'funsearch' inside a cosmic-censorship artifact
+- **HF-13** (minor) `artifacts/flash-11/f1_aux_class_binding/corpus/w06/neg10_cross_domain_contamination.json`: base-project token 'cubic graph' inside a cosmic-censorship artifact
+- **HF-13** (minor) `artifacts/flash-11/f1_aux_class_binding/corpus/w06/neg10_cross_domain_contamination.json`: base-project token 'minimum degree' inside a cosmic-censorship artifact
+- **HF-13** (minor) `artifacts/worker-008/a0_rubric_review/audit_run_out/LATEST.json`: base-project token 'cubic graph' inside a cosmic-censorship artifact
+- **HF-13** (minor) `artifacts/worker-008/a0_rubric_review/audit_run_out/LATEST.json`: base-project token 'minimum degree' inside a cosmic-censorship artifact
+- **HF-13** (minor) `artifacts/worker-008/a0_rubric_review/audit_run_out/LATEST.json`: base-project token 'cap set' inside a cosmic-censorship artifact
+- **HF-13** (minor) `artifacts/worker-008/a0_rubric_review/audit_run_out/LATEST.json`: base-project token 'funsearch' inside a cosmic-censorship artifact
+- **HF-13** (minor) `artifacts/worker-008/a0_rubric_review/audit_run_out/LATEST.md`: base-project token 'cubic graph' inside a cosmic-censorship artifact
+- **HF-13** (minor) `artifacts/worker-008/a0_rubric_review/audit_run_out/LATEST.md`: base-project token 'minimum degree' inside a cosmic-censorship artifact
+- **HF-13** (minor) `artifacts/worker-008/a0_rubric_review/audit_run_out/LATEST.md`: base-project token 'cap set' inside a cosmic-censorship artifact
+- **HF-13** (minor) `artifacts/worker-008/a0_rubric_review/audit_run_out/audit-20260912T001816.json`: base-project token 'cubic graph' inside a cosmic-censorship artifact
+- **HF-13** (minor) `artifacts/worker-008/a0_rubric_review/audit_run_out/audit-20260912T001816.json`: base-project token 'minimum degree' inside a cosmic-censorship artifact
+- **HF-13** (minor) `artifacts/worker-008/a0_rubric_review/audit_run_out/audit-20260912T001816.json`: base-project token 'cap set' inside a cosmic-censorship artifact
+- **HF-13** (minor) `artifacts/worker-008/a0_rubric_review/audit_run_out/audit-20260912T001816.json`: base-project token 'funsearch' inside a cosmic-censorship artifact
+- **HF-13** (minor) `artifacts/worker-019/a0_review/results.json`: base-project token 'cubic graph' inside a cosmic-censorship artifact
+- **HF-13** (minor) `artifacts/worker-019/a0_review/results.json`: base-project token 'minimum degree' inside a cosmic-censorship artifact
+- **HF-13** (minor) `artifacts/worker-019/a0_review/results.json`: base-project token 'funsearch' inside a cosmic-censorship artifact
+- **HF-13** (minor) `artifacts/worker-024/apply_events_authority/sandbox_pristine/evaluation_rubric.yaml`: base-project token 'cubic graph' inside a cosmic-censorship artifact
+- **HF-13** (minor) `artifacts/worker-024/apply_events_authority/sandbox_pristine/evaluation_rubric.yaml`: base-project token 'minimum degree' inside a cosmic-censorship artifact
+- **HF-13** (minor) `artifacts/worker-024/apply_events_authority/sandbox_pristine/evaluation_rubric.yaml`: base-project token 'cap set' inside a cosmic-censorship artifact
+- **HF-13** (minor) `artifacts/worker-024/validate_map_vacuity/tmp/mirror/evaluation_rubric.yaml`: base-project token 'cubic graph' inside a cosmic-censorship artifact
+- **HF-13** (minor) `artifacts/worker-024/validate_map_vacuity/tmp/mirror/evaluation_rubric.yaml`: base-project token 'minimum degree' inside a cosmic-censorship artifact
+- **HF-13** (minor) `artifacts/worker-024/validate_map_vacuity/tmp/mirror/evaluation_rubric.yaml`: base-project token 'cap set' inside a cosmic-censorship artifact
+- **HF-13** (minor) `artifacts/worker-029/l0_rev3_verify/snapshots/artifacts__audit__audit_lib.py`: base-project token 'funsearch' inside a cosmic-censorship artifact
+- **HF-13** (minor) `artifacts/worker-029/l0_rev3_verify/snapshots/artifacts__audit__audit_lib.py`: base-project token 'eight-cycle' inside a cosmic-censorship artifact
+- **HF-13** (minor) `artifacts/worker-029/l0_rev3_verify/snapshots/artifacts__audit__audit_lib.py`: base-project token '8-cycle' inside a cosmic-censorship artifact
+- **HF-13** (minor) `artifacts/worker-029/l0_rev3_verify/snapshots/artifacts__audit__audit_lib.py`: base-project token 'priority function' inside a cosmic-censorship artifact
+- **HF-13** (minor) `artifacts/worker-029/l0_rev3_verify/snapshots/artifacts__audit__audit_lib.py`: base-project token 'weakly connected component' inside a cosmic-censorship artifact
+- **HF-13** (minor) `artifacts/worker-029/l0_rev3_verify/snapshots/artifacts__audit__audit_lib.py`: base-project token 'strongly connected component' inside a cosmic-censorship artifact
+- **HF-13** (minor) `artifacts/worker-029/l0_rev3_verify/snapshots/evaluation_rubric.yaml`: base-project token 'cubic graph' inside a cosmic-censorship artifact
+- **HF-13** (minor) `artifacts/worker-029/l0_rev3_verify/snapshots/evaluation_rubric.yaml`: base-project token 'minimum degree' inside a cosmic-censorship artifact
+- **HF-13** (minor) `artifacts/worker-029/l0_rev3_verify/snapshots/evaluation_rubric.yaml`: base-project token 'cap set' inside a cosmic-censorship artifact
+- **HF-13** (minor) `artifacts/worker-038/a0_selftest/run_b_absolute_out/LATEST.json`: base-project token 'cubic graph' inside a cosmic-censorship artifact
+- **HF-13** (minor) `artifacts/worker-038/a0_selftest/run_b_absolute_out/LATEST.json`: base-project token 'minimum degree' inside a cosmic-censorship artifact
+- **HF-13** (minor) `artifacts/worker-038/a0_selftest/run_b_absolute_out/LATEST.json`: base-project token 'cap set' inside a cosmic-censorship artifact
+- **HF-13** (minor) `artifacts/worker-038/a0_selftest/run_b_absolute_out/LATEST.json`: base-project token 'funsearch' inside a cosmic-censorship artifact
+- **HF-13** (minor) `artifacts/worker-038/a0_selftest/run_b_absolute_out/audit-20260912T002342.json`: base-project token 'cubic graph' inside a cosmic-censorship artifact
+- **HF-13** (minor) `artifacts/worker-038/a0_selftest/run_b_absolute_out/audit-20260912T002342.json`: base-project token 'minimum degree' inside a cosmic-censorship artifact
+- **HF-13** (minor) `artifacts/worker-038/a0_selftest/run_b_absolute_out/audit-20260912T002342.json`: base-project token 'cap set' inside a cosmic-censorship artifact
+- **HF-13** (minor) `artifacts/worker-038/a0_selftest/run_b_absolute_out/audit-20260912T002342.json`: base-project token 'funsearch' inside a cosmic-censorship artifact
+- **HF-13** (minor) `artifacts/worker-038/f0_conformance/snapshots/evaluation_rubric.d748a9e3574e.yaml`: base-project token 'cubic graph' inside a cosmic-censorship artifact
+- **HF-13** (minor) `artifacts/worker-038/f0_conformance/snapshots/evaluation_rubric.d748a9e3574e.yaml`: base-project token 'minimum degree' inside a cosmic-censorship artifact
+- **HF-13** (minor) `artifacts/worker-038/f0_conformance/snapshots/evaluation_rubric.d748a9e3574e.yaml`: base-project token 'cap set' inside a cosmic-censorship artifact
+- **HF-13** (minor) `artifacts/worker-042/canon_binding/recheck/snapshot/canonical/evaluation_rubric.yaml`: base-project token 'cubic graph' inside a cosmic-censorship artifact
+- **HF-13** (minor) `artifacts/worker-042/canon_binding/recheck/snapshot/canonical/evaluation_rubric.yaml`: base-project token 'minimum degree' inside a cosmic-censorship artifact
+- **HF-13** (minor) `artifacts/worker-042/canon_binding/recheck/snapshot/canonical/evaluation_rubric.yaml`: base-project token 'cap set' inside a cosmic-censorship artifact
+- **HF-13** (minor) `artifacts/worker-042/canon_binding/snapshot/canonical/evaluation_rubric.yaml`: base-project token 'cubic graph' inside a cosmic-censorship artifact
+- **HF-13** (minor) `artifacts/worker-042/canon_binding/snapshot/canonical/evaluation_rubric.yaml`: base-project token 'minimum degree' inside a cosmic-censorship artifact
+- **HF-13** (minor) `artifacts/worker-042/canon_binding/snapshot/canonical/evaluation_rubric.yaml`: base-project token 'cap set' inside a cosmic-censorship artifact
+- **HF-13** (minor) `artifacts/worker-054/a0_vocab_reconcile/evaluation_rubric.patched.proposal.yaml`: base-project token 'cubic graph' inside a cosmic-censorship artifact
+- **HF-13** (minor) `artifacts/worker-054/a0_vocab_reconcile/evaluation_rubric.patched.proposal.yaml`: base-project token 'minimum degree' inside a cosmic-censorship artifact
+- **HF-13** (minor) `artifacts/worker-054/a0_vocab_reconcile/evaluation_rubric.patched.proposal.yaml`: base-project token 'cap set' inside a cosmic-censorship artifact
+- **HF-13** (minor) `artifacts/worker-055/a0_hf01_firing/canonical_live/LATEST.json`: base-project token 'cubic graph' inside a cosmic-censorship artifact
+- **HF-13** (minor) `artifacts/worker-055/a0_hf01_firing/canonical_live/LATEST.json`: base-project token 'minimum degree' inside a cosmic-censorship artifact
+- **HF-13** (minor) `artifacts/worker-055/a0_hf01_firing/canonical_live/LATEST.json`: base-project token 'cap set' inside a cosmic-censorship artifact
+- **HF-13** (minor) `artifacts/worker-055/a0_hf01_firing/canonical_live/LATEST.json`: base-project token 'funsearch' inside a cosmic-censorship artifact
