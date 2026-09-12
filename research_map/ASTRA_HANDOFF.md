@@ -113,24 +113,26 @@ Own the cosmic-censorship research map and improve epistemic quality before incr
 - Dashboard: `research_map/research_map.html`
 - Validator: `python3 research_map/validate_map.py`
 - Current map validation: `VALID`
-- Remote status: no project-specific Astra or DeepSeek Flash fleet was found on `ophis-gpu`; existing remote Codex/training processes belong to other work. `~/ai4math-swarm.tar.gz` on `ophis-gpu` is a stale snapshot pushed from the local workstation (2026-09-11); the server holds no artifacts that are not already in git.
+- Remote status (updated 2026-09-12): the live controller fleet runs on `ophis-gpu` in `/data3/guoshaoyang/workdir/ai4math-swarm`; the `/data/home/guoshaoyang/...` checkout path is the same directory via symlink, so there is no drift between them. `~/ai4math-swarm.tar.gz` on the server is a stale 2026-09-11 snapshot - ignore it. All live artifacts from the server checkout are committed on this branch (see Handover below).
 
-## Handover (2026-09-12)
+## Handover (2026-09-12, re-stamped over live server state)
 
-The project is being handed over to an industry collaborator who will execute it with a large-scale swarm. Target operating structure on her side:
+The project is being handed over to an industry collaborator who will execute it with a large-scale swarm on an effectively unlimited budget. Target operating structure on her side:
 
-| role | model |
+| role | model (all at max effort) |
 |---|---|
-| Driver (controller, owns the map) | Fable 5.1 |
-| Group leads | Fable 5.1 or Astra |
-| Execution agents | GPT 5.6 Sol and Opus |
+| Driver (controller, owns the map, self-restarting) | Fable 5.1 |
+| Group leads | Astra, GPT 5.6 Sol, or Opus 5 |
+| Execution agents (subagents or parallel queue consumers) | Opus 5 / GPT 5.6 Sol |
+
+Stopping rules are gate-based, not budget-based: the swarm stops when the five map gates pass, never on a spend cap. Max effort everywhere is deliberate - it lengthens single-process lifetime and amortizes cold-start re-reads of the 100k+ line map. The human is absent by default and interacts intermittently at high frequency; the driver and group leads re-spawn themselves via the subagent protocol (see `harness/supervise_loop.sh` for the guardian pattern).
 
 Repository facts for the handover:
 
-- GitHub `swarm-research/ai4math-swarm` is the single source of truth. Every project artifact is committed on `shaoyang/cosmic-censorship` (framework, `research_map/`, `runs/` ledgers, `erdos64/`, problem shortlist in `data/`); the repo is intentionally small (<1 MB).
-- API keys are the only thing deliberately NOT in the repo. Model providers are read from `~/.maso/model-providers.yaml` (`framework/pool.py`); each operator supplies her own keys there. Never commit this file.
-- `research_map/run_parallel.py` referenced in the startup section is not in the repo; it ships with the task-specific prompt bundle.
-- Authorship: `main` (base framework + `HANDOFF.md`) stays under Triciaaaaa; the research-map commits on `shaoyang/cosmic-censorship` are under guoshaoyang-pku.
+- GitHub `swarm-research/ai4math-swarm`, branch `shaoyang/cosmic-censorship`, is the single source of truth. The full live evidence chain is committed there: `research_map/` (map + `events.jsonl`), `artifacts/` (~1.3 GB worker evidence), `comms/` (controller-agent traffic), `runtime/` (instance trajectories + state), plus `evaluation/`, `ledger/`, `numerics/`, `proposals/`, `proposed/`, `reviews/`, `schemas/`, and the `harness/` guardian scripts. Only `tmp/` (worker scratch) is git-ignored.
+- The branch homepage `README.md` (badges, architecture diagram, plan DAG, ETA table, handover guide) is the entry point - read it before this file.
+- API keys are the only thing deliberately NOT in the repo. Framework providers are read from `~/.maso/model-providers.yaml` (`framework/pool.py`); the DeepSeek executor wrapper (`dsh_fixed.sh`) reads `~/.dsh/.credentials.yaml`. Both live outside the repo; each operator supplies her own keys there. Never commit these files.
+- Authorship: `main` (base framework + `HANDOFF.md`) stays under Triciaaaaa; all commits on `shaoyang/cosmic-censorship` are under guoshaoyang-pku, with `Co-Authored-By: Astra <astra@local>` on controller-generated lifecycle commits.
 
 ## Portfolio
 
