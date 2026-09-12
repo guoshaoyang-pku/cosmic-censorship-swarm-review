@@ -1,0 +1,16 @@
+#!/usr/bin/env python3
+import json,time,subprocess,datetime,pathlib
+ROOT=pathlib.Path('/data3/guoshaoyang/workdir/ai4math-swarm')
+OUT=ROOT/'runtime/state/overnight_watch.jsonl'
+while True:
+    try: names=[x.split(':',1)[0] for x in subprocess.check_output(['tmux','ls'],text=True,stderr=subprocess.DEVNULL).splitlines()]
+    except Exception: names=[]
+    def count(ps): return sum(any(x.startswith(p) for p in ps) for x in names)
+    ctl=count(('controller-','astra-controller'))
+    leads=count(('lead-formulation-','lead-literature-','lead-numerics-','lead-audit-'))
+    workers=count(('worker-formulation-','worker-literature-','worker-numerics-','worker-audit-'))
+    cps=sorted((ROOT/'runtime/state/checkpoints').glob('ckpt-*.json'),key=lambda p:p.stat().st_mtime,reverse=True)
+    q=(ROOT/'runtime/state/quota_circuit_until').read_text().strip() if (ROOT/'runtime/state/quota_circuit_until').exists() else None
+    rec={'ts':datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8))).isoformat(),'project_tmux':ctl+leads+workers,'controller':ctl,'leads':leads,'workers':workers,'quota_until':q,'checkpoint':cps[0].name if cps else None}
+    with OUT.open('a') as f: f.write(json.dumps(rec,ensure_ascii=False)+'\n')
+    time.sleep(300)
