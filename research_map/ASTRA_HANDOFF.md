@@ -132,7 +132,7 @@ Repository facts for the handover:
 - GitHub `swarm-research/ai4math-swarm`, branch `shaoyang/cosmic-censorship`, is the single source of truth. The full live evidence chain is committed there: `research_map/` (map + `events.jsonl`), `artifacts/` (~1.3 GB worker evidence), `comms/` (controller-agent traffic), `runtime/` (instance trajectories + state), plus `evaluation/`, `ledger/`, `numerics/`, `proposals/`, `proposed/`, `reviews/`, `schemas/`, and the `harness/` guardian scripts. Only `tmp/` (worker scratch) is git-ignored.
 - The branch homepage `README.md` (badges, architecture diagram, plan DAG, ETA table, handover guide) is the entry point - read it before this file.
 - API keys are the only thing deliberately NOT in the repo. Framework providers are read from `~/.maso/model-providers.yaml` (`framework/pool.py`); the DeepSeek executor wrapper (`dsh_fixed.sh`) reads `~/.dsh/.credentials.yaml`. Both live outside the repo; each operator supplies her own keys there. Never commit these files.
-- Authorship: `main` (base framework + `HANDOFF.md`) stays under Triciaaaaa; all commits on `shaoyang/cosmic-censorship` are under guoshaoyang-pku, with `Co-Authored-By: Astra <astra@local>` on controller-generated lifecycle commits.
+- Authorship: `main` (base framework + the original full `HANDOFF.md` narrative) stays under Triciaaaaa; on this branch `HANDOFF.md` has been distilled to swarm measurement discipline + known traps, and the Erdős task material (`erdos64/`, `data/`, `runs/`) was removed (full narrative remains in `main`'s history). All commits on `shaoyang/cosmic-censorship` are under guoshaoyang-pku, with `Co-Authored-By: Astra <astra@local>` on controller-generated lifecycle commits.
 
 ## Portfolio
 

@@ -3,8 +3,8 @@ Main loop. Islands of proposers, a verifier gate, a retractable ledger, a dead-e
 and instrumentation that can tell exploration from collapse.
 
 Usage:
-    python3 run.py erdos64 --calls 120 --islands 5 --families sol,qwenmax,o50
-    python3 run.py erdos64 --calls 120 --families sol            # single-family control
+    python3 run.py capset --calls 200 --islands 5 --families sol,qwenmax,o50
+    python3 run.py capset --calls 200 --families sol            # single-family control
 
 The single-family control is not optional garnish. Every claim this project has made about
 heterogeneity has been overturned by measurement at least once, in both directions, so any

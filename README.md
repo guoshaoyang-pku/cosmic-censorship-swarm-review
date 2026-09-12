@@ -215,7 +215,7 @@ A full-tree secret scan preceded every push of this branch.
 | `comms/` | per-agent JSONL mailboxes (`inbox/`, `outbox/`), `PROTOCOL.md`, `rejected.jsonl` |
 | `runtime/` | supervised instance trajectories (15,832), controller verification reports, checkpoints, state |
 | `harness/` | guardian + launcher scripts (`launch_swarm.sh`, `supervise_loop.sh`, `independent_supervisor*.sh`, `overnight_watch.sh`, monitors) and the local review/closure artifact set |
-| `framework/`, `erdos64/`, `data/`, `runs/` | inherited verifier-gated search layer and Erdős measurements from `main` — kept for provenance; this branch does not depend on them |
+| `framework/` | inherited verifier-gated search layer from `main`, kept as a control layer (`capset` task only). The Erdős task material (`erdos64/`, `data/`, `runs/`) was removed from this branch — full narrative in `main`'s history; distilled lessons live in `HANDOFF.md`. This branch does not depend on `framework/` |
 
 Dashboard: open `research_map/research_map.html` in a browser (reads the map JSON directly;
 Mermaid rendering via external JS).
