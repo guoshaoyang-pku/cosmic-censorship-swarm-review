@@ -7,12 +7,29 @@ Own the cosmic-censorship research map and improve epistemic quality before incr
 ## Current state (2026-09-11)
 
 - Repository: `swarm-research/ai4math-swarm`
-- Branch: `codex/research-map-dashboard`
+- Branch: `shaoyang/cosmic-censorship` (renamed 2026-09-12 from `codex/research-map-dashboard`; `main` history and authorship untouched)
 - Map: `research_map/research_map.json`
 - Dashboard: `research_map/research_map.html`
 - Validator: `python3 research_map/validate_map.py`
 - Current map validation: `VALID`
-- Remote status: no project-specific Astra or DeepSeek Flash fleet was found on `ophis-gpu`; existing remote Codex/training processes belong to other work.
+- Remote status: no project-specific Astra or DeepSeek Flash fleet was found on `ophis-gpu`; existing remote Codex/training processes belong to other work. `~/ai4math-swarm.tar.gz` on `ophis-gpu` is a stale snapshot pushed from the local workstation (2026-09-11); the server holds no artifacts that are not already in git.
+
+## Handover (2026-09-12)
+
+The project is being handed over to an industry collaborator who will execute it with a large-scale swarm. Target operating structure on her side:
+
+| role | model |
+|---|---|
+| Driver (controller, owns the map) | Fable 5.1 |
+| Group leads | Fable 5.1 or Astra |
+| Execution agents | GPT 5.6 Sol and Opus |
+
+Repository facts for the handover:
+
+- GitHub `swarm-research/ai4math-swarm` is the single source of truth. Every project artifact is committed on `shaoyang/cosmic-censorship` (framework, `research_map/`, `runs/` ledgers, `erdos64/`, problem shortlist in `data/`); the repo is intentionally small (<1 MB).
+- API keys are the only thing deliberately NOT in the repo. Model providers are read from `~/.maso/model-providers.yaml` (`framework/pool.py`); each operator supplies her own keys there. Never commit this file.
+- `research_map/run_parallel.py` referenced in the startup section is not in the repo; it ships with the task-specific prompt bundle.
+- Authorship: `main` (base framework + `HANDOFF.md`) stays under Triciaaaaa; the research-map commits on `shaoyang/cosmic-censorship` are under guoshaoyang-pku.
 
 ## Portfolio
 
