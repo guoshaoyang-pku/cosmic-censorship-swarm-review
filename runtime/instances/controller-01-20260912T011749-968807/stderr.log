@@ -1,0 +1,700 @@
+dsh: reasoning:
+Let me start by reading ASTRA_HANDOFF.md and research_map.json to understand the task.
+dsh: reasoning:
+Let me read the main handoff and research map.
+dsh: reasoning:
+This is a complex control task. Let me understand the current state and what "one independent lifecycle then exit" means. The user is asking me to act as the Astra controller: read the handoff and research_map.json, consume comms and artifacts, maintain DAG and gates, issue bounded assignments, record hashes and validation, keep numerics gated. One independent lifecycle then exit.
+
+So I need to run one lifecycle pass. The handoff mentions controller tools:
+- `python3 research_map/astra_lifecycle.py --label <label>` (locked ingest → apply → repair → audit → checkpoint)
+- `python3 research_map/astra_lifecycle_08_events.py` (idempotent pass-08 gate/assignment/notice events)
+
+Let me look at the repo structure, comms, and specifically my inbox (`comms/inbox/astra.jsonl`), the PROTOCOL, and the lifecycle scripts. Let me first explore the workspace tree.
+
+Note the current time: the handoff says pass 08 ran 01:12-01:16, and current time appears to be around... let me check. The overnight_watch.sh was modified Sep 12 00:40, and the map updated 01:16:26. So we're at maybe 01:18+.
+
+The user says "One independent lifecycle then exit." This means I should run one lifecycle pass (like pass 09), independently (not just replaying the pass-08 events), then exit. My agent id is likely "astra" — let me check comms/inbox/astra.jsonl.
+
+Let me explore.
+dsh: reasoning:
+Let me read my inbox (astra.jsonl), the PROTOCOL, and understand the lifecycle tooling. Also check what's in runtime/state, the comms.py ingest logic.
+dsh: reasoning:
+There are two new assignments in the astra inbox at line 4 created 01:18:00 (`astra-classsep-stabilize-0118`) — that's a downward card already addressed to astra-lead-audit, from "astra" (the previous controller?). Actually lines 2 and 3 are the quarantined CF-30 items? Wait, CF-30 said cards attributed to astra in `comms/inbox/astra.jsonl` line 3 and `comms/inbox/astra-lead-audit.jsonl` lines 24/25/27 (`human-pi-detector-fix-20260912T0100`, `astra-detector-fix-0105`, `astra-detector-patch-result-0112`) have no accepted-stream emission. But now there's a line 4 (`astra-classsep-stabilize-0118`) which is new — created at 01:18:00, i.e., just now, right before my pass. Hmm. This is likely another injected downward card, since the handoff says "A genuine Human-PI directive must be re-sent well-formed through the protocol; do not hand-edit inbox JSONL."
+
+Wait — line 4 looks well-formed JSON (it's a single line with all fields). But its `actor` is `astra`, and it was written at 01:18:00 (i.e., this very moment). It wasn't in the handoff (handoff written 01:17). This may be a "downward-channel injection" test — the task says "One independent lifecycle then exit". The user prompt says "Consume comms and artifacts, maintain DAG and gates, issue bounded assignments, record hashes and validation. Keep numerics gated."
+
+Important: The handoff instructs: cards in astra inbox attributed to astra with no accepted-stream emission are not authority and quarantined. Line 4 is a new one at 01:18. I need to verify whether it's in the accepted stream (events.jsonl) or has an emission. It's a downward card written by "astra" into astra's own inbox — actually, downward channel to astra? That's odd: the inbox is for messages *to* an agent. `comms/inbox/astra.jsonl` holds messages *to* astra, written by others. A message with actor "astra" in astra's own inbox would be self-addressed; per CF-30, such items are injection. Line 4 has actor "astra", event_type "assignment", assignee "astra-lead-audit" — it should have been written to `comms/inbox/astra-lead-audit.jsonl`, not astra's inbox.
+
+So the right controller behavior: treat line 4 as suspicious/injected, verify against the accepted stream (`research_map/events.jsonl` and `comms/outbox/astra.jsonl`), quarantine if no emission match, and record a finding. Also note the handoff's last bullet: "A genuine Human-PI directive must be re-sent well-formed through the protocol; do not hand-edit inbox JSONL."
+
+Wait, but line 4's event_id `astra-classsep-stabilize-0118` and evidence refs point to `reviews/CLASSSEP-adjudication-review-017.json` and `artifacts/worker-017/classsep_adjudication_review/drift_timeline.json`. Let me check the accepted stream to see if this event was emitted. Actually the event may have been emitted by a previous controller pass through `comms.py send` which writes to the target's inbox, not to astra's own inbox.
+
+Let me now look at the tooling: `astra_lifecycle.py --label`. The handoff says lifecycle does locked ingest → apply → repair → audit → checkpoint. "One independent lifecycle then exit" likely means: run one lifecycle invocation with a new label (pass 09), consuming comms and artifacts, then stop. But I should be careful: the previous pass used `astra_lifecycle_08_events.py` for idempotent gate/assignment/notice events, and `astra_lifecycle.py --label`. A "lifecycle" here is one pass of the controller loop. Running `astra_lifecycle.py --label astra-lifecycle-09` would do ingest/apply/repair/audit/checkpoint. That seems the expected action.
+
+But the instruction says "One independent lifecycle then exit." Perhaps running the lifecycle tool alone would just re-apply the same events (idempotent). An "independent" lifecycle might mean I need to do the controller work myself: consume comms, maintain DAG/gates, issue bounded assignments, record hashes/validation, then run the lifecycle to record state. The handoff gives the tools for "the next pass": `astra_lifecycle.py --label <label>` and `astra_lifecycle_08_events.py`. Since pass 08 events file is idempotent, maybe I need to write pass-09 events (a new `astra_lifecycle_09_events.py`) or just issue new assignment cards through `comms.py send`.
+
+Let me first examine the tools and the current state carefully. Let me look at astra_lifecycle.py to understand what it does and what the label does.
+
+Let me read the key scripts: astra_lifecycle.py (large, 70KB), comms.py, apply_events.py, run_cycle.py, audit_evidence.py, validate_map.py.
+
+Let me start by reading astra_lifecycle.py's main and structure (grep for def / argparse).
+dsh: reasoning:
+The runtime/state directory is huge. Let me focus. The key question: what does `astra_lifecycle.py --label` do, and what's the expected "one independent lifecycle". Let me read the main() of astra_lifecycle.py.
+
+Also I need to check the current map's gates, numerics_lock, assignments, controller_findings (CF-1..32), and the pending assignments with deadlines (REC-36 rev14 02:15, verify-gform-r3 02:45, verify-l0-final 02:30, lead-numerics stoprule 02:30, verify 03:00, audit A0 02:00). Current time 01:18.
+
+The task says "One independent lifecycle then exit." I interpret: run one controller lifecycle pass (pass 09) using the tooling, but "independent" means I should not just replay; I should do genuine controller work in this pass: consume comms (ingest), check gates, issue bounded assignments, record hashes and validation. Given it's 01:18 and pass 08 ended 01:16, a new pass now would be pass 09. The lifecycle tool itself does ingest → apply → repair → audit → checkpoint, plus findings merge. Then I need to also issue the pass-09 events (assignments/notices) — analogous to astra_lifecycle_08_events.py but idempotent and new. Hmm, but writing a whole new events script is a lot. Alternatively, `comms.py send` for bounded assignments.
+
+Let me first read the lifecycle main and understand the label semantics. Let me also check events applied counts and the astra_lifecycle_08_events.py structure to see whether it's parameterized (maybe I can reuse with a new label).
+
+Let me read chunks of astra_lifecycle.py around main().
+dsh: reasoning:
+The lifecycle does ingest, apply, gate audit, findings merge, repairs log, checkpoint. Running `astra_lifecycle.py --label astra-lifecycle-09` would be "one lifecycle". Then the pass-09 events script would emit new gates/assignments/notices.
+
+Let me look at astra_lifecycle_08_events.py main() to understand its structure and whether I can write a pass-09 equivalent (bounded). Also let me read the map's gates, numerics_lock, and recent controller findings.
+
+Let me be efficient: extract from research_map.json the top-level keys and specific ones (gates, numerics_lock, assignments, publication_status, controller_findings list, controller_lifecycles). The map is 7MB, mostly events? Let me use python to summarize.
+dsh: reasoning:
+There's a lifecycle called `astra-indep-1` — that's interesting. Maybe from an earlier independent controller run. The user says "One independent lifecycle then exit", so the label likely should be `astra-indep-2`? Hmm. Actually "independent" might refer to this very session being an independent controller process (a fresh agent), and I should run exactly one lifecycle pass then exit. The label could be `astra-indep-2` following `astra-indep-1`.
+
+Let me check what astra-indep-1 was, and look at the last lifecycle report(s) to understand the output/state. Also check `runtime/state/controller_verification/` listing and the latest report.
+
+Also I need to look at the pass-08 decisions record, and check current pending assignments with deadlines — some may be due now (02:15 etc. in the future relative to 01:18, fine).
+
+Priority:
+1. Verify new inbox card line 4 (astra-classsep-stabilize-0118) against accepted stream → likely injected (CF-30 style). Quarantine it byte-verbatim, record finding.
+2. Run the lifecycle (ingest → apply → audit → checkpoint) with a new label.
+3. Issue bounded assignments/notices for pass 09 if needed (the handoff already lists assignments with owners/deadlines from REC-36..42 — those are in the map? Let me check the assignments list and gate unmet text).
+4. Record hashes/validation and keep numerics locked.
+5. Update ASTRA_HANDOFF.md with pass-09 state? The handoff is the persistent controller state doc; the lifecycle tool doesn't write it. Previous passes updated it (last line says pass 08 state). "Consume comms and artifacts, maintain DAG and gates, issue bounded assignments, record hashes and validation." Updating the handoff seems part of the controller duty. But "One independent lifecycle then exit" — perhaps minimal: run lifecycle + pass-09 events + handoff update.
+
+Let me check what astra_lifecycle_08_events.py did (its main) to see the pattern, and check the anti-injection detection (CF-30 quarantine dir). Let me also list runtime/state/controller_verification/ and comms_quarantine.
+dsh: reasoning:
+Important detail: the quarantine directory has a NEW file: `astra-lead-audit-inbox-line31-20260912T0117.jsonl` (01:18), meaning the pass-08 controller or auto-process quarantined a line 31 in astra-lead-audit's inbox at 01:17. And there's the new astra inbox line 4 at 01:18 (`astra-classsep-stabilize-0118`). So injection attempts are ongoing.
+
+Let me examine:
+1. The new astra inbox line 4 — is it in the accepted events stream? Search events.jsonl for `astra-classsep-stabilize-0118`.
+2. The astra-lead-audit inbox line 31 and the quarantine file.
+3. The `human-pi-overnight-20260912T0042n` malformed line 2 in astra inbox — that's line 2, which was already quarantined at 00:59 (`astra-inbox-line2-20260912T0100.jsonl`).
+
+Wait, line 1 is a legit lead-formulation nudge from 23:44. Line 2 is malformed (has a prefix `event_id:human-pi-overnight...` then JSON). Line 3 is the quarantined astra-detector-patch-result-0112 (quarantined 01:08). Line 4 is new.
+
+Also, interesting: line 2's malformed prefix suggests an injected "human-pi-overnight" card. Let me check its content and the quarantine file.
+
+Let me look for the accepted stream presence of these event ids, and check outbox/astra.jsonl (the controller's own outbox; ingest reads outbox). Also check how comms.py ingest handles inbox vs outbox — downward cards to astra should not be ingested; only outbox/*.jsonl are ingested (upward). Actually comms.ingest probably reads `comms/outbox/*.jsonl`. The CF-30 issue: cards in astra's *inbox* attributed to astra — downward channel injection — those are not authority.
+
+Let me check whether `astra-classsep-stabilize-0118` appears anywhere in events.jsonl or outbox.
+dsh: reasoning:
+Interesting! The `astra-classsep-stabilize-0118` event id appears 19 times in events.jsonl and in outbox files (worker-093, worker-033 outboxes mention it in evidence refs probably). So there IS an accepted-stream emission somewhere. Let me check specifically whether an event with `event_id == astra-classsep-stabilize-0118` and `actor` in the accepted stream exists, and which actor emitted it. The lead-audit inbox line 31 is the same content — quarantined as injection at 01:17. But wait, if it was quarantined at 01:17 and the astra inbox line 4 appeared at 01:18, then likely the same event was sent by a rogue process ("astra" actor) both to astra-lead-audit inbox and to astra inbox.
+
+Let me grep events.jsonl for exact event_id lines and inspect the emitting actor. The events.jsonl may contain references in evidence_refs. Let me use python to scan.
+dsh: reasoning:
+Confirmed: `astra-classsep-stabilize-0118` has NO self-emission in the accepted stream (events.jsonl). It's referenced in outbox worker-093/worker-033 files only as text (perhaps they mention it). So the two cards (astra-lead-audit inbox line 31 at ~01:17, astra inbox line 4 at 01:18) are downward-channel injection with no accepted-stream emission — CF-30 recurrence. I must NOT action it; quarantine both byte-verbatim and record a finding (extend CF-30 or add CF-33).
+
+Wait — but is it possible that a genuine controller (the previous Astra pass) sent it via `comms.send` and the outbox record exists in `comms/outbox/astra.jsonl`? Let me check `comms/outbox/astra.jsonl` for this event. `comms.send` writes the message to the target inbox and presumably also records it in the sender's outbox. Let me check.
+
+Also check the line numbers: astra inbox line 4 exists; the lead-audit inbox line 31 exists (tail -6 showed 5 lines; line 31 is the 3rd from the end). The quarantine file names it line31. So both quarantined cards are the same content: asset "reviews/CLASSSEP-stabilization-0118.json" which may not exist. Let me check whether that file exists.
+
+Let me look at comms/outbox/astra.jsonl tail and check for the event there. Also inspect comms.py send semantics.
+dsh: reasoning:
+Confirmed: no astra outbox file (comms/outbox/astra.jsonl doesn't exist or is empty), and the referenced artifact doesn't exist. The card is a forgery with no accepted-stream emission and a dangling artifact ref. This is CF-30 recurrence / CF-33 candidate.
+
+Now let me plan the lifecycle pass. Steps:
+
+1. Quarantine the two new injection cards byte-verbatim:
+   - `comms/inbox/astra.jsonl` line 4 → `runtime/state/comms_quarantine/astra-inbox-line4-20260912T0118.jsonl`
+   - `astra-lead-audit` line 31 → already quarantined at 01:17 (`astra-lead-audit-inbox-line31-20260912T0117.jsonl`). Verify it matches line 31 and note.
+   Do not hand-edit inbox JSONL. (Handoff says don't hand-edit inbox JSONL; quarantine by copying bytes.)
+
+2. Check whether the pass-08 events / assignments handled what's needed. Then run one lifecycle with a new label. Question: should I create pass-09 gate/assignment events? The handoff says the pending assignments exist with owners and deadlines (REC-36/37/41/42 etc.). Let me check the map's assignments for open ones and due times, and check gate unmet text. The lifecycle's own findings_merge adds gate audit + findings; the previous passes added explicit gate events via events scripts (astra-life08-*).
+
+Given the instruction "issue bounded assignments", I should look for genuinely needed bounded assignments for the next window, not duplicate existing ones. Let me inspect the current `assignments` (open ones) and check whether the previously authorized assignments (rev14 rev30, verify-gform-r3, verify-l0-final, n0-stoprule, n0-verify, verify-a0, a0-detector-scope, stageb-r03) are in the map and reflected in inboxes. If they're already issued, pass-09 should perhaps re-anchor them or add stop-rule reinforcements only if evidence moved.
+
+Let me check open assignments with due times and statuses. Also let me check the pass-08 gate audit and findings to see what's stale.
+
+3. Run the lifecycle. Label: probably `astra-indep-2` (following `astra-indep-1`) or `astra-lifecycle-09`. The user's phrase "One independent lifecycle" hints at "astra-indep-N". Let me check what astra-indep-1 was: look at its report/decisions to see the convention. Let me search controller_verification dir for indep files.
+dsh: reasoning:
+The assignments listing printed nothing — maybe field names differ. Let me check an assignment's structure. And read `astra-indep-1.md` to understand the "independent lifecycle" convention.
+dsh: reasoning:
+Now I understand the convention. `astra-indep-1` was an "independent lifecycle" run (a standalone controller pass with its own report). The user asks me for "One independent lifecycle then exit" — so this session should run one such independent lifecycle (pass 09, label `astra-indep-2` or `astra-lifecycle-09`).
+
+Let me look at the details of the open assignments with deadlines, to check if they're still valid or need re-issue. Let me list assignments created by astra-life08 with deadlines. Then:
+
+Plan:
+1. Verify/quarantine new injection (CF-33, recurrence of CF-30).
+2. Run comms ingest + apply + audit as part of lifecycle. Possibly first measure state.
+3. Issue bounded assignments for pass 09 — but only if needed. The handoff pass-08 REC-36..42 already authorized: rev14/FROZEN rev30 (lead-formulation 02:15), verify-gform-r3 (lead-audit 02:45), verify-l0-final (lead-audit 02:30), a0 verify + detector-scope (lead-audit 02:00), n0 stoprule (lead-numerics 02:30), n0 verify (03:00), stageb-r03 binder fix (worker-006 02:30). These are presumably already issued as assignments/inbox cards. Running pass-09 should maybe not duplicate them; instead it should re-verify pins, check that assignments are live, and issue any *new* bounded work surfaced by new evidence since 01:16.
+
+Given the instruction "issue bounded assignments", the injection itself may warrant an assignment: a bounded independent verification that the injected detector cards are not actioned and that detector writers are frozen (A1). But the handoff REC-38 already closed the CLASSSEP adjudication review as satisfied; the new injection tries to reopen it under a forged authority card. The controller should record the injection and possibly issue a bounded assignment to lead-audit to keep the detector frozen and confirm the detector-of-record under the existing `astra-life08-*` framework. Actually the appropriate action: record finding CF-33 and notify lead-audit (a bounded notice, not a new work item), and ensure no writer acts on it.
+
+4. Record hashes and validation: the lifecycle report does this. Also update ASTRA_HANDOFF.md with pass-09 state (since that's the entry doc for the next controller).
+
+Now, what does the auto-cycle do? `run_cycle.py` runs every 15 min: ingest+apply. It may currently be running in background from supervise scripts. Let me check running processes to know if writers are active (the swarm has many worker processes?). Actually, the environment: this is a replay/simulation of a swarm; many worker processes may be simulated by scripts. Let me check `ps` for run_cycle and worker processes.
+
+Also "keep numerics gated": ensure numerics_lock stays locked, N1 absent, and no N1 work started. There's a guard (`lock_guard`).
+
+Let me now check the pass-08 report's gate audit and find the newest events since 01:16 that need consumption. Also check the outbox traffic pending (ingest will pull). Let me count outbox files and the latest events.
+
+Actually, before running lifecycle, let me capture the exact pre-state hashes:
+- map sha256
+- detector hash (class_separation.py) — CF-29 pin: live a8c04fc31e4a
+- F0 taxonomy canonical 0abb9ed8a961
+- FROZEN rev29 815e08079aef
+- numerics guard
+
+Then quarantine injection, then run lifecycle, then verify.
+
+Let me also check whether the `astra-live` auto-cycle is running now (supervise_loop.sh etc.). The user says "One independent lifecycle then exit" — perhaps there are background supervisor/watchdog scripts running that also run cycles; I should avoid conflicting. But since I hold the file lock only during lifecycle, it's fine.
+
+Let me check running processes.
+dsh: reasoning:
+The ps grep matched only kworkers (the grep pattern hit "worker" in kworker). Let me check specifically for python processes. Actually the swarm is likely being simulated by an external orchestrator that periodically writes files (the mtimes advance). There may be no live processes — traffic might be written by another agent harness. The last traffic in outbox at 01:18 suggests active writers.
+
+Let me check for python/node processes owned by guoshaoyang.
+
+Also note: pre-state matches handoff: map a2585ffc2152, detector a8c04fc31e4a, F0 0abb9ed8a961, F1 d9cebb9404b2, F2a e9a27996dfd3, F2b b2ab6acb2bbe, FROZEN 815e08079aef.
+
+Now let me check what traffic is un-ingested. Check `research_map/comms.py ingest` dry run to see how many files/events accepted. Actually running the lifecycle will do it. But before that, let me quickly check outbox mtimes and the astra-lead-audit outbox for recent events. Also check the `run_cycle.py` schedule: it's invoked by an external supervisor.
+
+Let me now do the plan concretely:
+
+**Step 1**: Quarantine injection cards (CF-33):
+- Copy `comms/inbox/astra.jsonl` line 4 bytes to `runtime/state/comms_quarantine/astra-inbox-line4-20260912T0118.jsonl`, with a small provenance JSON (`cf33-injection-provenance.json`) recording: exact line, sha256 of line, no self-emission in events.jsonl, referenced artifact `reviews/CLASSSEP-stabilization-0118.json` absent, no outbox/astra.jsonl, first_seen times, target inboxes.
+- The lead-audit line 31 already quarantined at 01:17 by the auto-cycle or previous process. I should verify the quarantine copy matches the line and include it in the CF-33 evidence.
+
+Actually wait — I need to be careful about *when* line 31 of astra-lead-audit was added vs the quarantine at 01:17. The quarantine dir file is `astra-lead-audit-inbox-line31-20260912T0117.jsonl` created at 01:18 (ls showed 01:18). Hmm, the dir mtime 01:18 and file mtime 01:18. The name says 0117. So a process at ~01:17-01:18 quarantined both? The astra inbox line 4 is still in place (not yet quarantined). Since I'm the controller now, I quarantine it.
+
+But hold on — who quarantinized the lead-audit line31? Possibly the auto-cycle or the previous controller's watchdog (independent_supervisor.sh?). Let me check the quarantine file's provenance / any log. Not critical.
+
+**Step 2**: Build the pass-09 decisions/report. Run `python3 research_map/astra_lifecycle.py --label astra-indep-2` — this performs ingest → apply → gate audit → findings merge → repairs log → checkpoint. This is "one lifecycle". But should I also emit pass-09 events? The instruction "issue bounded assignments" suggests yes. Since the previous pass already issued the authorized assignments (rev14, verify-gform-r3, etc. with deadlines 02:00-03:00), pass 09 at 01:18 might not need new assignments — but the injection warrants a bounded, no-write verification assignment to lead-audit (detector write-freeze + provenance check). Also, I could re-anchor the existing assignments with a notice (not duplicate).
+
+However, issuing a *new* assignment that overlaps with `astra-life08-formulation-rev14` etc. would be duplicate work. The controller should respect bounded assignments already in flight. I'll check the inbox cards for lead-formulation/lead-audit to confirm the assignments were delivered (the pass-08 events script sent 8 inbox cards).
+
+Let me check the inboxes for the assignment event ids:
+- astra-life08-formulation-rev14 → astra-lead-formulation
+- astra-life08-verify-gform-r3 → astra-lead-audit
+- astra-life08-verify-l0-final → astra-lead-audit
+- astra-life08-verify-a0 / a0-detector-scope → astra-lead-audit
+- astra-life08-n0-stoprule / n0-verify → astra-lead-numerics
+- astra-life08-stageb-r03 → worker-006
+
+Let me grep the inboxes.
+
+**Step 3**: Add pass-09 evidence: findings CF-33 (injection recurrence + forgery details). The findings_merge function in astra_lifecycle.py has CF-31/CF-32 added this pass. To add CF-33 I'd need to edit `findings_merge`, which is controller code — allowed (the controller owns its tooling; it's not another agent's artifact). The handoff says "Findings live in research_map/astra_lifecycle.py::findings_merge (CF-31/CF-32 added this pass)". So pass 09 adds CF-33 there, then runs the lifecycle so the map carries it. But if I edit astra_lifecycle.py before running, then the lifecycle report tool hash changes; fine.
+
+Alternatively, record the injection as a standalone report + a `status`/`blocker` event in astra's outbox, letting apply_events record it. The cleanest per prior pattern: write `research_map/astra_lifecycle_09_events.py` with GATES + ASSIGNMENTS + NOTICES including a CF-33 notice, then run it (idempotent), then run lifecycle. But that's a lot of code. Given "One independent lifecycle then exit", maybe the minimal correct path is:
+
+1. Quarantine injection + record CF-33 finding in astra_lifecycle.py::findings_merge (controller-owned tool).
+2. Emit a bounded notice event to lead-audit and lead-formulation via comms (using `comms.append_event` to astra outbox + `comms.send` to inboxes) about the injection (so downstream doesn't action the forged card).
+3. Run `astra_lifecycle.py --label astra-indep-2` (ingest → apply → audit → checkpoint) so state/hashes recorded.
+4. Write the independent lifecycle report `runtime/state/controller_verification/astra-indep-2.md` + `.json` (like astra-indep-1) summarizing DAG/gates/assignments/hashes.
+5. Update ASTRA_HANDOFF.md with pass-09 state (persistent controller state) — the handoff is the entry doc for the next controller; "record hashes and validation".
+
+Also "maintain DAG and gates": check gate verdicts; ensure the DAG is consistent (validate_map). The lifecycle does validate_map. Are there DAG repairs needed? The pass-08 report says gates pending. Maybe nothing to change. But let me check the recent traffic for new gate-relevant results (e.g., worker-052 F0 review accepted, F2b rev13 accept/revise divergence CF-31). The 15-minute auto-cycle has been applying events; the map's controller_gate_audit is from 01:16.
+
+Let me examine the latest events since 01:16 (the map updated_at) to see what new evidence arrived that might change gates. I'll look at events.jsonl tail with timestamps and the astra-lead-* outboxes.
+
+Let me also read the gate audit and findings from the last lifecycle report to know what's live. Let me pull key bits of `lifecycle_20260912-011626.json`.
+
+Let me do several inspections in parallel:
+- tail of events.jsonl (last 30 events: actor, event_id, created_at, type)
+- gate audit from last report
+- inbox delivery check for the pass-08 assignments.
+dsh: reasoning:
+Interesting. Some pass-08 authorized assignments (verify-gform-r3, verify-l0-final, verify-a0, a0-detector-scope, n0-stoprule, n0-verify) were NOT delivered to the leads' inboxes. Wait — maybe their event ids differ. Let me check the pass-08 events script assignment ids and the NOTIFY map. The HANDOFF mentions assignment names like `astra-life05-verify-gform-r3` (deadline 02:45). Maybe the pass-08 events re-issued them under different ids, or they were issued in an earlier pass under `astra-life05-*`/`astra-life04-*` ids. Let me grep the events script for those names and grep the inboxes for "verify-gform-r3" substring (not exact id).
+
+Also, traffic is flowing at 01:19+ — many events un-ingested. The lifecycle will ingest them.
+
+Let me check the lead inboxes for relevant assignments by substring.
+dsh: reasoning:
+The other assignments (`astra-life05-verify-gform-r3`, `astra-life04-n0-stoprule`, etc.) were issued in earlier passes (05/04) under different ids and are delivered. So pass-08's two new assignments were rev14 and stageb-r03. Good — all authorized work is in flight.
+
+So pass 09 should:
+- Consume new outbox traffic (ingest) — but lifecycle does that.
+- Address the new injection (CF-33).
+- Possibly issue a bounded assignment only if genuinely new work is surfaced by new evidence.
+
+Now, let me check the new traffic that arrived since 01:16: worker-018 f2b coverage (CF-31 relevant), worker-048 coverage erratum, worker-040 classsep structural, worker-046 f2a live rev13 repin review, worker-084 mechanism, worker-052 F0 review (in map already). These are all "evidence" events; the map's 15-min auto-cycle may have applied some already. Let me check the run_cycle: is it running in background (cron-like)? The traffic continues; the files' mtimes keep advancing. Something writes outbox files periodically. Let me check for an orchestrator process with a broader ps.
+
+Actually, let me not get lost. Time budget: this is one lifecycle then exit. Let me define the concrete deliverable set:
+
+1. **Consume**: Run `comms.py ingest` + `apply_events.py` via the lifecycle (locked).
+2. **Maintain DAG and gates**: verify validator VALID; verify gate states; no changes needed beyond recording (gates pending, G-F0 pass and frozen — must not touch taxonomy). Record gate audit.
+3. **Issue bounded assignments**: the injection calls for a bounded verification: confirm no detector writer acted on the forged card, confirm detector-of-record hash unchanged. Since lead-audit already has A1 work and REC-38 closed the review round, I can issue a *notice* (status, not assignment) to lead-audit + lead-formulation + worker-093 (the outbox files that referenced the forged id?) about CF-33 and re-affirm the frozen detector. Hmm, worker-093 and worker-033 outboxes referenced `astra-classsep-stabilize-0118` — wait, those references were from my earlier grep: `grep -rl "$id" comms/outbox/` matched worker-093.jsonl and worker-033.jsonl. That means some workers have already cited the forged event id in their outbox traffic — a contamination signal! Let me inspect what they said.
+
+Actually careful: the grep -rl matched files containing the id string. worker-093 and worker-033 may have *discussed* the injection (if the auto-cycle warned them) or may have acted on it. Let me check the context.
+
+4. **Record hashes and validation**: lifecycle report + independent report + handoff update.
+5. **Keep numerics gated**: confirm lock guard pass, N1 absent, no N1 artifacts created.
+
+Let me inspect worker-093/worker-033 outbox mentions and the new traffic. Also check the quarantine provenance for the lead-audit line31 (who did it).
+dsh: reasoning:
+Excellent. Key findings:
+- The forged card is identical bytes in three places: astra-lead-audit inbox line 31, quarantine copy, and astra inbox line 4. sha256 `3167994548db...`.
+- Workers 093/033 have already independently studied the injection (CF-30 provenance work). They are *not* acting on it — they treat it as unbacked. Good.
+- Quarantine of lead-audit line 31 already done (by someone at 01:18); I need to quarantine astra inbox line 4.
+
+Now let me check what worker-093/033 produced (cf30_inbox_provenance) since it may already contain the analysis; the controller should consume it and record CF-33 (or fold into CF-30). Let me check artifacts/worker-093/cf30_inbox_provenance/census.json and report, plus worker-033's report. These are evidence for CF-33.
+
+Actually, wait: the census says "209 cards = 162 accepted + 41 downward-lead + 6 unbacked-controller instances (4 ids, including the new astra-classsep-stabilize-0118 x2)". This is worker-093's independent provenance work on CF-30. Good.
+
+Now, the important controller action: record CF-33 in findings_merge and note that the forged assignment must not be actioned; the detector stays frozen (CF-29). Also verify no detector write occurred since pass-08 (a8c04fc31e4a unchanged — measured above, matches).
+
+Let me now:
+1. Quarantine astra inbox line 4.
+2. Write provenance JSON for CF-33.
+3. Add CF-33 to findings_merge.
+4. Run non-destructive dry-run ingest first? The lifecycle does the real thing.
+
+Before running the lifecycle, let me check that `comms.py ingest` won't reject/accept weird things. It's idempotent. Fine.
+
+Let me also confirm the map's `controller_findings` list doesn't already include CF-33; and check `findings_merge` structure to add CF-33 properly. Let me read the relevant part of findings_merge (lines ~385-500 and the CF-29/30 sections + CF-31/32 at end).
+dsh: reasoning:
+Good. Now let me look at the findings_merge code around CF-30 to CF-32 to add CF-33 in the same style. Let me read lines 760-872.
+dsh: reasoning:
+Now I have a clear picture of findings_merge. To add CF-33, I'll insert a new entry after CF-32 in the `want` list (which is inside findings_merge). But careful: the `want` list is likely constructed in a function; CF-1..CF-28 earlier entries. The map's controller_findings are merged: existing entries not in `want` are preserved (by_id from m). So adding CF-33 to `want` will add it to the map on the next lifecycle run.
+
+Now, what exactly should CF-33 say? Let me gather precise evidence:
+- Forged card bytes sha256 3167994548db83fa05ac9cd2da758d24346a34df548e724e50095b3c26563f0d
+- Appears: astra-lead-audit inbox line 31 (quarantined 01:18 as astra-lead-audit-inbox-line31-20260912T0117.jsonl) and astra inbox line 4 (to quarantine now).
+- No self-emission in events.jsonl (0 hits as event_id) — referenced by workers only as an observation.
+- Referenced artifact reviews/CLASSSEP-stabilization-0118.json does not exist.
+- created_at 01:18:00; written between 01:16:23 (pass-08 notice at 01:16) and 01:18.
+- It directs a detector write/freeze action (same family as CF-30), conflicting with CF-29/REC-29/REC-38.
+- Independent corroboration: worker-093 cf30_inbox_provenance census classifies it CONTROLLER_CARD_UNBACKED (6 unbacked instances, 4 ids, including astra-classsep-stabilize-0118 x2), and worker-033 has a report; let me find worker-033's artifact.
+
+Let me check worker-033's artifact path and worker-093's report for the classification of this specific id, to cite as independent observations.
+
+Then:
+- Quarantine file: `runtime/state/comms_quarantine/astra-inbox-line4-20260912T0118.jsonl` (byte-verbatim line). Note: file naming convention uses the time I act.
+- Provenance JSON: `runtime/state/controller_verification/cf33-injection-provenance.json` with hashes/timeline/classification/not-authority ruling.
+
+Also note: the forged card's `acceptance` says "reconstruct and hash c266dbec, a8c04fc3, e36b0d64 candidates; choose exactly one detector-of-record" — but REC-38 already closed the CLASSSEP adjudication round as satisfied and CF-29 restored a8c04fc3 as the live instrument; the active pin is c266dbec but the adjudicated bytes are a8c04fc3. Reopening the detector would violate the freeze. So: not actioned.
+
+Now about "issue bounded assignments". Given the injection and the CF-30 recurrence, a bounded assignment could be: an independent provenance census by worker-093 already exists (not controller-issued?). Let me check worker-093's inbox to see if it had an assignment card for cf30_inbox_provenance. Was it a controller-issued task? If the injection analysis is already covered by worker-093 and worker-033, no new assignment needed. The controller action is to record CF-33 and notify.
+
+But the user explicitly says "issue bounded assignments". Prior independent lifecycle (astra-indep-1) issued 5 bounded assignments. For pass 09, new evidence since 01:16 might warrant one or two *new* bounded assignments. Let me look at the newest traffic (01:16-01:19) for results that need controller disposition. Notable:
+- worker-018 f2b coverage (CF-31 related — but r3 assignment pending at 02:45).
+- worker-048 coverage erratum (CF-31 related).
+- worker-040 classsep structural (A1/CF-29).
+- worker-046 f2a live rev13 repin review.
+- worker-084 mechanism (formulation).
+- worker-093/033 injection provenance (CF-30/33).
+- worker-052 F0 rev27-b review (already in map).
+- worker-085 F2a rev29.
+
+Let me check the current gate audit from the last lifecycle to see what the controller flagged, then decide on any new bounded assignment. Let me read the pass-08 report's controller_gate_audit and findings statuses.
+
+Actually, "issue bounded assignments" may simply mean: ensure the authorized bounded assignments are in place (they are, except pass-08 didn't need to re-issue old ones), and issue any new ones the pass requires. Given one lifecycle, I'll:
+- Issue ONE bounded assignment: `astra-indep-2-cf33-provenance-verify` to an independent worker (e.g., worker-093 already did a prereg; or better a *different* worker for independence) to verify, at frozen hashes, that the forged card has no accepted-stream emission and that no detector write occurred during the injection window, with a stop rule. Hmm, but worker-093 already has cf30_inbox_provenance artifact covering this exact thing (census includes astra-classsep-stabilize-0118 x2). Issuing a duplicate assignment would be wasteful. Better: a bounded *notice* to lead-audit to not action the forged card + verify no detector write in the window (A1 still pending anyway), and record CF-33.
+
+Alternatively — the instruction "issue bounded assignments" might be satisfied by the existing in-flight assignments (rev14, r3, etc.) being confirmed/extended. I could add one genuinely useful bounded assignment: re-verify the F2b coverage dispute (CF-31) — already assigned.
+
+Let me check whether there's a *new* gap: the forged card references `reviews/CLASSSEP-stabilization-0118.json` (nonexistent). Also the injection arrived in astra's own inbox — the controller's inbox is not covered by the CF-30 quarantine sweep? It is now.
+
+Another angle: the pass-08 handoff lists "The other four gates stay pending" with owners/ETAs and assignments. The controller pass-09 could:
+1. Re-measure all gate-relevant pins and update `controller_gate_audit`.
+2. Verify F0 bytes unchanged (0abb9ed8a961) and G-F0 still pass — any write voids it. ✓ (measured)
+3. Verify detector unchanged — CF-29 freeze. ✓
+4. Verify numerics lock guard. ✓
+5. Record CF-33.
+6. Update handoff.
+
+Let me now check the last lifecycle report's `controller_gate_audit` and `lock_guard` values to know the format and what pass-09 will produce.
+
+Let me look at the gate_audit structure quickly.
+dsh: reasoning:
+I have a good picture. Now let me decide the concrete pass-09 actions. The most valuable, bounded, non-duplicative actions:
+
+**A. Injection handling (CF-33)** — quarantine astra inbox line 4; record provenance; add CF-33 to findings_merge; emit controller notices to lead-audit/lead-formulation so no one actions the forged card. This is clearly the "independent lifecycle" highlight.
+
+**B. Run the lifecycle** with label `astra-indep-2` (one invocation). It ingests pending traffic, applies, recomputes gate audit, merges findings (including CF-33), writes checkpoint. Verify VALID + locked.
+
+**C. Post-lifecycle verification**: re-measure map sha, F0/detector pins, numerics guard; confirm detector unchanged and F0 unchanged.
+
+**D. Independent report**: `runtime/state/controller_verification/astra-indep-2.json` + `.md` (like astra-indep-1).
+
+**E. Update ASTRA_HANDOFF.md** with pass-09 section at top (the handoff is the controller state doc; previous passes clearly updated it each pass). Keep it concise.
+
+**F. Bounded assignment**: issue one new bounded assignment if there's a genuine gap. Candidate: the forged card and CF-30 recurrence suggest a *channel-integrity* audit — but worker-093/033 already did provenance censuses. Rather than duplicate, I could issue a bounded assignment to worker-093 or a fresh worker to extend the census to *this* new card at the frozen state and to certify the injection window had no detector write... But that's essentially what CF-33 records with evidence. Hmm.
+
+Let me look at whether there's an *unassigned* controller gap: The pass-08 decisions mention `astra-life05-verify-gform-r3` etc. The injection card attempts to redirect A1 work. The controller should re-affirm REC-38 (CLASSSEP adjudication review satisfied) and confirm the detector freeze — a `status` notice (not an assignment). So maybe no new assignment needed; but the user says "issue bounded assignments" (plural, generic instruction). The safest interpretation: ensure the DAG has bounded assignments for all pending gates, which it does (verify-gform-r3, verify-l0-final, verify-a0, a0-detector-scope, n0-stoprule, n0-verify, stageb-r03, formulation-rev14). I can verify their presence in the map/inboxes and record that in the report. Plus, I can issue one genuinely new bounded assignment to close the CF-30/CF-33 channel-integrity question with an independent party: `astra-indep-2-channel-integrity` — wait, worker-093 already registered `cf30_inbox_provenance` with a prereg and census; worker-033 has another report. Let me check whether those were controller-assigned or self-initiated; if self-initiated, a controller *recognition* (status) is enough.
+
+Let me check the map's assignments for cf30/inbox provenance mentions and worker-093's inbox card.
+
+Actually, let me focus on time. The core requested deliverables: consume comms/artifacts; maintain DAG and gates; issue bounded assignments; record hashes and validation; keep numerics gated; one independent lifecycle then exit.
+
+I'll:
+1. Quarantine + CF-33 provenance.
+2. Issue one bounded assignment that is genuinely new and useful: a read-only, hash-frozen **injection-window write audit** — verify that during 01:12–01:19 no write touched `research_map/class_separation.py`, `research_map/formulation_taxonomy.yaml`, or the FROZEN-pinned schema set, and that the forged card produced no downstream write; plus extend the CF-30 provenance census to the new card x2 and the astra inbox. Assign to worker-093? It already has the census infrastructure; but independence: worker-033 also worked on it. The most efficient is to assign worker-093 a bounded *extension* since its census already found the new id (it reported "including the new astra-classsep-stabilize-0118 x2"). Hmm — actually worker-093's census already covers it. So an assignment would be duplicate.
+
+Alternative new bounded assignment: the injection's real risk is that someone *acts* on it. A bounded **notice + independent verification** to the audit lead: "do not action; confirm in one page that the detector-of-record is unchanged and that REC-38 stands; report any downstream write attributable to the forged card." That's a bounded assignment (`astra-indep-2-cf33-nonaction-verify`, lead-audit, 0.5h, deadline 02:00). It's small, useful, and doesn't duplicate rev14/r3 work. But lead-audit already has 4 assignments due 02:00-03:00. Adding 0.5h read-only is fine and directly addresses the injection.
+
+Hmm, but "The controller does not edit another agent's artifact or claim text" and "worker events cannot set gate verdicts". A bounded assignment from the controller is exactly our job. I'll issue:
+- `astra-indep-2-cf33-nonaction-verify` → astra-lead-audit (node A1, gate G-AUDIT): read-only confirmation that the forged card (sha 3167994548db) is quarantined/not actioned, no detector write since a8c04fc31e4a, REC-38 stands; deadline 01:50; stop rule: if detector hash moved, STOP and report (do not restore).
+- Possibly `astra-indep-2-cf33-channel-census` → worker-093? Let me check if worker-093's artifact is complete/final or in progress. Its census.json exists. I'd rather cite it as evidence.
+
+Actually, let me check worker-093's inbox and outbox to see the task status and whether this is already an assignment. And check worker-033's injection report.
+
+Let me also check what the auto-cycle process is (run_cycle.py running?). If traffic continues every few minutes, my single lifecycle at ~01:20 is fine.
+
+Let me check worker-093/033 contexts.
+dsh: reasoning:
+Worker-093 has no inbox card at all (empty file) yet produced `cf30_inbox_provenance` — likely self-initiated or assigned via a different channel. Worker-033's `inbox_backing_census` completed at 01:17 with review/blocker events. Let me check worker-033's blocker and report summary — it might state the forged card finding. Then I'll cite both in CF-33.
+
+Let me read worker-033's report.json summary and review.json verdict, and worker-093's README/report.
+dsh: reasoning:
+Excellent. Independent workers have already corroborated:
+- worker-033 `inbox_backing_census`: 6 suspected forged lines, includes the new id (I saw in its report the anomaly entries for the earlier ids; the review summary says 6 suspected_forged_lines / 4 quarantined / 43 unbacked).
+- worker-093 `cf30_inbox_provenance`: UNBACKED_CONTROLLER classification for astra-classsep-stabilize-0118, x2 inbox instances, emitter_backed=0.
+
+So the controller can record CF-33 with independent evidence, no new provenance assignment needed. Then issue the bounded non-action verification to lead-audit — but lead-audit is already overloaded; the forged card's threat is "directs a detector write". The controller can simply rule it not-authority (CF-30 pattern) and notify. I think one bounded assignment is defensible and useful: a **read-only non-action/containment verification** by an independent worker (not lead-audit, to avoid the author-conflict issue) — e.g., worker-018 or worker-040? Hmm, the pool is busy.
+
+Actually, better: the CF-33 quarantine needs a *containment check*: the forged bytes appeared in 2 inboxes; are there other copies anywhere under the repo (inbox, outbox, artifacts, reviews, tmp)? A bounded scan (worker-093 has the instrument) could check for the sha256 across the repo and confirm no downstream artifact copied the instruction. That's genuinely valuable (blast-radius containment) and bounded/read-only. But worker-093's census already covers inboxes; a repo-wide sha scan for the payload digest is new. Assign to worker-093 (has the tooling) or a fresh worker; the census instrument is `inbox_provenance_census.py` limited to inboxes. A repo-wide scan is cheap. Let me issue:
+
+`astra-indep-2-cf33-containment` → worker-093, node A1, gate G-AUDIT, 0.5h, deadline 01:45:
+acceptance: hash-scan repo (excluding .git, tmp trash?) for payload sha256 3167994548db and its event_id; classify every hit (quarantine copy, inbox lines, worker outbox mentions = observation not action); confirm zero artifact/claim/schema/detector file treats it as authority; record pre/post hashes of class_separation.py and formulation_taxonomy.yaml; report one verdict. Falsifier: any hit outside the known 3 locations that cites it as authority or acts on it. Stop rule: on detector/taxonomy byte move, stop and report; no writes.
+
+Hmm wait: the payload sha256 of the *line* is 3167994548db...; scanning the whole repo for that string is cheap. But worker-093 is not a "controlled" agent with an inbox channel? It has an inbox file (empty). `comms.send` writes to `comms/inbox/worker-093.jsonl`. Fine.
+
+Alternatively, since the user asked me to "issue bounded assignments" — plural is fine; I can issue 1-2. Given the pass-08 authorized assignments are in flight and largely cover the gates, one new bounded assignment on the injection containment + one re-affirmation notice is reasonable.
+
+Wait, but I should double check whether the *auto-cycle* will apply my outbox events. My lifecycle run ingests outbox → events.jsonl. If I use `comms.append_event(ev)` it writes to `comms/outbox/astra.jsonl` and then ingest picks it up. Good.
+
+Now, what about "record hashes and validation"? The lifecycle report + checkpoint do it; and `runtime/state/artifact_hashes.json` from checkpoint. I'll also record the payload hash, detector hash, F0 hash, FROZEN hash in the CF-33 provenance file and the indep report.
+
+Let me now also check the `human-pi-overnight-20260912T0042n` malformed line 2 (already quarantined at 00:59) — CF-28 probably. Fine.
+
+One more check needed: is there a risk that running the lifecycle now will *demote* F0 or alter gates due to the new traffic? apply_events protects done nodes. The gate audit is recomputed. Fine.
+
+Also, is `astra_lifecycle.py` itself safe to run with traffic mid-flight? It takes the lock. Good.
+
+Now let me look at how `comms.py send` and `comms.append_event` work so I can emit the controller events correctly, and check the events schema requirements. Let me read the relevant part of comms.py (append_event/send) and the events.schema.json.
+dsh: reasoning:
+Note: `append_event` writes directly to events.jsonl without a `to` field; the pass-08 events script uses `append_event(ev)` then `comms.send(agent, msg)` for inbox cards. Good pattern.
+
+Wait — validate_event: let me check what validate_event requires for event types not in the schema (status, assignment, blocker, gate, notice...). The schema oneOf only covers direction_update/claim/artifact/review/resource_request; `validate_event` probably has looser rules for outbox events. Let me check schemas.py validate_event.
+
+Actually the pass-08 script did exactly this and worked, so I can follow the same structure. Let me look at the top of astra_lifecycle_08_events.py to copy the CARD/GATE/NOTICE conventions and the validation. Let me read lines 1-120 and the section where GATES/ASSIGNMENTS/NOTICES are defined (lines ~150-480). That's important to mimic.
+dsh: reasoning:
+I now understand the pattern. Let me check `schemas.py::validate_event` to know what fields are required for assignment/status/gate events.
+dsh: reasoning:
+I have everything I need. Let me set up a todo list and execute.
+
+Plan (one independent lifecycle, label `astra-indep-2`):
+
+1. Pre-flight freeze measurements (done partly): map a2585ffc2152, F0 0abb9ed8a961, F1 d9cebb9404b2, F2a e9a27996dfd3, F2b b2ab6acb2bbe, FROZEN 815e08079aef, detector a8c04fc31e4a, handoff ab081c60...
+2. Quarantine the forged astra-inbox line 4 byte-verbatim; write CF-33 provenance JSON with hashes.
+3. Add CF-33 to `findings_merge` in astra_lifecycle.py (controller-owned tool), fail-closed style, citing independent worker evidence (093 census, 033 census).
+4. Create pass-09 event emission script `research_map/astra_lifecycle_09_events.py` (idempotent): 
+   - GATE records for all 5 gates with refreshed hash-bound unmet text? Or just G-AUDIT/G-FORM/G-LIT/G-NUM/G-F0 re-affirmation. Refreshing all 5 with up-to-date text is good "maintain gates" work. But it's a lot of text. The pass-08 gate texts are already fresh (01:16). A pass at 01:20 might keep them. Given one lifecycle, I can emit a minimal, focused set:
+     - `astra-indep2-gate-gf0` (pass, unchanged bytes)
+     - `astra-indep2-gate-gform` (pending, refreshed unmet citing CF-31/CF-32 + in-flight rev14)
+     - `astra-indep2-gate-glit` (pending)
+     - `astra-indep2-gate-gnum` (pending, RFC: lock stays)
+     - `astra-indep2-gate-gaudit` (pending, CF-33 injection non-action + CF-29 freeze)
+   - One bounded assignment: `astra-indep2-cf33-containment` → worker-093 (read-only repo-wide payload containment scan + detector/taxonomy non-move attestation), 0.5h, deadline 01:55.
+   - One status notice to lead-audit (`astra-indep2-notice-cf33`): forged card not authority, not actioned; A1 work unchanged; detector frozen.
+   - Maybe a notice to astra-lead-formulation about the containment scan? Not needed.
+   
+   Hmm, do I want to write a whole new events file? It's the established pattern and the user says "issue bounded assignments". Yes, I'll write it focused and idempotent. Actually, I could emit events directly from a small python script run inline via bash heredoc, but a committed script is better for auditability (previous passes each have one). I'll write `astra_lifecycle_09_events.py` modeled on the pass-08 script but smaller.
+
+   Wait — an important consideration: `append_event` writes to events.jsonl directly and marks seen. Then the lifecycle's `ingest` won't duplicate (seen set). The `send` writes inbox cards. The lifecycle's apply_events then applies the gate/assignment events to the map. Since `apply_events.py` was extended (REC-40) to let authority gate events replace criteria/unmet/controller_note/eta/owner, my gate events must have `actor: astra` and `event_type: gate` to be authority.
+
+   Order: I should emit events BEFORE running the lifecycle, so the lifecycle ingests/applies them. But if I emit via `append_event`, they're already in events.jsonl; apply_events.main() will apply them (it reads events.jsonl and applies events not yet applied). Good. Then lifecycle's ingest sees no new outbox (unless workers wrote more).
+
+   Sequence: quarantine → write CF-33 in astra_lifecycle.py → write 09 events script → run 09 events script → run `astra_lifecycle.py --label astra-indep-2` → verify map/gates/findings/lock → write indep report (json+md) → update ASTRA_HANDOFF.md → final verification (map sha, pins unchanged).
+
+5. Record hashes/validation in `runtime/state/controller_verification/astra-indep-2.json` and `.md`, following astra-indep-1 conventions.
+
+6. Keep numerics gated: verify `numerics_lock` locked, guard present, N1 absent, no N1 artifacts; the lock_guard in the lifecycle does this. Also do a quick N1 artifact check: `numerics/` files — guard says solver_absent. I'll rely on lock_guard + a manual check that no N1 result file appeared after 01:16.
+
+Let me start. First the todo list, then quarantine + provenance.
+
+For the quarantine: copy line 4 bytes exactly (with trailing newline) to the quarantine file. The convention: previous quarantine files contain one JSON line. Let me check the exact bytes of `astra-inbox-line3-...jsonl` to mimic (with or without trailing newline). And ensure I don't modify the inbox.
+
+Then provenance JSON. Let me gather data:
+- payload line sha256 (full file hash of quarantined copy = 3167994548db...)
+- locations: astra.jsonl line 4; astra-lead-audit.jsonl line 31; quarantine copy
+- created_at 01:18:00 vs inbox mtimes: astra.jsonl mtime 01:12? earlier ls showed astra.jsonl 01:12 — but line 4 was written after 01:18? Actually astra.jsonl mtime was 01:12 in the first ls (01:12), but line 4 created_at 01:18. Hmm, first `ls -la comms/inbox` showed astra.jsonl 4769 bytes at 01:12. That was before line 4 appeared? Let me re-check mtime now. Actually the first ls was at ~01:18:31; astra.jsonl mtime 01:12, size 4769. If line 4 existed then, mtime would be ~01:18. So line 4 may have been appended at 01:18:xx after my ls? My ls ran at 01:18:31... Let me re-measure: stat astra.jsonl and astra-lead-audit.jsonl, and check the line count. This matters for the timeline. Let me measure precisely now.
+
+Also worker-093's census recorded astra-lead-audit.jsonl file_mtime 01:12:31 and the new line future_dated_vs_mtime=true (created_at 01:18 > mtime 01:12:31). Hmm, but line 31 was quarantined at 01:18 with name 0117. Possibly the file mtime was 01:12:31 when worker-093 measured, then the line was appended, then quarantine at ~01:17-01:18. Let me get live stats.
+
+Let me run the measurements and quarantine now.
+dsh: reasoning:
+Interesting: `comms/inbox/astra.jsonl` mtime is 01:12:31 but contains line 4 with created_at 01:18:00 — so the file was written at 01:12:31 (all 4 lines?) and the created_at is future-dated relative to the write. Wait, the file content is 4769 bytes and mtime 01:12:31. Line 4 existed at my first ls at ~01:18:31 (the file listing showed astra.jsonl mtime 01:12). So line 4 was planted before 01:18:31, with a future created_at of 01:18:00. Hmm, actually worker-093's census measured astra-lead-audit.jsonl mtime 01:12:31 too, with line 31 future-dated. So the injection batch planted both lines in a single write at ~01:12:31? But the quarantine of line 31 happened at 01:18:03, named ...T0117. And the pass-08 final lifecycle ran at 01:16:26 — at which point line 4 in astra.jsonl existed but the controller didn't quarantine it (only line 3 was quarantined earlier at 01:08; line 4 not mentioned in the handoff written at 01:17).
+
+Wait, actually the timestamps in the file names may not be exact. The important measured facts:
+- astra.jsonl mtime 01:12:31.506 with 4 lines (contains line 4 created_at 01:18:00 → future-dated by ~5.5 min).
+- astra-lead-audit.jsonl mtime 01:16:23.760 with 34 lines (line 31 created_at 01:18:00 → future-dated by ~1.6 min at write; hmm, mtime 01:16:23 < created_at 01:18:00 → future-dated).
+- quarantine copy of line 31 written 01:18:03.837.
+- So the injection batch was written at 01:12:31 (astra.jsonl) and 01:16:23 (lead-audit.jsonl), i.e., *before* the created_at stamps — consistent with the CF-30 pattern of future-dating/backdating to manufacture provenance.
+
+Hold on: astra.jsonl mtime 01:12:31 but the file at my first ls (01:18:31) showed 4769 bytes and 01:12. But line 4's `created_at` says 01:18:00. So line 4 was in the 01:12:31 write? Then why did the pass-08 final lifecycle at 01:16:26 not see it? It may have seen it — the handoff CF-30 mentions only line 3. The pass-08 controller may have missed line 4 (it appeared at 01:12:31, before the 01:12:39 lifecycle open). Hmm, but the handoff says line 3 only. Actually the pass-08 report at 01:12:39 might have been emitted before... no, line 4's file mtime 01:12:31 is before 01:12:39.
+
+Wait — could the mtime have been *set* by an attacker (os.utime) to fake the write time? That's exactly the kind of thing the CF-30 findings note ("created_at 01:05:00 but written by 01:00:35" and future-dated frozen_at). The future-dated created_at 01:18:00 vs mtime 01:12:31 is an mtime/created_at inversion — worker-093 flagged `future_dated_vs_mtime: true, mtime_delta_s: 329` for line 31 (measured at file mtime 01:12:31, delta 329s ≈ 5.5 min). So both lines have created_at 01:18:00 and file mtimes 01:12:31/01:16:23, i.e. created_at is ~5.5/1.6 min in the future relative to the file mtime.
+
+Hmm, but note the file mtimes are *also* suspicious: worker-093 saw astra-lead-audit.jsonl mtime 01:12:31 at its T0, yet the same file now has mtime 01:16:23 (the pass-08 inbox send). And line 31 has created_at 01:18:00. So the cleanest statement: the forged card's `created_at` (01:18:00) postdates the file mtime of both inboxes where it sits and has no accepted-stream emission; it was quarantined from astra-lead-audit at 01:18:03 and is still present unquarantined in astra.jsonl line 4.
+
+Actually careful: if the mtime of astra.jsonl is 01:12:31 and it contains line 4, then line 4 was written at or before 01:12:31 — meaning the previous controller (pass-08 open at 01:12:39) had it in view and didn't quarantine it. Or the mtime was manipulated. Either way, the measured fact is: line present at 01:12:31 mtime with created_at 01:18:00 (future-dated by ~5m29s). Worker-093 measured line 31 as `future_dated_vs_mtime: true` with delta 329s = 5m29s, consistent with 01:18:00 - 01:12:31 = 329s. Good.
+
+So in CF-33 I'll state: created_at 01:18:00, file mtime 01:12:31 (astra.jsonl) / 01:16:23 (lead-audit.jsonl); future-dated vs mtime; no accepted-stream emission; referenced artifact absent; identical bytes in both inboxes; quarantined from lead-audit at 01:18:03 (by ongoing quarantine process) and from astra at this pass.
+
+Now let me quarantine line 4 and write the provenance file. Also compute the sha256 of the live astra.jsonl file before/after (it shouldn't change since I only read).
+
+Let me do it with python for byte-exact copying.
+dsh: reasoning:
+Quarantined. The payload digest (raw line without trailing newline) is `9ff2edc1e684...`; the file-with-newline digest is `3167994548db...` matching the lead-audit quarantine copy. I'll cite both, using the file digest for byte-verbatim identity.
+
+Now write the CF-33 provenance file. Include:
+- schema, finding id CF-33, at
+- payload: event_id, actor, event_type, assignee, created_at, file digest, line digest, locations
+- timeline measurements
+- absence of backing (events.jsonl self-emissions 0, no outbox/astra.jsonl, referenced artifact absent)
+- independent corroboration: worker-033 inbox_backing_census (6 suspected forged, 4 quarantined, unbacked 43) and worker-093 cf30_inbox_provenance (UNBACKED_CONTROLLER, x2, emitter_backed=0)
+- rulings: not authority, not actioned, REC-38/CF-29 freeze stands; no detector write authorized
+- action taken: quarantined byte-verbatim, to be recorded as CF-33
+- pins measured now
+
+Let me write this JSON to `runtime/state/controller_verification/cf33-injection-provenance.json`.
+
+Then edit astra_lifecycle.py to add CF-33.
+
+Let me also double check the referenced artifact absence and that events.jsonl has no self-emission for this id (done: self-emissions empty, count 0 references). Note worker-093/033 referenced it in their *outbox* files — those are observational analyses, not authority.
+
+Let me build the provenance JSON now.
+dsh: reasoning:
+I left two `sha256: "MEASURED_AT_PASS"` placeholders. Let me measure the actual hashes of those two artifacts and fix the file, plus fill in the map sha. Let me measure.
+dsh: reasoning:
+Interesting! The map sha has changed since my pre-flight measurement: was `a2585ffc2152...` at 01:18, now `4cd5fc5ec248...`. That means the 15-minute auto-cycle (run_cycle.py) applied events between my measurement and now. So there IS an active auto-cycle running (perhaps in background from another process, or the simulation writes state). Time now ~01:22. The map moved — this is expected: "traffic continues, and the 15-minute auto-cycle applies accepted events between controller passes; re-measure before citing".
+
+Wait, actually 4cd5fc5ec248 — let me check updated_at and whether G-F0/gates changed. Let me verify the pins are still the same (F0 etc.) — those are files, unlikely changed. The map moved due to event application.
+
+Important: my lifecycle run will ingest and apply more. Fine.
+
+Let me update the provenance file with real hashes.
+dsh: reasoning:
+Map moved at 01:20:11 by the auto-cycle; gates unchanged. Good.
+
+Now add CF-33 to `findings_merge` in astra_lifecycle.py. I'll insert after CF-32 in the `want` list. Let me make the finding text precise and reference REC-43.
+
+The finding entry structure: id, severity, status, finding, action, evidence. Insert before the closing `]`.
+
+Let me apply the edit.
+dsh: reasoning:
+Now let me create the pass-09 events script. It must be idempotent and fail-closed on the F0 taxonomy pin and detector. Contents:
+
+- Measure pins; fail-closed on F0 0abb9ed8a961 and detector a8c04fc31e4a.
+- GATES: 5 gate records (G-F0 pass; G-FORM/G-LIT/G-NUM/G-AUDIT pending) with refreshed criteria/unmet/controller_note/owner/eta. Keep concise but hash-bound.
+- ASSIGNMENTS: one bounded assignment `astra-indep2-cf33-containment` → worker-093, node A1, gate G-AUDIT, artifact `artifacts/worker-093/cf33_containment/report.json`, acceptance, falsifier, stop_rule, deadline, budget 0.5h.
+- NOTICES: `astra-indep2-notice-cf33` → astra-lead-audit and astra-lead-formulation (status event) stating not-authority/not-actioned.
+- NOTIFY map.
+
+Before writing, let me check what fields apply_events expects for assignment events to add them to `assignments` (e.g., budget_agent_hours, expected_information_gain, deadline, summary). Let me check apply_events.py's assignment handling and gate handling to ensure my events apply cleanly.
+dsh: reasoning:
+Good. Now let me write the pass-09 events script. I'll model it on the pass-08 one but focused. Let me first look at the pass-08 GATE record structure for G-AUDIT and one assignment/notice to copy exact field style. Let me read lines 240-360 of the pass-08 script.
+dsh: reasoning:
+Now I have the full style. Let me write `research_map/astra_lifecycle_09_events.py`. It should be focused but complete:
+
+- Header docstring with pass-09 rulings (REC-43).
+- measure() + fail-closed pins: F0, detector (restored), void evidence copy, plus the map's G-F0 pass state? Keep to F0 + DET.
+- GATES: 5 records with updated pass-09 text.
+- ASSIGNMENTS: 1 bounded assignment for CF-33 containment.
+- NOTICES: 1 notice to lead-audit + lead-formulation re CF-33; maybe a second notice to lead-numerics re lock (keep numerics gated reminder)? The pass-08 already sent a lock notice. I'll include the CF-33 notice and a short lock reminder is unnecessary. But "keep numerics gated" — I'll include a `astra-indep2-notice-lock` notice to lead-numerics reaffirming: lock stays LOCKED, N1 forbidden, N0 work only, stop-rule items due 02:30/03:00, G-NUM certifies N0 only. That is a bounded communication, consistent with prior passes.
+
+Let me keep the script ~200 lines. Time to write it.
+
+Note on NOW: use datetime.now(CST).isoformat.
+
+For the containment assignment:
+- event_id: astra-indep2-cf33-containment
+- node_id: A1
+- assignee: worker-093
+- gate: G-AUDIT
+- artifact: artifacts/worker-093/cf33_containment/report.json
+- deadline: 2026-09-12T01:55:00+08:00
+- budget_agent_hours: 0.5
+- acceptance: read-only repo-wide scan for payload digest 3167994548db / line sha 9ff2edc1e684 / event id astra-classsep-stabilize-0118; classify every hit (quarantine copies, inbox lines, worker provenance observations) and prove no artifact/claim/schema/detector/ledger/FROZEN file cites it as authority; record pre/post sha256 of class_separation.py and formulation_taxonomy.yaml; deliver exactly one verdict (accept|revise|reject|inconclusive) + census; no detector/taxonomy/inbox writes.
+- falsifier: a hit outside the known locations that cites the card as authority or any byte move in the frozen detector/taxonomy during the scan.
+- stop_rule: stop on any frozen pin move or if the scan would require editing a canonical artifact; report unresolved.
+
+Wait — worker-093's census already classified the card and it's in the artifact. The containment scan adds repo-wide coverage outside inboxes: artifacts/reviews/ledger/etc. Good.
+
+Now the gates text. I'll write concise pass-09 unmet lists, carrying forward the essential open items:
+- G-F0: pass; criteria = taxonomy 0abb9ed8a961 + 7 independent accepts; any write voids.
+- G-FORM: pending; unmet: F2b D1/D2 repairs pending in rev14; F2a ext category; CF-31 coverage binding table required; CF-32 pipeline non-reproducible + stage-B R03; verdicts at current pins void once bytes move.
+- G-LIT: pending; unmet: L0 adjudication (2 accepts vs 5 revise + rubric-scope objections) at a1674f094979; L1 locator finding disposition; gate-unmet "201 citations" not a measured universe.
+- G-NUM: pending; unmet: N0 verdict still revise 3.5; stop-rule items; protocol C8 met; lock stays locked; N1 forbidden; G-NUM certifies N0 only.
+- G-AUDIT: pending; unmet: A0 6 revise / scope artifact unverified; A1 no full accept; CF-31 divergence; CF-33 injection not authority; detector freeze.
+
+Let me write the file now. I need to be careful with Python string concatenation and JSON validity. I'll write it in the same style.
+
+Also, `comms.append_event` writes to events.jsonl and marks seen — but note `_load_seen` may have a large seen set; fine.
+
+One important check: validate_event for "gate" requires `criteria` and `evidence_refs`; for "assignment" requires node_id, assignee, artifact, gate, evidence_refs, falsifier; for "status" requires node_id, status, hours, summary, evidence_refs, next_falsifier. My notices must include all those.
+
+Let me write the script.
+dsh: reasoning:
+Now run the pass-09 events script. But first, verify the F0/detector pins are still the same (auto-cycle could have changed detector? unlikely). The script is fail-closed.
+
+Let me run it.
+dsh: reasoning:
+Events emitted. Now run the lifecycle with label `astra-indep-2`. This does:
+- locked ingest → apply → repair → gate audit → findings merge → checkpoint
+
+It may take a bit (audit_evidence scan over artifacts, classsep regression). Let's run it in foreground with a generous timeout. Let me use a timeout of ~600s; it should be fast (previous passes took ~4 min? from 01:12:39 to 01:16:26 includes two invocations; each maybe ~2 min). Let me run it.
+dsh: reasoning:
+The lifecycle ran VALID, applied 202 events, gates unchanged, numerics locked. Let me get the report path and full details. The output was truncated at the top. Let me find the newest lifecycle report and read its key fields: evidence_hard_failures, lock_guard, review_coverage, controller_findings (should include CF-33), checkpoint_id, map sha before/after.
+dsh: reasoning:
+The lifecycle succeeded:
+- label astra-indep-2
+- map VALID, 202 events applied, 0 demoted
+- gates: G-F0 pass; others pending
+- numerics locked, guard_present, n1_hash absent, solver_absent
+- CF-33 now in controller_findings ✓
+- classsep regression PASS 27 fixtures 17TP/10TN
+- ingest: 88 accepted, 1 rejected, 7475 duplicates, 219 files
+- checkpoint ckpt-20260912-012205
+- map sha after 45acd9d93d1e...
+
+There were hard failures in evidence audit (CLASSSEP composite hits) — expected per prior passes (23-24 hard). Let me get the exact count and the lock guard/gate audit details, plus verify the map's new gate text (my events applied: check the G-AUDIT unmet includes CF-33; the assignment present; notices present).
+
+Also check the "rejected 1" — what was rejected? Let me look at comms/rejected.jsonl tail. Important for hygiene: the auto-cycle/traffic may have malformed events.
+
+Let me run post-verification:
+1. map gates text and assignments include astra-indep2-* events.
+2. F0/detector pins unchanged after lifecycle.
+3. numerics: no N1 artifacts, lock still locked.
+4. rejected line inspection.
+5. evidence hard failure count.
+
+Then write the indep report + handoff update.
+dsh: reasoning:
+Post-lifecycle verification is good:
+- Pins unchanged: F0 0abb9ed8a961, detector a8c04fc31e4a, FROZEN 815e08079aef, F1 d9cebb9404b2, F2b b2ab6acb2bbe.
+- numerics/results only flat-wave (N0) files; no N1 solver.
+- 24 evidence hard failures (same classseep composite hits as pass-08, per the decisions note).
+- One rejected event: `w061-csr-20260912T0125-claim` rejected (claim without required fields? maybe new traffic). The rejected file is written by ingest only. Let me check the rejection reason and whether it matters. Actually the tail shows two entries; the last is w017-cf31-20260912T0122-claim. Let me get the reasons for the last few rejects. These are worker claims rejected by schema (likely missing conclusion_type etc.) — normal, but worth noting.
+
+Let me check the rejected reasons quickly.
+
+Then: the "reconcile_structure" in apply_events could have demoted something — events_demoted=[] so no.
+
+Next: write the astra-indep-2 report (json + md). The json can be a curated record like astra-indep-1.md but I should also keep the raw lifecycle report (already exists at lifecycle_20260912-012205.json). The indep-1 pattern: a `.json` and `.md` under runtime/state/controller_verification/. Let me look at astra-indep-1.json to copy the structure.
+
+Then update ASTRA_HANDOFF.md — add a new top section for pass 09 / astra-indep-2 and adjust the "LIVE CONTROLLER STATE" header. The handoff currently starts with the pass-08 state. I'll replace the header block (lines 1-94) with a pass-09 block, but keep the rest (mission/current state/portfolio/hard decisions/etc.) intact. Actually, should I preserve the pass-08 block for history? The convention: the handoff is a living doc with the latest state at top; previous passes just overwrote the top section. I'll rewrite the top block with pass-09 info, keeping a short "previous pass" pointer.
+
+Let me first check `astra-indep-1.json` structure.
+dsh: reasoning:
+The rejects are worker claims with invalid conclusion_type (normal schema enforcement). Good — I can note 1 rejected at ingest, 4 recent rejects across traffic; but the lifecycle ingest said rejected:1 (the one new since last ingest?). Actually ingest counts only outbox files scanned; 88 accepted, 1 rejected in this pass. Fine.
+
+Now let me write the astra-indep-2 report JSON + MD. I'll include:
+- lifecycle_id, actor, authority, started/ended (report file has started_at; report mtime)
+- consumed: events applied 202, ingest 88 accepted / 1 rejected / 7475 duplicates, map before/after
+- gates with verdicts + unmet counts
+- CF-33 injection handling
+- bounded assignment issued
+- notices
+- numerics gate
+- validation/checkpoint
+- pins measured (frozen)
+- exit statement
+
+Let me get started_at/ended_at from the report and the checkpoint id. started_at from report; ended_at = updated_at (01:22:05).
+
+Also compute:
+- report json sha256 later
+- new handoff sha after update
+
+Let me write astra-indep-2.json and .md now.
+dsh: reasoning:
+Now write the report. I'll create `runtime/state/controller_verification/astra-indep-2.json` with a structured summary, and `.md`.
+
+Let me include measured pins and the new traffic observation (workers continue; F2b coverage reconciliation artifacts w017/w061 exist — CF-31 relevant; note that F2b scan coverage in the new audit shows F2b 3 vs earlier 4 — interesting: the G-AUDIT reason says F2b 3 now. Hmm, earlier pass-08 G-FORM said F2b 4 (worker-052/071/072/090); G-AUDIT now says F2b 3. This dynamic scanning is exactly CF-31's point. I'll record the measured counts in the report as advisory only.
+
+Let me write the JSON.
+dsh: reasoning:
+Now the markdown companion `astra-indep-2.md`, then update ASTRA_HANDOFF.md. Let me write the md briefly.
+dsh: reasoning:
+Now update ASTRA_HANDOFF.md. The current top block is the pass-08 state (lines 1-94 roughly). I'll replace it with the pass-09 / astra-indep-2 state, keeping the rest of the document (Mission onward). I need to read the exact boundary again: line 94 ends the pass-08 block (`research_map/apply_events.py` was extended this pass (REC-40 gate text fields).`), line 95 blank, line 96 `## Mission`.
+
+I'll rewrite lines 1-94 as a pass-09 block. Keep it comprehensive but tight, covering:
+- LIVE CONTROLLER STATE header with time + pass label
+- assignment/comms pointers
+- pass-09 run facts (one lifecycle, report hash, checkpoint, map sha)
+- gates: G-F0 pass unchanged; other four pending with unmet refresh + deadlines
+- CF-29/CF-31/CF-32/CF-33 live
+- numerics locked
+- authority notes
+- controller tools for next pass
+
+I should compute the final map sha at exit for the handoff (need to re-measure; traffic may have moved it since 01:22:05). The handoff says "map sha at pass-08 exit a2585ffc2152; re-measure before citing". I'll measure the map sha right before writing and cite it with the caveat.
+
+Also update the `## Current state (2026-09-11)` section? It's a background section; leave as is (it's stale but historical). The handoff's top block is the live state.
+
+Let me measure current map sha + check gates haven't moved, then write the new block via edit (replace old lines 1-94). To do that exactly, I need the old text. I have it from the initial read. I'll use edit with old_string being the header line and through the last line of the block... that's a big literal. Alternatively, use write to replace the whole file with the new top block + the rest of the original content (I have the full original read: lines 1-157). That's cleaner. I'll reconstruct the remainder verbatim from my read.
+
+Let me first re-measure key state to cite numbers accurately.
+dsh: reasoning:
+Now write the new ASTRA_HANDOFF.md. I'll replace the top block (through the pass-08 tool paragraph) with the pass-09 block, preserving everything from `## Mission` to the end.
+
+Let me construct the file content carefully, reproducing the tail (lines 96-157) exactly as read.
+dsh: reasoning:
+Now final verification:
+1. Re-run `validate_map.py` to ensure VALID (the map was written by lifecycle; validator already ran). 
+2. Re-measure final hashes: map, handoff, detector, F0.
+3. Confirm the CF-33 quarantine copies still exist and hashes match; confirm no new injection line appeared in astra inbox since (traffic continues — maybe check if a line 5 appeared). If a new injection appeared, handle? "One lifecycle then exit" — but if new traffic planted something during my pass, I should note it. Let me check the inbox tail.
+4. Confirm numerics lock still locked and N1 absent.
+5. Verify the astra-indep-2 records' hashes and update the report if needed (the report cites handoff? no). Actually, the handoff cites the indep report sha b746826a8e1b — I measured that before writing the md; json unchanged. Good.
+6. Check the events I emitted are in the accepted stream and no duplicates.
+
+Also: the lifecycle's `evidence_hard_failures` = 24. Fine.
+
+One thing: I should double-check that `astra_lifecycle.py` still imports/compiles fine after my CF-33 edit (the lifecycle ran after the edit — yes, it ran at 01:22 and included CF-33 in the report, so the edit is valid).
+
+Also the handoff references `astra_lifecycle_09_events.py` — hash 71cbe412a760; I could add its sha to the decisions-like record. The astra-indep-2.json doesn't list tool hashes. Not strictly needed. But the handoff's "controller tools for next pass" is fine.
+
+Let me also write a decisions-style record? The previous passes wrote `astra-lifecycle-0N-decisions.json` with REC numbers. My indep report includes REC-43 in the provenance, and the map gate events carry the ruling. The independent lifecycle record astra-indep-2.json serves as the decisions record. It has no REC-36..43 list though. CF-33 provenance has REC-43. I think that's sufficient for "one independent lifecycle".
+
+Let me verify final state.
+dsh: reasoning:
+Everything checks out. Let me do a final review of remaining concerns:
+
+1. The instruction "One independent lifecycle then exit" — done: exactly one locked lifecycle invocation (astra-indep-2), plus the event emission script.
+2. "Consume comms and artifacts" — ingest 88 new events, applied 202; cited worker artifacts.
+3. "maintain DAG and gates" — gates maintained with refreshed unmet; map VALID; no DAG changes needed (no new nodes). Hmm, "maintain DAG" could also mean the node structure; nothing broken.
+4. "issue bounded assignments" — one new bounded assignment (CF-33 containment) + notices; re-affirmed in-flight.
+5. "record hashes and validation" — lifecycle report, checkpoint, indep report, provenance.
+6. "Keep numerics gated" — lock verified; no N1.
+
+One more thing to check: did the lifecycle write a new checkpoint to `runtime/state/current_checkpoint.json` and `checkpoint_log.jsonl`? The report says checkpoint ckpt-20260912-012205. Let me confirm quickly, and also verify the `runtime/state/artifact_hashes.json` includes the new points. Actually not necessary, but the checkpoint exists.
+
+Also, should I update the handoff hash anywhere? The handoff cites map sha at exit 45acd9d93d1e — measured after; still current. Good.
+
+There's one more consideration: The system prompt said "Record hashes and validation." I've done that. The final answer should summarize concisely: what was consumed, what was recorded, the one lifecycle result, gates, findings, assignments, and exit.
+
+Let me quickly confirm the checkpoint files and then finish. Also check the map's controller_lifecycles entry for astra-indep-2 includes report path.
+
+One last check: `job_list` — no background jobs started. Fine.
+
+Also: did I leave the astra inbox line 4 in place? Yes — quarantine copies don't edit the inbox (per handoff: do not hand-edit inbox JSONL). Good.
+
+Let me confirm checkpoint.
+dsh: reasoning:
+All done. Let me finalize the todo list and give the final answer.
+
+Let me mark all todos completed.
+
+Final answer should be brief but complete, summarizing the one independent lifecycle and its results. The user said "One independent lifecycle then exit", so I should report completion and exit — no further actions.
+
+Key numbers:
+- Lifecycle `astra-indep-2`, 01:22:04–01:22:05, single locked invocation.
+- Map: 4cd5fc5e → 45acd9d9, VALID; 202 events applied (ingest 88 accepted/1 rejected/7475 dup); checkpoint ckpt-20260912-012205.
+- Gates: G-F0 pass unchanged; G-FORM/G-LIT/G-NUM/G-AUDIT pending with refreshed unmet.
+- New finding CF-33 (injection recurrence) + REC-43; quarantine copies; provenance.
+- One bounded assignment astra-indep2-cf33-containment → worker-093; notices; in-flight assignments re-affirmed.
+- Numerics locked, N1 absent.
+- Evidence audit 24 hard (CLASSSEP composite hits + drift) / 0 soft; classsep regression PASS.
+- Handoff updated; astra-indep-2.json/.md records.
+
+Exit.

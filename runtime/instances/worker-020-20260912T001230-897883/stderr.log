@@ -1,0 +1,529 @@
+dsh: reasoning:
+Let me start by exploring the workspace to understand the handoff/map and comms structure.
+dsh: reasoning:
+The workspace is huge. I need to find "handoff/map" and "comms". Let me look for directories named handoff, comms, or swarm-related. The context mentions "ai4math-swarm.tar.gz", "launch_swarm.sh", "supervise_swarm.sh". Likely there's a swarm directory. Let me search.
+dsh: reasoning:
+Found `/data3/guoshaoyang/workdir/ai4math-swarm/comms`. Let me explore the swarm directory.
+dsh: reasoning:
+Let me read the key files: HANDOFF.md, README.md, comms/PROTOCOL.md, research_map/ASTRA_HANDOFF.md, and the research_map.json. Also look at the runtime directory which may contain worker assignments (worker=020). Also look at inbox/outbox.
+dsh: reasoning:
+Now let me read research_map/ASTRA_HANDOFF.md and research_map.json, and check the inbox for worker-020. The prompt says "worker=020" and agent ids are `deepseek-flash-01` … `deepseek-flash-20`. So worker 020 is `deepseek-flash-20`.
+
+Let me look at inbox and outbox, research_map.json.
+dsh: reasoning:
+Now let me look at worker-020's inbox assignment and outbox. `deepseek-flash-20.jsonl` inbox and outbox. Also the "worker=020" might correspond to a runtime instance worker-020. Let me check both.
+
+Let me read the inbox deepseek-flash-20.jsonl and outbox deepseek-flash-20.jsonl.
+dsh: reasoning:
+The task for worker=020 seems to be from `deepseek-flash-20` assignment: Build the ablation harness (evaluation/ablation_harness.py), synthetic/dummy proposers only, matched token + wall-clock budgets, log per-arm metrics, dry-run only, no model calls.
+
+But wait — the runtime instance `worker-020-20260912T001230-897883` was created at 00:12:30. There might be a task card in that instance directory. Let me check runtime/instances/worker-020-* and also the assignments in research_map.json.
+
+Also there's a supervisor system. Let me look at the instance dir contents for worker-020, worker-20. And the launch/swarm scripts to understand how workers are dispatched. Let me check `runtime/instances/worker-020-20260912T001230-897883`.
+dsh: reasoning:
+Interesting — I'm apparently worker-020, and my stderr.log is capturing my own reasoning. So this session IS the worker-020 instance. Good.
+
+My assignment: from my inbox `deepseek-flash-20.jsonl`, issued 23:19: node A2, class_id GLOBAL, artifact `evaluation/ablation_harness.py`, gate G-AUDIT, task "Build the ablation harness; execute with synthetic/dummy proposers only." Acceptance: "Harness enforces matched token+wall-clock budgets, logs per-arm metrics, runs on synthetic data end-to-end." Falsifier: "Harness compares arms at unequal token budget." Stop rule: "Dry-run only; no model calls." Budget 4 agent hours, deadline 2026-09-12T03:15+08:00.
+
+But also there may be newer assignments issued at 00:09 from the controller (`astra-life01-*`). Let me check research_map.json assignments for worker slots, and check the supervisor/run_cycle to see which task worker-020 gets. Also check `runtime/instances/worker-20-*` prompts — same prompt likely.
+
+Wait — there's also "worker-09" outbox versions, and worker-06. The map's assignments may have `assignee` names like `deepseek-flash-20` or `worker-020`. Let me read the research_map.json assignments section. It's probably big; let me grep.
+
+Also check the evaluation directory: `evaluation/` exists with `ablation_harness.py` maybe already? Let me check.
+
+Let me look at research_map.json.
+dsh: reasoning:
+Interesting: the A2 harness already exists at `evaluation/ablation_harness.py` (30742 bytes, sha256 df878e97bf6e...), and worker-20 (prior instance) already ran self-test and dry-run, wrote evidence under `artifacts/worker-20/`, and emitted a completion claim. The map's A2 shows a completion claim pending reviewer verdict.
+
+So my job as worker-020: "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit."
+
+Given the A2 harness already built and validated by worker-20 (previous instance), the marginal value would be to do the verification/review side? But authority says worker events cannot set status=done. The prompt says "Take one class-bound task" — so I should pick one task from the map/inbox that is class-bound and not complete.
+
+Let me check what's most useful. Options:
+1. Verify the existing harness (evidence/review). But A2's review verdicts must come from reviewer leads (astra-lead-audit). A worker cannot set validation_status=passed.
+2. My inbox assignment is specifically A2 harness build. The harness exists already. Maybe I should independently verify it, and emit artifact/claim/status events with hash + falsifier.
+3. Check for newer inbox messages — my inbox only had 2 lines; but there might be newer assignments in `comms/outbox/assignments/` or the map assignments keyed to slots. Let me check `runtime/instances/worker-020` prompt is generic, so my task comes from inbox.
+
+Let me check whether `deepseek-flash-20` has newer inbox messages (no, file is 2496 bytes, 2 lines as of 23:22). Also check `comms/outbox/assignments/` and the supervisor script `supervise_loop.sh` to understand worker slot → task mapping.
+
+Actually, the key question: what "one class-bound task" should I take? The inbox assignment is class_id GLOBAL (not really a class), artifact evaluation/ablation_harness.py. The A2 node. The prior worker-20 already completed the build and dry-run, and emitted a claim with an independent checker. My fresh instance could add value by doing an independent verification pass and checkpoint — but the "review" must be from a reviewer; however, a worker can emit a `review` event type per protocol (review — target_id, reviewer, verdict, score, hard_failures, findings). The reviewer id could be deepseek-flash-20... but self-review isn't independent. Hmm.
+
+Let me look at the A2 node in the map (lines around 4980) and the claims by flash20 (lines 5948, 6507), and the artifacts/worker-20 directory. Also check `runtime/state/artifact_hashes.json` for the harness hash and `counts.tsv` / current_checkpoint for pending items.
+
+Let me also check what tasks are pending and unassigned for workers. Let's inspect the map's assignments list for assignees deepseek-flash-* and statuses, plus `publication_status`. Also the latest controller findings for open gaps.
+
+Given bounded execution, I should pick the clearly assigned task for me: A2 harness (evaluation/ablation_harness.py). Since it already exists and was validated, the highest-value bounded action is to run an independent, adversarial verification of the harness against its falsifier ("Harness compares arms at unequal token budget"), verify what's on disk matches the recorded hash, and produce a checkpoint + JSON events with IDs/evidence/hash/falsifier. If the harness fails the falsifier test, report a blocker/claim with evidence.
+
+Actually — wait. Let me check whether there's a newer assignment issued to worker-020 by the supervisor/lifecycle at 00:12:29. `runtime/instances/worker-020-20260912T001230-897883` prompt is the generic one. The launch_swarm.sh probably dispatches workers with tasks from a queue. Let me look at supervise_loop.sh, launch_swarm.sh, and the assignment mapping to see what worker 020 is supposed to do in this generation.
+
+Let me also check `comms/outbox/assignments/`.
+dsh: reasoning:
+The A2 node status is "active", artifact claim exists, promotion_blocked. The next_falsifier in the A2 node is exactly: "Re-run the harness with a config where wall clock binds (small --wall-budget) and verify the budget checker marks primary arms wall-clock-limited as unmatched; or diff report generator_sha256 against the harness bytes."
+
+So my bounded task: take A2 (class_id GLOBAL), run the next falsifier — wall-clock-binding configuration — and verify the budget checker behavior. That's a concrete, class-bound-ish task with a falsifier already named in the map. This is the highest-value bounded action: it tests the harness's honesty under the wall-clock dimension, which the prior claim did not establish (the prior claim only established token-cap matching).
+
+Then emit valid JSON events (claim + artifact + status) with IDs, evidence refs including sha256, and falsifier, then checkpoint.
+
+Let me first check the harness structure and how to run it. Let me read evaluation/ablation_harness.py (30KB), plus ablation_report.json, and README_ablation_harness.md. And check artifact_hashes.json for the harness's recorded hash.
+
+Also note: the current harness sha on disk — let me verify df878e97bf6ede6c... matches.
+
+Let me look at the harness CLI.
+dsh: reasoning:
+The harness hash on disk matches df878e97... (recorded). Good.
+
+Now let me read the harness key parts: budget enforcement, check_matched_budgets, and how wall budget is used. Then design the falsifier test: run with a small `--wall-budget` such that wall clock binds, and verify the checker marks primary arms wall-clock-limited as unmatched (i.e., primary_comparison_valid false).
+
+Let me read the relevant sections of the harness. Let me grep for budget functions.
+dsh: reasoning:
+Now I understand the harness. The wall-clock binding test: set `--wall-budget` small enough that arms hit the wall clock before tokens. The checker should then report violations "wall-clock-limited; the comparison is confounded" and `matched: false`, `primary_comparison_valid: false`, and the CLI exit code 1.
+
+Note a subtlety: `run_arm` checks token budget first, then calls budget, then wall. With small wall_budget, stop_reason="wall_clock" for every arm. Then the residual check also triggers. So expected result: primary_comparison_valid false with wall-clock violations.
+
+But wait: is this a genuine falsification test of the falsifier? The named next_falsifier is: "Re-run the harness with a config where wall clock binds (small --wall-budget) and verify the budget checker marks primary arms wall-clock-limited as unmatched". So the expectation is that it works correctly (detects and marks unmatched). This is a positive control on the harness's honesty: harness refuses to declare validity when wall clock is the binding constraint.
+
+Additionally, the second half: "or diff report generator_sha256 against the harness bytes" — i.e., verify the report records the generator hash matching the harness bytes. Let me check what the report contains for generator_sha256.
+
+Let's plan the bounded task:
+
+1. Verify the harness on disk matches the claimed hash (df878e97...). ✓ (already done)
+2. Run `--self-test` to confirm 14/14 still pass (maybe not needed but cheap).
+3. Run the wall-clock-bound falsifier test: `--wall-budget` small, output to a scratch JSON/CSV; check:
+   - exit code 1 (invalid)
+   - primary_comparison_valid false
+   - violations contain wall-clock-limited entries for each primary arm
+   - stop_reason == wall_clock for primary arms
+   - also the residual check.
+   Also run a boundary control: wall budget large (default) → valid true (reproduces baseline).
+4. Check generator_sha256 in the report equals the sha256 of the harness bytes (independent recomputation).
+5. Also test an adversarial variant: mutate the checker tolerance so unequal budgets pass? That's the negative control already in self-test. Perhaps verify the self-test's 4 mutation controls reject the unequal-budget falsifier. Let me check what the self-test does (lines 547-646).
+6. Write evidence artifact(s) under a canonical path. Which path? Assignment artifact is `evaluation/ablation_harness.py`; evidence should go under `artifacts/worker-020/` maybe. The protocol says artifact events need path + sha256 + validation_status. Worker-20 wrote evidence under `artifacts/worker-20/`. I'm worker-020 (slot 020), so `artifacts/worker-020/` would be a distinct, non-colliding path. But wait, is the canonical evidence path perhaps `artifacts/worker-20/`? The assignment for slot 20. Instances named worker-020 vs worker-20. To avoid collision and drift, I should check `artifacts/` contents and the canonical path policy.
+
+Let me check the artifacts dir and `schemas/` for expected artifact naming. Also check what canonical path policy says about worker evidence.
+
+Also: I should emit events to `comms/outbox/deepseek-flash-20.jsonl` (my agent id per protocol: deepseek-flash-01..20). The worker-020 runtime instance maps to agent `deepseek-flash-20` (as prior instance did: deepseek-flash-20 outbox). Actually the prior worker-20 wrote events into `comms/outbox/deepseek-flash-20.jsonl`. Let me check tail of that file to see format of my previous events.
+
+Let me read the tail of outbox/deepseek-flash-20.jsonl.
+dsh: reasoning:
+Important! The prior worker-20 instance already ran the wall-clock small-budget test at 00:11 (`a2_smallbudget_20260912T000939+0800.*`), and a strict check at 00:12. So the "next falsifier" I identified was already executed by the previous instance at 00:09-00:12. Let me read its blocker event and small-budget results to see what remains.
+
+Let me read the tail of the outbox JSONL properly (the tail cut mid-line), the blocker, and the smallbudget strict check. There's a "blocker-A2-design-conformance" about the design file. Let me read the last few complete events.
+dsh: reasoning:
+Excellent. So the previous worker-20 instance (00:03–00:13) already:
+- Re-verified harness
+- Ran design-strict checks
+- Found the tolerance issue (F1: harness token_tolerance=0.15 vs design's 0.02)
+- Emitted blocker
+- Emitted checkpoint
+
+What remains? Let me check the map's latest state and see if there are new assignments for me (issued 00:09 by controller: `astra-life01-*` for leads). And check what happened with the A2 blocker — whether a reviewer (flash-18/19) has responded.
+
+Also the newer `run_cycle` may have issued worker assignments for the newest generation. Let me check the supervisor/lifecycle scripts and recent events after 00:13. Wait — what time is it now? Let me check. The session shows files with mtimes up to 00:14. Let me check current time and recent events in `comms/outbox/` and `map.assignments`.
+
+Since I'm a fresh worker-020 instance started at 00:12:30, and the prior worker-20 was still active until ~00:13:41... Actually the prior instance worker-20-20260912T000737 was still writing until 00:13. Hmm, this is getting concurrent/duplicative. I should avoid duplicating the previous instance's work.
+
+The most useful non-duplicative bounded contribution now: check whether the F1 finding (tolerance 0.15 vs design 0.02) is still standing, and whether the harness has been changed. Also the falsifier I could execute: the design's `artifacts.harness` binding F2.
+
+But hold on — the instruction says "Take one class-bound task". "Class-bound" likely means the task must be bound to a class_id (e.g. AF-WCC-VAC-GEN etc.) per the controller's emphasis on class binding. The A2 assignment is class_id GLOBAL — arguably not "class-bound". The controller notice says "Group leads must review class binding..." The new lifecycle assignments might include class-bound tasks (formulation classes).
+
+Let me check the latest map assignments and controller state to find open worker-level tasks. Check `map.assignments` entries with created_at after 00:00 and assignees like worker-0xx or deepseek-flash-*. Also check `runtime/instances` for the newest generation at 00:12:29 (`worker-001..0NN-20260912T001229-897883`) — 20 workers launched at 00:12:29. The supervisor presumably assigns them tasks. Let me look at `supervise_loop.sh`/`independent_supervisor*.sh` in /data3/guoshaoyang (workspace root) and `launch_swarm.sh` to understand how worker-020 gets its task at this generation.
+
+Given the prompt is generic, each worker is expected to read the map/comms and pick a task. Let me check the newest assignment cards in inbox for deepseek-flash-20 — only 2 lines (23:19, 23:22). But maybe the assignment dispatch now uses `research_map/run_cycle.py` with `worker tasks`. Let me check `independent_supervisor_100.sh` and `supervise_swarm.sh` in workspace root, plus ai4math-swarm `.git` recent state.
+
+Actually, let me look at the newest controller state: `runtime/state/current_checkpoint.json` and `controller_verification/lifecycle_20260912-000929.json`, plus map `controller_findings` for open items. And the `astra_lifecycle_independent.py` to see worker task slots.
+
+Let me first check the time and the most recent file modifications in the swarm dir.
+dsh: reasoning:
+Now I understand the setup: 100 workers launched with generic prompt. I am worker slot 020 (worker-020). My task: "Take one class-bound task" — I should pick a bounded task from the map's assignments/immediate queue that is class-bound, and contribute something not already done. Duplication across 100 workers is a huge risk; I need to pick something concrete and check for existing work/leases.
+
+Note there's no locking mechanism except maybe `runtime/control/`. Let me check the state counts and what tasks other workers have taken. The outbox for worker-020 (slot) — workers in this generation (worker-001..100) likely write to their own outbox files like `comms/outbox/worker-020.jsonl`. Let me check what exists in outbox for workers.
+
+Actually the prior worker-20 instances wrote to `deepseek-flash-20.jsonl` (agent id mapping). But the new generation of 100 workers has slot names `worker-020`; their outbox would be `comms/outbox/worker-020.jsonl`. Let me check.
+
+Also, maybe there's a task board: `research_map/assignments` in the map is a list of 84 event-like assignments. Let me list all assignments with statuses/binding to classes and pick an open one — ideally a class-bound (not GLOBAL) task that has no artifact yet.
+
+Let me print a compact table of assignments from the map: event_id, node_id, assignee, artifact, class_id, gate, plus artifact_exists. And also check the `map.assignments` for items added after 00:00.
+
+Let me do that now.
+dsh: reasoning:
+Many assignments. The map assignments are all "None" for artifact_exists here (map field name may differ). The worker-level tasks (deepseek-flash-*) are the ones I can take. But the `deepseek-flash-20` A2 assignment is the only one for me, and it's GLOBAL.
+
+"Take one class-bound task" — since my own assignment is GLOBAL, but there are class-bound worker tasks. Given 100 workers spawned concurrently at 00:12, most will grab tasks. I should pick a task where I can add durable value with low duplication risk.
+
+Given my unique context: I have the A2 harness context. The prior flash-20 increment found F1 (tolerance loose: harness 0.15 vs design 0.02) — a blocker awaiting lead-audit/astra decision. A bounded, high-value, class-bound follow-up: build a *checker* for the design-strict budget matching, i.e., a proposed patch/wrapper? But modifying the canonical harness without authorization would be drift. Hmm.
+
+Alternatively, I could execute the falsifier the map itself names for A2: "Re-run the harness with a config where wall clock binds (small --wall-budget) and verify the budget checker marks primary arms wall-clock-limited as unmatched". The prior instance ran small-budget with token-budget 2000, wall-budget 5 — but did it actually make wall clock *bind*? Let me check the smallbudget JSON: tokens 2000/2000/1800/1920 means token-limited (each arm stopped at token_budget), not wall-limited. Wall budget 5 with 60 episodes: episode latency maybe ~0.05s each, so 60 episodes ≈ 3s < 5s. So wall clock did NOT bind; the run stopped on tokens. Thus the map's named falsifier — wall-clock-binding — remains untested!
+
+That's a perfect bounded contribution: run the wall-clock-binding probe (e.g., --wall-budget 1.0 or 0.5) and verify:
+- primary arms stop_reason == "wall_clock"
+- check_matched_budgets reports violations "wall-clock-limited; the comparison is confounded"
+- budget_matched == false, primary_comparison_valid == false, CLI exit code 1
+
+And the adversarial direction: does the harness *ever* report valid when wall binds? If it does → falsifier triggered, blocker.
+
+Additionally test the "residual > one episode cost" rule etc. But keep bounded.
+
+However — is this duplicative? The prior instance's `a2_smallbudget_strict_check` may have covered wall semantics as F3 ("wall-clock semantics: design's ±2% on wall is equal-envelope, not equal-consumed"). Let me read those artifacts to see exactly what was tested and what remains. Especially `a2_smallbudget_strict_check_20260912T000939+0800.json` and the design file's HF-11 and budget_matching.
+
+Let me read the design yaml budget_matching section and the smallbudget check JSON summary.
+dsh: reasoning:
+Confirmed: F1 already established. Wall-clock binding wasn't tested (token budget bound in that probe). The map's A2 `next_falsifier` explicitly names the wall-clock-binding test. That's a genuinely open, bounded, non-duplicative (as far as I can tell) increment with a clear falsifier.
+
+Let me verify no other worker has run a wall-binding probe. Check `comms/outbox/*.jsonl` for "wall" or "wall_clock" references and artifacts dir for wall probes. Let me grep the outbox for "wall_budget" or "wall-clock-limited".
+
+Then design and execute:
+
+Test W (the named next falsifier):
+1. Reproduce baseline: default config → primary_comparison_valid true, all token-limited, exit 0.
+2. Wall-binding probe: choose wall_budget small enough that arms stop on wall_clock. From measurements: episode latencies per episode per arm: strong_single wall 3.0 for full 60 episodes → 0.05/ep; self_consistency 0.05; independent_cheap 2.25/60=0.0375; cheap_coordinator 2.4/60=0.04. With wall_budget = 1.0: strong_single does 20 episodes (1.0), self_consistency 20 (1.0), independent 26 (0.975), coordinator 25 (1.0). stop_reason wall_clock for all → checker should report violations and matched=false, primary_comparison_valid=false, exit 1.
+3. Also test the mixed case: wall_budget tuned so that some arms are wall-limited and others token-limited? With equal caps, mixed stop reasons possible if consumption per arm differs. E.g., wall_budget=2.0: strong_single 40 episodes → tokens 20000? Wait default token budget 20000 and each episode cost = max_episode_cost*? Let me understand costs: 20,000 tokens over 60 episodes for strong_single → ~333 tokens/episode. With wall 2.0: strong 40 eps (2.0s), self_consistency 40 eps (2.0), independent 53 eps (1.9875), coordinator 50 eps (2.0). So all wall-limited. Fine — the checker flags each primary arm.
+4. Verify the CLI exit code is 1 when invalid (the CLI returns 0 iff primary_comparison_valid). Confirm the harness refuses to call a wall-limited comparison valid — this is the honesty property.
+5. Negative control: verify that the *harness's own* checker isn't just blanket-failing small budgets — i.e., that at a wall budget just above the full-suite wall time but with token budget unchanged, primary arms remain token-limited and valid=true. From data: full suite wall for all arms ≤3.0s; so wall_budget=5.0 with default token budget 20000 → valid=true (already seen in prior design run). Choose wall_budget=3.5 or 4.0 as the near-boundary positive control. This distinguishes "wall bind" from "wall budget too small for anything".
+6. Additional adversarial check: mutate a copy of the report (not the harness) to set stop_reason="token_budget" for a wall-limited arm and run the independent checker to ensure it recomputes from raw arm records rather than trusting the summary. Actually, the key thing: the checker in the harness computes from ArmResult objects, not the report. My independent verification should recompute from raw arm records in the JSON (limits) and the metrics.
+
+Also worth checking: does the harness report `wall_clock` stop reason and still `matched: false` when *one* primary arm is wall-limited? Yes (line 397-398 per-arm).
+
+Additional falsifier angle: the harness's `check_matched_budgets` flags wall-limitation only for primary arms (`if r.stop_reason == "wall_clock" and r.is_primary`). The null arm is not primary, so if the null arm is wall-limited that's not flagged — fine, since it's a control. But what about the case where the *null* arm's wall-limitation changes the control comparison? Not gate-relevant.
+
+One more subtle hole worth probing: the wall-clock budget check per episode uses `episode_latency(arm, models)` — a deterministic estimate. Actual wall time isn't measured! `res.wall_consumed += episode_latency(...)` — the harness uses *estimated* latency, not measured wall-clock. That's a real weakness: the harness "enforces" a wall-clock envelope using a model constant, so the claimed wall-clock matching is simulated, not measured. This is a legitimate independent finding (but is it a fair criticism? For a synthetic dry-run, estimated latency is the only thing available; the limitation is documented? Let me check the report "limitations"). The prior F3 finding said "wall-clock matching interpreted as equal enforced envelope caps, not equal consumed wall time". Hmm, that's about design semantics.
+
+I should check the harness code: is there any time measurement? grep `time.` / `perf_counter`. If none, then the harness's wall-clock discipline is entirely synthetic — arguably fine for a dry-run with synthetic proposers, but worth recording as a scope limitation in the report. Let me check the report limitations field for this.
+
+Let me now:
+1. Check for existing wall-binding probes (avoid duplication).
+2. Read harness main() and DEFAULTS to know exact behavior and exit codes.
+3. Read report limitations.
+
+Then write my probe script (stdlib only), run it, write artifacts, emit events, checkpoint.
+
+Where to write artifacts? I'm slot worker-020. `artifacts/worker-020/` doesn't exist; create it. But the prior agent's evidence is in `artifacts/worker-20/`. For consistency with the map's naming (`deepseek-flash-20`), maybe write to `artifacts/worker-20/`. However concurrent worker-20 (slot 20, different instance worker-20-20260912T001118?) may be writing there... Let me check which instances exist now for slot 20/020. There's worker-020-20260912T001230 (me) and worker-20-20260912T001118-843521 possibly. Let me check.
+
+Actually to avoid collision, `artifacts/worker-020/` is safer and self-identifying. The prior generation used `worker-20`. Hmm, but the map/controller may look for a canonical pattern. Protocol says write artifacts to assigned canonical path; for evidence, worker dirs are the norm. Given the ambiguity, I'll write to `artifacts/worker-020/` and reference explicitly. Wait — but the assignment's artifact is `evaluation/ablation_harness.py`, which I'm not modifying (freeze). My outputs are evidence artifacts whose canonical location is not fixed. Prior worker-20 used `artifacts/worker-20/`. A reviewer looking for my evidence will follow the path in my event. Either is acceptable. I'll use `artifacts/worker-020/` to avoid any write conflict with a concurrent worker-20 instance.
+
+Hmm, actually let me check if a `worker-20-20260912T001118` instance exists and is writing to artifacts/worker-20 right now. 148 instances. Let me check.
+
+Let me also check `runtime/control/` — it was empty, so no locks.
+
+Let me proceed with the investigation commands.
+dsh: reasoning:
+Good. No one has yet run a wall-binding probe (the grep for wall in artifacts/worker-20 shows the F3 finding and the strict check mention "wall_clock_s" but the smallbudget run was token-limited). Let me double-check across all of `artifacts/` and `comms/outbox/` for a probe with `"stop_reason": "wall_clock"` in a primary arm.
+
+Let me grep for `"stop_reason": "wall_clock"` in artifacts and outbox.
+dsh: reasoning:
+Confirmed: no wall-clock-limited run exists anywhere. The map's named `next_falsifier` for A2 is unexecuted. This is my bounded, class-bound (A2/GLOBAL... hmm "class-bound" — A2 is GLOBAL). 
+
+Wait. The prompt says "Take one class-bound task". The A2 harness assignment has class_id GLOBAL. Is that acceptable? The controller emphasized "assign class-bound bounded tasks". Workers are supposed to pick a class-bound task. A2 is a GLOBAL gate task, not a physics class. But it's my assigned task from my inbox and it's what the previous instance did. The instruction likely just means a task bound to a class_id (even GLOBAL) with node binding — vs. free-floating. I think A2 with node_id A2 and class_id GLOBAL satisfies "class-bound" in the loose sense of the assignment schema (every assignment carries class_id; PROTOCOL's claim requires class_id). 
+
+Alternative: pick a genuinely class-bound task like F1/F2a/F2b or N0 tasks. But those have dedicated assignees (deepseek-flash-03..06, 12..15) and lead-owned artifacts. Picking an unassigned review of a class-bound artifact could add value: e.g., independent verification of `schemas/af_scc_c2_vacuum.yaml` class binding. But the A2 thread is mine, has an explicit unexecuted next_falsifier, and I have full context. The highest expected value with lowest duplication risk is the wall-binding probe + harness honesty verification. It is bound to node A2, class GLOBAL, gate G-AUDIT.
+
+Hmm, but honestly the "class-bound" requirement... A2 is explicitly class_id GLOBAL in the assignment. The controller's own lifecycle assignments to leads include GLOBAL class ids. I'll note in my events that the task is bound to node A2 and class GLOBAL per the assignment card, and that the falsifier is the map-declared A2 next_falsifier. That's defensible and traceable.
+
+Actually, let me reconsider: with 100 workers all told "take one class-bound task", there's a risk of everyone piling onto the same obvious tasks. My differentiated advantage is the A2 context. Go with it.
+
+Plan:
+1. Snapshot the current canonical hashes (harness df878e97..., design 1b2a83ef..., map hash).
+2. Write a probe script `artifacts/worker-020/a2_wallbind_probe.py` (stdlib only) that:
+   a. Imports the canonical harness by path (importlib) — frozen at hash; records generator_sha256 from its report and compares to actual bytes.
+   b. Runs three configs via `run_ablation`:
+      - W0 baseline: default config (token 20000, wall 60) → expect valid=true, all primary token-limited.
+      - W1 wall-binding: wall_budget=1.0, token default → expect every primary stop_reason=wall_clock, budget_check.matched=false with wall-clock violation for each primary arm, primary_comparison_valid=false.
+      - W2 near-boundary positive control: wall_budget=3.5, token default → expect valid=true, primaries token-limited (proves W1's rejection is not blanket small-budget behavior).
+      - W3 CLI-level: run `python3 evaluation/ablation_harness.py --dry-run --wall-budget 1.0 --json-out ...` and check exit code 1; and baseline CLI exit 0. (End-to-end enforcement including exit status.)
+   c. Recompute the budget check independently from raw arm records (tokens_consumed, caps, stop_reason), and verify the harness's `budget_check` equals the recomputation (no trust in summary).
+   d. Adversarial mutation control on the report: take W1's report, flip one primary arm's stop_reason to "token_budget" in a copy, feed to an independent matcher that recomputes: it should then (incorrectly) say matched if it only read the mutated summary — demonstrating that the checker recomputation from raw arm records is what matters. Better: verify that the harness's own check is derived from run records (call check_matched_budgets on mutated ArmResult objects: construct an ArmResult list where one primary has stop_reason wall_clock and tokens > cap etc.).
+      Actually simpler and stronger: directly call `check_matched_budgets` with a fabricated `ArmResult` for the falsifier direction:
+        - mutated control M1: same consumption but stop_reason token_budget → harness must return matched=true (this proves the wall-check is specifically keyed on stop_reason and not a blanket fail). This is the positive control for the checker.
+        - mutated control M2: tokens_consumed > token_budget by 1 → matched=false (overspend).
+      This gives sensitivity/specificity evidence: the checker rejects wall-limited and overspend, and accepts the same numbers when token-limited.
+   e. Record the observed wall-clock enforcement mechanism finding: harness wall budget is consumed via `episode_latency()` estimate (deterministic model), not measured time; verify by grep/line refs. This qualifies the strength of the claim (scope limitation), not a falsification of the assignment.
+3. Write outputs:
+   - `artifacts/worker-020/a2_wallbind_probe.py` (the probe)
+   - `artifacts/worker-020/a2_wallbind_probe_results_<ts>.json` (full evidence)
+   - CLI logs `..._cli_baseline.log`, `..._cli_wallbind.log` or capture into JSON
+   - `artifacts/worker-020/a2_wallbind_checkpoint_<ts>.json`
+   - maybe a CSV not needed.
+4. Emit events to `comms/outbox/deepseek-flash-20.jsonl`:
+   - artifact event for the results JSON (path, sha256, validation_status=unverified)
+   - claim event (class_id GLOBAL, node A2, conclusion_type numerical_evidence, evidence_refs with hashes, falsifier)
+   - status event (node A2, status active, summary, next_falsifier)
+   - artifact checkpoint event
+   Valid JSON one per line, with IDs, created_at, actor.
+5. Run the official checkpoint: `python3 research_map/checkpoint.py`? The instruction says "checkpoint". The protocol lists `python3 research_map/checkpoint.py` — full 15-min checkpoint snapshot. Let me check that script exists and what it does (writes runtime/state/current_checkpoint.json and checkpoint_log.jsonl). Let me check it. There's also `runtime/bin/checkpoint_loop.sh`. Let me look at `research_map/checkpoint.py`.
+6. Verify map validate still VALID (`python3 research_map/validate_map.py`) and record.
+
+Also note: the protocol says `comms.py ingest` is run by the controller to pull outbox → events. I only write to outbox.
+
+Before writing, I must verify hashes at read time. Let me also check the design file's wall-clock wording to be precise: design budget_matching rule says "same wall-clock envelope T (+/-2%), enforced by a scheduler that stops an arm when either is exhausted". So wall-clock-limited primaries = arms stopped by wall = comparison invalid per design? The design's falsifier at line 132: "any arm pair outside tolerance -> the comparison is void (HF-11)". And the harness's own check flags wall-limited primaries. So expected behavior in W1: harness itself declares invalid → the harness passes the named falsifier probe (it does not accept an unmatched wall-clock comparison). The result: the named next_falsifier is *not* triggered (harness behaves correctly); the F1 tolerance issue remains the open blocker.
+
+Wait, careful: what exactly does "verify the budget checker marks primary arms wall-clock-limited as unmatched" mean for the falsifier? The next_falsifier from the map is phrased as a test to run. If the checker marks them unmatched → that branch is resolved (no new falsification). If the checker were to mark matched → falsifier triggered. So my claim will state: on config W1 the harness correctly reports matched=false/valid=false; the wall-clock branch of the A2 next_falsifier is resolved in the harness's favor for the primary arms.
+
+But there's a subtle hole to probe adversarially: the harness only flags wall-limited *primary* arms. What if the null arm is wall-limited? Not gate-relevant.
+
+Another hole: in run_arm, the token check precedes the wall check; when the wall budget binds exactly on the last episode, no issue.
+
+A sharper adversarial probe of the wall dimension: what if wall budget binds for the *self_consistency* arm only, while other primaries are token-limited? Then the checker flags that one arm (violation non-empty) → matched=false. Let me construct a config to produce a mixed stop-reason set, e.g., wall_budget=2.6: strong_single: 2.6/0.05=52 eps → tokens 52*333=17316 (<20000) → wall-limited. self_consistency same → wall-limited. Hmm all arms have similar wall totals (3.0, 3.0, 2.25, 2.4 for full suite), so nearly any wall budget <3.0 makes all four wall-limited; between 2.25 and 2.4 independent/coordinator may exhaust episodes (stop_reason=episodes_exhausted) while strong/self are wall-limited. E.g. wall_budget=2.3: strong 46 eps (2.3), self 46 (2.3), independent 60 eps (2.25 ≤ 2.3 → episodes_exhausted at 60 episodes, tokens 60*?; independent costs 1800 tokens max at 60 eps? earlier small-budget independent had 1800 tokens at 45 episodes (2.25/0.0375=60 eps? hmm). Let me compute precisely: independent_cheap: samples=5, max_episode_cost = 1800/45 = 40 per episode (from small-budget: 1800 = 45 eps × 40). episode_latency = 0.0375. At wall 2.3 → 61 episodes → but suite is 60 → episodes_exhausted, tokens 2400, not wall-limited. Meanwhile strong_single: cost 2000/2000... at token budget 2000: 2000 tokens at 6 episodes? Hmm: in small budget probe strong consumed 2000 = token cap → 2000/cost_per_ep. With default 20000 tokens for 60 eps → cost 333.33/ep (strong, single sample, ~333 tokens/ep). wall 2.3/0.05=46 eps → tokens 15333 < 20000 → wall_clock. self_consistency same 46 eps wall-limited. So mixed case: independent & coordinator episodes_exhausted; strong & self wall-limited. Checker flags the two wall-limited primaries → matched=false. Good — that's the mixed-stop-reason probe W2.
+
+Then W3 = near-boundary positive control with wall 3.5 → all arms episodes_exhausted (tokens consumed: strong 20000, self 20000, independent 2400? wait independent at default token budget: 60 eps × 40 = 2400 tokens; self_consistency: 60 eps × 333.33 = 20000; coordinator: 60 eps × 320 = 19200; strong: 20000). Hmm, at default token budget 20000, independent_cheap consumes only 2400 tokens total because its episode cost is 40 (small) — it exhausts episodes long before tokens. Then spread = (20000-2400)/20000 = 0.88 > 0.15! But the baseline report says spread 0.01 and valid=true with tokens 20000/20000/19800/19200. So my cost model is wrong. Let me actually read the synthetic model/arm specs and the actual arm dicts from the baseline report to get exact numbers.
+
+Let me read the report's arms: tokens_consumed, stop_reason per arm, and the model specs (lines 100-292). Let me read those sections.
+dsh: reasoning:
+Now I have exact numbers:
+- strong_single: 400 tokens/ep, 0.60s/ep, 50 eps at 20000 → wall 30s
+- self_consistency: 2000 tokens/ep (400*5), 0.60s/ep (latency is per model call 0.6? Actually episode_latency probably = samples * model latency... 10 eps in 30s → 3.0s/ep? wall_consumed=30.0 for 10 eps → 3.0/ep. So latency = 0.60*5 = 3.0).
+- independent_cheap: 600 tokens/ep (120*5), 0.75s/ep (0.15*5), 33 eps → 24.75.
+- cheap_coordinator: 640 tokens/ep (600+40), 0.80s/ep (0.75+0.05), 31 eps → 24.8.
+- random null: 50 tokens/ep, 0.05s/ep, 60 eps → 3.0.
+
+Wall binding: choose wall_budget=5.0 with default token 20000:
+- strong: 5/0.6 = 8 eps (4.8), tokens 3200
+- self: 5/3.0 = 1 ep (3.0), tokens 2000
+- independent: 5/0.75 = 6 eps (4.5), tokens 3600
+- coordinator: 5/0.80 = 6 eps (4.8), tokens 3840
+All stop wall_clock → checker flags 4 violations → matched=false, valid=false, exit 1.
+
+Hmm but wait: with wall 5.0 and token 20000, token spread among primaries = (3840-2000)/20000 = 0.092 ≤ 0.15, so the spread check alone wouldn't catch it; the wall check does. Good — this isolates the wall-clock mechanism (the exact falsifier branch). If the harness somehow ignored wall-limited, it would report valid=true (spread 0.092 < 0.15, no call_budget, residual check: residual = 20000-3200=16800 > max_episode_cost 400 → that would ALSO trigger "stopped with residual > one episode cost"!). Hmm, the residual rule (line 408-412) would independently catch it. So to isolate wall-clock, I need a config where the residual rule doesn't fire but wall does. Residual must be ≤ max_episode_cost for each primary: strong residual token_budget - consumed ≤ 400 → consumed ≥ 19600. But if wall-limited, consumed = eps*400 where eps ≤ wall/0.6. For consumed ≥ 19600 → eps ≥ 49 → wall ≥ 29.4. Self_consistency: residual ≤ 2000 → consumed ≥ 18000 → eps ≥ 9 → wall ≥ 27. independent: residual ≤ 600 → consumed ≥ 19200 → eps ≥ 32 → wall ≥ 24.0. coordinator: residual ≤ 640 → consumed ≥19200 → eps≥30 → wall ≥ 24.0.
+
+So wall_budget = 26.0: strong → 43 eps (25.8s, 17200 tokens) — wall-limited, residual 2800 > 400 → residual violation too. Hmm strong always has residual issue when wall-limited before token. To make strong's residual ≤ 400 under wall binding, need wall ∈ [29.4, 30.0) where strong does 49 eps (29.4s, 19600 tokens, residual 400 exactly, ok ≤ 400+1e-9). eps = floor? loop: while wall_consumed + ep_latency > wall_budget break. Start 0: 49 eps → wall 29.4; +0.6 = 30.0 > 29.4? If wall_budget=29.4 then after 49 eps wall=29.4, check 29.4+0.6=30.0>29.4 → stop wall_clock. consumed 19600, residual 400 → not >400. 
+
+self_consistency at wall 29.4: 9 eps = 27.0; +3.0 = 30.0 > 29.4 → stop wall_clock; consumed 18000, residual 2000, max_episode_cost 2000 → residual not > 2000 → OK. independent: 39 eps = 29.25; +0.75=30.0>29.4 → stop; consumed 39*600=23400 > token 20000? Wait token check comes first: at 33 eps consumed 19800; next est 600 → 20400 > 20000 → token_budget stop. So independent stops token_budget at 19800 with residual 200 (≤600 → OK). coordinator: 31 eps at token 19840 (residual 160 ≤640 OK) → token_budget. So with wall_budget=29.4: strong & self are wall-limited (and residual-OK), independent & coordinator are token-limited. Mixed case! The only violations would be the two wall-clock ones. 
+
+But is that exact? Let me verify with actual runs. The mixed case is the strongest test because the only difference between arms is the stop reason. With wall 29.4:
+- strong: 49 eps, 19600 tokens
+- self: 9 eps, 18000
+- independent: 33 eps, 19800 (token)
+- coordinator: 31 eps, 19840 (token)
+Token spread among primaries = (19840 - 18000)/20000 = 0.092 ≤ 0.15, call_budget none, residuals all ≤ maxep. So the ONLY violations are strong+self wall-limited. If the harness's wall check were removed, it would report matched=true, valid=true. So this config isolates the wall-clock falsifier branch precisely.
+
+And a second config where ALL primaries are wall-limited: wall=5.0 (also residual violations, but the wall violations are there).
+
+I'll run:
+- C0 baseline default (positive control): valid=true, exit 0.
+- C1 wall-binds-all: wall=5.0, token 20000 → all 4 primary stop=wall_clock, matched=false, violations include 4 wall-clock lines, valid=false, exit 1.
+- C2 wall-binds-two (isolating): wall=29.4, token 20000 → strong & self wall-limited; independent & coordinator token-limited; violations exactly the 2 wall-clock lines; spread 0.092 ≤ 0.15; residuals within bound; matched=false, valid=false, exit 1.
+- C3 near-boundary positive control: wall=30.5 (≥30.0 full suite for strong/self) → expect all primary token-limited, matched=true, valid=true, exit 0. This proves C1/C2 rejections are caused by wall binding, not by the smaller wall number per se.
+
+Sensitivity/specificity mutation controls on `check_matched_budgets` with fabricated ArmResults (direct function call, no I/O):
+- M0: C2's four primary ArmResults with stop_reason token_budget for all (i.e., mutate strong/self stop_reason to token_budget) → expect matched=true (this is the counterfactual: the identical numeric profile would be accepted absent the wall signal).
+- M1: one arm tokens_consumed = cap + 1 → expect overspend violation, matched=false.
+- M2: null arm wall-limited → expect NOT flagged (control arm; documents scope: wall check applies to primaries only) → matched=true. This is an important scope boundary to state, not a bug per the design (comparison is among primaries). Hmm — but wait, is that a hole? If the null arm is wall-limited, the null baseline is still valid as a control. Fine.
+
+Also verify:
+- `generator_sha256` in each report equals sha256 of the canonical harness bytes (the map's second named option).
+- The wall budget is enforced using estimated latency `episode_latency` (no wall-clock measurement): grep for `time`/`perf_counter` in the harness; state as a scope note. Let me verify by grep.
+
+Then evidence artifacts + events + checkpoint.
+
+About "class-bound": I'll bind to node A2, class_id GLOBAL, and cite the assignment card. I'll also note the gate G-AUDIT.
+
+Now, where to run: I must not modify the canonical harness or its canonical outputs (`evaluation/ablation_report.json`, `evaluation/ablation.csv`). My runs write to `artifacts/worker-020/`. Good.
+
+Note on concurrency: 100 workers running other probes might be importing/running things. My work is isolated.
+
+Let me first read the rest of the harness (lines 210-292 and 447-546) to understand `run_ablation` and report generation, and check for any time measurement. Then write the probe script.
+dsh: reasoning:
+Confirmed: `time` is only used for `strftime`; wall budget is consumed via deterministic `episode_latency` estimate, not measured. I'll record that as scope note (S1), with the caveat that for a synthetic dry-run no real wall time exists; the design's "wall-clock envelope" is modeled, not measured — important for G-AUDIT before real runs.
+
+Now let me look at what specific classes/artifacts exist for A2 so I bind correctly. I have everything.
+
+Let me now write the probe script. Design:
+
+```python
+#!/usr/bin/env python3
+"""A2 wall-clock-binding falsifier probe..."""
+import hashlib, json, subprocess, sys, importlib.util, time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]  # artifacts/worker-020/x.py -> swarm root
+```
+Wait: `/data3/guoshaoyang/workdir/ai4math-swarm/artifacts/worker-020/probe.py`: parents[0]=worker-020, [1]=artifacts, [2]=ai4math-swarm. Good.
+
+Load harness module from canonical path via importlib.
+
+Configs:
+- C0: canonical defaults, run in-process. Expect valid True, all primary token_budget, no wall violations.
+- C1: token 20000, wall 5.0 → all primary wall_clock.
+- C2: token 20000, wall 29.4 → strong/self wall_clock, independent/coordinator token_budget (isolating).
+- C3: token 20000, wall 30.5 → all primary token_budget, valid True (near-boundary positive control).
+
+CLI checks: subprocess run baseline and C2 (I'll do C1 too) with `--json-out` to artifacts dir, capture exit codes.
+
+Independent checker: recompute from report arm records:
+- caps identical among primaries
+- no overspend (tokens, wall)
+- all primary wall-limited → violation; list them
+- token spread vs tolerance 0.15 → violation if above
+- residual > max_episode_cost → violation
+- compare recomputed violations set to harness's `budget_check.violations` exactly (order-insensitive)
+- verify `primary_comparison_valid == (matched and n_primary>=4)`
+- verify generator_sha256 == sha256(harness bytes)
+
+Mutation controls on the checker using fabricated ArmResult:
+- M0 "counterfactual stop-reason": construct ArmResult copies from C2 results with stop_reason="token_budget" for all primaries → check_matched_budgets should return matched=True (proving the rejection in C2 is due to the wall-clock stop reason, not the numbers).
+  But careful: C2's strong residual = 20000-19600=400 = maxep, ok; self residual 2000 = maxep, ok. So yes, with stop reasons token_budget it should be matched.
+- M1 overspend tokens by 1.0 → matched False with overspend violation.
+- M2 null arm wall-limited → not flagged (is_primary False) → matched True (documents that only primaries are wall-checked).
+- M3 (nice): all arms token-limited but spread 0.16 > 0.15 → violation. Could fabricate.
+
+Also to verify the *actual observed* stop reasons, I'll record per-arm records from each config.
+
+Then assemble results JSON with:
+- probe_meta: actor worker-020, node A2, class GLOBAL, gate G-AUDIT, created_at, assignment id, falsifier (map's next_falsifier), hypothesis
+- canonical_inputs: harness sha256 (measured), design sha256, map sha256 (measured at probe time)
+- configs and per-config outcome
+- cli_exit_codes
+- independent_check per config
+- mutation_controls
+- scope_notes: S1 estimated wall, S2 tolerance F1 (carried, referenced), F2 path binding (referenced), null-arm wall scope
+- falsifier_verdict: "not triggered" for the wall-clock branch (harness rejects wall-limited primaries)
+- what would falsify: if harness reported matched/valid true in C1 or C2, etc.
+
+Then write:
+- `artifacts/worker-020/a2_wallbind_probe.py`
+- `artifacts/worker-020/a2_wallbind_probe_<ts>.json`
+- `artifacts/worker-020/a2_wallbind_cli_<ts>.log` (stdout+exit codes)
+- `artifacts/worker-020/a2_wallbind_checkpoint_<ts>.json`
+
+Then events in outbox: artifact (results json), claim, status, artifact (checkpoint). With sha256 for each artifact. Also artifact event for the probe script maybe.
+
+Then official checkpoint: inspect `research_map/checkpoint.py` first. Let me read it quickly.
+
+Timestamp format: use `+0800` like prior: `20260912T00XX+0800`. I'll compute now.
+
+One concern: the map `map.lock` exists (runtime/state/map.lock, 0 bytes at 00:12). The controller may be running. I won't touch the map. `checkpoint.py` might require the lock or may write state files. Let me read it before running. Actually, "checkpoint" in my instructions might just mean writing my own checkpoint artifact (the prior instance did both: own checkpoint artifact + official checkpoint via runtime state). Running `research_map/checkpoint.py` writes runtime/state/current_checkpoint.json and checkpoint_log.jsonl — these are controller-ish files. The prior worker-20 instance ran the official checkpoint (event `flash20c-...-artifact-official-checkpoint` referencing `runtime/state/checkpoints/ckpt-20260912-001311.json`). So workers do run it. But with 100 concurrent workers, checkpoint.py may race. Let me read it first.
+
+Let me read research_map/checkpoint.py.
+dsh: reasoning:
+checkpoint.py ingests comms (may write events.jsonl / rejected.jsonl) and writes state files; it never mutates research_map.json. Running it concurrently with 100 workers could race on `runtime/state/current_checkpoint.json` and `events.jsonl` appends, but the prior instance did it at 00:13:11 and files show checkpoints dir. Given the instruction "checkpoint, then exit", I'll run the official checkpoint at the end (accepting normal concurrent behavior — that's what the system is designed for; `comms.py ingest` presumably dedupes by event id). But better: run it and verify my events got accepted. Note that `map.lock` might block ingest? Let me check comms.py ingest behavior briefly for locking. Actually let me defer; run checkpoint after writing events, then parse the checkpoint record for accepted counts and verify my event IDs are in ingested_ids.
+
+Now let me write the probe script. I'll be careful to keep everything deterministic and stdlib-only.
+
+Time budget: fine.
+
+Let me write the script to `artifacts/worker-020/a2_wallbind_probe.py`. First create the directory.
+
+The script outline:
+
+```python
+#!/usr/bin/env python3
+"""A2 wall-clock-binding falsifier probe (worker-020).
+
+Bounded probe for assignment asg-2026-09-11-A2-deepseek-flash-20-29.
+Executes the map-declared A2 next_falsifier:
+  "Re-run the harness with a config where wall clock binds (small --wall-budget) and
+   verify the budget checker marks primary arms wall-clock-limited as unmatched;
+   or diff report generator_sha256 against the harness bytes."
+
+No model calls, synthetic proposers only.  Reads the frozen canonical harness but
+never writes to it.  Writes only under artifacts/worker-020/.
+"""
+from __future__ import annotations
+import hashlib, importlib.util, json, subprocess, sys, time
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parent.parent
+HARNESS = ROOT / "evaluation" / "ablation_harness.py"
+DESIGN = ROOT / "evaluation" / "ablation_design.yaml"
+MAP = ROOT / "research_map" / "research_map.json"
+
+def sha256(p): return hashlib.sha256(Path(p).read_bytes()).hexdigest()
+
+def load_harness():
+    spec = importlib.util.spec_from_file_location("a2_harness_frozen", HARNESS)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+...
+```
+
+Important: importlib exec of the harness will execute module-level `ROOT = Path(__file__).resolve().parent.parent` → evaluation/.. = swarm root. Fine. It has `if __name__ == "__main__"` guard, so no CLI run. Good.
+
+Configs (base = harness.DEFAULTS):
+```
+CONFIGS = [
+ ("C0_default_positive_control", {"wall_budget": 60.0}),
+ ("C1_wall_binds_all_primaries", {"wall_budget": 5.0}),
+ ("C2_wall_binds_two_isolating", {"wall_budget": 29.4}),
+ ("C3_near_boundary_positive_control", {"wall_budget": 30.5}),
+]
+```
+with token_budget 20000, episodes 60, seed 20260911, token_tolerance 0.15.
+
+For each: report = h.run_ablation(cfg); extract arms; run independent check; expected assertions:
+- C0: valid True, matched True, all primary stop token_budget
+- C1: valid False, matched False, all primary stop wall_clock, wall violations count 4
+- C2: valid False, matched False, exactly {strong_single, self_consistency} wall-limited; spread 0.092 <= tol; no overspend; residual ok; violations == exactly those 2 wall lines
+- C3: valid True, matched True, all primary token_budget
+
+Independent checker `independent_budget_check(rep, tol)`:
+```python
+def independent_check(rep, tol):
+    arms = rep["arms"]
+    prim = [a for a in arms if a["is_primary"]]
+    v = []
+    caps = {(a["token_budget"], a["wall_budget"]) for a in prim}
+    if len(caps) > 1: v.append("different enforced caps")
+    for a in arms:
+        if a["tokens_consumed"] > a["token_budget"] + 1e-9: v.append(f"{a['arm']}: overspent tokens")
+        if a["wall_consumed"] > a["wall_budget"] + 1e-9: v.append(f"{a['arm']}: overspent wall clock")
+        if a["is_primary"] and a["stop_reason"] == "wall_clock": v.append(f"{a['arm']}: wall-clock-limited")
+    if prim:
+        consumed=[a["tokens_consumed"] for a in prim]
+        spread=(max(consumed)-min(consumed))/max(1.0, prim[0]["token_budget"])
+    else: spread=None
+    if spread is not None and spread > tol: v.append("spread")
+    for a in prim:
+        if a["stop_reason"]=="call_budget": v.append(f"{a['arm']}: call-count-limited")
+        residual=a["token_budget"]-a["tokens_consumed"]
+        if residual > a["max_episode_cost"] + 1e-9: v.append(f"{a['arm']}: residual")
+    return {...}
+```
+Then compare: the harness's `budget_check["matched"]` equals `not v`; harness `token_spread_fraction` equals recomputed spread (within 1e-12); violations sets match by *kind+arm* parsing? Simpler: compare booleans and the wall-limited arm names and counts. I'll compare:
+- matched flags equal
+- spread equal within 1e-12
+- set of arms named in harness violations equals set named in recomputed, and equals expected per config
+- number of violations equal
+
+Mutation controls with fabricated ArmResult objects:
+Build from a dict profile:
+```python
+def mk(name, kind, primary, null, tok, tb, wall_c, wb, stop, maxep):
+    return H.ArmResult(arm=name, kind=kind, is_primary=primary, is_null=null, token_budget=tb, wall_budget=wb,
+                       tokens_consumed=tok, wall_consumed=wall_c, max_episode_cost=maxep, stop_reason=stop,
+                       episodes_attempted=0, calls=0)
+```
+Use C2's four primaries + null with real numbers, then:
+- M0: all primaries stop_reason="token_budget" → expect matched True
+- M1: strong tokens = tb + 1 → expect matched False and violation mentions strong overspend
+- M2: null arm wal_consumed > wb and stop wall_clock → expect matched True (scope: null not wall-checked); also null overspend would be flagged by the overspend loop for all arms (r in results) — so keep wall_consumed ≤ wb but stop_reason wall_clock → expect matched True. Good.
+- M3: all primaries token-limited but one consumed = tb - 3*maxep (residual 3*maxep > maxep) → expect matched False residual violation.
+
+This proves checker sensitivity/specificity.
+
+CLI subprocess:
+```
+def cli(args, log):
+    p = subprocess.run([sys.executable, str(HARNESS)] + args, capture_output=True, text=True, cwd=ROOT)
+    ...
+```
+Run:
+- CLI0: --dry-run --json-out artifacts/worker-020/a2_wallbind_cli_default.json --csv-out ... → exit 0
+- CLI1: --dry-run --wall-budget 5 --json-out ... → exit 1
+- CLI2: --dry-run --wall-budget 29.4 --json-out ... → exit 1
+Capture stdout/stderr/exit code into the results JSON and a log file. Avoid CSV to reduce clutter? Include CSV only for C0 maybe. I'll skip CSV.
+
+Verify generator_sha256 for in-process reports equals measured harness sha256; also for CLI outputs re-read and verify.
+
+Escape hatch: if assertions fail → falsifier_triggered true and find failure details; the claim then reports the falsifier as triggered. But I expect pass.
+
+Then results JSON.
+
+Let me now write the script with the write tool. I'll include a `main()` that writes results to a path given by argv[1] (timestamped), prints summary, and exits 0 if probe executed (regardless of verdict? better: exit 0 if the probe ran and every control behaved as expected; exit 2 if falsifier triggered). I'll handle in the driver: script writes JSON and prints; I then read it.
+
+For created_at timestamps, use `datetime.now(CST).isoformat(timespec='seconds')`.
+
+Also record `git rev-parse HEAD` for provenance? The repo has .git. Nice-to-have: measure `git -C ROOT rev-parse HEAD`. Add to meta.
+
+Let me write it.
+dsh: reasoning:
+Now write the probe script.

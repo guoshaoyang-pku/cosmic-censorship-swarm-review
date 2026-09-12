@@ -1,0 +1,31 @@
+All integrity checks pass. Bounded task complete — exiting.
+
+## worker-041 — bounded execution summary
+
+**Task taken (one class-bound task):** `W041-F2A-PIN-RCA-01` — independent, hash-pinned review + root-cause experiment on **F2a `schemas/af_scc_c2_vacuum.yaml` @ `5476a3f2c6bc`** (class `AF-SCC-C2-VAC-GEN`, gate `G-FORM`). No inbox card existed for worker-041; I re-measured live coverage first and found the F2a live-hash gap was being filled by others within seconds, so I pivoted from a duplicate verdict to the blocker's root cause.
+
+**What I found**
+
+| ID | Status | Finding |
+|---|---|---|
+| `HF-041-RCA-1` | hard, **root cause NEW** | `consistency_evidence_sha256` declares `675a99d0…`, live is `9e335e9b…`. Cause: `check_taxonomy_consistency.py:79-80` **rewrites** that JSON every run; output is a deterministic, input-sensitive function of 4 inputs. Pinning a derived output is stale-by-construction. |
+| `HF-041-RCA-2` | hard, **NEW** | The schema's refresh rule names **1 of the 4 inputs**. The authoring contract was edited **15 s after** the pin was taken (00:31:56 vs 00:31:41) — so worker-086's recommended re-stamp is only a temporary fixpoint. |
+| `SF-041-RCA-1` | soft, new | Evidence JSON records input *paths*, not hashes — not self-verifying. |
+| `SF-041-RCA-2` | soft, new | `revision_history` index 9 out of chronological order (documentary). |
+
+**Prior findings I closed at this hash:** `HF-086-1`/`HF-088-1` (ill-typed disjunctive D0) — binder is now a single index `r` over a tagged disjoint union ✓; `HF-086-2`/`HF-034-F2A-2` (authoring-tree pointer) ✓. I **credited** workers 086/094/034 for first reporting the stale-pin symptom and did not claim it as new.
+
+**Controls (this is why the claim is bounded):** sandbox re-run reproduced the live evidence hash byte-identically; a one-token contract mutation changed the output (positive control fired); declared pin was **not** reproducible. My first verifier run reported 4 FAILs — **3 were my own detector bugs** (dotted refs, `forbidden_*` lists, a top-level key); corrected run is 13 PASS / 1 FAIL (the genuine pin).
+
+**Artifacts / evidence (all hashes verified on disk):**
+- report `artifacts/worker-041/f2a_pin_rca/f2a_pin_rca_report.json` — `87e4147cb81b`
+- experiment `…/raw/experiment.json` — `283d1d82ed4b`; script `…/run_pin_rca.py` — `45cf7b463330`
+- checker + runs `artifacts/worker-041/f2a_indep_review/` — `verify_run2.json` `017c87c768ab`
+- 4 events appended to `comms/outbox/worker-041.jsonl` (`status`/`artifact`/`claim` [`diagnosis`]/`review` `revise` score 3.0) — **all 11 outbox events validate**, no ID collisions
+- checkpoint `runtime/state/w041_checkpoint_3.json` + log
+
+**Falsifier:** nondeterminism across identical runs; `675a99d0` reproducible from current inputs; an input edit that does *not* move the output; or the checker not rewriting the path — any one kills the diagnosis.
+
+**Fixed action for the lead:** regenerate evidence → re-stamp all three rev12 schemas **atomically at freeze** (advisory value `9e335e9b`, must be re-measured); structurally, pin the dependency closure instead of the derived output.
+
+**Boundaries respected:** no node status, `validation_status=passed`, or gate verdict claimed; writes confined to `artifacts/worker-041/**`, my outbox, and my checkpoints. The live shared evidence file was never written (hash `9e335e9b` before and after). Target hash stable at `5476a3f2c6bc` through 00:41:09.

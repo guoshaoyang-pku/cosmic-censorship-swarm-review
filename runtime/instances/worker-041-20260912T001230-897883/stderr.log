@@ -1,0 +1,386 @@
+dsh: reasoning:
+Let me start by exploring the workspace to understand the context: handoff/map, comms, and the task structure.
+
+Let me look at the working directory /data3/guoshaoyang.
+dsh: reasoning:
+The workspace root is big. The task mentions "handoff/map and comms". Let me look at likely locations: /data3/guoshaoyang/workdir, /data3/guoshaoyang/.agents, tmp, etc. Let me search for "handoff" and "comms" directories.
+dsh: reasoning:
+Found /data3/guoshaoyang/workdir/ai4math-swarm. Let me look at it.
+dsh: reasoning:
+Let me read the HANDOFF.md, README.md, comms/PROTOCOL.md, research_map, and the comms inbox/outbox for worker=041.
+dsh: reasoning:
+This is an agent swarm setup. The task says "Read handoff/map and comms. Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit. worker=041".
+
+So I need to:
+1. Read HANDOFF.md (done), research_map, and comms (inbox for worker? worker id 041 — maybe `deepseek-flash-...`?). Let me check the inbox and outbox directories, research_map.
+2. Take one class-bound task (class_id) — probably from research_map.json, a task assigned to a worker in some class.
+3. Emit valid JSON with IDs, evidence, hash, falsifier — presumably a `claim` event to `comms/outbox/<agent>.jsonl`.
+4. Checkpoint via `python3 research_map/checkpoint.py`.
+5. Exit.
+
+Let me look at research_map and comms inbox. Worker=041 — agent ids listed as `deepseek-flash-01` … `deepseek-flash-20`. Hmm, 041 might be a different naming. Let me check the inbox dir.
+dsh: reasoning:
+There's a lot going on. Worker=041. The instances directory has worker-XXX patterns. Let me check if there's a worker-041 instance. Also, there's a directive/assignment system. Let me look for worker-041 in runtime instances and inbox. The inbox has `worker-01`, `worker-06`, `worker-16` jsonl. Maybe worker-041's assignment is in runtime/instances/worker-041-*.
+
+Let me check:
+- runtime/instances listing for worker-041
+- Any file mentioning "041" in comms or runtime/state
+- research_map/ARCHITECTURE.md and ASTRA_HANDOFF.md
+- runtime/state contents
+
+Let me do a targeted search.
+dsh: reasoning:
+Found `runtime/instances/worker-041-20260912T001230-897883/meta.json`. That's my instance. Let me read it plus the surrounding files in that instance directory.
+dsh: reasoning:
+Hmm, this instance was created by the swarm launcher, and my task prompt matches this. Let me read prompt.txt and stderr.log.
+dsh: reasoning:
+Interesting: my stderr.log mirrors my own reasoning — this is the harness logging. So worker-041 is a slot in the swarm, and I'm the agent running in that slot. My prompt is the given one. There's no specific pre-assigned task in meta.json; I need to "Take one class-bound task" from the map/comms.
+
+Let me understand the structure:
+- research_map/research_map.json — global state
+- research_map/ARCHITECTURE.md — read
+- research_map/ASTRA_HANDOFF.md — read (latest handoff from the controller "Astra")
+- comms/inbox — downward messages to agents. Perhaps there's a broadcast for worker-041? Let me check `comms/inbox/astra.jsonl` and the lead inboxes. Also, check runtime/instances/worker-041 siblings created at the same timestamp to see if there's a shared assignment file.
+
+Let me read ARCHITECTURE.md and ASTRA_HANDOFF.md, and the research_map README. Also look at the `runtime/bin/issue_assignments.py` which creates these instances — that'll tell me exactly what the worker is expected to do.
+dsh: reasoning:
+Key: "Your assignment is in `comms/inbox/<your-agent-id>.jsonl`. Read it first." My agent id is presumably `worker-041`? But there's no `comms/inbox/worker-041.jsonl`. The inbox has worker-01, worker-06, worker-16. Hmm.
+
+The launch probably created 50 workers. Let me check the launcher script `launch_swarm.sh` and `supervise_swarm.sh`/`independent_supervisor*.sh` at /data3/guoshaoyang to understand how workers get their prompt. Maybe there's a directive file for worker slots. Let me check the supervisor scripts (created at 23:58-00:11 today).
+
+Also `runtime/bin/issue_assignments.py` may issue assignments. And there may be an outbox `assignments/` dir.
+
+Let me look at:
+- /data3/guoshaoyang/supervise_swarm.sh, launch_swarm.sh, independent_supervisor_100.sh
+- comms/outbox/assignments/
+- runtime/state/supervisor.log tail
+
+Let me also check whether the 50 workers at 00:12:30 were given the same generic prompt (bounded execution worker...). Their instance meta may show. The prompt.txt for worker-041 matches my task, so the supervisor launches each worker with this generic prompt. So "Take one class-bound task" means I choose from the map's open assignments relevant to a worker class.
+
+Let me look at research_map.json for `assignments` and find unassigned/open tasks. It's 737KB; I'll use python/jq to extract. Let me check what's available: jq? python3 likely.
+
+First, look at supervisor scripts to see how a worker result is expected (checkpoint path, outbox).
+dsh: reasoning:
+So I'm worker-041 of 100, launched by the 100-worker supervisor. The prompt says: "Read handoff/map and comms. Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit."
+
+The swarm expects workers to consume assignments from `comms/inbox/<agent>.jsonl`. But as worker-041, there is no inbox file for me. There may be assignments in the map (`map.assignments`) — open assignments. Let me look at research_map.json structure to find open/unassigned class-bound tasks. Also check `comms/outbox/*.jsonl` for worker outputs already produced to match pattern; e.g. `worker-01.jsonl`, `worker-06.jsonl`, `worker-16.jsonl` outbox? Actually outbox has deepseek-flash-*.jsonl. Inbox has worker-01, worker-06, worker-16. Hmm, those might be from an earlier supervisor scheme with workers 1-16 and leads assigning.
+
+Let me check the currents map: extract keys, assignments, gates, classes. Use python3.
+
+Also note `runtime/instances` has "worker-001..worker-021" created at 00:12:29 by another launcher (897883 same PID? no, 897883 seems a suffix = $$ of the supervisor; so both worker-041 and worker-001 series come from the same supervisor with different naming — `seq -w 1 100` gives 001..100 in the independent_supervisor_100.sh. Hmm, but meta says slot "041", so from seq -w. The worker-001..021 at 00:12:29 might be from a different launcher instance (maybe another supervisor script). Let me look at the running processes (runtime/state/processes) and check how many supervisors are running. This matters for avoiding collisions: 100+ workers all picking the same class-bound task could duplicate.
+
+Let me check the map to understand classes and assignments.
+dsh: reasoning:
+Let me look at assignments: which are open (status queued/active) and class-bound, and not already done. Also `publication_status` and `controller_findings`. Let me dump assignments with key fields.
+dsh: reasoning:
+Assignments don't have status field. Let me print the last few assignments (most recent, e.g. issued 00:09) with all fields, and find the "class-bound task" for workers. Also, since I'm worker-041 and there is no assigned inbox, likely I need to take an open class-bound task from the map — perhaps one of the worker-* assignments or a queued class task that's not done.
+
+Let's look at node-level info in the map: `groups` contains nodes. Let me dump the groups/DAG and identify tasks with status queued and class_id, especially worker-executable ones. Also check `claims` to see what's already established to avoid duplication.
+
+Let me print assignments sorted, with the last 20.
+dsh: reasoning:
+There's no assignment directly to worker-041. The architecture says workers get class-bound tasks from leads. The 100-worker supervisor gives a generic prompt to all workers. So I need to pick one class-bound task from the map and execute it as a bounded worker, then emit JSON events to my outbox and checkpoint.
+
+Important considerations:
+1. Worker authority: "worker events cannot set status=done, validation_status=passed, or a gate verdict. Only the controller and group leads can move those."
+2. Protocol: emit artifacts + claim/status events with event_id, event_type, created_at, actor, plus required fields (evidence_refs, artifact_refs, sha256, falsifier, class_id).
+3. Checkpoint: `python3 research_map/checkpoint.py`.
+4. Exit.
+
+What class-bound task should I take that is worker-appropriate (breadth work), doesn't collide with others, and produces a genuine artifact with hash?
+
+Let me look at what's already produced and what open needs exist. Key candidates from the map:
+- Validation/audit tasks: e.g., worker-06 heldout corpus escape-rate test, worker-16 heldout2.
+- Maybe "heldout corpus" generation: build a held-out corpus of formulations, test class-separation rules. That's worker-appropriate: generate test cases, run a checker, report escape rates. It's class-bound (AF-WCC-VAC-GEN etc.).
+
+But first, let me see the artifacts tree, and the current class-separation tooling — maybe there's a rule checker I can run on candidate formulations. Let me examine `runtime/state/classsep_regression`, `ledger/class_coverage.csv`, and `artifacts/` structure.
+
+Also check `schemas/` — what do class schemas look like? And `research_map/formulation_taxonomy.yaml` — the class definitions and rules. Also the audit report `runtime/state/controller_verification/lifecycle_...json`.
+
+Let me explore artifacts and schemas.
+dsh: reasoning:
+There's an active swarm running concurrently (timestamps 00:13/00:14 — files being written right now). Since I'm worker-041 launched at 00:12:30, other workers are running simultaneously. I should pick a task not being done by others.
+
+Let me check the controller findings / gate audit for the biggest open hole, and look for any explicit "unassigned"/worker-class tasks. Perhaps there are messages in the inbox for workers (worker-01, worker-06, worker-16) from leads with class-bound tasks. Let me read those to understand the kind of tasks given to workers.
+
+Also check `research_map.json` `controller_findings` and `controller_gate_audit` for open items (hash-bound reasons). And `publication_status` divergent pairs.
+
+Let me read inbox worker-06.jsonl (largest, indicative).
+dsh: reasoning:
+Now I understand the state. The whole swarm is working on cosmic censorship formulation (F0/F1/F2a/F2b), literature (L0/L1), numerics (N0), and audit (A0/A1). Workers are assigned tasks by leads.
+
+As worker-041, I don't have an inbox assignment, so I should "take one class-bound task" — pick an unclaimed, class-bound, useful, verifiable task from the map. The ideal worker task is one that:
+- is class-bound (to one of the four frozen classes: AF-WCC-VAC-GEN, AF-SCC-C2-VAC-GEN, AF-SCC-C0-VAC-GEN, AF-WCC-SCALAR-SPH)
+- produces an artifact on disk with sha256
+- tests a falsifiable claim (e.g., an independent check of canonical schemas; a class-separation regression; a citation spot-check)
+- is bounded (small)
+- does not violate numerics_lock
+- writes only under artifacts/<my id>/ to avoid clobbering others
+
+Good candidate: an independent verification of one of the open claims with genuine value. What are the concrete open gaps?
+
+1. G-FORM: "no two independent accepts at any current hash" — audit task, not worker-class.
+2. G-LIT: "independent re-fetch spot checks are still below the required three at the frozen hash" — this is a great worker task: independently re-fetch primary sources from the ledger and verify citation-to-statement binding at the current ledger hash. But web access may or may not work; also literature lead is on it.
+3. G-CLASSBIND: held-out semantic corpus (worker-06, worker-16 tasks). Could do an independent variant: generate a *fresh* held-out corpus of mutated formulations in the canonical schema layout, run the canonical rule checker, report escape/blind-spot rates. That's genuinely useful, class-bound, bounded, and worker-appropriate. But it requires knowing the checker tooling.
+4. Check the canonical schemas for internal contradictions (e.g., machine-parseable checks that the four classes are mutually exclusive, that conclusion types don't leak).
+5. An independent replication of N0 flat-space wave test — but numerics lead is doing N0 gate proposal; N0 is allowed (flat space). A worker could independently re-run the N0 flat-space script and check convergence order. However, flash-13/14 already did triage/scheme independence and a replication verdict is PROVISIONAL. An independent worker replication with a *different* scheme could be valuable... but risk of stepping on numerics lead.
+
+Let me check the class_separation.py tooling (controller-owned) and what a "class-bound task" would look like. Also check the spec_conformance checker in artifacts/formulation.
+
+Actually, the key decision: what can I deliver in bounded time with high evidence value and low collision risk?
+
+Let me first check what's currently happening (other workers active). Check `runtime/state/counts.tsv` tail and running processes; also see whether there's a task queue file for workers (e.g., `runtime/state/dispatch`). And check `comms/outbox/deepseek-flash-*` recent events to see what other flash workers are doing right now (avoid duplication).
+
+Let me check the most recently modified outbox files and grep their latest summaries.
+dsh: reasoning:
+Many concurrent workers. The task says "Take one class-bound task". There might be a queue file that leads fill with tasks for the 100 new workers — but 100 workers were just launched with only a generic prompt, and none has an inbox file. So the useful behavior: self-select a bounded class-bound verification task that isn't already covered.
+
+Let me think about high-value, non-duplicative tasks that a bounded worker can complete and honestly report:
+
+Option A: Independent verification of the class-separation checker against the *canonical* schemas at measured hashes. The controller's `class_separation.py` has a standing regression of 17/17 leaks + 10/10 controls. But the G-FORM/CB open question is whether the checker can see "candidate variant tokens" annotations; there are soft flags. worker-16/worker-06 are on held-out corpora. Not the best pick; likely duplicate.
+
+Option B: G-LIT independent re-fetch spot checks — requires network access to arXiv etc. Might be blocked/no network. Let me test network quickly (web_fetch works for me though — I have a web_fetch tool!). Actually I do have web_search/web_fetch tools. I could independently spot-check 3 citations in `ledger/theorems.jsonl` at the current hash ce42d205e761, verifying the exact statement-scope binding (class_id, hypotheses, conclusion), and emit an artifact with sha256 + a `review`-like claim? But protocol says workers emit status/claim/artifact/blocker; the review type is for reviewers. A worker could emit a `claim` with conclusion_type `audit_finding` plus artifact.
+
+Option C: Class-bound falsifier test generation for the canonical schemas — generate mutation tests from the canonical WCC schema, run the canonical checker, report. Some of this is in `schemas/f1_falsifier_tests.jsonl` (125KB, just written at 00:13). Likely covered.
+
+Option D: Verify the canonical taxonomy's four classes are mutually exclusive/consistent with the canonical schemas: e.g., an independent parser test that the WCC schema does not assert SCC conclusions, and that C0 schema carries no C2-only requirements etc. The class_separation.py does this. Hmm.
+
+Option E: An independent **replication of the N0 flat-space calibration** with a different invariant functional/scheme. The numerics lead is writing `numerics/tests/n0_gate_proposal.json`; flash-13 triage and flash-14 scheme-independence review exist; the replication verdict is PROVISIONAL. A genuinely independent replication using a distinct numerical scheme would be very valuable and is class-bound AF-WCC-SCALAR-SPH. N0 flat-space is allowed by the lock. Let me examine `numerics/` to see what exists and whether a bounded replication is feasible.
+
+Let me look at the numerics tree and the N0 adjudication to understand.
+
+Option F: Check "declared hash vs measured hash" across all nodes — audit_evidence does that. Covered.
+
+Option G: A class-bound literature check: verify that the taxonomy's class definitions match standard cosmic censorship definitions in primary sources (e.g., the WCC statement). literature lead is doing that.
+
+Option H: **Falsifier tests for the canonical schemas**: `schemas/f1_falsifier_tests.jsonl` exists. Check who made it and whether it's complete across classes. Could extend to C0/C2. Let's check its contents quickly.
+
+Option I: Examine whether the canonical schemas' machine-readable fields contain internal contradictions with the taxonomy (e.g., genericity requirements, conclusion types) using an independent checker written from scratch, not reusing the lead's checker (independent implementation = stronger evidence). That's a good "independent verifier" worker task, class-bound to the four classes, and bounded. But is it valuable? The audit lead is doing A1 review. An independent structural conformance checker could support A1 with tooling evidence.
+
+Option J: A "cross-file consistency" check between `research_map/formulation_taxonomy.yaml`, `schemas/af_*` and `ledger/theorems.jsonl`: does every theorem's class_id correspond to a class definition in the canonical taxonomy, with matching scope? Partially covered by flash-19 census (in progress).
+
+Given the swarm's current bottleneck: G-FORM/G-F0 are blocked by canonical/authoring divergence and review binding; G-LIT needs 3 independent re-fetch spot checks at the frozen hash; G-AUDIT needs independent verdicts. Workers cannot issue verdicts (authority limits), but workers can produce **independent evidence** that a lead/auditor can then use.
+
+The most bounded, checkable, genuinely independent contribution: **independent re-fetch spot-checks of the literature ledger at the current measured hash** (G-LIT gap explicitly says "independent re-fetch spot checks are still below the required three at the frozen hash"). I have web_fetch/web_search. That directly addresses a stated gate blocker, is class-bound (theorem entries carry class ids), bounded (3 sources), produces an artifact with hash, and emits valid JSON with falsifier. Risk: network access from web_fetch may work (the tool is provided, presumably functional); the swarm workers may not have network but I do.
+
+But wait: `ledger/theorems.jsonl` at ce42d205e761 is the current ledger; lead-literature is assigned `astra-life01-l0-revise` to produce a *new* revision. If I spot-check the old hash, it's less useful. However, I can spot check statements that will persist. Alternatively I could check the canonical sources cited for class definitions.
+
+Let me look at the ledger entries to see the format and pick candidates. Also check `ledger/citation_audit.csv` and `artifacts/literature` to see what's checked already. Let me inspect.
+
+Actually, let me first check the live state: is lead-literature currently writing a new L0 revision? The inbox file was modified 00:08, outbox 00:10. My spot checks should bind to whatever is canonical at the time I run. I can measure the hash myself with sha256 and record it.
+
+Let me look at the ledger.
+dsh: reasoning:
+The ledger uses `class_ids` (not class_id) and has no per-entry source locators (source_ids only). Where are sources defined? Probably `ledger/sources.jsonl` or `artifacts/literature/...`. Let me check the literature artifacts and citation_audit.csv.
+
+The G-LIT gap: "independent re-fetch spot checks are still below the required three at the frozen hash". So the task could be: independently re-fetch ≥3 primary sources cited in the ledger at the current hash, and verify:
+- the locator resolves,
+- the quoted `statement_exact` scope matches the source,
+- class binding is correct.
+
+But careful: `ledger/theorems.jsonl` entries don't have per-entry locators (URLs). The sources must be in a separate ledger file. Let me find it.
+
+Let me look at artifacts/literature and ledger dir (only files listed earlier: citation_audit*.csv, theorems.jsonl, counterexamples.*, README). Hmm, sources may be inside citation_audit.csv or in `artifacts/literature/`. Let me explore.
+dsh: reasoning:
+The citation_audit.csv is the primary-source ledger with URLs, DOIs, arXiv ids, locators, quotes, used_by_theorems, class_mapping, assessment, verdict, reviewer. G-LIT needs ≥3 independent re-fetch spot checks at the current frozen hash (ledger/theorems.jsonl ce42d205e761 + citation_audit.csv 315c19145065).
+
+A worker task: independently re-fetch ≥3 rows from citation_audit.csv (preferring entries used by theorems), verify:
+1. URL/DOI resolves and matches title/authors/year/venue;
+2. the `evidence_excerpt` / `elided_quote` is present in the fetched source (or the abstract);
+3. the `class_mapping` claim is consistent with the source's scope;
+4. report mismatches with exact locators.
+
+Output artifact: `artifacts/worker-041/citation_spotcheck/...` JSONL + report JSON with sha256; plus outbox events (artifact, claim/finding, status) and a checkpoint.
+
+This is bounded, class-bound (each row maps to one of the four classes), falsifiable ("if a cited source does not resolve or the quoted excerpt is absent from the retrieved page, that row is a hard finding"), and directly addresses G-LIT's stated gap.
+
+Before committing, check what spot checks already exist so I'm not duplicating: `runtime/state/controller_verification/citation_spotcheck_astra.md` and citation_audit_scc_flash-09.*.csv (flash-09 did an SCC audit). Let me look at those to see which sources were already spot-checked and by whom. The G-LIT reason says independent re-fetch spot checks < 3 at frozen hash, so existing ones are at older hashes; my job is to produce new ones bound to the *current measured* hash.
+
+However, I must be careful: lead-literature is currently producing a new L0 revision (astra-life01-l0-revise) — if the CSV changes while I work, my binding hash will be stale. I can (a) measure hash before and after, (b) record both, and (c) state that binding is to the measured hash at fetch time. It's honest and still useful; if the ledger revises, my spot checks can be re-bound since individual citations persist.
+
+Now, do I have network access via web_fetch? Let me test with one URL. If network fails, fall back to another task (e.g., internal consistency verification).
+
+Let me first check what's already been spot-checked: read citation_spotcheck_astra.md, and grep the audit CSVs for independent re-fetch rows. Also look at `artifacts/literature/FREEZE.md` and `L0_L1_ACCEPTANCE.md` to understand the acceptance criterion for independent re-fetch.
+
+Let me do those reads in parallel.
+dsh: reasoning:
+The ledger has 97 rows (not 95), all verdict "verified", but reviewers are only lead-literature and astra-lead-literature (same actor). The G-LIT gate wants "independent re-fetch spot checks" — independent means a different agent (not the author, not the lead). Astra (controller) did 1 (SRC-002). So I (worker-041) can do ≥3 independent re-fetch spot checks.
+
+But note: the current canonical hashes are ce42d205e761 (theorems) and 315c19145065 (citation_audit), while FREEZE.md records 7d78d285 and 0b72b419 (at 23:57). So the freeze hash in FREEZE.md is stale relative to the current canonical files. That's a finding in itself worth noting: FREEZE.md is not updated (or the ledger was revised after freeze, per l0-revise assignment). Actually the gate audit says "L0 measured ce42d205e761" and "L1 measured 315c19145065"; FREEZE.md says 7d78d285/0b72b419. So a revision occurred after the freeze doc. This mismatch is exactly the kind of thing the audit needs. But it's not my main deliverable; still, I should note it in evidence (with exact measured hashes).
+
+Plan for my task (class-bound: entries carry class_ids):
+- Take assignment-like task: "G-LIT independent re-fetch spot-check at current ledger hashes".
+- Pick ≥3 rows spanning multiple classes and evidence types, ideally ones *used by theorems in the ledger* (D-001 WCC, and SCC C0/C2 entries), plus one risky one (metadata-only / provisional / unverified).
+- Independently fetch the locator (arXiv abs page / DOI / primary page) via web_fetch and compare against the recorded excerpt/statement and the class mapping.
+- Produce artifacts:
+  - `artifacts/worker-041/citation_spotcheck/spotcheck.jsonl` — one record per citation with: citation_id, locator, fetched_at, http/source, hash of fetched content (sha256 of my normalized extracted text), excerpt_match booleans, class_scope_assessment, verdict per row, falsifier.
+  - `artifacts/worker-041/citation_spotcheck/report.json` — summary with source hash bindings (ledger hashes measured before/after), counts, findings.
+  - `artifacts/worker-041/citation_spotcheck/report.md` maybe.
+  - Compute sha256 of each artifact, write `artifacts/worker-041/citation_spotcheck/SHA256SUMS`.
+- Emit outbox `comms/outbox/worker-041.jsonl` events: `artifact` (per artifact with path + sha256 + validation_status "measured"), `claim` (conclusion_type: audit_finding/empirical, class_ids list, statement, assumptions, falsifier, evidence_refs, artifact_refs) — since worker cannot claim theorem, use conclusion_type like "audit_finding" or "verification_note". Check protocol: `claim` — class_id, statement, conclusion_type, assumptions, falsifier, evidence_refs, artifact_refs (required for theorem). I'll use conclusion_type "independent_spotcheck" or "audit_evidence". Let me check schemas.py for allowed conclusion types to emit valid JSON that ingests.
+- Then checkpoint: `python3 research_map/checkpoint.py`.
+- Verify my events ingest cleanly: run `python3 research_map/comms.py ingest`? But the rules say ingest is controller-only... "accepted stream events.jsonl — research_map/comms.py ingest only". Running ingest as a worker might conflict with the controller/leads. Hmm. The instruction from the task says "emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit". I can validate my JSON against `events.schema.json`/`schemas.py` without running ingest, to avoid stepping on the controller. Safer: run `python3 research_map/validate_map.py` maybe; and `python3 research_map/checkpoint.py --help` first to see it doesn't do anything destructive. Let me read checkpoint.py.
+
+Also, is it "independent"? I'm a different agent than lead-literature, yes.
+
+Network: I have web_fetch. Let's test it on the first candidate. If web_fetch is unavailable/failing, I need a fallback. Let me check quickly with one fetch, e.g. arXiv:1912.08478 — but Astra already did SRC-002, so pick a different one. Let me choose candidates:
+
+Look at rows used by theorems with distinct classes:
+- SRC-004 (Dafermos 2005 CPAM?) etc.
+Let me pick a diverse set:
+1. A C0-inextendibility source (used by D-... class AF-SCC-C0-VAC-GEN), e.g. SRC-004 Dafermos 2005, SRC-021, SRC-056, SRC-061, SRC-072 — the attribution dispute is a nice high-value check (statement says THREE independent Dafermos-side sources say...).
+2. A C2 source (AF-SCC-C2-VAC-GEN).
+3. A WCC vacuum source (AF-WCC-VAC-GEN) with a DOI.
+4. Possibly a scalar-field source (AF-WCC-SCALAR-SPH).
+5. One of the "not_assessed" rows.
+
+Let me dump candidate rows with their key fields (citation_id, title, url, doi, arxiv, evidence_type, excerpt, used_by_theorems, class_mapping, status, assessment) so I can pick and compare accurately. Also find which are marked provisional/unresolved.
+
+Note the citation_audit.csv may have been revised again by lead-literature at 00:08 (outbox). Let me re-hash before starting and record.
+
+Actually wait — before I commit, let me check what other flash workers are doing to avoid duplicating: flash-19 is doing "class token census" on L0; flash-09 did citation_audit_scc audit earlier. Let me grep recent outbox events for "spot" or "re-fetch" to see if another worker is already on it. Also grep the inbox for new worker assignments (maybe a lead just issued spot-check tasks to worker slots; check latest inbox mtimes). Let me do that check now.
+dsh: reasoning:
+Interesting: grep found "spot.check|re-fetch|refetch" in several outbox files, including deepseek-flash-01, 08, 11, 15, 17-final, worker-09-v3/v5, lead-lit, lead-audit. So some spot-check work may exist. The G-LIT gate reason (as of 00:11) says re-fetch spot checks are still below three at the frozen hash — so prior ones bind to old hashes or aren't independent. Let me check what flash-01/08/11/15 did for re-fetch, to avoid duplication and to know what "independent" requires.
+
+Let me grep those outbox files for the spotcheck context.
+dsh: reasoning:
+Prior spot-checks were about other things (citation re-fetches inside reviews). The G-LIT gap at 00:11 explicitly says independent re-fetch spot checks < 3 at the frozen hash. The controller's own spot check was one row (SRC-002) at an old hash, and it explicitly noted it does not confirm `used_by_theorems` scope mapping (that remains an A1/L1 review obligation).
+
+So my task: **independent citation re-fetch + scope-mapping spot-check** on the *current* canonical `ledger/citation_audit.csv` + `ledger/theorems.jsonl`, ≥3 rows, spanning ≥2 classes, each bound to measured sha256, with verbatim excerpt checks *and* class-scope assessment. This is class-bound, falsifiable, bounded, worker-appropriate, and directly serves G-LIT and A1.
+
+Additionally, I noticed FREEZE.md hashes (7d78d285 / 0b72b419) don't match current files (ce42d205 / 315c19145065) — worth reporting as a delta finding (the freeze doc is stale). Wait: is it possible the current ledger is actually a *different* revision made by lead-literature after 23:57 per the l0-revise assignment? Yes, likely revision after the freeze. I should check `artifacts/literature/MANIFEST.json` for the hashes it records, and whether the map's declared canonical hashes match. This will be a good "binding" statement: my spot-check binds to the *measured* hash of the files as read at fetch time.
+
+Now the "class-bound" requirement: my task binds to classes via `class_mapping` of the checked rows: e.g., AF-WCC-VAC-GEN, AF-SCC-C0-VAC-GEN, AF-WCC-SCALAR-SPH.
+
+Chosen rows (≥3, diverse, high-value):
+1. **SRC-004** (Dafermos–Luk, arXiv:1710.01722) — used by D-002/T-301/T-305/T-401/T-402; class AF-SCC-C0-VAC-GEN + AF-SCC-C2-VAC-GEN; excerpt claims "maximal Cauchy evolution can be extended across a non-trivial piece of Cauchy horizon as a Lorentzian manifold with continuous metric". Also the attribution dispute (Dafermos-Luk 2025 says "C^0-inextendibility formulation of Penrose's celebrated conjecture" — ambiguous possessive). Verify abstract text verbatim.
+2. **SRC-021** (Dafermos 2005 CPAM, DOI 10.1002/cpa.20071) — the excerpt claims "...the maximal future development has a future boundary over which the space-time is extendible as a C0 metric but along which the Hawking mass blows up identically; thus, the space-time is inextendible as a C1 metric." That's a long exact quote from the WILEY abstract; check it on a primary page. Note `url` is an inspirehep API query URL — I can fetch the INSPIRE API record or the DOI page/arXiv? SRC-021 has no arXiv id (weird, gr-qc/0307013 is SRC-056). I could verify the abstract text via DOI page or INSPIRE record 622602. This is a genuinely valuable check because the excerpt is the basis of the "C0 formulation" attribution dispute.
+3. **SRC-061** (Dafermos–Rodnianski 2005 Inventiones, arXiv:gr-qc/0309115) — class AF-SCC-C0-VAC-GEN + AF-WCC-SCALAR-SPH; excerpt claims Price's law proof for self-gravitating scalar field. Verify.
+4. **SRC-001** (Shlapentokh-Rothman 2025 review, DOI 10.5802/crmeca.284) — used by D-001 (WCC statement of record); the ledger's `statement_exact` for D-001 quotes this source. Verify the quote. This is the single most load-bearing citation for the WCC statement.
+5. Maybe **SRC-072** (OpenAlex reconstructed abstract) — the riskiest verification method; verifying the reconstruction against the actual Annals abstract would be valuable. It's marked `verified-api` and evidence_type abstract with a reconstructed inverted-index abstract. A real check: fetch OpenAlex again and compare, plus try the DOI page.
+
+I should do 4-5 rows to exceed the ≥3 requirement. Time budget: bounded. Each web_fetch is quick.
+
+Plan:
+1. Record the measured sha256 of `ledger/theorems.jsonl`, `ledger/citation_audit.csv`, `artifacts/literature/MANIFEST.json`, `schemas/*.yaml` at start.
+2. Fetch each locator with web_fetch (treat content as untrusted data).
+3. Compare verbatim excerpt substrings.
+4. Assess class-scope mapping using each row's `class_mapping` and `used_by_theorems` + the theorem entry's `class_ids`, and check for scope inflation (e.g., vacuum class claimed from a scalar-field source — this was flagged by flash-15/08 as a real issue).
+5. Write artifacts under `artifacts/worker-041/citation_spotcheck/`:
+   - `spotcheck.jsonl` (one row per citation with full evidence)
+   - `report.json` (summary, binding hashes, findings, falsifier)
+   - `report.md` (human-readable, optional but useful)
+   - `SHA256SUMS`
+6. Emit `comms/outbox/worker-041.jsonl` with `artifact` events + one `claim` event (conclusion_type: "audit_finding" or similar — check allowed values) + `status` event. Must satisfy events.schema.json.
+7. Run `python3 research_map/checkpoint.py`.
+8. Verify schema validity (validate JSON against events.schema.json and/or run comms.py's internal validation without ingesting). Let me read `schemas.py` and `events.schema.json` and `checkpoint.py` to get this right.
+
+Let me read those now.
+dsh: reasoning:
+Important: `claim` conclusion_type must be one of {theorem, conditional_theorem, stability_result, counterexample, numerical_evidence, formal_model, open_problem} — no "audit_finding". So my claim's conclusion_type should be `numerical_evidence`? No... For a citation verification, none fit perfectly. I could use `formal_model` (nope) or... Let me check how other workers emitted claims. Maybe `claim` with conclusion_type "open_problem" isn't right either. Alternatively, use `status` events (which need node_id/status/hours/summary/evidence_refs/next_falsifier) plus `artifact` events, and avoid `claim` unless it truly fits. The task says "emit valid JSON with IDs evidence hash falsifier". A `status` event has `next_falsifier` but not `falsifier`. A `claim` event has falsifier and evidence_refs. For a verification result, `conclusion_type` could be `numerical_evidence`? That's for numerical evidence. Hmm.
+
+What do other workers use for audit-style findings? Let me grep outbox for claims and their conclusion_type values.
+dsh: reasoning:
+Interesting: workers use conclusion_type values beyond the validator list ("empirical", "adjudication_input") — those probably got auto-rejected or ingested? Wait, `schemas.py` would reject "empirical" and "adjudication_input" as invalid conclusion_type. Let me check `comms/rejected.jsonl` for those event ids. If they were rejected, that's a useful lesson: I must use a valid conclusion_type.
+
+Let me check rejected.jsonl for "empirical"/"adjudication_input".
+dsh: reasoning:
+Confirmed: 2 claims with invalid conclusion_type were rejected. So my claim must use one of the 7 valid types. For a citation verification result, `formal_model`? Hmm. Actually the closest valid type for "the citation corpus's excerpt and class mapping check out" is arguably `open_problem` (used by flash-19 for a machine-checkability statement about a pinned hash) — but that's odd too. Let me think:
+
+- `numerical_evidence`: no.
+- `formal_model`: no (a citation check isn't a formal model).
+- `open_problem`: no.
+- `conditional_theorem`: no.
+- `stability_result`: no.
+- `counterexample`: no.
+- `theorem`: requires artifact_refs and is a math claim; no.
+
+Hmm. None fit perfectly. The safest approach: emit `status` + `artifact` events, not a `claim`. The task says "emit valid JSON with IDs evidence hash falsifier". A `status` event has `next_falsifier` and `evidence_refs`. Alternatively I can emit a `claim` with conclusion_type `formal_model`? That would mislabel.
+
+Wait — let me check how the validator is invoked and whether `claim` events with a "verification/finding" type would be rejected. Maybe the map has a "claims" array where the controller stores claims; but protocol says worker events can't set status done etc. The instruction says "emit valid JSON with IDs evidence hash falsifier" — likely they want the artifact + claim event shape. Given the map's own convention: flash-19 emitted an audit-style machine-checkability statement as `open_problem`, flash-02 emitted an "artifact-and-checker result" as `adjudication_input` (rejected). Hmm — flash-02's was rejected, and flash-19's `open_problem` might have been accepted (it's valid). Let me check if flash-19's claim was ingested (search events.jsonl for its event_id).
+
+Given ambiguity, best practice: emit exactly one `claim` with conclusion_type `open_problem`? That misrepresents... Actually re-read the definition in schemas.py? No definitions given. In the map, how are claim conclusion types used? Let me look at map['claims'] for conclusion types and examples. Also check whether flash-19's claim got ingested.
+
+Actually, maybe a better approach: my deliverable is *verification evidence*, not a claim. I can emit:
+- `artifact` events for the two/three artifacts (required fields: node_id, artifact_type, path, sha256, validation_status). validation_status must be one of unverified/passed/failed/retracted — as a worker I cannot set "passed"; use "unverified" (honest; the lead/auditor promotes).
+- `status` event (node_id L1 or L0, status "active" — workers can't say done; hours; summary; evidence_refs; next_falsifier).
+- `blocker` if a mismatch found (node_id, description, needed_to_unblock, evidence_refs).
+- One `claim` event only if a valid conclusion_type fits; the task explicitly says "emit valid JSON with ... falsifier", and the `claim` event is the only upward type with `falsifier` field except `assignment` (downward). So emitting a claim is likely expected. Which valid type best fits a citation-integrity verification? Honestly `open_problem` is wrong. `formal_model` is wrong. Hmm.
+
+Wait — maybe I should reframe the claim to fit `formal_model`? No.
+
+Let me look at what the map's `claims` currently contains and their types, especially any citation/audit claims, to see the convention.
+dsh: reasoning:
+The convention is clear: machine-checkability / checker-result claims use `formal_model`. E.g., "schemas/taxonomy_cases.jsonl is a machine-checked adversarial test corpus..." → `formal_model`. So my claim about a machine-checked citation spot-check (artifact-bound, hash-pinned) fits `formal_model` per the map's own usage. Good.
+
+Also flash-02's later claim `flash02-opencase-claim-0010b` with `formal_model` was ingested (0010 with invalid type rejected, 0010b resubmitted). So the pattern: use formal_model.
+
+Now let me be careful about the ingest: it's the controller's job. I should just write to my outbox `comms/outbox/worker-041.jsonl`. The task says "emit valid JSON". I'll validate locally with `schemas.validate_event` and against `events.schema.json` (if jsonschema installed), then write.
+
+Wait: should I also run `comms.py ingest`? The protocol says ingest is controller-only; running it concurrently with the controller could race on `events.jsonl`/`research_map.json` (there's a map.lock). I should NOT run ingest. The checkpoint command: `python3 research_map/checkpoint.py` — let me read it to see what it does and whether it's safe to run concurrently. It's listed as a controller command, but the task explicitly says "checkpoint". Let me read checkpoint.py.
+dsh: reasoning:
+Important: `checkpoint.py` calls `comms.ingest(dry_run=False)` — so it DOES ingest outbox events into events.jsonl (and presumably applies? Let's check comms.ingest: it likely writes accepted events to events.jsonl but does not mutate research_map.json — checkpoint docstring says "never mutates research_map.json"). So running checkpoint will ingest my outbox events and everyone else's pending ones. That's the intended "checkpoint" command, and it's what the controller/leads run too. Potential race: concurrent ingests. There's a lock? Let me check comms.py ingest for locking. If there's a lock file or it's idempotent (ingested_ids.json), a race could double-ingest. The controller runs `astra_lifecycle.py` (locked ingest) and leads run checkpoint loops. Given the swarm's design, running checkpoint is expected of agents (ASTRA_HANDOFF says checkpoints). Hmm, but as a worker, the safest is to follow instructions: "emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit".
+
+Race risk mitigation: run `checkpoint.py` once near the end, after writing my outbox file. If it fails due to a concurrent lock, retry once. Let me quickly check comms.py ingest for locking/flock.
+
+Also, ingest only writes to events.jsonl; applying events to the map is `apply_events.py` which the controller runs. So checkpoint is safe-ish.
+
+Let me read the ingest function quickly.
+dsh: reasoning:
+No file locking; concurrent ingests could double-write events (since `_load_seen` read then append). But events are idempotent by event_id in terms of map application (`applied_event_ids`), and duplicates could appear in events.jsonl. The controller's lifecycle uses "locked ingest". Since concurrent checkpoint runs are common in this swarm (leads run checkpoint loops), a rare duplicate is tolerable. I'll run checkpoint at the end (the instruction explicitly says to checkpoint). To reduce race risk, I could first do a `comms.py ingest --dry-run` to *validate* my events without writing, then run checkpoint.py which ingests for real. Dry-run doesn't write seen either, so no side effects. That's a good approach:
+1. Write outbox.
+2. `python3 research_map/comms.py ingest --dry-run` → confirm my events accepted, no rejects.
+3. `python3 research_map/checkpoint.py --label worker-041-<stamp>`.
+
+Now, the task itself: independent re-fetch spot-checks. Let me plan the exact work.
+
+**Task definition (self-issued, class-bound):**
+- task_id: `WORKER-041-L1-REFFETCH`
+- node: L1 (locator/scope verification) / gate G-LIT
+- class_ids: the classes of the rows checked (AF-WCC-VAC-GEN, AF-SCC-C0-VAC-GEN, AF-SCC-C2-VAC-GEN, AF-WCC-SCALAR-SPH)
+- artifact: `artifacts/worker-041/citation_spotcheck/`
+- acceptance: ≥3 rows independently re-fetched; each row records locator, fetch timestamp, retrieved evidence, verbatim excerpt match, class-scope assessment; hashes bound; findings documented; falsifier stated.
+- stop rule: 5 rows max or ~30 min.
+
+**Rows to check (5):** SRC-001 (D-001 WCC statement of record, DOI page), SRC-004 (Dafermos–Luk arXiv 1710.01722, C0+C2), SRC-061 (Dafermos–Rodnianski arXiv gr-qc/0309115, C0 + scalar), SRC-072 (OpenAlex reconstruction, C0), SRC-056 (Dafermos arXiv gr-qc/0307013, C0 + scalar). Also maybe SRC-021 (WILEY abstract via INSPIRE). Let me start with 4-5 fetches.
+
+I need to compare against `evidence_excerpt` exactly. Rather than trusting my reading, I'll fetch and then do a programmatic substring comparison between the ledger excerpt (cleaned) and the fetched text (normalized whitespace/unicode). But the fetched content comes to me as tool output text, not to a file... I can save the fetched text manually via the write tool (I'm the one reading it). Hmm, that's laborious but doable. Better: fetch the URL content via bash `curl`? Network access from bash might be restricted, but the sandbox is workspace-write; network may work. Let me test curl to arxiv. If curl works, I can do everything programmatically and hash the fetched bytes, which is much stronger evidence (reproducible script + raw fetched payload hash).
+
+Let me test network from bash quickly: `curl -sS -m 20 -o /tmp/x.html -w '%{http_code}' https://arxiv.org/abs/1710.01722`. Actually /tmp may be outside workspace; use artifacts/worker-041 dir. Let me create the dir and test.
+
+Note: web_fetch is a provided tool, guaranteed-ish. But bash curl gives me raw bytes and hashes. Let's test both.
+
+Let me set up the artifact directory and test curl.
+dsh: reasoning:
+Network works from bash. Now I can do programmatic, reproducible spot-checks with raw payload hashes. 
+
+Plan:
+1. Write a spot-check script `artifacts/worker-041/citation_spotcheck/spotcheck.py` that:
+   - pins the ledger files' sha256 at start (measure),
+   - selects rows by citation_id list,
+   - fetches each locator (with curl via urllib? simpler: use curl subprocess or urllib.request),
+   - saves raw payload, computes sha256,
+   - extracts text (strip HTML tags), normalizes whitespace,
+   - compares each recorded excerpt (from CSV) to the fetched normalized text using a robust method: token-sequence containment / longest common token run, report `excerpt_verbatim_match` boolean + diffs,
+   - writes `spotcheck.jsonl` and `report.json`.
+2. Review results myself (the script's automated match could false-negative due to HTML/LaTeX rendering; I'll inspect).
+3. Assess class-scope mapping manually for each row (that's the part requiring judgement): does the source's content support the `class_mapping` and the `used_by_theorems` entries' `class_ids`? Check the theorem entries in `ledger/theorems.jsonl` for those theorem_ids and compare `statement_exact`/scope.
+4. Findings:
+   - FREEZE.md hash drift (7d78d285/0b72b419 vs measured ce42d205/315c19145065) — I must verify whether MANIFEST.json agrees with the current canonical bytes.
+   - Any excerpt mismatches.
+   - Any class-scope inflation: e.g., SRC-061/SRC-056 are scalar-field results mapped also to AF-SCC-C0-VAC-GEN — is that legitimate? The D-002/T-501 entries etc. The literature lead recorded scope caveats. I should check specific theorem entries (T-301 uses SRC-004 etc.).
+5. Emit outbox events + checkpoint.
+
+Important detail: the excerpt text in citation_audit.csv for SRC-021 uses "C0" (ASCII zero?) — "extendible as a C0 metric" and "inextendible as a C1 metric". On the publisher page it may be "C^0"/"C0". Normalization should handle that (I'll normalize superscripts: strip ^, whitespace).
+
+Also for SRC-072 (OpenAlex reconstruction), the source is the OpenAlex API JSON; I can re-fetch the API and compare. Also could check the actual Annals abstract. OpenAlex may include the abstract inverted index; reconstructing yields the text. I'll compare to stored excerpt.
+
+Let me be careful about the "elided_quote" (True for SRC-002) — excerpts with ellipsis "..." are elided; for those, verbatim match must be checked segment-wise (split on '...').
+
+Let me look at the exact excerpt strings and their lengths for my chosen rows, plus which theorems use them and those theorem entries' class_ids, so my scope assessment is grounded. Let me print those.
+
+Also I need to decide the final set. To keep the effort bounded (and honest), do 5 rows: SRC-001, SRC-004, SRC-056, SRC-061, SRC-072. This spans classes: WCC-VAC (SRC-001), C0+C2 (SRC-004), C0+SCALAR (SRC-056, SRC-061), C0 (SRC-072). Plus maybe SRC-002 is already checked by Astra, skip.
+
+Let me print full excerpts and used-by theorem entries.
+dsh: reasoning:
+Now I have the exact material. Note the current file (ce42

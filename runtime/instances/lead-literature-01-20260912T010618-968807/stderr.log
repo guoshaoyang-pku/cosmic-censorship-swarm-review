@@ -1,0 +1,996 @@
+dsh: reasoning:
+No handoff directory at top level via glob. Let me search for "handoff" directories.
+dsh: reasoning:
+The `.agents` dir is unrelated. There's a `workdir` dir recently modified and `anm_scratch`, `ca_worldmodels`. The swarm tarball was extracted to `workdir`. Let me look at `workdir`.
+dsh: reasoning:
+The swarm repo is at `/data3/guoshaoyang/workdir/ai4math-swarm`. It has HANDOFF.md, comms, research_map, runtime, schemas, ledger, reviews, artifacts.
+
+I'm a group lead for group=literature. Let me read HANDOFF.md, README.md, and the research_map, and comms.
+dsh: reasoning:
+I'm the group lead for group=literature. There's a research_map with ARCHITECTURE.md and ASTRA_HANDOFF.md, schemas, comms.py, checkpoint.py, apply_events.py, promote.py, run_cycle.py, class_separation.py, accounting.py, validate_map.py.
+
+I need to:
+1. Read handoff/map and comms
+2. Review artifacts
+3. Consume queue
+4. Emit structured events and checkpoints
+5. Report blockers
+6. One independent lifecycle then exit
+
+Let me read ARCHITECTURE.md and ASTRA_HANDOFF.md, and schemas.py + events.schema.json to understand the event format.
+
+Also need to find how "group=literature" maps — maybe there's a groups config. Let me check research_map.json and the ARCHITECTURE.md.
+
+Let me read several files in parallel.
+dsh: reasoning:
+Now I understand the setup. I'm a group lead for `literature`. I need to:
+1. Find my inbox: `comms/inbox/<my-agent-id>.jsonl`. But what's my agent id? "group=literature" — likely `lead-literature-01` or similar. Let me check `comms/inbox/`.
+2. Read `comms/PROTOCOL.md`.
+3. Read the research_map.json state for literature nodes (L0, L1).
+4. Consume queue.
+5. Emit structured events (status/claim/artifact/blocker) to my outbox.
+6. Checkpoint.
+7. Report blockers.
+8. One independent lifecycle then exit.
+
+Let me look at comms/inbox, PROTOCOL.md, and the literature-related parts.
+dsh: reasoning:
+My inbox is `comms/inbox/astra-lead-literature.jsonl`. Let me read PROTOCOL.md and the literature group state, plus my inbox.
+
+Let me read the PROTOCOL.md, then the literature group in research_map.json.
+dsh: reasoning:
+Let me continue reading the inbox (more messages). Let me count lines first, and show the remaining messages.
+dsh: reasoning:
+13 lines total. So I have 13 cards; I saw 1-12 and #13 got truncated but visible partially. Let me see the full #13 and confirm nothing else.
+
+Now I need to determine the current state. Key questions:
+1. Current live hash of `ledger/theorems.jsonl` and `ledger/citation_audit.csv`.
+2. Which tasks remain: L0 freeze reconcile (CF-19), L0 rev3 verify (two independent blind reviewers), L1 spot checks.
+3. The ASTRA_HANDOFF says: **G-LIT L0 `a1674f094979` (1 accept worker-075 vs 5 revise + 1 inconclusive) + L1 `315c19145065` (23 spot checks) pending `astra-life05-verify-l0-final`**.
+
+But the handoff also mentions pass 06 with REC-22..REC-28 and a set of open assignments. G-LIT was not in the supersede list. Let me read the latest decisions file and controller verification report, and check `research_map.json` for gates G-LIT, assignments related to literature, and reviews.
+
+Also note the handoff says latest lifecycle at 01:02, pass-06 final at 01:01:17. The current time? Let me check. Files updated at 01:06. So I'm running right after pass 06. My relevant open assignment from pass 05/06: `astra-life05-verify-l0-final` (lead-audit, deadline 02:30). Hmm — but that's assigned to lead-audit, not literature. Let me check the assignments in the map for assignee=astra-lead-literature and status != done.
+
+Let me query the map comprehensively for literature-related state.
+dsh: reasoning:
+There's a lot. The key: L0 `last_status` at 01:09 by worker-079 says controller scanner now reads L0 distinct full accepts ['worker-075','worker-079'] (two_distinct_accepts=true).
+
+Interesting — the handoff pass-06 said L0 `a1674f094979` (1 accept worker-075 vs 5 revise + 1 inconclusive) pending `astra-life05-verify-l0-final`. Now worker-079 added a second accept at 01:09 (after the map's updated_at 01:05:09, but the status was appended... wait, the map updated_at is 01:05:09 yet last_status at 01:09:00. That means the map was updated after 01:05:09 — possibly by run_cycle. Let me check current time and map mtime.
+
+Let me now:
+1. Check current time.
+2. Check live hashes of ledger/theorems.jsonl, ledger/citation_audit.csv, and compare to map.
+3. Check reviews dir for L0 verdicts at the current hash.
+4. Check assignments for my group and their status.
+5. Check controller_verification latest report + decisions REC-22..REC-28.
+6. Check the queue — "consume queue" probably means `comms.py ingest` to pull accepted traffic into events.jsonl, or the assignments queue.
+
+The task says: "Read handoff/map and comms. Review artifacts, consume queue, emit structured events and checkpoints, report blockers. One independent lifecycle then exit. group=literature"
+
+So I should run one independent lifecycle as the literature group lead:
+- Read handoff/map/comms ✓
+- Review artifacts (L0/L1 ledger, reviews)
+- Consume queue (ingest outbox → events.jsonl; process assignments)
+- Emit structured events (status/claim/artifact/review) to my outbox
+- Emit checkpoint (runtime/state/current_checkpoint.json + checkpoint_log.jsonl via checkpoint.py? but that's controller tooling — need to check if leads can run it. Also "checkpoints" — maybe via research_map/checkpoint.py)
+- Report blockers
+- Exit
+
+Key decision to make as group lead: G-LIT adjudication. The gate says pending, and the handoff says G-LIT pending `astra-life05-verify-l0-final` (lead-audit, deadline 02:30). But there's a very important thing: only the controller and group leads can set a gate verdict. G-LIT owner is `lead-literature` (me!). So I may be able to emit a gate verdict event for G-LIT.
+
+But careful: CF-19 — the reconcile. Let me check whether `reviews/L0-freeze-reconciliation.json` exists and what happened. The handoff pass-06 says live L0 hash `a1674f094979` with 1 accept (worker-075) vs 5 revise + 1 inconclusive. Now worker-079 says two distinct accepts at a1674f094979 (worker-075 + worker-079). Hmm, but the map's gates G-LIT unmet still says "L0 carries three revise verdicts... and no accept". Gate updated_at 01:00:43. So the gate record is stale relative to worker-079's 01:09 accept.
+
+Let me be careful and evidence-driven. First gather facts:
+- mtimes and hashes now
+- reviews list with verdicts, hashes, actors
+- assignments relevant to literature
+- latest controller lifecycle report/decisions
+- reject/ingest state
+
+Let me do this systematically.
+
+Let me check the current time first.
+dsh: reasoning:
+The live hashes match the map's recorded hashes for both L0 (a1674f094979) and L1 (315c19145065). Good: the freeze reconciliation happened, and the live bytes are stable.
+
+Now, the critical question is whether G-LIT can be adjudicated pass. Key evidence:
+- L0 at a1674f094979: need 2 independent accept verdicts at this hash.
+- L1 at 315c19145065: need >=3 independent re-fetch spot checks.
+
+Let me look at the reviews that bind these hashes. Specifically:
+- reviews/L0-review-worker-079.json (accept 4.0) — new at 01:03
+- reviews/L0-review-075-rev3.json (accept?) 
+- reviews/L0-review-rev3-final.json (adjudication)
+- reviews/L1-spotcheck-* and L1-locator-adjudication-025.json
+- reviews/L0-freeze-reconciliation.json
+
+Let me examine these carefully. This is the crux of my lifecycle: as group lead, I review artifacts, adjudicate, and emit gate verdict if warranted — with evidence.
+
+Let me extract the key fields from these review files programmatically.
+dsh: reasoning:
+Now I have a clearer picture:
+
+L0 at a1674f094979:
+- worker-075: accept 4.0 (00:49)
+- worker-079: accept 4.0 (01:03) — with sha256 file too
+- worker-005: revise 3.0 with hard failure HF-W005-L0-01 "exact_locator_is_a_discovery_query_on_67_of_97_rows"
+- worker-011: revise 3.0 with critical HF-14 (60 of 62 rows truthy support assertion with no independent review)
+- Other revise verdicts: flash-16, flash-17, lead-audit (from earlier)
+
+So L0 has 2 accepts and multiple revises with hard failures. Hmm. The gate criteria: "ledger rows have resolvable locators; verification_status honest; >=3 independent re-fetch spot checks; unresolved marked unresolved".
+
+The controller handoff says G-LIT pending "astra-life05-verify-l0-final" — an audit-lead verification. Let me check what that means and whether the L0 rev3 final adjudication (by lead-literature at 00:53) resolved the revises.
+
+Also, importantly, the pass-06 handoff mentions CF-19 was addressed (freeze reconciliation at 00:44).
+
+Let me read L0-review-rev3-final.json carefully — it's my own (lead-literature) adjudication of rev3. And the reconciliation. Then decide.
+
+Also check `reviews/INDEX.md` for G-LIT status (the gate unmet mentions INDEX records fail).
+
+Let me also check the controller's latest decisions (astra-lifecycle-06-decisions.json, REC-22..28) and the controller verification report — to know what constraints apply (e.g., "hold: no further ledger writes until two independent verdicts bind the reconciled hash").
+
+Actually that hold was from astra-life04-l0-freeze-reconcile: "(4) after either path, HOLD: no further ledger writes until two independent verdicts bind the reconciled hash." Two independent verdicts now bind a1674f094979: worker-075 and worker-079 both accept. So the hold condition is satisfied. But worker-005 and worker-011 have revise verdicts at the same hash with hard failures. There's tension: 2 accepts vs 2+ revises at the same hash.
+
+The critical claim is the two accepts did "full-scope" review on content_status/review_status axes with hard_failures=[]. Worker-079's summary says "controller scanner now reads L0 distinct full accepts ['worker-075','worker-079'] (two_distinct_accepts=true)".
+
+But worker-011's HF-14 (critical) says 60/62 rows set truthy author_asserts_supports with no independent reviewer verdict. Does worker-079's full-scope review address that? Let me read those reviews in full to see if the hard failures are actually resolved or if the accepts simply scanned different axes.
+
+This is the crux: as group lead I must not promote fluent text; I need to decide whether G-LIT can pass. The controller/audit has the assignment `astra-life05-verify-l0-final` (lead-audit). So G-LIT final verification is assigned to audit, not me. My role: ensure L0/L1 artifacts are sound, emit my own status/artifact/claim/blocker events, and possibly a gate verdict as gate owner... but the handoff says the remaining criterion is a non-author independent verification by audit lead.
+
+Let me check `astra-life05-verify-l0-final` card status — maybe it's been done. Let me look at the latest controller lifecycle records and the reviews for that.
+
+Also "consume queue" — let me check if there's an explicit queue: `research_map/events.jsonl`, `comms/outbox` un-ingested, or assignments queue in the map. Let me check assignments with assignee=astra-lead-literature and their status.
+
+Let me gather:
+1. assignments for me (status), 
+2. latest lifecycle report/lifecycle_20260912-010117.json,
+3. decisions REC-22..28,
+4. reviews/INDEX.md G-LIT row,
+5. my outbox tail (what I last emitted).
+dsh: reasoning:
+Very important: assignments in the map have `status: None` for all — meaning the map's assignment status field isn't populated by ingest (or is stored elsewhere, e.g. `assignments[].status` is not tracked). So "consume queue" likely means ingest events from outboxes.
+
+Note: `reviews/INDEX.md` line 13 records L0 at `e42923726186` = revise 3.0 HF-03 (stale hash, before rev3). Line 36: G-LIT fail. So INDEX is stale.
+
+Now — key question about my lifecycle. I'm the literature group lead. The pass-06 handoff says G-LIT is pending `astra-life05-verify-l0-final` (lead-audit, deadline 02:30). That's still just after 01:07 now. That's assigned to audit, not me.
+
+But what CAN I do that's valuable and within my authority?
+- As gate owner for G-LIT, I can emit a `gate` verdict event if I have artifact + review evidence. But the controller has explicitly assigned the final L0 verification to lead-audit. If I preempt it, I'd be duplicating/conflicting — CF-12: one canonical path, one owner.
+- More important: the L0 hash currently at a1674f094979 has conflicting verdicts: 2 accepts (worker-075, worker-079) and at least 2 revises at the same hash (worker-005 with hard failure HF-W005-L0-01 "exact_locator_is_a_discovery_query_on_67_of_97_rows" and worker-011 with critical HF-14). The gate cannot be adjudicated pass while a critical hard failure remains unresolved. Let me check whether HF-14 was resolved by the rev3 repair, and what the disposition of the revises is.
+
+The L0-review-rev3-final.json (my own earlier adjudication as lead-literature at 00:53) is the right place to see the disposition. Let me read it.
+
+Also, L1: need >=3 independent re-fetch spot checks at 315c19145065. Handoff says 23 spot checks. Let me verify L1 spot check verdicts bind 315c19145065 and count distinct independent reviewers who passed.
+
+Let me read:
+1. reviews/L0-review-rev3-final.json (full)
+2. reviews/L0-review-freeze-reconciliation.json
+3. L1 spot checks + L1-locator-adjudication-025.json
+4. The latest decisions file REC-22..28 for any constraints on G-LIT.
+
+Let me also check runtime/state/controller_verification/astra-lifecycle-06-decisions.json.
+dsh: reasoning:
+Now I have a very solid picture. The critical unresolved item is **BL-7 / HF-02**: 8 rows (D-004, D-005, T-303, T-305, T-402, T-515, T-526, T-528) disjoin two frozen class ids. Multiple independent reviewers (worker-093, worker-097, deepseek-flash-18, worker-036) confirm. This is critical for G-LIT.
+
+At 01:03, worker-079 posted an accept 4.0 with hard_failures=[] and the summary says "full-scope on content_status/review_status axes". Does worker-079's review address HF-02? Its summary mentions axes content_status/review_status — that's the HF-14 axis, not HF-02 class disjunction. If worker-079 is a second accept that does not address HF-02, then the gate still has an unresolved critical hard failure.
+
+Let me read worker-079's review and worker-075's review in full to see their scope and whether they address HF-02. And check what the *latest* controller decisions say (REC-22..28) — particularly whether the controller ruled on BL-7. The pass-06 handoff says G-LIT pending `astra-life05-verify-l0-final`. It doesn't mention BL-7 ruling. Hmm, but the handoff says "G-LIT L0 a1674f094979 (1 accept worker-075 vs 5 revise + 1 inconclusive)". So at pass 06: L0 = 1 accept, 5 revise, 1 inconclusive. And worker-079's accept came at 01:03, which is *before* the pass-06 final at 01:01:17? No — 01:03 is after 01:01:17. So worker-079's accept landed after the pass-06 final. And the map's L0 last_status at 01:09 is from worker-079. But map mtime is 01:05:09. Contradiction — the last_status entry says at 01:09:00 but the map was modified at 01:05:09? Possibly the map was written by run_cycle at 01:05:09 with an event whose created_at is 01:09 (future-dated?) or clock skew. Hmm, worker-079's review file mtime is 01:03. Let me check: `reviews/L0-review-worker-079.json` mtime 01:03, `.sha256` 01:04. The status "at": "2026-09-12T01:09:00+08:00" is likely a claimed/future timestamp (or the worker's clock). Slight clock skew is a known CF issue (CF-? timestamp corrections). Not my main concern, but worth noting for the record: a status event with a created_at later than the map write.
+
+Hmm wait. Actually the map may have been updated by the 15-min auto-cycle after 01:05... but mtime says 01:05:09. And the wall clock now is 01:07:09. So event with 01:09 timestamp cannot have been applied at 01:05. Unless... map `updated_at` is 01:05:09 but the L0 last_status at 01:09 came from an event ingested with a future created_at. Let me check events.jsonl for it.
+
+Actually, hold on. The map's `updated_at` field may lag the file mtime? No, file mtime 01:05:09 = when written. Let me check run_cycle.log or events. Let me look at events.jsonl tail.
+
+Actually, my clock check said `date` = 01:07:09. The file mtime of research_map.json = 01:05:09. L0 last_status.at = 01:09:00. That's ~2 min in the future relative to now. So someone emitted a status with a future timestamp — that's the "clock discipline" issue the controller tracks. OR the map was written after 01:09 and mtime is stale... no.
+
+Wait — maybe I misread. Let me re-check: the `last_status.at` might be from worker-079's event, created_at 01:09:00. Let me grep events.jsonl for worker-079.
+
+OK. Let me now do the actual work. My lifecycle plan as literature group lead:
+
+1. **Consume queue**: run `python3 research_map/comms.py ingest` to pull outbox → events.jsonl. (Read-only-ish: ingest is the controller's tool; the protocol says "Pull accepted traffic: python3 research_map/comms.py ingest". As a lead, doing ingest is sanctioned? The protocol lists it under "Controller commands". Hmm, risk: ingest writes events.jsonl and applies to map? Let me check comms.py to see what ingest does. If ingest is expected of me ("Read handoff/map and comms. Review artifacts, consume queue"), then it's fine. But it might conflict with the controller. Let me read comms.py first.)
+
+2. **Review artifacts**: verify the live hashes, the L0/L1 ledger, the outstanding HF-02 defect, and the two accepts' scope.
+
+3. **Adjudicate**: As G-LIT owner. The gate cannot pass while HF-02 has an unresolved critical hard failure at the frozen hash. I can emit a `review`-type adjudication record + a `gate` event with verdict=pending and explicit unmet criteria (blocker). Actually — careful: only controller and group leads can set a gate verdict. I'm the gate owner for G-LIT. But the controller has an open assignment to lead-audit (`astra-life05-verify-l0-final`). If I emit a gate verdict now, I'd be preempting. The right move: emit `gate` verdict=pending (a re-affirmation, not a pass) with the decisive reason (BL-7/HF-02 critical, unresolved). That is within my authority and doesn't contradict the audit's pending verification.
+
+Actually more precisely: emitting `gate verdict=pending` is safe and useful (it's the current state; it refreshes the unmet list with measured facts). But it might be seen as noise. Alternatively emit a `blocker` for BL-7 and a `status` for L0.
+
+Let me think about what genuinely advances the map:
+- The single deciding question is BL-7 (HF-02 scope) — ruled by controller/A0. It's already recorded in my earlier adjudication with recommended controller actions. Has the controller ruled? Let me check decisions REC-22..28 and controller_findings.
+- The other open item: worker-075 and worker-079 accepts. Are they valid "full-schema registered accepts"? worker-075 is cited in pass-06 handoff as the 1 accept. worker-079 says the controller scanner now reads two distinct full accepts. But both accepts are on the content_status/review_status axis; neither seems to address HF-02 (class disjunction). If HF-02 is in scope, an accept with hard_failures=[] that doesn't examine class binding is not a clean accept.
+
+So the highest-value thing I can do: measure, at the live hash, whether the 8 disjunctive rows still have two class_ids, and whether the two accepts address class binding. Then emit:
+- `artifact` events for the live L0/L1 hashes (re-announce measured hashes + mtimes) — maybe already announced (lit-l6-*).
+- `review`/adjudication: L0 remains revise because HF-02 is a live critical hard failure confirmed by 4+ independent reviewers, and the accepts' scopes exclude class binding.
+- `gate` G-LIT: verdict pending, unmet = [HF-02 live at frozen hash, 8 rows; ...], with cited hashes.
+- `blocker`: BL-7 needs controller/A0 ruling on HF-02 ledger scope; the repair is hash-moving and REC-4 forbids it inside the metadata patch.
+- `status`: L0 active/blocked, L1 satisfied on spot checks.
+- checkpoint: run `research_map/checkpoint.py` to snapshot (verify it writes under runtime/state and doesn't touch ledger).
+
+Also the L1 side: gate criterion ">=3 independent re-fetch spot checks" — the controller audit at 00:43 said L1 315c19145065 with 23 independent re-fetch spot checks (>=3 met). So L1 is met. Let me verify by counting spot-check evidence binding 315c19145065 with distinct reviewers. Let me check the L1 spot checks and L1-locator-adjudication-025.json.
+
+Let me now:
+(a) read comms.py to know what ingest does,
+(b) check controller decisions REC-22..28 for BL-7 ruling,
+(c) read worker-079 + worker-075 accepts' scope for class binding,
+(d) measure the 8 disjunctive rows at live hash myself (independent measurement, cheap),
+(e) count L1 spot checks.
+
+Then emit events and checkpoint.
+
+Let me do (a), (b), (c), (d), (e) in parallel-ish.
+
+Let me first read comms.py and the decisions.
+dsh: reasoning:
+Good: `comms.py ingest` never mutates research_map.json — it appends accepted events to events.jsonl. So running ingest is safe and is exactly "consume queue."
+
+Now let me see the rest of decisions REC-23..REC-28, particularly anything about G-LIT/L0/BL-7/HF-02. Let me grep the decisions for L0/LIT/HF-02.
+dsh: reasoning:
+Very important: **No ruling on BL-7 (HF-02 scope)** exists in pass-06 decisions. The controller's CF-15 counts L0 1 accept. CF-24 says "L0 awaits two accepts." So the controller did not rule BL-7, and the gate is pending the audit lead's `astra-life05-verify-l0-final`.
+
+Now worker-079 posted a second accept at 01:03, after pass-06. But the accept's scope: "full-scope on content_status/review_status axes". Need to check if it addresses HF-02. If not, then the "two distinct accepts" claim is misleading for a gate whose decisive question is HF-02 scope.
+
+Let me read worker-079's review and worker-075's review fully to determine their coverage of class_ids/disjunction.
+
+Then I'll do my own independent measurement of the 8 disjunctive rows at the live hash (cheap, decisive, hold-compliant: read-only) to bind the fact with a fresh measurement.
+
+Let me also count L1 spot checks properly.
+
+Then my lifecycle emissions:
+- One adjudication artifact: `reviews/L0-gate-adjudication-lead-literature-<ts>.json` (new non-canonical file, no ledger write) that:
+  - re-measures the live hashes (a1674f09 / 315c19145065),
+  - measures HF-02 still fires on the 8 rows at the live hash,
+  - records the two accepts' scope vs class-binding axes,
+  - records L1 spot-check count,
+  - decides G-LIT = pending with a single decisive unmet condition,
+  - names the escalation (BL-7 to controller/A0, audit card).
+- events to `comms/outbox/astra-lead-literature.jsonl`: status (L0), status (L1), claim? no (no theorem), artifact (adjudication file + hashes), blocker (BL-7), review (adjudication verdict), and possibly `gate` — hmm. Protocol downward types include `gate` written by Astra; upward types are status/claim/artifact/blocker/direction_update/resource_request/review. There's no upward `gate` type. So as a group lead I cannot send an upward gate event via the normal schema. The handoff says "Only the controller and group leads can, with artifact + review evidence" set gate verdicts — but the mechanism is probably the controller applying it; or gate_proposals. Let me check the schema for allowed event types in schemas.py, and check what previous lead events looked like (e.g., lead-formulation gate proposals).
+
+Let me check schemas.py for event types, and see examples in my outbox (comms/outbox/astra-lead-literature.jsonl) to match the established format exactly.
+
+Then checkpoint: `python3 research_map/checkpoint.py` writes runtime/state snapshot. Is that a controller tool? It writes `runtime/state/current_checkpoint.json` and `checkpoint_log.jsonl`. The task says "emit structured events and checkpoints" — so running checkpoint.py is exactly what's asked. Let me check checkpoint.py to be sure it doesn't write map or ledger.
+
+Let me read my outbox and schemas.
+dsh: reasoning:
+Excellent. So I am lifecycle L10 (previous was L9 at 01:05:03). The prior lifecycle L9 already did: census completeness audit, blockers BL-10, BL-13, status saying "G-LIT stays pending and is ruling-bound on BL-7 (HF-02 ledger scope), not reviewer-latency-bound. No new inbox card; nothing literature-owned outstanding."
+
+So the previous lifecycle already handled much. Now the new development: worker-079 posted a 2nd accept at 01:03 (reviews/L0-review-worker-079.json), and the map's L0 last_status claims "controller scanner now reads L0 distinct full accepts ['worker-075','worker-079'] (two_distinct_accepts=true)". This is new since L9's census (L9 said 2 accepts = worker-072 + worker-075; worker-079 didn't exist yet at 01:03? L9 was at 01:05, worker-079 review at 01:03 — so L9 maybe missed it or it landed right at boundary).
+
+So the current decision-relevant question: does worker-079's accept change the gate? The claim "two_distinct_accepts=true" would, under the controller's framing, satisfy the G-LIT criterion of 2 independent accepts — EXCEPT that BL-7/HF-02 remains an open critical hard failure at the same hash, which the accepts apparently do not adjudicate (worker-079's scope: content_status/review_status axes = HF-14 axis).
+
+This is exactly the kind of "gate short-circuit" a group lead must catch: the gate criterion is met numerically (2 accepts) while a critical hard failure is unresolved. If I just let it ride, the controller could flip G-LIT to pass on the next pass and the epic fail would be promoting a ledger with 8 rows disjoining two frozen classes (hard decision 1: keep classes separate; class leakage is exactly what the project's #1 hard decision forbids).
+
+So my L10 lifecycle should:
+1. Consume queue (ingest outbox → events.jsonl), including worker-079's review event if it's in an outbox. Let me check where worker-079's event is. `comms/outbox/` — look for worker-079.
+2. Independently measure HF-02 at the live hash (read-only): count rows whose class_ids has >1 token; verify the 8 named rows; and check whether the two accepts cover class binding (parse their scope fields).
+3. Emit an adjudication artifact + events:
+   - artifact: new review/adjudication file
+   - review event: target = worker-079's accept; verdict: revise (scope-insufficient for the gate) OR inconclusive? Careful: I'm the ledger author, so my verdict on an L0 review is not independent. Better: emit a `review` event targeting the *accept's scope*, with a clear statement that it's an owner-side adjudication, counts_as_full_schema_verdict=false. Actually a review event with verdict=revise against worker-079's accept would be a lead adjudication of scope — allowed, since lead-adjudications of reviewer scope exist already (lit-l9-005 did review accept of a census artifact).
+   - blocker: restate BL-7 as the single decisive unmet condition, now with the added fact that a second accept exists but does not cover the class-binding axis.
+   - status: L0/L1 with freeze held, hashes unchanged.
+4. Checkpoint: create the lifecycle checkpoint. The prior lifecycle wrote `artifacts/literature/checkpoints/checkpoint-12.md`. And the task says "emit structured events and checkpoints". I should write checkpoint-13.md and run research_map/checkpoint.py? Let me check what checkpoint.py does — whether it's safe for a lead to run. It writes runtime/state/current_checkpoint.json + checkpoint_log.jsonl, possibly artifact_hashes.json. The controller uses it. Running it as a lead might collide with controller's checkpoint (ckpt-20260912-010117). Hmm. The task explicitly says "emit structured events and checkpoints" — so creating my lifecycle checkpoint artifact (checkpoint-13.md in the literature checkpoints dir, mirroring checkpoint-12.md) is the intended move; optionally also research_map/checkpoint.py if safe.
+
+Let me check checkpoint.py quickly and the checkpoints dir.
+
+Also: "One independent lifecycle then exit." So I should do exactly one pass and then exit. Don't loop.
+
+Let me now check:
+- comms/outbox for worker-079 and any new traffic (un-ingested).
+- the checkpoint dir + checkpoint.py.
+- worker-079 and worker-075 review scope in full.
+- independent HF-02 measurement.
+
+Let me look at outbox files newer than the last ingest. Actually `comms.py pending` shows accepted-but-unapplied. Let me run `ingest --dry-run` first to see what's new (safe). Then decide.
+
+Let me also check whether run_cycle auto-ingests every 15 min, which might already have consumed. events.jsonl tail will tell.
+
+Plan of commands:
+1. `python3 research_map/comms.py pending` and `ingest --dry-run`.
+2. Read worker-079 review + worker-075 review (full).
+3. HF-02 measurement script over live ledger.
+4. L1 spot-check count at 315c19145065.
+
+Let me do 1 and 2-3 in parallel.
+dsh: reasoning:
+This is now crystal clear and it's a genuinely important finding.
+
+Both accepts (worker-075, worker-079) explicitly:
+- report HF-02 fires on the 8 dual-class rows (worker-075 C06-DISJUNCTION-CENSUS: PASS but reports the 8 rows; worker-079 O1-DUAL-CLASS-ROWS),
+- declare it "non-blocking" and defer it as a "detector-scope question for the lead-audit calibration card, not a content/review-status defect".
+
+But: worker-079's own `verdict_scope` is restricted to "content_status/review_status axes ... Excludes per-row mathematical entailment and page-level ...". And O1/O2/O3 are explicitly "evidence for the lead adjudication, not rulings".
+
+So the two accepts do NOT adjudicate HF-02; they report it and route it. The gate criterion "two independent accepts" is numerically met, but the accepts are scoped away from the one axis that a critical hard failure (HF-02, class_leakage, critical) fires on. This is exactly the "gate short-circuit" risk: the controller might flip G-LIT to pass at the next pass on 2 accepts while HF-02 remains unresolved and BL-7 unruled.
+
+Also note worker-075's C05-FROZEN-TOKENS counts: AF-WCC-VAC-GEN 14, AF-SCC-C0-VAC-GEN 17, AF-SCC-C2-VAC-GEN 20, AF-WCC-SCALAR-SPH 12 = 63 total across 62 rows (one row has 2 tokens extra) — consistent with 8 disjunctive rows. worker-079's C08 says "WCC 11, C0 14, C2 14, SPH 10" = 49 for class_ids and mentions informs_classes separately. Fine.
+
+My job now: measure independently, then emit.
+
+Independent measurement (read-only, cheap):
+1. Confirm live hashes (done: a1674f09 / 315c19145065, both match declared).
+2. Count rows with >=2 class_ids in `class_ids`; verify exactly the 8 named rows; check if any row defines a union class (the accepts say no union class definition — I can check whether the row's statement/exact statement defines a union; that's more semantic. The decisive question for HF-02 scope is a rubric/audit question, not mine to rule).
+3. Check the class_ids census.
+4. Check whether HF-02 is defined in evaluation_rubric.yaml as applying to "ledger or claim record" — the scope question. Let me read rubric lines ~100 and the HF-02 definition. That's the decisive text. If HF-02's own predicate text says it applies to ledger rows, then BL-7 is answerable from the rubric text itself — and the existing rubric text says what it says. Let me read it. The prior adjudication said: "HF-02 (class_leakage, disjunction of class_ids, critical)". Let me get the exact predicate text and its scope.
+
+Actually here's the thing — the prior lifecycle already recorded the lead_position and routed to A0/controller. The new fact is the 2nd accept + the map's claim two_distinct_accepts=true. My highest-value contribution in L10:
+- Record that both accepts are scope-limited and both explicitly preserve HF-02 as an open interpretation question (O1/O3), so the 2-accept criterion must not be read as clearing HF-02.
+- Measure the rubric text for HF-02 to sharpen the ruling request (does its literal predicate bind ledger rows?).
+- Emit the events + checkpoint.
+
+Let me read the rubric HF-02 definition and check A0's detector-scope adjudication (a26be4b85706) — that artifact might already rule on HF-02 for ledger rows (CF-23). Let me check it! `evaluation/A0_detector_scope_adjudication.json` — if it scopes HF-02 out for ledger rows, then BL-7 is resolved by A0 evidence (pending independent verify via astra-life04-verify-a0). Let me read it.
+
+Let me:
+- read evaluation_rubric.yaml HF-01/HF-02/HF-14 definitions with line numbers,
+- read evaluation/A0_detector_scope_adjudication.json.
+
+Then measure the 8 rows and emit.
+dsh: reasoning:
+A0's detector-scope adjudication is about HF-14/HF-03 corpus scope (archives/snapshots), not about HF-02 ledger-row scope. So BL-7 is NOT ruled by A0's artifact.
+
+Let me read the rubric HF-02 entry exactly (lines ~171-190) and its `scope:` field. There's a `scope: [L0, L1]` at line 136 — that's likely HF-03's scope, and line 123 `scope: [F1, F2]`, line 146 `scope: [A1]`, line 156 `scope: [N0,N1]`. So the rubric's hard-failure entries have explicit `scope:` fields! If HF-02 (line 175-180) has no scope field but its neighbors do, that's the ambiguity. Let me read lines 115-260 of the rubric.
+
+This is the decisive text for BL-7. Let me read it.
+dsh: reasoning:
+Now the decisive rubric text:
+
+- Line 168-169: "HF-NN are binary defects; any occurrence is counted. A claim/artifact with a critical HF cannot be accepted regardless of other merits."
+- HF-02 detector (line 178-180): "unknown class_id | disjunction of class_ids | evidence metadata violates the class forbidden_evidence list without transfer_argument | conclusion_type not allowed for class". Severity: critical.
+- Critically, HF-02's detector is written on generic fields `class_id` / `class_ids` — it does NOT have a `scope:` field (unlike gates which have scope). The taxonomy's preamble says "A claim/artifact with a critical HF cannot be accepted regardless of other merits."
+
+So the rubric text itself says: a critical HF on an *artifact* means it cannot be accepted. The L0 ledger is an artifact; 8 rows carry a disjunction of class_ids; HF-02 is critical. Therefore, **by the rubric's own preamble, L0 cannot be accepted while HF-02 fires** — unless the detector is ruled out of scope for ledger rows, which is what BL-7 asks.
+
+The two accepts both recorded HF-02 firing (worker-075 C06 "PASS" but counted 8 disjunctive rows; worker-079 O1) and both explicitly deferred it as a scope question. So the "two independent accepts" is a *conditional* state: the accepts themselves say the HF-02 firing needs a lead/audit ruling.
+
+Now — my authority as group lead. G-LIT's owner is lead-literature, but the controller's framing (CF-15/CF-24) says L0 awaits two accepts, and the assignment `astra-life05-verify-l0-final` is with lead-audit. There is a real risk the next controller pass flips G-LIT to pass on 2 accepts.
+
+What's the right, honest, high-value L10 action?
+
+1. **Do not claim G-LIT pass.** Do not write to the ledger. Hold the freeze.
+2. **Emit a precise, decisive adjudication** that:
+   - measures the live pins,
+   - measures the 8 dual-class rows at the live hash (my own read-only measurement),
+   - quotes the rubric preamble + HF-02 detector text,
+   - records that both accepts explicitly scope HF-02 out and defer it (with their own O1/O3 text),
+   - therefore states: two accepts exist, but the gate's `criteria` line "statement scope matched to class_id" (rubric G-LIT line 140) is exactly the axis on which HF-02 fires, so a gate pass on the accept count alone would be a rubric-preamble violation while HF-02 is live,
+   - requests exactly one ruling from the controller/A0 owner with two enumerated outcomes and the consequences (this is the "one decision" ask).
+3. **Emit events**: artifact (adjudication + checkpoint), status (L0/L1 freeze held), blocker (BL-7 update with the new accept-count fact + the rubric citation), review (scope adjudication of the two accepts: I can review them as *insufficient scope for the gate* without disputing their internal checks).
+4. **Checkpoint**: write the literature lifecycle checkpoint (checkpoint-13.md) and record hashes.
+5. **Consume the queue**: run `comms.py ingest` (not dry-run) so the new traffic (worker-079's review event, etc.) enters events.jsonl. But careful: is ingest my job? The protocol says ingest is how accepted traffic is pulled; the ASTRA_HANDOFF says "Pull accepted traffic: python3 research_map/comms.py ingest". As a group lead doing one lifecycle, running ingest is expected. It never mutates the map. But there's a subtlety: the controller's run_cycle also ingests. Running it is idempotent (dedup by event_id). So safe.
+
+Wait — one important thing about ingest: my own outbox events must be *written first*, then ingest pulls them in. But should I ingest other agents' traffic? "consume queue" — yes, ingest is the mechanism. It appends to events.jsonl which the controller applies. Let me check how many new events there are and whether ingest would add anything problematic. The dry-run showed new events from workers (F2b, A1, etc.) plus rejects for worker-064/077 claims with invalid conclusion_type. Ingest handles rejects properly (writes comms/rejected.jsonl). That's normal.
+
+Hmm, but the rejects: `! REJECT` lines for worker-064 and worker-077 — those are pre-existing accepted-unapplied? No, dry-run shows what ingest would do. It would append rejects to comms/rejected.jsonl. That's fine and is the designed behavior.
+
+Actually — should a group lead run global ingest, which touches comms/rejected.jsonl and research_map/events.jsonl? The task instruction says "consume queue". The map has `comms` key. Let me check what the map's `comms` says (maybe there's an explicit queue for me). Also let me check run_cycle.py — maybe the intended "consume queue" for a lead is just reading the inbox. Hmm.
+
+Let me be careful about scope creep: ingest is a global operation normally done by the controller (`run_cycle.py` 15-min auto-cycle). If I run it, I'm doing the controller's job. But the handoff explicitly instructs: "Pull accepted traffic: `python3 research_map/comms.py ingest`" as part of reading your assignment. And it's idempotent and non-mutating to the map. I'll run it — it's the sanctioned "consume queue" step, and it makes my own emitted events land in the accepted stream too (though I should re-run ingest after writing my outbox events).
+
+Actually, order: 
+1. First ingest existing queue (consume).
+2. Do measurements + write adjudication artifact + write outbox events.
+3. Ingest again to pull my own events into events.jsonl (so they're in the accepted stream).
+4. Checkpoint.
+
+Hmm, but careful: will my events pass schema validation? Let me check EVENT_TYPES and required fields in schemas.py fully before writing, so I don't create rejects. Let me read schemas.py lines 1-120.
+
+Also: I should check whether the "review" event type requires specific fields (target_id, reviewer, verdict, score, hard_failures). And check whether `artifact` events require path+sha256+validation_status. Let me read.
+
+Also check: does the map track `comms` with an ingest cursor? Let me look at m['comms'].
+
+Let me read schemas.py and m['comms'].
+dsh: reasoning:
+The last events were received at 01:07:09 — that's exactly "now" from my earlier `date`. So the auto-cycle already ingested at 01:07:09. So the queue is likely already consumed (ingest is idempotent). Let me still run ingest to confirm "no new traffic" after my measurements.
+
+Now let me set up a todo list and execute the L10 lifecycle:
+
+1. Measure: live pins, HF-02 8-row set, class census, L1 spot check count (independent read-only measurement).
+2. Write adjudication artifact (new file, no canonical writes).
+3. Write outbox events (artifact, review, blocker, status).
+4. Ingest queue.
+5. Checkpoint (write literature checkpoint-13.md; event for it).
+6. Verify no canonical writes; confirm hashes unchanged.
+7. Report.
+
+Let me first do the measurement script. I'll write it as a deterministic read-only tool under artifacts/literature/reviews/ so it's re-runnable (consistent with prior practice, e.g. l0_census_completeness_audit.py). That gives me a machine record with a hash.
+
+Measurement specifics:
+- ledger/theorems.jsonl: 62 rows; count rows where len(class_ids)>=2 → expect exactly the 8 named; list tokens; check whether any row's class-defining field (statement_exact/assumptions/note) defines a union — hard to check semantically, but I can check structural facts: does any row contain a token like "AF-...∪AF-..." or "or" union in class_ids? I'll record class_ids only.
+- check `informs_classes` for dual tokens too.
+- HF-02 detector components measurable literally:
+  - unknown class_id: any class_ids/informs_classes token not in the frozen four → count
+  - disjunction of class_ids: rows with >=2 → count
+  - evidence metadata violates forbidden_evidence without transfer_argument → check for transfer_argument field presence
+  - conclusion_type not allowed for class → check C0-typed theorem rows (T-302, T-303, T-526)
+- rubric citations: preamble lines 168-169, HF-02 lines 175-180, G-LIT criterion line 140.
+- L1: citation_audit.csv rows 97; spot checks at 315c19145065: count from reviews/L1-spotcheck-*.json and other evidence; distinct reviewers.
+
+Let me check L1 spot check evidence quickly before writing the tool. Let me look at those files' binding hashes.
+
+Actually, let me focus: the decisive item is HF-02. L1 is already ruled met (controller audit: 23 independent re-fetch spot checks ≥3). I'll verify the count cheaply and cite it.
+
+Let me write the measurement script now. I'll make it deterministic and self-hashing.
+
+Design of tool: `artifacts/literature/reviews/l10_gate_adjudication_audit.py`
+- Reads: ledger/theorems.jsonl, ledger/citation_audit.csv, evaluation_rubric.yaml, reviews/L0-review-075-rev3.json, reviews/L0-review-worker-079.json, reviews/L0-review-093.json, reviews/L0-review-18-rev3.json, artifacts/worker-097/l0_rev4_review/report.json.
+- Computes: hashes; row counts; dual-class rows; unknown tokens; C0-theorem rows; transfer_argument presence; accept scopes (verdict, scope strings, O1/O3 presence); L1 spot check count binding 315c19145065.
+- Writes a JSON machine record to stdout (and I redirect into a file). Deterministic, sorted keys.
+
+Then the adjudication artifact: `artifacts/literature/reviews/L0-gate-adjudication-L10-<ts>.json` (a review/adjudication record, non-canonical).
+
+Then events. Let me get the exact expected field sets:
+- artifact: node_id, artifact_type, path, sha256, validation_status (+ event_id, event_type, created_at, actor) — plus extras allowed.
+- review: target_id, reviewer, verdict, score, hard_failures, findings.
+- blocker: node_id, description, needed_to_unblock, evidence_refs.
+- status: node_id, status, hours, summary, evidence_refs, next_falsifier.
+
+Let me now write the measurement tool.
+
+One more check first: the exact L1 spot-check evidence and the review-coverage scanner behavior, so my claims are measured not asserted. And check `artifacts/worker-097/l0_rev4_review/report.json` exists.
+
+Let me write and run the audit script now. I'll create the todos first.
+dsh: reasoning:
+Ingest consumed traffic, including `w16-conv04-...-review-l0` — a new L0 review from worker-016! Let me check that review. It might be another L0 verdict. Let me find it in the outbox.
+
+Also, `worker-064` and `worker-077` claims got rejected (invalid conclusion_type) — that's the ingest doing its job; not mine.
+
+Let me inspect the newly ingested w16-conv04 review-l0.
+dsh: reasoning:
+Note: `w16-conv04-review-l0` is a review of a **claim** (`claim-lit-20260911-012-1abbb2fa6746`), not of the L0 ledger artifact. It's a claim-level review with verdict likely "revise" and it explicitly sets `counts_as_independent_second_verdict: false`. Let me confirm its verdict/hard_failures. But it matters: it's a claim-scoped review, not a ledger verdict. The earlier L0-review-rev3-final also noted "HF-01 is claim-scoped".
+
+So the review census: at the ledger hash, worker-075 accept, worker-079 accept, plus revises. And now a claim-scoped L0 review from worker-16 with blocking findings (B-16L0-01, B-16L0-02 open). That's relevant: a claim bound to AF-SCC-C0-VAC-GEN overreads the source. That's a *content* issue. But it's claim-scoped, not ledger-row-scoped.
+
+OK. I have plenty. Let me now:
+1. Run my independent measurement tool.
+2. Write the adjudication.
+3. Emit events.
+4. Checkpoint.
+
+Let me be efficient and careful. First the measurement script. I'll write it to `artifacts/literature/reviews/l10_gate_adjudication_audit.py` and run it, saving output to `artifacts/literature/reviews/L0-gate-adjudication-L10-machine.json`.
+
+The script must be deterministic and read-only. Let me design its output:
+
+```json
+{
+  "schema": "astra/literature/l10-gate-audit/v1",
+  "created_at": "...",
+  "pins": {"ledger/theorems.jsonl": {"sha256":..., "bytes":..., "rows":62, "mtime":...}, "ledger/citation_audit.csv": {...}},
+  "frozen_class_tokens": [...4...],
+  "hf02": {
+     "rubric_ref": "evaluation_rubric.yaml:175-180",
+     "rubric_preamble_ref": "evaluation_rubric.yaml:168-169",
+     "glit_criterion_ref": "evaluation_rubric.yaml:140",
+     "rows_total": 62,
+     "rows_with_ge2_class_ids": 8,
+     "rows": [{"theorem_id":..., "class_ids":[...]}, ...],
+     "unknown_class_tokens": [...],
+     "informs_classes_ge2": [...],
+     "c0_bound_theorem_rows": [...],
+     "transfer_argument_rows": 0,
+  },
+  "accepts": {"worker-075": {verdict,score,scope,o1}, "worker-079": {...}},
+  "l1": {"sha256":..., "rows":97, "spotchecks_binding_hash": N, "distinct_reviewers": [...]},
+  "verdict": "..."
+}
+```
+
+For L1 spot checks, let me count evidence in reviews/L1-spotcheck-*.json that references 315c19145065. Let me quickly inspect those files for their binding hash. Let me check all L1-spotcheck files for the hash string 315c19145065.
+
+Let me do the L1 count as part of the script by scanning reviews/*.json and artifacts/worker-*/*.json for files whose JSON contains "315c19145065" AND a spot-check-ish marker. That could be noisy. Simpler: the controller already measured 23 independent re-fetch spot checks at 315c19145065 (CF-15, lifecycle report). I can cite that as controller-measured and cross-check a few. Let me count files named reviews/L1-spotcheck-*.json and check each binds the hash. There were: L1-spotcheck-049.json, -077, -09, -10, -11. Only 5 files. The controller's 23 count likely comes from many worker artifacts.
+
+Let me do a bounded scan: count distinct actors whose JSON artifact contains both "315c19145065" and a "spot" or "re-fetch"/"refetch" token. Report both the strict count (files under reviews/L1-spotcheck-*) and the controller-measured number with citation. That's honest.
+
+Let me just write the script and run it.
+
+Actually, for efficiency: the decisive content is HF-02. L1 I'll cite the controller's own measured number (23, CF-15) plus list the 5 named spot-check review files that bind the hash. Let me verify those 5 bind the hash in the script.
+
+Let me write it now.
+dsh: reasoning:
+My independent measurement confirms:
+- Pins unchanged: a1674f09 / 315c19145065.
+- 8 rows with ≥2 class_ids, exactly the set named by the revises: D-004, D-005, T-303, T-305, T-402, T-515, T-526, T-528. ✓
+- 3 of them are typed `theorem` and bound to C0 (T-303, T-526 dual; T-302 is C0-theorem but singular — my c0_theorem list includes T-302, T-303, T-526). ✓
+- No `transfer_argument` field on any row → the "forbidden_evidence without transfer_argument" component also literal-fires (though this component needs evidence metadata to actually violate the forbidden list; presence of the field is how a transfer would be recorded).
+- 0 unknown class tokens → that component does not fire.
+
+So 2 of 4 HF-02 components literal-fire: "disjunction of class_ids" (8 rows) and "conclusion_type not allowed for class" (3 rows C0+theorem). Plus the preamble: "A claim/artifact with a critical HF cannot be accepted regardless of other merits."
+
+Now let me check the L1 output and accept scopes.
+dsh: reasoning:
+My scan of "revises binding hash" is noisy (picked up F2b/A0 reviews that merely contain the hash string). But the important ones are clear: worker-025 (3.5, "class binding / class leakage... eight rows have a class_ids array with >1 frozen class token"), worker-093 (3.5, HF-02 + HF-01), deepseek-flash-18 (3.0, HF-14/HF-02/HF-04), worker-011 (3.0, HF-14 support assertion), worker-005 (3.0, locator).
+
+And worker-025's `L0-hf02-staged-repair-025.json` — a staged repair for HF-02! Let me look at that: it may already contain the prepared class-binding repair. That's valuable — it tells me the repair is staged and ready, so the ruling is the only gate.
+
+Let me check `reviews/L0-hf02-staged-repair-025.json` and `artifacts/literature/reviews/L0-rev3-adjudication-...` etc. Also check if there's a staged repair artifact for the 8 rows.
+
+This matters for my adjudication: I can state the repair is already staged (worker-025) and that the ruling is the only blocker.
+
+Let me read the staged repair quickly.
+
+Then write the adjudication record + events. Time to move — I've spent a fair amount of context. Let me be efficient.
+
+Key adjudication content (L10):
+
+**Finding L10-F1 (gate-blocking):** G-LIT's numeric criterion (2 independent accepts) is now met at the frozen L0 hash a1674f09 by worker-075 and worker-079, but both accepts explicitly scope HF-02 out of their verdicts (O1/O3) and defer it to a lead/audit interpretation ruling. The rubric (evaluation_rubric.yaml:168-169) says a critical HF cannot be accepted regardless of other merits; HF-02 (lines 175-180) is critical and its "disjunction of class_ids" component literal-fires on 8 rows at the live hash (my measurement), plus "conclusion_type not allowed for class" on 3 C0-bound theorem rows (T-302, T-303, T-526). G-LIT's own criterion line 140 requires "statement scope matched to class_id". Therefore a G-LIT pass on the accept count alone would contradict the rubric preamble while HF-02 is live/unruled.
+
+**Requested ruling (BL-7, one decision, two outcomes):**
+- (R-a) HF-02's disjunction component is OUT of scope for ledger rows → then the 8 dual-class rows are not a hard failure; record the scope ruling at the rubric hash; the two accepts stand; G-LIT can be adjudicated by the controller/audit on the accept evidence; the post-accept REC-4 metadata patch (R1–R6) may proceed, and the class-binding cleanup becomes backlog (worker-025 staged repair).
+- (R-b) HF-02 applies to ledger rows → L0 is revise at a1674f09; the class-binding repair is a hash-moving content change; all verdicts at a1674f09 void; re-dispatch after the repair as a new revision; REC-4 forbids doing it in the metadata patch.
+
+Either way: **no ledger write while the ruling is open** (hold in force), and the frozen ledger hash must remain a1674f09.
+
+That's the high-value, decisive contribution. It prevents a false gate pass.
+
+Also worth recording: the new w16-conv04 L0 review is claim-scoped, not ledger-scoped, and carries 2 open blocking findings against a C0-bound claim (B-16L0-01/02). Those are content-level (claim overread) and belong to L0 content backlog, not the ledger-verdict census. Note it, don't conflate.
+
+Let me check the staged repair file, then write the adjudication JSON.
+
+Actually — let me reconsider one thing. Is it possible that HF-02 "does not apply" because the rows don't define a union class (per worker-075/079 classification: "relation_or_variant_mention" 6, "wcc_antecedent_status" 2)? The detector literal is "disjunction of class_ids" — it doesn't say "defines a union class". So literally it fires. The counter-argument (worker-075/079) is that the rubric detectors are written for *claim events*, not ledger rows, because the ledger row schema has no artifact_refs (HF-01) etc. That's the genuine scope question. My job is not to rule it — I'm the ledger author, and the prior lifecycle already said the author cannot rule on the scope of a detector written to constrain him. Correct. So I request the ruling and quantify the two outcomes. Good.
+
+But there's a subtlety worth adding: whichever way BL-7 is ruled, the *class binding* itself is a real content issue independent of the detector: 28/62 rows have class_ids == [] (worker-079 O2) and 8 have two. G-LIT criterion line 140 requires "statement scope matched to class_id". Even if HF-02 is ruled out of scope as a *detector*, the G-LIT criterion "statement scope matched to class_id" cannot be satisfied for rows with two class_ids or none. So the gate has a *criterion-level* gap that is not merely detector-scope. That's stronger than BL-7 alone.
+
+Hmm, careful: is that overreach? G-LIT criterion 140: "statement scope matched to class_id; matter/Lambda/dimension/symmetry of the source explicitly recorded". For 8 rows with two class_ids, "matched to class_id" is ambiguous; for 28 rows with class_ids == [], there is no class_id to match. Also the second half (source scope fields) is HF-03: 0/97 sources record matter/Lambda/dimension/symmetry/formulation scope fields (worker-097 / deepseek-flash-18 B5). So G-LIT criterion line 140 is *objectively unmet* on the source-scope half for all 97 rows, independent of HF-02! That's a strong, rubric-textual, measured fact.
+
+Wait — but CF-18 (controller ruling) said: "(b) BL-3 - abstract-level evidence is sufficient for G-LIT provided verification_status is honest and T-101/T-102 stay provisional; no paywalled full text is required for the gate; (c) lit-l4-006 - evidence_url is the locator column and exact_locator is query-provenance, so no hash-moving metadata patch is authorized now". It did not rule on the source-scope fields (HF-03) requirement. And A0's detector-scope adjudication says HF-03 is corpus-scoped and still fires on 15 live files including registry.jsonl (97 records). So HF-03 (critical) also fires on live L1 artifact registry.jsonl at 97 records!
+
+Hmm — but is registry.jsonl canonical for L1? The L1 canonical artifact is `ledger/citation_audit.csv` (per assignments) and map pins L1 = 315c19145065 (citation_audit.csv). A0's scope taxonomy lists `artifacts/literature/registry.jsonl` as `live_emitted` and HF-03 is "kept" there with 97 records. And the L0-freeze-reconciliation's R3 backlog item says: "Add the five source scope fields ... to the 97 L1 registry rows so forbidden_evidence is machine-checkable" (source: HF-03).
+
+So HF-03 (critical, unsupported_citation / class metadata mismatch) — its detector: "claim cites a citation whose resolution_status in {unresolved, contradicted} or whose class metadata mismatches the claim's class". Hmm, the detector text is about resolution_status/class-metadata mismatch, while the `metrics`/G-LIT criterion 140 asks for source scope fields. The HF-03 firing on registry.jsonl is about missing source_meta scope fields per the earlier gate unmet: "201 citations have no source_meta scope fields". OK.
+
+This is getting deep. My adjudication should stay focused and defensible:
+1. Two accepts now exist; both scope HF-02 out and defer it (measured, quoted).
+2. HF-02 literal-fires on 8 rows at the live hash (my measurement) + 3 C0-theorem rows; rubric preamble makes any critical HF acceptance-blocking; G-LIT criterion 140 is the scope-match axis.
+3. Therefore the gate is *ruling-bound*, not reviewer-latency-bound; name the single decision and the two outcomes.
+4. Record that the second accept changes the arithmetic but not the unresolved axis; a pass on arithmetic alone would be a rubric-preamble violation.
+5. Note the claim-scoped w16 review and the 28/62 empty class_ids as additional L0 content backlog (not gate arithmetic).
+6. Hold: no ledger writes.
+
+Now let me check the staged repair and then write.
+
+Let me look at reviews/L0-hf02-staged-repair-025.json briefly.
+dsh: reasoning:
+This is excellent — the repair is staged and verified: `artifacts/worker-025/l0_hf02_staged/staged/theorems.hf02-staged.jsonl#b3ab6a1a6357`, mechanically clean, content-preserving, 0 HF-02 firings. And worker-025 is a *revise* verdict at the live hash (so the census is now: 2 accepts, revises including worker-025 3.5).
+
+Now I have everything for a decisive adjudication. Let me write it.
+
+The adjudication record path: `reviews/L0-gate-adjudication-lead-literature-L10.json`. Wait — is `reviews/` the canonical place for reviews? Yes, reviews/ holds review records; I'm the owner writing a non-canonical new review file. The prior lifecycle wrote review artifacts under `artifacts/literature/reviews/`. To be safe and avoid colliding with the audit lead's `reviews/L0-review-final-verify.json`, I'll write mine at `reviews/L0-gate-adjudication-lead-literature-L10.json` — a new, distinct filename. Hmm, but note that the controller's review scanner globs `reviews/*.json` for a top-level `verdict` key. If I put a `verdict` field in there, it would enter the L0 verdict census as another "review" — which could be miscounted as a 3rd accept/revise. To avoid polluting the census, I should NOT use the key `verdict` for my lead adjudication; I'll use `adjudication` + `counts_as_full_schema_verdict: false` and `counts_toward_gate_accept: false`, mirroring how my earlier `L0-review-rev3-final.json`... hmm, that one is in reviews/ and has no top-level `verdict` key (it has "status": "ADJUDICATED__REVISE__GATE_PENDING"). Good — same pattern. So I'll avoid a top-level `verdict` key.
+
+Actually wait: my earlier L0-review-rev3-final.json is in reviews/ and has no `verdict` key. Good precedent.
+
+But the outbox *event* of type `review` requires `verdict` — that's fine; events are separate from the file. My outbox review event will have verdict=revise (scope-insufficient adjudication) and counts_as_full_schema_verdict=false. Hmm, would that event be counted as an L0 revise in the controller's scan? The controller's review_coverage scan globs reviews/*.json (files), per the prior adjudication's note. The events stream is used by apply_events to update `reviews` in the map. Let me check how apply_events handles review events — to avoid inflating the census with a non-independent lead review. Let me quickly grep apply_events.py for 'review'.
+
+Risk: my review event could be recorded in map['reviews'] and counted as a verdict by the next gate audit, making L0 look like "2 accepts, N revises" — it already is that. But a *lead* verdict being counted as independent would be wrong. Many lead reviews exist already (e.g., lit-l9-005 review events). Let me check how map['reviews'] entries are keyed and whether the gate audit distinguishes writer. Let me grep.
+
+Let me check apply_events.py review handling + controller_gate_audit structure.
+dsh: reasoning:
+Key: `apply_events` for review events only appends to `m["reviews"]` and to node `review_verdicts` if `idx` maps `target_id` to a node. My review event's `target_id` would be the accept artifact path (not "L0"), so it won't attach to the L0 node's review_verdicts. But it will append to m["reviews"] as a review event — that's a record, fine. However, to keep the L0 verdict census clean, I should target my review at the *accept records* (specific paths), not at "L0".
+
+Also important: gate events from non-AUTHORITY actors become `gate_proposals`. Let me check AUTHORITY — does it include group leads? Let me grep.
+
+If AUTHORITY includes only 'astra' (controller), then my gate event would be a proposal, not a verdict. That's the right, honest mechanism: as gate owner I can *propose* but the controller applies. Let me check.
+
+Let me grep AUTHORITY in apply_events.py and in astra_lifecycle.py.
+dsh: reasoning:
+Group leads ARE in AUTHORITY. So a `gate` event from `astra-lead-literature` WOULD set the gate verdict in the map. That's real authority I hold as G-LIT owner.
+
+Now the decision: should I emit a G-LIT gate event?
+
+Careful reasoning:
+- I must NOT emit verdict=pass while HF-02 is live and unruled — that would violate the rubric preamble and promote a known defect.
+- Should I emit verdict=fail? Hmm. The controller's framing is "pending". Is it fail? The gate criteria: (1) locator+resolution_status — met (97/97 resolved, 23 spot checks); (2) citation_support == 1.0 for every claim's evidence set — the HFs say not computable / unresolved; (3) statement scope matched to class_id + source scope fields — 8 rows dual-class, 28 empty class_ids, 0/97 source scope fields → unmet; (4) quantity_check — HF-04 15 rows missing → unmet; (5) unresolved listed — met.
+  So on the rubric-literal criteria, G-LIT has unmet criteria → verdict should be `fail` or `pending`. The distinction: `fail` = gate evaluated and failed; `pending` = not yet adjudicable.
+  
+  Earlier the literature lead's own direction statement (map groups.literature.direction) said: "G-LIT at the old L0 hash is determined FAIL on HF-14 (critical, 60 rows) rather than pending on reviewer latency; rev 3 at 3e3d3553 closes it." So precedent exists for the literature lead declaring G-LIT fail when a critical HF is live. And INDEX.md records G-LIT fail.
+
+  But the controller has re-asserted G-LIT pending (REC-28) and assigned `astra-life05-verify-l0-final` to the audit lead (deadline 02:30). If I now emit G-LIT=fail at a1674f09, I'd be preempting the audit lead's verification card and contradicting the controller's pending status. That's CF-12 territory (one canonical owner) — though G-LIT's owner *is* lead-literature per the map.
+
+Hmm. What's the least-risk, highest-value move?
+
+Option A: Emit G-LIT gate event verdict=pending with updated unmet (the HF-02 fact + the 2 accepts). This re-asserts the controller's verdict, adds measured reasons, and does not preempt anyone. It prevents a silent pass by making the blocking reason hash-bound and explicit in the gate record's `unmet`.
+
+Option B: Emit verdict=fail. Stronger, defensible on rubric-literal grounds (critical HF live). But it contradicts the controller's pending and the in-flight audit card, and could be read as the ledger author adjudicating the detector scope he's constrained by — exactly what the prior lifecycle refused to do. Not my call.
+
+Option C: Emit no gate event; emit blocker + status only. Leaves the gate record stale (its unmet list says "L0 carries three revise verdicts ... and no accept", which is now factually wrong — there are 2 accepts). A stale gate record is a real hazard: the next controller pass could diff accept-count → pass.
+
+Option A is right: refresh the gate record to `pending` with accurate, measured unmet reasons, explicitly noting the 2 accepts now exist and that the pass arithmetic is met but the axis is unruled. This is the honest, non-preempting, hazard-removing action. And it's within my authority as gate owner.
+
+Hmm, one concern with Option A: does a `gate` event from a lead require `criteria` field (yes, required) — I'll include the rubric G-LIT criteria list verbatim-ish and evidence refs.
+
+Also the gate event's `evidence_refs` must be path#sha256-prefix. I'll compute hashes for my adjudication file and the machine record.
+
+Now let me also decide on the `review` event. Two candidate review events:
+1. Adjudicate the *accept scope*: target_id = "reviews/L0-review-worker-079.json" (path), reviewer = astra-lead-literature, verdict = revise, score 3.0, hard_failures = [], findings = [scope exclusion of the HF-02/class-binding axis means the accept cannot discharge the gate while HF-02 is live]. But careful: verdict=revise on another reviewer's accept could be misread as me overriding their verdict. I'll state clearly in findings that this is a scope adjudication, not a challenge to their checks; counts_as_full_schema_verdict=false, counts_toward_gate_accept=false; and that the ledger author is not an eligible independent reviewer (CF-4/authority). Actually — hmm, maybe better to frame it as `inconclusive`? No: "revise" fits "the artifact needs a further action before it can be accepted at gate level" — but really the blocker is a *ruling*, not an artifact revision. 
+
+Alternative: skip the review event entirely and put the scope adjudication into the adjudication artifact + blocker + status. That avoids polluting m['reviews'] with a lead verdict on an accept. But the task says "emit structured events" — I have artifact/blocker/status/gate which is plenty. Hmm, but a `review` event is the natural channel for an adjudication. The prior lifecycle did emit a review event (lit-l9-005) reviewing a census artifact with verdict=accept. So reviews-of-artifacts are normal.
+
+I think one review event is fine and useful: target = the two accept files' adjudication record (my own adjudication file), verdict... no, that's self-referential.
+
+Better: emit review event with target_id="reviews/L0-review-worker-079.json" and verdict="inconclusive" — meaning: at gate level, the accept is inconclusive pending the BL-7 ruling, because its own O1/O3 refer the deciding axis elsewhere. Score 4.0 for internal quality (the checks pass), hard_failures=[] . Hmm, `inconclusive` with score 4.0 is coherent: strong artifact, but not decisive for the gate.
+
+Hmm, let me reconsider. Is this over-engineering? The core deliverables the task names: review artifacts, consume queue, emit structured events and checkpoints, report blockers. I'll emit:
+- 1 artifact event for the machine audit record
+- 1 artifact event for the adjudication record
+- 1 review event: scope adjudication of the two L0 accepts → verdict `inconclusive` at gate level (not a content verdict), score 4.0, findings quoting their own O1/O3; counts_as_full_schema_verdict=false, counts_toward_gate_accept=false, reviewer_independence="ledger author; not an eligible independent reviewer".
+- 1 blocker event: BL-7 refresh with the new accept arithmetic + rubric citations + one-decision ask + staged repair availability.
+- 1 status event: L0/L1 freeze held, L10 lifecycle summary, next_falsifier.
+- 1 gate event: G-LIT pending with measured unmet list.
+- 1 artifact event for the checkpoint file.
+
+That's a complete, structured lifecycle. Then run ingest to land them, then verify the map/gate via apply? Note: ingest only appends to events.jsonl; the 15-min run_cycle applies to map. Should I run apply_events.py myself? That's a controller tool ("controller_tools": validate_map, audit_evidence, checkpoint, apply_events). The task says "emit structured events and checkpoints" — emitting is enough; application is the controller's. Running apply_events myself would mutate the map — risky and outside a lead's lane. I'll emit and let the controller/auto-cycle apply. But then my gate refresh won't take effect immediately... 
+
+Hmm. Consider: if I don't apply, the gate record stays stale until the controller's next pass. The controller pass-06 already ran at 01:01, and traffic continues with run_cycle every 15 min. Does run_cycle apply events to the map? Let me check run_cycle.py — the handoff says "the 15-minute auto-cycle (research_map/run_cycle.py) applies accepted events between controller passes". So run_cycle applies. Let me check what run_cycle does and whether it will apply my events. If run_cycle runs apply_events, then my events will land automatically within 15 min. 
+
+Let me check run_cycle.py quickly. If it's a safe, idempotent, standard cycle, I could run it once as part of my lifecycle ("consume queue ... emit events and checkpoints"). Hmm — but that's the controller's cadence. The safest: verify my events are schema-valid via ingest, then let the cycle apply. But then I can't verify the gate refresh landed...
+
+Actually, let me re-read my mandate: "Review artifacts, consume queue, emit structured events and checkpoints, report blockers. One independent lifecycle then exit." Nothing says "apply events". The controller owns application. So: emit → ingest (accept into stream) → checkpoint → exit. I'll note in the status that the gate refresh is emitted and awaits application.
+
+Hmm, but there's a real risk: if the controller applies my gate event with verdict=pending, it might overwrite the controller's own pending with my unmet list — which is fine and better-informed, and evidence_refs get merged.
+
+Let me check run_cycle.py + checkpoint.py quickly to decide on checkpoint execution.
+
+Let me look at checkpoint.py's behavior (writes current_checkpoint.json + log). Running it as a lead... The map's comms lists checkpoint.py under controller_tools. The literature lead has been writing its own checkpoints under artifacts/literature/checkpoints/checkpoint-NN.md (12 so far). That's my lane. I'll write checkpoint-13.md and ALSO run research_map/checkpoint.py? No — I'll avoid running controller tools that write shared controller state (runtime/state/current_checkpoint.json) to avoid colliding with the controller's ckpt-20260912-010117. My lifecycle checkpoint = checkpoint-13.md, mirroring the established literature pattern. That satisfies "emit ... checkpoints" in my group's established form.
+
+Let me verify the checkpoints dir pattern and read checkpoint-12.md as a template.
+
+Let me do that, then write everything.
+dsh: reasoning:
+`run_cycle.py` does lock → ingest → apply_events → checkpoint. It's the controller's cadence tool. I will NOT run it (avoid mutating global map). My events will be applied by the auto-cycle/controller.
+
+Now let me write:
+1. The adjudication record `reviews/L0-gate-adjudication-lead-literature-L10.json` — careful: no top-level `verdict` key so the controller's reviews/*.json glob doesn't miscount it. Actually wait: the controller's scan may look for `verdict` at top level; my file won't have it. Good. But it also lives in reviews/ which is the canonical review dir — that's appropriate for a lead adjudication. Hmm, but is `reviews/` "canonical"? It's the review record dir. My earlier `reviews/L0-review-rev3-final.json` (mine) is there. Fine.
+
+2. Update my measurement JSON's sha (it's already written; fine).
+
+3. Checkpoint-13.md.
+
+4. Outbox events.
+
+Let me first write the adjudication JSON deterministically via a small script so hashes are consistent, or just write the file and compute sha256 after. I'll write the file with the `write` tool, then hash it, then write events referencing the hash.
+
+Let me draft the adjudication content carefully.
+
+```json
+{
+  "schema": "astra/literature/l0-gate-adjudication/v1",
+  "lifecycle": "lit-l10",
+  "node_id": "L0",
+  "node_ids": ["L0","L1"],
+  "gate": "G-LIT",
+  "actor": "astra-lead-literature",
+  "reviewer": "astra-lead-literature",
+  "reviewer_role": "group lead, G-LIT owner, and author of the target ledger (NOT an eligible independent reviewer)",
+  "created_at": "<ts>",
+  "status": "ADJUDICATED__GATE_PENDING_RULING_BOUND",
+  "counts_toward_gate_accept": false,
+  "counts_as_full_schema_verdict": false,
+  "ledger_written": false,
+
+  "measured": { pins ... from machine file },
+  
+  "what_changed_since_l9": [
+    "worker-079 posted a second full-schema L0 ledger accept (4.0) at 01:03:17 at the unchanged hash a1674f09, following worker-075 (4.0, 00:49:01).",
+    "The map's L0 last_status (by worker-079) asserts the controller scanner now reads two_distinct_accepts=true.",
+    "The controller's own gate record was NOT refreshed after 01:00:43 and still lists 'no accept'."
+  ],
+
+  "gate_arithmetic": {
+    "criterion": "...",
+    "accepts_at_frozen_hash": ["worker-075","worker-079"],
+    "revises_at_frozen_hash_independently_confirmed": [...],
+    "counting_conclusion": "the 2-independent-accept criterion is numerically met at a1674f09"
+  },
+
+  "deciding_axis_still_open": {
+    "id": "BL-7 / HF-02",
+    "rubric_text": {...},
+    "measurement": {...8 rows, 3 C0 theorem rows...},
+    "both_accepts_scope_it_out": {
+       "worker-075": "O1 ... 'non-blocking, gate interpretation'",
+       "worker-079": "O1/O3 ... 'detector-scope question for the lead-audit calibration card, not a content/review-status defect'"
+    },
+    "conclusion": "The two accepts do not adjudicate HF-02; they report it and refer it. A G-LIT pass on the accept count alone would accept an artifact carrying a live critical HF, against evaluation_rubric.yaml:168-169."
+  },
+
+  "one_decision_requested": {
+    "question": "...",
+    "owner": "controller with A0/rubric owner (audit lead)",
+    "outcome_a": {...},
+    "outcome_b": {...},
+    "either_way": "no ledger write; freeze stays at a1674f09"
+  },
+
+  "staged_repair_available": { path, sha, properties },
+
+  "additional_content_backlog_not_gate_arithmetic": [
+    "28/62 rows have class_ids == [] (worker-079 O2)",
+    "claim-scoped review w16-conv04-20260912T0112-review-l0 (2 open blocking findings B-16L0-01/02) targets claim-lit-20260911-012, not the ledger; not a ledger verdict",
+    "HF-03 source scope fields 0/97",
+    "HF-04 quantity_check 15 rows"
+  ],
+
+  "hold": {...},
+  "falsifier": "...",
+  "not_claimed": [...]
+}
+```
+
+Careful about the claim-scoped review: let me confirm its verdict/hard_failures and that its target is the claim, not the ledger. From the event: evidence_refs include "research_map/research_map.json#claim-lit-20260911-012-1abbb2fa6746", counts_as_independent_second_verdict: false. Let me get its verdict + hard_failures quickly when writing.
+
+Let me get the w16 l0 review's verdict/target.
+
+Then write. Let me batch: get w16 verdict, then write adjudication.
+dsh: reasoning:
+Note: `w16-conv04-...-review-l0` has `target_id = "L0"` and verdict=revise, score=3.0, and `counts_as_independent_second_verdict: false`. Because `apply_events` maps target_id "L0" → node, this will append a review_verdict to the L0 node as worker-16 revise 3.0. But it's a *claim*-scoped review (blocking findings on claim-lit-20260911-012), not a ledger-content verdict — and it self-declares counts_as_independent_second_verdict false. This is another census-hygiene fact worth recording: the verdict census will now read a 3rd L0 revise that is not a ledger verdict.
+
+This strengthens the case that the census is unstable in both directions: accepts undercounted by the scanner (BL-10) and claim-scoped revises inflating the revise count. But the *gate arithmetic* on the 2 accepts is what the controller will read. My adjudication must be robust to census noise: the point is not the count, it's the unresolved axis.
+
+Now write the adjudication. Let me produce it with a script so I can embed the machine-record sha and the live pins. Actually simpler: write the file directly with the write tool (content is static + known hashes), then sha256 it, then emit events.
+
+Let me get current timestamp: use ~01:12 (checkpoints are labeled with times; date now ~01:11). Let me just use the actual time.
+
+Let me write the adjudication file now.
+dsh: reasoning:
+Now the checkpoint-13.md. Then hash both new artifacts, then write the outbox events.
+
+Let me write checkpoint-13.md.
+dsh: reasoning:
+Now compute hashes of the new files, then write the outbox events.
+
+Files:
+1. artifacts/literature/reviews/l10_gate_adjudication_audit.py
+2. artifacts/literature/reviews/L0-gate-adjudication-L10-machine.json
+3. reviews/L0-gate-adjudication-lead-literature-L10.json
+4. artifacts/literature/checkpoints/checkpoint-13.md
+
+Let me hash them. Also fix the checkpoint.md placeholders ("see event ...") — that's fine, it mirrors checkpoint-12's style.
+
+Let me hash.
+dsh: reasoning:
+Freeze confirmed: hashes and mtimes unchanged.
+
+Now write the outbox events appended to `comms/outbox/astra-lead-literature.jsonl`:
+
+1. `artifact` — machine record + scanner (I'll do two artifact events: one for the scanner, one for the machine record? Or one combined with the scanner as evidence_ref. Prior pattern: separate artifact events per path. Let me do:
+   - lit-l10-20260912-001: artifact, node L0,L1, path artifacts/literature/reviews/L0-gate-adjudication-L10-machine.json (sha 3d3594fb...), artifact_type l10_gate_audit_machine_record, validation_status unverified, evidence_refs [the scanner path#fded290ed955], summary.
+   - lit-l10-20260912-002: artifact, path reviews/L0-gate-adjudication-lead-literature-L10.json (sha 6e1cb894...), artifact_type l0_gate_adjudication, validation_status unverified.
+   - lit-l10-20260912-003: artifact, path artifacts/literature/checkpoints/checkpoint-13.md (sha 17c7ba33...), artifact_type literature_checkpoint, validation_status unverified.
+   Actually let me include the scanner as its own artifact event too:
+   - lit-l10-20260912-001: scanner (path l10_gate_adjudication_audit.py, sha fded290e...)
+   - lit-l10-20260912-002: machine record (sha 3d3594fb...)
+   - lit-l10-20260912-003: adjudication (sha 6e1cb894...)
+   - lit-l10-20260912-004: checkpoint (sha 17c7ba33...)
+   
+2. `review` — scope adjudication of the two accepts:
+   - lit-l10-20260912-005: review, target_id "reviews/L0-review-worker-079.json", reviewer astra-lead-literature, verdict inconclusive, score 4.0, hard_failures [], findings [...], counts_as_full_schema_verdict false, counts_toward_gate_accept false.
+   Hmm — should I also cover worker-075? I could emit one review event per accept, or one covering both. One event with target_id = a combined string? The schema requires target_id; a path is cleaner. I'll do one review event on worker-079 (the new one) and reference worker-075 in findings, since the adjudication file covers both. Actually to be thorough and symmetric, two review events (one per accept) would inflate m['reviews'] with two lead entries. The prior lifecycle emitted one. I'll emit one covering both, target_id="reviews/L0-review-worker-079.json" and findings citing both. Hmm, but then worker-075's accept isn't directly adjudicated by an event. The adjudication artifact covers both explicitly. Good enough — one event.
+
+   Wait: careful with `verdict: inconclusive` and score 4.0. Schema allows. But semantically: "gate-level inconclusive". I'll make findings crystal clear.
+
+3. `blocker` — lit-l10-20260912-006: node L0, description = BL-7 refreshed (2 accepts now exist but HF-02 unruled; quote rubric), needed_to_unblock = the one decision with two outcomes, evidence_refs.
+
+4. `status` — lit-l10-20260912-007: node L0,L1, status active (not blocked — work continues? Actually the node is freeze-held and ruling-bound; "blocked" would signal waiting on the ruling. Hmm. The prior lifecycle used status "active" with a summary saying ruling-bound. Is the L0 node blocked? The gate is blocked by a ruling; the node itself has no authorized work while the hold is in force. I think `blocked` is more honest: no authorized ledger work remains, and the next action is external (controller ruling). But changing node status to blocked could have side effects (apply_events sets status). The map currently has L0 status "active". Prior lifecycle chose "active" and said ruling-bound. To avoid a spurious status flip, and since the L1 work is not blocked and the group continues to exist, I'll keep `active` but state clearly that no literature-owned work is unblocked until the ruling. Hmm.
+
+   Actually, let me reconsider: "status: blocked" with a clear needed_to_unblock is arguably the accurate state and is useful signal. But the risk: the controller's gate audit/CF logic might treat blocked oddly; and the map's L0 is `active`. Also there IS literature work available: L1 backlog (HF-03 source scope fields) — but that's frozen under the hold too (no canonical writes). So really no authorized canonical work. The honest status is `blocked` on a ruling. 
+
+   Hmm, but "blocked" is defined in STATUSES and apply_events will set n['status']='blocked'. Would that hurt? It might cause the controller to issue an unblock card, which is exactly what I want. But it could also be read as the group stalling. Given the handoff's emphasis on honest state, and that a blocker event already carries the same information, I'll use `active` for continuity (the group is active; the gate is pending) and rely on the `blocker` event + gate pending record for the blockage. The prior lifecycle did exactly this. Consistency with predecessor > cleverness.
+
+   status: active, hours 0.4, summary, evidence_refs, next_falsifier = "A rule on BL-7 by the controller/A0; if ruled in-scope, the 8-row dual-class set is falsified as a defect by a content-preserving repair at a new announced hash; if ruled out, by a recorded scope ruling at the rubric hash. Until then, any G-LIT pass at a1674f09 is falsified by evaluation_rubric.yaml:168-169 while HF-02 literal-fires."
+
+5. `gate` — lit-l10-20260912-008: gate_id G-LIT, scope "L0,L1", verdict "pending", criteria [list], evidence_refs, unmet [measured], controller_note, updated_at. Schema requires gate_id, scope, verdict, criteria, evidence_refs. Extra fields allowed.
+
+Wait — should I emit the gate event at all? Let me think once more about the risk of emitting verdict=pending as a lead with AUTHORITY. apply_events sets gate["verdict"]="pending" and merges evidence_refs. That is exactly the current controller verdict. So it's a no-op on verdict, but it refreshes the `unmet`/`controller_note` if apply_events copies those. Let me check what apply_events does with a gate event beyond verdict/evidence_refs — from the earlier snippet: sets verdict and evidence_refs only. So my `unmet` won't be applied to the gate record (that's derived by astra_lifecycle). Hmm! So the gate event would only refresh verdict+evidence_refs, and my carefully measured unmet would live in m['reviews']/events only.
+
+Hmm, does apply_events copy other gate fields? Let me check the full gate branch. From snippet lines 341-350: 
+```
+elif t == "gate":
+    actor = ...
+    if actor not in AUTHORITY:
+        m.setdefault("gate_proposals", []).append(...)
+    else:
+        for gate in m["gates"]:
+            if gate["gate_id"] == ev["gate_id"]:
+                gate["verdict"] = ev["verdict"]
+                gate["evidence_refs"] = sorted(set(...))
+```
+Maybe more lines after 350. Let me check whether it copies `unmet`/`controller_note`. Likely it also sets updated_at/last_verdict_event. Let me read lines 341-365.
+
+If it doesn't carry unmet, the value of my gate event is: (a) it refreshes evidence_refs to include my measured adjudication, and (b) it's an explicit gate-owner statement in the record. The unmet list would be recomputed by the controller at next pass from the review corpus — and my adjudication file (without a top-level `verdict` key) might not be counted... 
+
+Hmm, this matters: if the controller's next pass recomputes G-LIT unmet from the accept count → 2 accepts → could flip to pass. Does astra_lifecycle compute a gate verdict itself, or only report? Earlier, pass-06 "re-asserted" verdicts — G-F0 was set pass by a controller repair based on review coverage. So astra_lifecycle DOES compute gate verdicts from coverage (controller_gate_audit). That's the hazard: next pass sees 2 accepts at a1674f09 → G-LIT pass.
+
+So my strongest lever is to make the *blocking fact* visible to whatever the controller reads. The controller reads: reviews/*.json with top-level verdict key (coverage scan), plus gate records, plus controller_findings, plus events. My adjudication file deliberately has no top-level `verdict` (avoiding census pollution) — but then the scanner may ignore it entirely.
+
+Better: emit a gate event with verdict=pending AND include unmet + controller_note (even if apply_events doesn't copy them, the event is in the stream and the controller's own pass reads events/reviews). Plus emit the blocker event (blockers attach to the node in the map via apply_events — yes, blocker branch appends to n['blockers']). That's the durable, map-visible signal.
+
+Additionally: does the controller's gate audit look at node blockers? Unknown. But the `blocker` event lands in the map node. Good.
+
+Let me also check whether there's a way to attach a "gate-blocking" note that the controller reads: `controller_findings` is written by the controller's own findings_merge (astra_lifecycle.py::findings_merge). Not by me.
+
+One more option: emit a `claim` event? No — claims are theorem-ish; wrong channel.
+
+OK: emit artifact×4, review×1, blocker×1, status×1, gate×1 = 8 events. That's a complete structured lifecycle. Then ingest, then verify all accepted (no rejects).
+
+Let me check the gate branch fully first (quick), then write the events file.
+
+Actually, time/context: let me just check lines 341-370 of apply_events.py quickly.
+dsh: reasoning:
+Confirmed: gate event applies verdict + evidence_refs + last_verdict_event + updated_at. It does not carry unmet/controller_note. My blocker event will carry the substance into the node's blockers.
+
+Now write the 8 events appended to my outbox. I'll write them with a small Python script to guarantee valid JSONL and correct fields, then ingest.
+
+Event list (all actor=astra-lead-literature, created_at 2026-09-12T01:10:30+08:00):
+
+1. artifact — scanner
+   event_id lit-l10-20260912-001
+   node_id "L0,L1", gate G-LIT, class_id GLOBAL
+   artifact_type "l10_gate_audit_scanner", path "artifacts/literature/reviews/l10_gate_adjudication_audit.py", sha256 fded290ed955d79bb84707ee781131c1c844bf38fb29f674ea4c6d114052015b, validation_status unverified
+   evidence_refs ["artifacts/literature/reviews/L0-gate-adjudication-L10-machine.json#3d3594fb8c9e","ledger/theorems.jsonl#a1674f094979","ledger/citation_audit.csv#315c19145065"]
+   summary: deterministic read-only gate audit; re-run reproduces the machine record; writes nothing.
+
+2. artifact — machine record
+   event_id lit-l10-20260912-002
+   path .../L0-gate-adjudication-L10-machine.json sha 3d3594fb8c9e...
+   artifact_type "l10_gate_audit_machine_record"
+   evidence_refs [scanner#fded290ed955, ledger#a1674f094979, audit#315c19145065]
+   summary: measured at the frozen pins: 62 rows, 8 with >=2 class_ids (D-004,D-005,T-303,T-305,T-402,T-515,T-526,T-528); 3 C0-bound theorem rows (T-302,T-303,T-526); 0 foreign tokens; both accepts' scope recorded.
+
+3. artifact — adjudication
+   event_id lit-l10-20260912-003
+   path "reviews/L0-gate-adjudication-lead-literature-L10.json" sha 6e1cb89475289720ea2eba15da75877dd6a05dda85d9680ba2670edd5f072e60
+   artifact_type "l0_gate_adjudication"
+   summary: gate-owner adjudication: the 2-independent-accept criterion is now numerically met at a1674f09, but both accepts scope HF-02 out and refer it; one decision requested (BL-7); no ledger write; counts_toward_gate_accept=false.
+
+4. artifact — checkpoint
+   event_id lit-l10-20260912-004
+   path "artifacts/literature/checkpoints/checkpoint-13.md" sha 17c7ba33dac4f6ad86f35cb8d79b94929f3522f830c6693755989e724a4cb1af
+   artifact_type "literature_checkpoint"
+   summary: Checkpoint 13 (L10): queue consumed; freeze held; second accept measured; gate ruling-bound on BL-7.
+
+5. review — scope adjudication of the new accept
+   event_id lit-l10-20260912-005
+   target_id "reviews/L0-review-worker-079.json"
+   reviewer "astra-lead-literature"
+   verdict "inconclusive", score 4.0
+   hard_failures []
+   findings: [
+     "GATE-LEVEL INCONCLUSIVE, not a content challenge: the accept's checks pass and its pin discipline is sound; it is inconclusive only as G-LIT accept evidence because its own verdict_scope is the content_status/review_status axes and its O1/O3 refer the HF-02/class-binding axis to a lead/audit ruling.",
+     "The same applies to the first full accept reviews/L0-review-075-rev3.json (O1 refers rubric-literal HF-02 to a scope question).",
+     "Reviewer is the ledger author and not an eligible independent reviewer; counts_as_full_schema_verdict=false; counts_toward_gate_accept=false."
+   ]
+   + counts_as_full_schema_verdict false, counts_toward_gate_accept false, reviewer_independence note, evidence_refs.
+
+6. blocker — BL-7 refresh
+   event_id lit-l10-20260912-006
+   node_id L0, gate G-LIT
+   description: "...two accepts now exist at a1674f09 (worker-075, worker-079); both record HF-02 firing on 8 dual-class rows and refer it; evaluation_rubric.yaml:168-169 makes a critical HF acceptance-blocking and :140 is the same scope-match axis; therefore G-LIT is ruling-bound..."
+   needed_to_unblock: "one controller/A0 ruling: does rubric-literal HF-02 bind ledger class_ids arrays? out-of-scope → accepts stand, gate adjudicable; in-scope → L0 revise, hash-moving repair, all a1674f09 verdicts void, re-dispatch. No ledger write while open."
+   evidence_refs [...]
+   + blocking_scope, owner.
+
+7. status — lifecycle summary
+   event_id lit-l10-20260912-007
+   node_id "L0,L1", status "active", hours 0.4
+   summary: ...
+   next_falsifier: ...
+
+8. gate — G-LIT pending refresh
+   event_id lit-l10-20260912-008
+   gate_id G-LIT, scope "L0,L1", verdict "pending"
+   criteria: [5 lines from rubric]
+   evidence_refs [adjudication, machine record, ledger, audit, rubric]
+   + unmet (measured), controller_note, counts_note.
+
+Careful: For the `gate` event, `criteria` must be present. Fine.
+
+Note on artifact event `validation_status`: use "unverified" (honest; not a node artifact claim). My adjudication is a review record, not a validated canonical artifact. Good.
+
+One concern: artifact events for files under `reviews/` and `artifacts/literature/...` — validation_status unverified is honest and consistent with prior practice. Does apply_events auto-set node artifact_sha256 / validation_status for `artifact` events? Let me check the artifact branch to avoid accidentally setting L0's declared artifact hash to my review file. Let me check lines ~300-330. The artifact branch might set n['artifact_sha256_measured'] etc. if path == n['artifact']. Since my paths differ from L0's declared artifact (ledger/theorems.jsonl), it should only append to artifact_submissions. Let me verify quickly — important safety check.
+
+Let me check the artifact branch.
+dsh: reasoning:
+Safety confirmed: for `node_id: "L0,L1"`, `idx.get("L0,L1")` — does the index map the combined "L0,L1" to a node? `idx` is built from node ids; "L0,L1" is unlikely to be a key (prior events used node_id "L0,L1" and they were recorded as artifact_submissions presumably). Let me verify: does idx contain "L0,L1"? Probably not, so `n` is None and nothing happens except... wait, if `n` is None, nothing is recorded at all (the whole block is inside `if n:`). Hmm, then prior "L0,L1" artifact events were no-ops in the map. That's why the map's L0 artifact_submissions only shows files with node_id "L0"? Actually the submissions list showed entries by lead-literature for artifacts/literature/*.md — so those events must have had node_id "L0".
+
+For safety and to make my artifacts recorded, I should use node_id "L0" for literature artifacts (since L0's declared artifact is ledger/theorems.jsonl, my paths differ → recorded as artifact_submissions, not overwriting the canonical pin). Good: `assigned and ev["path"] != assigned` → append to artifact_submissions.
+
+But careful with `frozen_artifacts`: if my path were in frozen_artifacts, a differing hash would deactivate it. My paths (reviews/..., artifacts/literature/reviews/...) are not frozen artifacts. Safe.
+
+So: use node_id "L0" (and for the L1-related gate, the gate event scope covers L1).
+
+Hmm, but the checkpoint file and adjudication cover L0+L1. node_id must be a single string per schema (no restriction, but map indexing needs it). I'll use "L0" for artifact events (they're L0-centric) and "L0,L1" for the gate/status events (matching prior practice; those branches iterate groups by target_id/node_id lookups — for status, `idx.get(ev["node_id"])`; "L0,L1" won't match, so node status won't be set. Is that desirable? For status events, prior lifecycle used node_id "L0,L1" and it didn't change node status. That's actually *good* — avoids spurious status flips while still recording the lifecycle status in m? Wait, if n is None for status, does the event get recorded anywhere? Let me check the status branch: probably `g,n = idx.get(...)`, `if n: ...`. If n is None, the event is dropped from the map entirely (still in events.jsonl though). Hmm.
+
+To make the status meaningful in the map, I could use node_id "L0" — but then apply_events would set L0's status to "active" (it already is) — harmless and keeps the node's last_status updated. Actually that's useful: the map's L0 `last_status` is currently worker-079's future-dated claim. A lead status event at node L0 would update last_status with the lead's measured state. That's valuable! Let me use node_id "L0" for the status event.
+
+But wait — does apply_events set `last_status`? Let me check the status branch. Earlier I saw code around line 246-262 dealing with st and AUTHORITY. Let me check whether it writes last_status. Let me grep 'last_status' in apply_events.py.
+
+Let me be efficient: check status branch and idx construction.
+dsh: reasoning:
+Confirmed: `node_index` keys by exact node id, so "L0,L1" is not found. And the status branch writes `last_status` when the node is found.
+
+Decision: use node_id "L0" for the artifact events (recorded as submissions since path != declared artifact), the blocker, and the status. Use "L0,L1" only for the gate event (gate branch doesn't use idx, it matches gate_id — safe).
+
+Now let me write the events. I'll write them with a Python script that appends JSONL, then ingest, then verify no rejects for my events.
+
+Let me be careful that each event validates:
+- artifact: event_id, event_type, created_at, actor, node_id, artifact_type, path, sha256, validation_status ✓
+- review: target_id, reviewer, verdict, score, hard_failures, findings ✓
+- blocker: node_id, description, needed_to_unblock, evidence_refs ✓
+- status: node_id, status, hours, summary, evidence_refs, next_falsifier ✓
+- gate: gate_id, scope, verdict, criteria, evidence_refs ✓
+
+Let me write the script.
+dsh: reasoning:
+Now ingest to land them in the accepted stream, and verify no rejects for my events. Then verify the events are in events.jsonl.
+
+Then verify the freeze once more (ledger untouched), and check I haven't accidentally modified anything canonical.
+
+Let me run ingest and validate.
+dsh: reasoning:
+All 8 events accepted, no rejects. 
+
+Now, the events are in the accepted stream but not yet applied to the map (that's the controller/auto-cycle's job). Should I verify they'd apply cleanly? I can run `apply_events.py --dry-run` (there's a dry_run param) to confirm application would be clean without mutating. Let me check if --dry-run exists: `apply_events.main(dry_run=False)` — so yes, dry-run is supported. Running it dry is a safe verification.
+
+Let me run `python3 research_map/apply_events.py --dry-run` (or however CLI is wired) to verify.
+
+Then final verification:
+- ledger hashes unchanged
+- validate_map still VALID
+- no canonical writes
+
+Then update todos and write the final report.
+
+Let me do these verifications.
+dsh: reasoning:
+Dry-run: 43 events would apply, 0 map_errors → my 8 events apply cleanly. validate_map: VALID.
+
+Freeze held: ledger hashes and mtimes unchanged (still 00:39:11). research_map.json hash is a5e5ec53... — it changed from earlier? Earlier map mtime was 01:05:09 and I didn't record its hash. It's likely unchanged since I never ran apply. Let me not worry — I didn't mutate it. Actually let me verify the map mtime is still 01:05:09 to confirm I didn't touch it.
+
+Wait, the map mtime check: let me confirm. If apply_events --dry-run mutated the map, that would be bad. It said dry_run and demoted/errors empty; validate_map is read-only. Let me check map mtime.
+
+Also: `git status` shows ledger/ and taxonomy as untracked — so the repo doesn't track them; fine.
+
+Let me check map mtime + that my events are NOT yet in the map (confirming dry-run didn't apply).
+
+Then finalize: update todos, write final report.
+
+One more consideration: should I run the checkpoint tool? My mandate says "emit structured events and checkpoints". I emitted checkpoint-13.md as an artifact event (lit-l10-20260912-004). That satisfies it in the group's established pattern. Running research_map/checkpoint.py would write controller state (current_checkpoint.json / checkpoint_log.jsonl) and is listed under controller_tools; the controller's ckpt-20260912-010117 is current. I'll not run it — but let me reconsider: the task says "emit structured events and checkpoints" — plural checkpoints. Prior literature lifecycles wrote checkpoint-NN.md files (checkpoint-12 = L9). So checkpoint-13.md is the continuation. Good.
+
+Hmm, but is there value in also running `research_map/checkpoint.py`? It's the controller's global snapshot; a lead running it could be seen as helpful or as lane-crossing. It writes runtime/state/current_checkpoint.json and checkpoint_log.jsonl — shared controller state. Prior lead lifecycles (L9) did NOT run it (they wrote checkpoint-12.md). I'll follow the established pattern and not cross into controller state. I'll note it explicitly in my report.
+
+Let me do the final verification and then report.
+dsh: reasoning:
+Wait — the map mtime is 01:10:29, which is *after* my session started (01:07) and around when I appended my events (01:10:30). And map updated_at = 01:10:29. So the 15-minute auto-cycle (run_cycle) ran at 01:10:29 and applied events — but "lit-l10 applied yet?: False". So the cycle ran just before my outbox append/ingest. Fine: the map was updated by the auto-cycle at 01:10:29, not by me. My events went into events.jsonl at ~01:11 and will be applied at the next cycle or controller pass.
+
+Hmm, let me double check: my append happened at what time? The bash calls: I appended events, then ran ingest. The map mtime 01:10:29 vs my append... My `date` earlier said 01:09:49, then I wrote files, then appended events (~01:10:30), then ingest. So the cycle at 01:10:29 may have run between. Either way, "lit-l10 applied yet: False" confirms apply hasn't happened for my events; the map mutation was the auto-cycle applying other traffic (43 events).
+
+Actually wait — could apply_events --dry-run have written? No: it reports dry_run handling, and map has no lit-l10. But the mtime 01:10:29 is suspiciously close to my activity. Let me confirm the cycle ran: check runtime/state for a recent cycle log. Let me look at runtime/state/ for run_cycle logs and checkpoint_log.
+
+Actually, it doesn't matter much for correctness: map updated_at 01:10:29 shows a cycle applied *something*; the dry-run said 43 would apply, which likely reflects the cycle having already applied 43 events... hmm, if the cycle applied them, dry-run would say 0 to apply. Dry-run said applied:43 skipped:6502 events_total:6545. So at the time of my dry-run, 43 events were still unapplied. So the cycle at 01:10:29 applied earlier traffic; 43 remain (including mine + worker events). That's consistent.
+
+Let me verify the cycle actually ran and note it. Check runtime/state/run_cycle* or checkpoint_log tail.
+
+This matters for my report: I should state accurately that the auto-cycle is running and my events are queued for application (dry-run: 43 pending, 0 errors).
+
+Let me check the cycle log quickly, then finalize.
+
+Also let me double-check that the map's G-LIT gate still says pending and L0 active — yes. Good: my events haven't been applied yet, and the gate is still pending (not flipped to pass by the auto-cycle). Important: the auto-cycle's apply_events does NOT compute gate verdicts (only astra_lifecycle does), so G-LIT can only flip at a controller pass. My blocker/adjudication/evidence are now in the stream for that pass.
+
+Let me check the cycle log and then finalize with the report.
+dsh: reasoning:
+Note: `runtime/state/supervisor.log` was modified at 01:11 — there's an active supervisor process running cycles. And `artifact_hashes.json` was updated at 01:11. This is the controller machinery running continuously. Good — my events will be applied automatically.
+
+Let me do a final check that artifact_hashes.json now includes my new files (the controller registry measures artifacts) — not required, but a nice confirmation the machinery is picking things up. Actually, that file is written by checkpoint.py; it may include my paths.
+
+I think I'm done with the lifecycle. Let me do a final verification sweep:
+1. Freeze held ✓ (ledger hashes/mtimes unchanged)
+2. Events accepted ✓ (8/8, no rejects)
+3. Dry-run apply clean ✓ (0 map_errors)
+4. validate_map VALID ✓
+5. Checkpoint emitted ✓ (checkpoint-13.md + event)
+6. No canonical writes by me ✓
+
+Let me update the todo list to completed and write the final report.
+
+Let me first quickly double-check that I didn't inadvertently modify the taxonomy or any frozen artifact — I only wrote 4 new files (scanner, machine json, adjudication, checkpoint-13.md) and appended to my outbox. Confirmed by the operations I performed.
+
+One last sanity check: confirm the 4 new files exist with the recorded hashes, and that outbox has 88 lines (80+8).
+
+Then final report.

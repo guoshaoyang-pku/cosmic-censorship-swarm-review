@@ -1,0 +1,447 @@
+dsh: reasoning:
+Let me start by understanding the environment. I need to read handoff/map and comms, find a class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit. worker=049.
+
+Let me look at the workspace.
+dsh: reasoning:
+No handoff or comms directories at the workspace root. The task mentions "handoff/map" and "comms". These may be in some subdirectory. Let me search. Recent files: independent_supervisor*.sh, launch_swarm.sh, supervise_loop.sh, supervise_swarm.sh, workdir, ai4math-swarm.tar.gz, ${I}.
+
+Given the mention "worker=049" and "class-bound task", this looks like a swarm setup. Let me check workdir and the launch_swarm.sh script.
+dsh: reasoning:
+The swarm is at /data3/guoshaoyang/workdir/ai4math-swarm. Let me inspect it: HANDOFF.md, research_map/, comms/inbox, comms/outbox, runtime/state, artifacts.
+
+I'm worker 049 — likely one of the "deepseek-flash-N" workers, or perhaps a specific worker ID. Let me look at the state and comms for assignments.
+dsh: reasoning:
+Now I need to find my assignment as worker=049. The swarm launched "deepseek-flash-01..20". But this task says "worker=049". Perhaps there's a separate worker registry. Let me check runtime/instances (148 entries) and state/control. Also check the map (research_map.json) and ASTRA_HANDOFF.md. There may be an assignment queue in comms/outbox/assignments.
+
+Let me look for "049" across the swarm directory.
+dsh: reasoning:
+There are 146 instances. Workers 001-... up to maybe 030+. Let me see the full listing and look for worker-049. Also I should check the runtime/bin (there may be a worker driver script), runtime/state/control, and the ASTRA_HANDOFF.md, plus comms protocol. The task: "Read handoff/map and comms. Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit. worker=049"
+
+This looks like a fresh-launched swarm (the runtime instances with suffix 897883 = worker-001..030+). Perhaps there's a supervisor script that launched 146 instances with prompts. Let me check supervise_swarm.sh / supervise_loop.sh / independent_supervisor*.sh at the root and the runtime/bin.
+dsh: reasoning:
+I am worker=049. The supervisor (independent_supervisor_100.sh) launched workers 1-100 with prompt "You are a bounded execution worker. Read handoff/map and comms. Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit. worker=049".
+
+So my job: read the handoff/map (research_map/ASTRA_HANDOFF.md, research_map.json, ARCHITECTURE.md, HANDOFF.md) and comms (inbox/outbox), find a class-bound task (probably assigned by a lead via issue_assignments.py or available in the queue), do it bounded, emit valid JSON event(s) with IDs, evidence, hash, falsifier, checkpoint, then exit.
+
+Let me look at:
+1. runtime/instances/worker-049-*/ — my prompt.txt, meta.json.
+2. research_map/ASTRA_HANDOFF.md
+3. comms/PROTOCOL.md
+4. The assignments mechanism: runtime/bin/issue_assignments.py, comms/outbox/assignments (empty).
+5. research_map.json structure (how tasks/nodes/classes are defined).
+6. comms.py — the way to emit events and checkpoint.
+7. checkpoint.py.
+
+Let me read the key files.
+dsh: reasoning:
+Key info: "Your assignment is in comms/inbox/<your-agent-id>.jsonl." My agent id is likely `worker-049` (the instance naming) — but the protocol lists agent ids `astra`, `astra-lead-*`, `deepseek-flash-01..20`. The 100-worker supervisor uses worker-001..100 with tmux session names worker-NN. Let me check if comms/inbox/worker-049.jsonl exists. Earlier listing of comms/inbox showed only up to worker-16 files. Let me check for worker-049 and see what's in the inbox.
+
+Also check the map's `assignments` for any unclaimed task. Since workers 001-100 were newly launched at 00:12:30, there might be assignments issued by the controller for specific workers. Let's look at research_map.json's assignments section. It's 737KB, so use python/jq to extract.
+
+Let me also read the runtime/state/current_checkpoint.json maybe. And check the counts/gates.
+
+Plan:
+1. Check comms/inbox for worker-049 file and any recent downward messages.
+2. Extract map assignments, gates, class list, node list.
+3. Find a class-bound task suitable for a bounded worker: something like a verification task, e.g., L1 spot-check of a citation, class-separation annotation, canonical-path hash check, etc. Must have evidence, hash, falsifier.
+4. Emit valid JSON event to comms/outbox/worker-049.jsonl (with all required fields), run checkpoint.py, verify, exit.
+
+Let me first check the inbox and extract the map's top-level keys.
+dsh: reasoning:
+My agent id might be `worker-049`, but there's no inbox file for me. The inbox files that exist: astra.jsonl, leads, deepseek-flash-01..20, worker-01, worker-06, worker-16, flash-08/11/13/15/17.
+
+So there's no direct assignment. Per the worker prompt: "Take one class-bound task" and per supervise_loop worker prompt: "take one available class-bound task; if none, inspect the immediate queue and propose one artifact-backed task". Let's look at the assignments in the map — 84 of them — and find available/queued class-bound tasks suitable for a bounded worker. Also check the most recent downward messages in comms/outbox/astra-lead-* and the astra inbox.
+
+Let me extract assignments and their statuses, plus gates and numerics_lock. Also inspect the latest controller lifecycle for open assignments.
+dsh: reasoning:
+Very informative. Now what class-bound task can I take as worker-049? The map says all gates are pending and the key needs: two independent accept verdicts per class at one frozen hash. But worker events cannot set status=done; only controller/leads can. However, a worker can produce an independent review or an artifact-backed check.
+
+Key open needs:
+- G-LIT: "L1 measured 315c19145065; independent re-fetch spot checks are still below the required three at the frozen hash." That's a great bounded class-bound task for a worker: perform an independent re-fetch spot check on ledger citations and produce a review artifact `reviews/L1-spotcheck-049.json` with evidence, hashes, and falsifier. The class IDs: L1 scope is GLOBAL per assignments, but ledger entries have class_ids (AF-WCC-VAC-GEN, AF-SCC-C2-VAC-GEN, AF-SCC-C0-VAC-GEN, AF-WCC-SCALAR-SPH). "class-bound task" means a task bound to a class ID.
+
+Let me check the ledger and existing L1 spot checks to avoid duplication (audit gate enforces duplication metrics). Existing spot checks: L1-spotcheck-10.json, L1-spotcheck-11.json, and worker-07 did L1-spotcheck3 (w07-artifact-L1-spotcheck3). Let me look at those artifacts to see which entries were checked and what format.
+
+Alternatively, a class-separation annotation task: "two class-separation soft flags on F2b (candidate-variant tokens) await disposition by the audit lead" — that's assigned to audit lead, not worker.
+
+Another possibility: verify canonical/authoring byte-identity (the controller's canonical-path policy requires artifacts/formulation/** to be published byte-identically). A worker could check byte-identity and hash divergence — that's a bounded verification task with hashes and falsifiers. But is it class-bound? It touches F1/F2a/F2b classes.
+
+The most clearly "class-bound" and valuable: **L1 independent re-fetch spot check** of primary-source citations in the ledger, selecting entries from a specific class (e.g., AF-WCC-VAC-GEN), verifying the citation resolves and the theorem statement/scope matches, emitting `reviews/L1-spotcheck-049.json` with per-row verdict, sha256 of the fetched source (or of ledger row + locator), and a falsifier. G-LIT explicitly says "independent re-fetch spot checks are still below the required three at the frozen hash" — so more independent checks directly unblock the gate.
+
+But wait: are we allowed to access the network? Let me check the existing spot-check artifacts to see how prior workers did it (web_fetch may be available; in previous runs they likely used curl or WebFetch). Let me read reviews/L1-spotcheck-11.json and the worker-07 one, plus the ledger.
+
+Also check the ledger's frozen hash: runtime/state/artifact_hashes.json has measured hash of ledger/theorems.jsonl. The controller says L1 measured 315c19145065.
+
+Let me read:
+- ledger/theorems.jsonl (structure)
+- reviews/L1-spotcheck-10.json, 11.json
+- runtime/state/artifact_hashes.json (relevant entries)
+- schemas/ for class IDs
+
+Let me also read the audit_evidence.py and comms.py to know the exact JSON event requirements and ingest path.
+
+Let me proceed.
+dsh: reasoning:
+Now I understand the L1 spot-check pattern. There have been spot checks on citation_audit.csv rows 1-20 (flash-10), 21-40 (flash-11), and worker-07 did some. The gate needs "independent re-fetch spot checks ... required three at the frozen hash". G-LIT reason: "L1 measured 315c19145065; independent re-fetch spot checks are still below the required three at the frozen hash."
+
+But careful: my task must be "class-bound". A citation spot check on ledger rows tied to a specific class (e.g., AF-SCC-C2-VAC-GEN or AF-SCC-C0-VAC-GEN) would be class-bound.
+
+However, I should check the most recent state: the gate audit at 00:11:13 says L1 measured hash 315c19145065 and independent re-fetch spot checks below three at the frozen hash. What is "L1"? Probably `ledger/citation_audit.csv` (the L1 artifact), while L0 is `ledger/theorems.jsonl`. There is a new file citation_audit_scc_flash-09.csv at 00:12 (after the audit). Also the current checkpoint might list measured hashes.
+
+Let me look at the current checkpoint and artifact_hashes for citation_audit.csv and theorems.jsonl hashes. And check reviews/INDEX.md for what L1 spot checks are on record at which hashes.
+
+Also, I want to verify network availability: can I re-fetch? The previous spot checks used https://export.arxiv.org/api. Let me test connectivity quickly. If no network, I need a different task (e.g., offline class-separation annotation checks, canonical/authoring byte-identity verification, or quantifier extraction checks). Network may be proxied. Let me test.
+
+Plan:
+1. Read current_checkpoint.json summary (gates, L1 artifact hash).
+2. Check reviews/INDEX.md re L1 spot checks.
+3. Test network (arxiv API + crossref) via curl/python urllib.
+4. Read comms/outbox/astra-lead-literature.jsonl and astra-lead-audit.jsonl recent messages for pending worker-level asks.
+
+Let me do these in parallel.
+dsh: reasoning:
+Good. Current state (00:14 checkpoint): L1 artifact `ledger/citation_audit.csv` measured sha256 `315c19145065...` (matches gate audit). Independent re-fetch spot checks on record at that hash: flash-10's L1-spotcheck-10 targeted `ledger/citation_audit.csv` at hash `fe4b48bb...` (stale) — actually 10's target lists rows 1-20 without explicit hash in the file shown; flash-11 targets hash fe4b48bb3dbd (stale), worker-07 spotcheck presumably at another hash. So no spot checks at the current hash 315c19145065. That's exactly the gap: need three independent re-fetch spot checks at the current frozen hash.
+
+I can be one of them: produce `reviews/L1-spotcheck-049.json` (or rather my agent id; per naming, worker-049 → `reviews/L1-spotcheck-049.json`), covering rows not yet covered, bound to a class. G-LIT is the gate; L1's rows map to classes via the CSV's class column.
+
+Let me examine `ledger/citation_audit.csv` header and structure, and determine which rows are class-bound to e.g. AF-SCC-C2-VAC-GEN. Also check what rows the other spot checks covered (rows 1-20 by flash-10, 21-40 by flash-11, worker-07 maybe rows something). To maximize information gain and avoid duplication, I should pick rows in the current frozen hash not covered: e.g. rows 41-69, or the SCC rows flash-09 just contributed? Wait — flash-09's `citation_audit_scc_flash-09.csv` was created at 00:12 but the frozen L1 artifact is `citation_audit.csv` with hash 315c19145065 (102771 bytes, at 00:08). Let me check whether `ledger/citation_audit.csv` equals the frozen hash now — if flash-09 modified it, the measurement may be stale. Let me measure.
+
+Also test network access. Note: previous spot checks used export.arxiv.org API. Let me check connectivity with curl to export.arxiv.org and api.crossref.org.
+
+Let me read the CSV header and rows.
+dsh: reasoning:
+Network works. The CSV has 97 rows, header includes `class_mapping` column (not `class_ids`). The frozen L1 artifact hash matches the measured one: 315c19145065a5f9c95d64461eae760b4c296b06d1f2f09bc5847ac1a7064ce9.
+
+Now determine coverage of prior spot checks at this hash:
+- flash-10: rows 1-20, but target hash? It didn't include a target sha, and it says "batch rows 1-20"; checked 6. It was created 23:39, when CSV hash may have been different (fe4b48bb?). Actually flash-11's target sha fe4b48bb3dbd is stated as the ledger/citation_audit.csv hash at its review time (23:42). The current hash is 315c1914 (at 00:08). So neither flash-10 nor flash-11 bind to the current hash. worker-07's l1_spotcheck: let me read it to see coverage/hash. And `artifacts/audit/reports/citation_spotcheck.json`.
+
+The gate wants "independent re-fetch spot checks ... required three at the frozen hash". So I should produce one spot-check artifact that explicitly binds to target hash 315c19145065..., covering rows not covered by the other two at-hash checks (whatever they are — likely worker-07's and maybe a new one). Let me check worker-07's spotcheck and the audit report for hash binding and rows.
+
+Then my check should: pick N rows (≥3 presumably), ideally class-bound rows (e.g., class_mapping == AF-SCC-C2-VAC-GEN), re-fetch evidence via exact_locator/evidence_url (arXiv API / Crossref / INSPIRE / DOI), compare ledger excerpt verbatim with fetched text, record verdicts, flag mismatches, and emit JSON artifact `reviews/L1-spotcheck-049.json` (naming convention like L1-spotcheck-<N>) plus outbox JSON event `artifact`+`review`? The protocol says upward message types: status, claim, artifact, blocker, direction_update, resource_request, review. A bounded worker should emit an `artifact` event (node_id L1, artifact_type review/spotcheck, path, sha256, validation_status) and maybe a `review` event (target_id, reviewer, verdict). But note: "Authority: worker events cannot set status=done, validation_status=passed, or a gate verdict." So validation_status should be something like "unverified"/"draft-unverified" (not "passed"). The protocol requires artifact event fields: node_id, artifact_type, path, sha256, validation_status. Plus every event needs event_id, event_type, created_at, actor. Also IDs: class_id (for review: target_id...). The user's instruction: "emit valid JSON with IDs evidence hash falsifier". So include node_id, class_id, evidence_refs, sha256, next_falsifier/falsifier.
+
+Let me check comms.py ingest to know exactly which schemas are validated and what's auto-rejected, and schemas.py. Also check audit_evidence.py. Important: event schema in research_map/events.schema.json.
+
+Let me read those files.
+dsh: reasoning:
+Excellent. worker-07 (deepseek-flash-07) already did spot check #3 covering rows 41-95 at the frozen hash 315c1914, declared before fetch. So there's at least one spot check at the frozen hash (plus possibly flash-10/11 at stale hash — not binding). The gate needs three independent re-fetch spot checks at the frozen hash. So I can be spot check #4.
+
+Wait: worker-07's artifact is at artifacts/worker-07/l1_spotcheck/spotcheck-l1-07.json, not in reviews/. Does the gate audit count it? The G-LIT reason at 00:11:13 said "independent re-fetch spot checks are still below the required three at the frozen hash", and worker-07's artifact was created at 00:10:53 — just before the 00:11:13 audit. Hmm, it might not have been ingested into the map (comms outbox) yet. Let me check the outbox for deepseek-flash-07 and whether an artifact event for spotcheck-l1-07 was ingested into events.jsonl.
+
+Let me check:
+- events.jsonl for "spotcheck-l1-07" and "L1-spotcheck".
+- comms/outbox/deepseek-flash-07/ dir listing.
+- The gate criteria text for G-LIT (third criterion).
+
+Then decide my task: an independent L1 spot-check #4, sampling rows disjoint from flash-10 (1-20), flash-11 (21-40), worker-07 (41-95). Hmm, that leaves rows 96-97 only, plus perhaps rows within 41-95 that worker-07 didn't check (worker-07 checked only 8 rows: 41,49,57,65,73,80,81,89). "Independent" here means independent of the literature group's fetch, not necessarily disjoint rows. But duplication metrics matter. flash-11 checked rows 21-40 (4 rows). flash-10 checked rows 1-20 (6 rows). These are at a stale hash though. If the ledger was rebuilt (hash changed), those spot checks don't bind.
+
+Given that, a fresh independent check at the frozen hash can re-sample a set of rows, ideally targeted at load-bearing citations for a specific class. Also, since the previous checks are at stale hashes, even rows 1-40 are fair game, but better to cover rows not yet checked at this hash: rows 1-40 and 96-97, or a class-targeted sample across the file.
+
+Now, note "class-bound": I should bind my spot check to a specific class, e.g., AF-SCC-C0-VAC-GEN or AF-WCC-SCALAR-SPH. Let me see class_mapping distribution in the CSV and which rows map to which class. The Counter I printed used the wrong key (class_ids) so all empty. Let me count class_mapping properly.
+
+Also check the CSV's row indices: 97 data rows represent SRC-001..SRC-097 likely. Let me verify IDs map to row numbers.
+
+Plan for my task:
+1. Freeze the target: sha256 of ledger/citation_audit.csv = 315c1914... (verify unchanged before fetch and after).
+2. Define sample: class-bound to AF-SCC-C0-VAC-GEN (or whichever has enough rows), choose rows not sampled by worker-07 within that class, declared before fetching (frozen sampling rule). Aim for ~6-8 rows with resolvable locators (arXiv/Crossref/INSPIRE).
+3. Re-fetch each via its own locator (arXiv API / Crossref / INSPIRE), hash raw responses, compare title/authors/year/venue/DOI and excerpt token coverage.
+4. Record verdicts and any mismatches; falsifier: "the spot check fires if any row's locator resolves to a different work or if the ledger's quoted excerpt contradicts the fetched abstract".
+5. Write artifact `reviews/L1-spotcheck-049.json` with schema_version, artifact_type "l1_spotcheck", node_id "L1", gate "G-LIT", class_ids [...], target hash, sampling rule frozen_before_fetch, results, falsifier_outcome, limitations, sha256 of the artifact itself computed after writing (embed? can't embed own hash; instead write a .sha256 sidecar, as worker-07 did: artifacts/worker-07/l1_spotcheck/spotcheck-l1-07.json.sha256).
+6. Emit outbox events `comms/outbox/worker-049.jsonl`: an `artifact` event (node_id L1, artifact_type l1_spotcheck, path, sha256, validation_status "unverified") and a `review` event? A review event requires target_id, reviewer, verdict, score, hard_failures, findings. I could emit a review of the L1 ledger (target_id "ledger/citation_audit.csv#315c1914") with verdict "accept"|"revise" based on findings and score. But careful: as a worker, can I issue a review verdict? The protocol says a worker emits status/claim/artifact/blocker/direction_update/resource_request. Reviews are listed as upward message types, and reviewers were assigned by leads. The audit gate wants independent verdicts. As a worker doing a spot check, I can emit a `review` event with verdict accept/revise — the map records it but authority to *bind* gate verdicts stays with controller/leads. However, mis-issuing a review with verdict "accept" on the whole L1 would be inflating: my spot check covers only a sample. Better: emit a `review` with verdict "inconclusive"? Hmm.
+
+Actually the user instruction: "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit." So the essential output is valid JSON event(s). A worker status/artifact/review event. To be safe and honest, emit:
+- `artifact` event for the spot-check file (validation_status "unverified" — worker cannot set "passed").
+- `review` event: target_id = "ledger/citation_audit.csv#315c19145065", reviewer = "worker-049", verdict = "inconclusive" if mismatches found > threshold else... Hmm. Let me decide after seeing results. Actually a spot check that finds everything matching at sampled rows would support "accept" for the sample but not the whole artifact. Prior art: worker-07 emitted what? Let me check its outbox events. Let me look at deepseek-flash-07's outbox dir and events.jsonl for their artifact/review event shapes.
+
+Also check how ingest works: `python3 research_map/comms.py ingest` reads comms/outbox/*.jsonl and validates. Worker-049 is not one of the recognized agent ids in the protocol ("deepseek-flash-01..20") but comms.py might accept any actor. The supervisor launched worker-01..100 with tmux names and instance ids; comms/inbox has worker-01/06/16 files, so worker-NN ids are accepted. Ingest may require the file basename to be a known agent. Let me read comms.py to check.
+
+Also "checkpoint": run `python3 research_map/checkpoint.py` (or maybe checkpoint is per-agent). Let me read checkpoint.py and comms.py quickly.
+
+Let me also check the current G-LIT criteria and what the third spot check needs.
+dsh: reasoning:
+Now let me see the worker-07 review event shape (w07-review-L1-spotcheck3-...) and status event, to mirror. Also read the rest of comms.py normalize_event to ensure my keys map correctly.
+dsh: reasoning:
+I have a clear template. Worker-07 delivered spot check #3. I'll be spot check #4, independent, class-bound.
+
+Considerations for maximum value and non-duplication:
+- Worker-07 sampled rows 41-95 (8 rows).
+- flash-10 sampled rows 1-20 (6 rows) but at a stale hash (target not hash-pinned; its target was citation_audit.csv without hash, created 23:39).
+- flash-11 sampled rows 21-40 (4 rows) at hash fe4b48bb (stale).
+
+Rows 96-97 were not sampled. Also, the current CSV has 97 rows while older ones had 69 — the rebuild added rows (flash-09 contributed SCC rows). The gate requires ">=3 independent re-fetch spot checks" recorded as passed. worker-07's #3 is at the frozen hash. flash-10/11 are stale-hash but maybe still counted. To be safe, I'll deliver a hash-pinned spot check #4 that covers rows not yet covered at this hash, prioritizes the newest/most load-bearing SCC rows (SRC-090..097?), and is class-bound to AF-SCC-C2-VAC-GEN and/or AF-SCC-C0-VAC-GEN.
+
+Let me inspect the CSV rows: IDs, class_mapping, used_by_theorems, locator fields, especially rows 90-97 and those mapping to AF-SCC-C0/C2. Also check "status"/verdict columns for rows I might sample. And verify which rows worker-07 sampled and their class coverage.
+
+Also important: the CSV currently may be rebuilt again by lead-literature. I must pin the hash and fail-closed if it changes (as worker-07 did). Let me check current mtime and whether any writer is active: comms/outbox for lead-literature recent. The astra-lead-literature outbox was updated 00:10. The file citation_audit.csv mtime 00:08. The current time is ~00:15+. Let me check for new outbox writes; also whether tmux sessions are still running (the supervisor loops relaunch workers every 20s! independent_supervisor_100.sh has `while :; do launch ...; sleep 20; done` — so workers will be relaunched after exit; each new worker-049 session may run again. But my job: one bounded lifecycle, then exit).
+
+Let me now extract the CSV rows with key columns for the classes of interest.
+dsh: reasoning:
+Wait: class_mapping counts show 41 '(evidence/tag only)' and various classes. Some rows have strange verification_method strings with spaces/embedded text (rows 90, 92, 93, 96, 97) — looks like the CSV may have column misalignment for those rows! Row 90's verification_method cell contains "open-copy PDF + OCR text-layer extraction (worker-09); quote re-checked by lead against the extracted text" and resolver_result "resolved". Hmm, that may be legit.
+
+Interesting potential finding: rows 96 and 97 are new, not covered by anyone. Rows 90-97 appear to be newly added by the 00:08 rebuild.
+
+Now, my class-bound task: independent L1 spot check #4 at frozen hash 315c1914, sampling rows not covered by worker-07 (#3, rows 41,49,57,65,73,80,81,89) nor flash-10 (#1: rows 1-20 sample) nor flash-11 (#2: 21-40). Existing checks #1/#2 are at stale hash, but if I want to be maximally complementary at the frozen hash, I should sample rows 1-40 and 90-97.
+
+But hold on: does sampling need to be class-bound? The user says "Take one class-bound task". So I'll bind to one or more class IDs: I can do a class-bound spot check of AF-SCC-C0-VAC-GEN rows. Let me choose rows from the frozen hash whose class_mapping includes AF-SCC-C0-VAC-GEN, avoiding worker-07's rows. Candidates: rows 4,5,6,21,22,24? (24 was checked by flash-11 at stale hash), 29, 35, 37, 40, 47, 48, 56, 61, 62, 63, 64, 65(worker-07), 72, 78, 79, 80(W07), 81(W07), 82, 83, 84, 85, 91.
+
+Hmm, wait. Better: rather than restricting to a single class, maybe the highest-value check is the *newest* rows 90-97 (not covered by anyone, and the most likely to contain errors since they were just added by flash-09/lead). But those are mostly "(evidence/tag only)" — not class-bound. The user requirement "class-bound task" is about taking a task bound to a class (as opposed to an unbound global task). I can bind to the union of the four frozen class IDs? worker-07 did that with class_ids all four. Hmm, "class-bound" here in the swarm's language means the task/claim names a class_id, and class leakage is policed. A spot check bound to AF-SCC-C0-VAC-GEN and AF-SCC-C2-VAC-GEN (the two SCC classes) with rows carrying those tokens is defensible and complementary.
+
+Best plan: class-bound to AF-SCC-C0-VAC-GEN (the class with soft flags/open reviews), sample ~6-8 rows at the frozen hash among C0 rows not covered by worker-07's #3. Include the newest C0 rows (91 is C0; 78,79,80-85, 47,48, 62-65, 40). Actually worker-07 covered 41,49,57,65,73,80,81,89; of those, 65 and 80,81 are C0-bound. So avoid those.
+
+Let me choose a frozen sampling rule (before fetching!): e.g., "every 7th data row of the frame 1-40 and 90-97 plus targeted augmentation" — hmm, I want to keep it simple and defensible:
+
+Sampling rule (frozen before fetch):
+- Frame: data rows SRC-001..SRC-040 and SRC-090..SRC-097 (rows not covered by spot check #3 at the pinned hash).
+- S1: every 5th row starting at row 4 within frame 1-40 → rows 4, 9, 14, 19, 24, 29, 34, 39. But those include flash-10/flash-11 rows at stale hash; still fine but duplication metrics — the audit lead tracks duplication. Hmm.
+- Better S1: every 5th row of the C0 class at the pinned hash excluding W07 rows.
+
+Actually, let me think about information gain: The check's value is verifying the *current* frozen artifact (rebuilt at 00:08), since earlier checks bind to a different hash. Verifying rows 1-40 again at the new hash is not duplication in the harmful sense — the artifact changed, and one must re-verify at the new hash. And G-LIT explicitly wants ≥3 independent re-fetch spot checks "recorded as passed" at the frozen hash. But rows 1-40 were checked by flash-10/11 against the older artifact; flash-10's results were 6 MATCH. Rows 1-40 in the new CSV may have been modified (the file grew from 69 to 97 rows; first 40 rows may be unchanged but the rebuild could have touched them).
+
+I'll design: class-bound to AF-SCC-C0-VAC-GEN (4 pure rows + 8 combined + others) — sample a deterministic spread across the file: C0 rows at positions 4,6,21,24,29,35,37,40,47,48,56,61,62,63,64,65,72,78,79,80,81,82,83,84,85,91. Excluding W07 rows (65,80,81) → 23 rows. Take every 3rd → 4,21,29,40,56,62,72,82,91? That's 9 rows. Hmm, but several of these (4,21,24,29,40) were checked by flash-10/11 at stale hash; fine.
+
+Also include row 91 (new, C0+WCC, T-515/T-528) and maybe row 96/97 targeted augmentation? Those are evidence/tag only, not C0.
+
+Alternatively, class-bound to both SCC classes: the SCC-focused newest rows 78-85 and 91 (all C0/C2 except 79). Hmm.
+
+Let me decide: **Class-bound task: independent hash-pinned L1 spot check #4 for AF-SCC-C0-VAC-GEN and AF-SCC-C2-VAC-GEN rows**, sampling:
+- S1 (deterministic): C0-or-C2 rows in file order, every 4th, starting from the 3rd (index within the filtered list): gives a spread across the file.
+- S2 targeted: the newest not-yet-checked C0/C2 row SRC-091 (added after the previous checks) — declared before fetch.
+- Also include one row with 'verified-primary' method and one with 'crossref-api'/'openalex-api' to sample different locator kinds? The locator kind per row depends on verification_method. Let me check the exact locator fields available per row: exact_locator, evidence_url, url.
+
+Note: for rows whose verification_method is non-API (primary-page-fetch), there may be an exact_locator URL to fetch.
+
+Implementation: Write a small script `artifacts/worker-049/l1_spotcheck/run_spotcheck.py`? That's nice for reproducibility but time is bounded. worker-07 wrote run_spotcheck.py and hashed it. I can write a simpler script that:
+- Loads CSV, pins sha256 = 315c1914 (fail-closed if mismatch).
+- Selects rows by SRC IDs (pre-declared list).
+- For each row: chooses locator:
+  - arXiv id → https://export.arxiv.org/api/query?id_list=<id>
+  - INSPIRE literature recid in url → the url (INSPIRE API)
+  - DOI → https://api.crossref.org/works/<doi>
+- Fetch with curl (subprocess or urllib), record http_status, bytes, sha256 of raw body.
+- Extract title/author/year/abstract:
+  - arXiv Atom XML: parse title, author names, journal_ref, doi, summary.
+  - Crossref JSON: title[0], author family/given, issued date-parts, container-title, DOI.
+  - INSPIRE JSON: metadata.titles[0].title, authors[].full_name, publication_info, abstracts[].value, dois.
+  - OpenAlex: not needed unless sampled; skip.
+- Compare: normalized title equality/substring; first-author family present; year vs (published/issued/print); DOI presence; excerpt token coverage vs fetched abstract (normalize LaTeX-ish: strip $, backslashes, braces).
+- Verdict per row: MATCH / PARTIAL / MISMATCH / NO_ABSTRACT.
+- Output JSON artifact with all fields and the sha256 of the raw responses.
+- Write artifact to `reviews/L1-spotcheck-049.json` plus sidecar `.sha256`.
+- Emit events.
+
+Honestly, a script is the right approach for reproducibility, but I can also do the fetch+compare in one script directly. Given the "bounded" worker nature and the need for reliability, I'll write one script that does everything and prints the artifact JSON to a path. The script itself gets hashed as evidence too (like worker-07).
+
+One concern: time budget. Each fetch ~1-3s. 6-9 rows → fine.
+
+Before writing, let me check:
+1. Whether the CSV can be rebuilt while I work — I'll re-check hash after fetching and record drift (fail closed if it changes).
+2. Whether `reviews/` is the right place vs `artifacts/worker-049/...`. Convention: the other spot checks are in reviews/ named L1-spotcheck-NN.json. The latest (W07) used artifacts/worker-07/l1_spotcheck/. The controller can ingest both. I'll put the artifact in `reviews/L1-spotcheck-049.json` to follow the assignment convention (map assignments for L1 spot checks named reviews/L1-spotcheck-*.json) and also a copy? No—duplicate artifacts are bad. I'll use `reviews/L1-spotcheck-049.json` and also keep the script+raw fetch cache under `artifacts/worker-049/l1_spotcheck/`.
+
+Hmm, but "reviewer" independence: the review event reviewer = "worker-049".
+
+Also I must not set validation_status to "passed" (worker authority) — use "unverified". And avoid claiming node done? Workers can emit status with status field... The W07 event did emit status "done" for the worker lifecycle, with a note "this event is a completion claim, not a node done / gate verdict". Hmm, but the ASTRA_HANDOFF says "worker events cannot set status=done". The map may auto-reject status done from workers, or the controller ignores. W07's status event exists; check whether it was accepted and applied. Let me check events.jsonl for w07-status and whether it was applied (assigned status). Safer: emit `status` with `status: "active"` and summary "bounded lifecycle complete; artifact delivered; no node status claimed"? Hmm, the status event requires a status from the set. worker-07 used "done" and it may have been accepted (I saw its summary in events.jsonl). Let me check the map's nodes for L1 status. In research_map.json there's no "nodes" list — the structure keys didn't include nodes. Statuses appear in portfolio_events/assignments. Let me grep events.jsonl for the w07 status event and whether apply_events.py skipped it.
+
+Actually simplest: follow W07's exact pattern — it seems accepted (3 events accepted per its own status text). It used status "done" with completion_scope clarifying it's a worker lifecycle claim. That's the established convention in this swarm. I'll do the same but make it explicit.
+
+But wait — is worker-049 an "actor" the controller will consider? comms/inbox has worker-01/06/16, so worker-NN agents exist. The supervisor launches 100 now. Fine.
+
+Now, about "checkpoint": run `python3 research_map/checkpoint.py`. Let me read checkpoint.py quickly to see args and where it writes (it writes runtime/state/current_checkpoint.json and checkpoint_log.jsonl presumably, plus maybe per-agent). 100 workers all calling checkpoint.py concurrently could conflict... The script may take a label. Let me read it.
+
+Also, do I need to run `comms.py ingest`? The protocol says the controller runs it; but W07 self-reported "3 events accepted", implying it ran ingest itself. Ingest is idempotent (dedup by event_id) and appends to events.jsonl. Running it is fine and expected per ASTRA_HANDOFF ("Pull accepted traffic: python3 research_map/comms.py ingest"). But careful: concurrent writers to events.jsonl from 100 workers could interleave. The file is 1.26MB; appends are line-based; Python append with a single write should be atomic enough for lines <4KB? Not guaranteed but likely O_APPEND atomic per write. Hmm. But the events.jsonl mtime was 00:13 and there's a lock? Let me read comms.py ingest to see if it uses a lock.
+
+Let me read the rest of comms.py (ingest function) and checkpoint.py.
+dsh: reasoning:
+Note: checkpoint.py's measure_agents() only recognizes `astra-*` and `deepseek-flash-\d+` process names — 100 workers named worker-NN with the same dsh binary won't be named, but that's not my problem. Running checkpoint.py from 100 workers concurrently: it runs ingest (appends to events.jsonl and rejected.jsonl, writes ingested_ids.json), validates, audits, writes checkpoint files. Potential races but idempotent-ish. However, the user asked me to "checkpoint" — running the global checkpoint tool is the established pattern (W07 wrote its own `runtime/state/w07_checkpoint_1.json`, per its status). Let me check what W07's checkpoint file looks like — maybe it wrote a per-worker checkpoint instead of running the global tool.
+
+Let me look at runtime/state/w07_checkpoint_1.json and see. Also check if checkpoint.py was recently run (checkpoint_log.jsonl last entry).
+
+Given "checkpoint, then exit", the safest: (a) run `python3 research_map/checkpoint.py --label worker-049-l1-spotcheck`? That writes global state files. The global checkpoint tool is used by the controller. W07 apparently wrote its own per-worker file. Hmm — its status evidence_ref says runtime/state/w07_checkpoint_1.json. Let me inspect it.
+
+Also note checkpoint.py runs comms.ingest which will ingest ALL outbox files including other workers'. That's the "pull accepted traffic" step; fine and idempotent.
+
+Let me check the w07 checkpoint and the last checkpoint log entry.
+dsh: reasoning:
+Interesting: checkpoints are being run every ~10 seconds by someone (multiple workers running checkpoint.py; the supervisor loop relaunches). So the global checkpoint is already happening frequently. W07 wrote a per-worker checkpoint file `runtime/state/w07_checkpoint_1.json`. For "checkpoint, then exit", I'll:
+1. Emit events and ingest them (via comms.py ingest, or let the next checkpoint ingest them).
+2. Write my own per-worker checkpoint `runtime/state/worker-049_checkpoint_1.json` documenting the task, artifact hash, evidence, falsifier, and exit note.
+3. Optionally run `python3 research_map/checkpoint.py --label worker-049-exit` to snapshot the global state. Given many concurrent runners, running it is safe-ish (checkpoint files are stamped by second; collisions possible but rare). I'll run it after ingest to include my events in the checkpoint record, but the events won't be *applied* to the map (that's the controller's job). Fine.
+
+Now let me design and execute the spot check. Steps:
+
+1. Decide sample rows (frozen before fetch):
+   Class-bound: AF-SCC-C0-VAC-GEN ∪ AF-SCC-C2-VAC-GEN.
+   Frame: data rows of ledger/citation_audit.csv at pinned sha256=315c1914... whose class_mapping contains either SCC token, excluding rows already independently re-fetched at this pinned hash by spot check #3 (SRC-065, SRC-080, SRC-081 — those are W07's C0/C2 rows).
+
+   Let me compute the eligible set programmatically and pick a deterministic sample. But the sampling rule must be frozen before fetch — I can define the rule as: "sort eligible rows by citation_id; take every 3rd starting at index 1, plus targeted additions declared here: SRC-091 (newest C0 row added in the 00:08 rebuild, used by T-515/T-528) and SRC-058 (C2 row, verified-primary, load-bearing for T-510/D-007/T-514)". Let me first compute eligible rows and counts, then finalize the rule and immediately write a frozen sample manifest file (with timestamp and hash of the CSV) before any fetch.
+
+2. Write the harness script `artifacts/worker-049/l1_spotcheck/run_spotcheck.py`:
+   - Reads frozen sample manifest (or embedded list).
+   - Pins CSV sha256; verifies; fail-closed.
+   - Fetches each row's locator with curl (subprocess, timeout 30s, UA header).
+   - Parses XML/JSON, compares, writes `reviews/L1-spotcheck-049.json` and prints summary.
+   - Records http status, bytes, sha256 of raw body, fetched metadata, quote coverage.
+   - Re-checks CSV hash after fetching → `drifted_during_fetch`.
+
+3. Run it, review output, fix issues if needed.
+
+4. Compute artifact sha256, write sidecar, write events to `comms/outbox/worker-049.jsonl` (artifact + review + status), run `python3 research_map/comms.py ingest` (dry-run first, then real).
+
+5. Write per-worker checkpoint `runtime/state/worker-049_checkpoint_1.json`.
+
+6. Validate my events were accepted (not in rejected.jsonl), then exit with a concise summary.
+
+Which locator to use per row? Use the row's `exact_locator` if present, else `evidence_url`, else `url`. But careful for `mirror_of` and rows whose method is "inspirehep-api" with URL to INSPIRE. Let me inspect the exact_locator values for candidate rows. Note rows 90-97 may have odd values due to the embedded text in verification_method. Let me examine candidate rows' columns in detail (locator, mirror_of, elided_quote, evidence_excerpt, elided_quote bool).
+
+Also potential gotcha: row 68 (SRC-068) and row 24/86/87 are mirrors/duplicates. Duplication metrics matter; but I'm re-fetching to verify a specific row, fine.
+
+Let me look at candidate row details, then finalize the sample. I'll pick ~8 rows.
+
+Time budget: each fetch 1-3 s; JSON parsing easy with Python stdlib (urllib.request rather than curl, or curl subprocess — W07 used curl; urllib avoids subprocess issues). I'll use urllib with a UA header and 30s timeout; also try/except.
+
+Let me inspect the candidate rows.
+dsh: reasoning:
+31 eligible rows. I'll sample 8 deterministically:
+
+Rule S1: sort eligible rows by citation_id ascending; take every 4th starting at index 1 (1-based: indices 1,5,9,13,17,21,25,29):
+Indices (1-based) in the eligible list (31 items):
+1: SRC-004
+5: SRC-022
+9: SRC-029
+13: SRC-037
+17: SRC-048
+21: SRC-058
+25: SRC-072
+29: SRC-084
+That's 8 rows. Nice spread across the whole file and classes: 
+- SRC-004 (C0+C2, primary-page-fetch, arXiv abs URL)
+- SRC-022 (C0+C2, inspirehep-api, INSPIRE recid)
+- SRC-029 (C0+C2, arxiv-api, arXiv 1707.08975)
+- SRC-037 (C0+WCC, arxiv-api)
+- SRC-048 (C0+C2, arxiv-api, 2609.05167 — future date? interesting; whatever)
+- SRC-058 (C2, primary-page-fetch 1702.05716)
+- SRC-072 (C0, openalex-api, mirror of SRC-020)
+- SRC-084 (C0+C2, arxiv-api)
+
+S2 targeted: SRC-091 (newest C0 row from the 00:08 rebuild, used by T-515/T-528) → 9 rows. Declared before fetch.
+
+Locator policy (declared before fetch): re-fetch from the row's own primary locator using the row's `evidence_url` host:
+- arxiv.org/abs/* or export.arxiv.org API → use arXiv API id_list (authoritative metadata + abstract).
+- inspirehep.net/api/literature/<recid> → use that INSPIRE API URL.
+- api.openalex.org/works/... → use that URL.
+This is exactly what previous spot checks did (worker-07 used crossref for DOI rows; for rows with arXiv I use the arXiv API). For SRC-004, evidence_url is arxiv.org/abs/1710.01722 → arXiv API id_list=1710.01722. For SRC-022 → INSPIRE API recid 1265214. SRC-072 → OpenAlex URL.
+
+OpenAlex parsing: title, publication_year, authorships, doi, abstract_inverted_index. I can reconstruct abstract from inverted index for quote coverage — previous row 92 notes it was reconstructed this way, so fine. If abstract missing → NO_ABSTRACT.
+
+Quotes: the CSV has `elided_quote` boolean (True = text contains ellipses / elisions) and `evidence_excerpt` with possible prefixes like "arXiv abstract (via INSPIRE): '...'". Worker-07 did content-token level checks. I'll normalize by:
+- strip common prefixes (e.g., "arXiv abstract ...: ", "INSPIRE recid ...: "), strip the journal ref etc. Simpler: token-level coverage = fraction of ledger excerpt tokens (normalized, len>=3, excluding stopword-ish?) that appear in the fetched text tokens. Also ordered match ratio maybe. I'll implement token coverage and a "longest common token run" to detect verbatim fragments; plus an exact-normalized-substring check. Verdict:
+  - MATCH if title strong + author ok + (year ok or year_note) + quote coverage >= 0.9 or no abstract.
+  - PARTIAL if year convention mismatch / quote coverage 0.6-0.9.
+  - MISMATCH if title/author/DOI conflict or quote coverage < 0.5 with abstract available.
+
+Also compare DOI: fetched DOI vs ledger DOI.
+Also verify "used_by_theorems" — not necessary.
+
+For SRC-004, the ledger row uses arXiv abs; fetched arXiv API gives journal_ref "Ann. of Math. (2) 202..."; previous checks covered it. Good.
+
+Now, importantly, freeze the sample before fetching. I'll write `artifacts/worker-049/l1_spotcheck/sample_manifest.json` now (before any fetch) containing: created_at, pinned csv sha256, eligible set definition, S1 rule + resulting IDs, S2 addition + reason, locator policy, comparison policy, falsifier. Then write the harness and run it. The manifest itself gets hashed as evidence.
+
+One risk: SRC-048 arXiv 2609.05167 — id format suggests 2026-09; the current date is 2026-09-12. Fine. SRC-005/SRC-006 exact_locator is a search query URL, but evidence_url is the arXiv abs; I'll use evidence_url for arXiv rows (declared in policy).
+
+Another risk: arXiv API rate limiting (100 requests per burst?) — 9 requests fine, but add sleep 3s between requests to be polite. Total ~30s.
+
+Let me also double check that the frozen CSV hash stays 315c1914 now (hash it right before writing the manifest). Then write files.
+
+Let me also think: is there any chance that the ledger gets rebuilt again while I run, invalidating my check? I'll record sha256 before/after and fail-closed (abort artifact emission? Worker-07 aborted on pre-fetch drift and re-pinned; if drift occurs *during* fetch, I'll record `drifted_during_fetch: true` and mark results as non-binding to the new hash but still evidence for the pinned hash). Good.
+
+Now write the manifest and harness.
+
+Plan for harness details (Python stdlib only):
+```python
+#!/usr/bin/env python3
+"""Independent L1 re-fetch spot check #4 ... class-bound AF-SCC-C0/C2 ..."""
+import csv, hashlib, json, re, ssl, sys, time, urllib.request, urllib.parse
+from datetime import datetime, timezone, timedelta
+ROOT = ...
+PIN = "315c1914..."
+SAMPLE = ["SRC-004",...]
+...
+def fetch(url):
+    req=urllib.request.Request(url, headers={"User-Agent":"ai4math-swarm-worker-049/1.0 (spot-check; contact: local)"})
+    with urllib.request.urlopen(req, timeout=45) as r:
+        body=r.read(); return r.status, body
+```
+Parse arXiv Atom with xml.etree.ElementTree; namespaces.
+
+Comparison:
+```python
+def norm(s): lowercase, replace latex commands braces $, collapse whitespace, strip punctuation
+def toks(s): re.findall(r"[a-z0-9]+", norm(s)) filtering len>=2? keep numbers.
+coverage = fraction of ledger excerpt tokens present in fetched text token multiset? Better: set of fetched tokens; coverage = |excerpt_tokens set ∩ fetched_set| / |excerpt_tokens set|.
+```
+For quote checks, journal refs in some rows: the excerpt for e.g. SRC-021 may be "INSPIRE recid ...: 'title', author; journal ref". Coverage against title+abstract+journal_ref text combined. I'll build fetched_text = title + " " + abstract + " " + journal_ref + " " + authors + " " + doi.
+
+Verdicts:
+- title_verdict: exact_norm match / strong (all excerpt title tokens present) / weak / mismatch.
+  For rows, ledger title vs fetched title. Use normalized equality or token Jaccard >= 0.9 as strong.
+- author_ok: first author family name (normalized) in fetched author list.
+- year_ok: ledger year in fetched years string (published/print/journal_ref) else note.
+- quote_check: coverage>=0.9 → grounded; 0.6-0.9 → partial; <0.6 → ungrounded; no abstract → no_abstract.
+- overall: MATCH if title strong and author_ok and quote grounded or no_abstract; PARTIAL if year mismatch only, or quote partial; MISMATCH if title mismatch or author missing or quote ungrounded.
+
+Record raw fetch sha256, bytes, status.
+
+Output artifact: reviews/L1-spotcheck-049.json with the fields similar to W07's. Include `target.sha256`, `sampling_rule`, `results`, `mismatches`, `falsifier` (pre-declared), `falsifier_outcome`, `limitations`, `method`.
+
+Let me write the manifest first, then the script. I'll use the write tool for files.
+
+Note file policy: workspace-write allowed under /data3/guoshaoyang. Good.
+
+Let me compute and freeze the manifest now. Note the manifest needs the exact eligible list (31 IDs) to be reproducible: I'll include the rule and the resolved sample IDs, plus eligible_count and a hash of the eligible list.
+
+Also include `independent_of` = reviews/L1-spotcheck-10.json, reviews/L1-spotcheck-11.json, artifacts/worker-07/l1_spotcheck/spotcheck-l1-07.json.
+
+Let me create the manifest file with a script (deterministic) and immediately hash it. I'll do it via bash python heredoc for accuracy (computing eligible list from CSV).
+dsh: reasoning:
+Manifest frozen: sha256 f8ad3524599450721d8ae9c3c117efece934dce58aa9e5b9484c4cbef682cb74. Sample: SRC-004, 021, 029, 040, 056, 062, 078, 084, 091.
+
+Wait: SRC-021 might be an INSPIRE row whose evidence_url is inspirehep.net/api/literature/622602. Good. SRC-056 is primary-page-fetch arXiv gr-qc/0307013 → use arXiv API with id_list=gr-qc/0307013. SRC-004 arXiv 1710.01722. SRC-029 1707.08975. SRC-040 2205.14808. SRC-062 2104.11857. SRC-078 2606.28253. SRC-084 2503.24114. SRC-091 2606.28008.
+
+Now write the harness script. Key parsing:
+- arXiv Atom: namespaces atom, arxiv. Entry title, summary, author/name, arxiv:journal_ref, arxiv:doi.
+- INSPIRE JSON: metadata.titles[0].title, metadata.authors[].full_name, metadata.publication_info[0].year / journal_title, metadata.abstracts[0].value, metadata.dois[0].value.
+- OpenAlex JSON: title, publication_year, authorships[].author.display_name, doi, abstract_inverted_index (reconstruct).
+
+Comparison functions:
+- norm(s): lowercase; remove LaTeX commands \command; remove braces, $, punctuation; collapse ws.
+- toks(s): normalized tokens (alnum chunks) length>=2? Keep 1-char numbers out. For coverage, use multiset? Use set for coverage; also compute ordered ratio via difflib? Keep simple: coverage = |set(excerpt)∩set(fetched)|/|set(excerpt)| with tokens len>=2.
+- title_verdict: if norm equal → "exact"; else Jaccard tokens >=0.85 → "strong"; >=0.6 → "weak"; else "mismatch".
+- author_ok: first author family token (last word of ledger authors first entry split by ';') normalized in fetched authors normalized string.
+- year_ok: str(year) in fetched year fields; else note.
+- quote_check: if no fetched abstract → "no_abstract"; coverage>=0.9 → "grounded"; >=0.6 → "partial"; else "ungrounded".
+
+Overall verdict:
+- MISMATCH if title_verdict in (weak,mismatch) or not author_ok or quote_check=="ungrounded"
+- PARTIAL if quote_check=="partial" or not year_ok (year note) or title strong but not exact? No: strong title is fine → MATCH.
+- MATCH otherwise.
+
+Extract from the ledger row: title, authors, year, venue, doi, arxiv_id, evidence_url, exact_locator, evidence_excerpt, elided_quote, class_mapping, used_by_theorems, verdict, verification_method.
+
+Fetch policy:
+- if arxiv_id → arXiv API id_list
+- elif 'inspirehep.net' in evidence_url → evidence_url
+- elif 'openalex.org' in evidence_url → evidence_url
+- elif doi → crossref api
+- else if exact_locator startswith http and host is not a search query → use it
+- else fetch evidence_url.
+
+For the arXiv URL id_list special case: id like "gr-qc/0307013" — must be fully percent-encoded? arXiv API accepts id_list=gr-qc/0307013 (slash ok). I'll use urllib.parse.quote(id, safe='') → "gr-qc%2F0307013"; the API accepts that. Previous checks used math%2F9901147. Good.
+
+Sleep 3s between requests. Timeout 45s. Retry once on failure.
+
+OpenAlex abstract reconstruction: positions dict token→[positions]; build list of (pos, token) sorted.
+
+Write the script now via the write tool. Then run it.
+
+One more consideration: the note "class_mapping" for SRC-021 is AF-SCC-C0-VAC-GEN. Fine.
+
+Let me write the script carefully. I'll include json output written to `reviews/L1-spotcheck-049.json` (relative to ROOT) and also print a summary. The artifact should include the harness sha and manifest sha as evidence refs; but harness sha can be computed at runtime and printed. I'll have the script record `harness_sha256` by hashing its own file, and `manifest_sha256`, and the artifact's own sha can't be embedded; sidecar written separately.
+
+Let me write it.

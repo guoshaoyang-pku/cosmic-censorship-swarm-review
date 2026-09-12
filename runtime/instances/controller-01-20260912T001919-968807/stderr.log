@@ -1,0 +1,1079 @@
+dsh: reasoning:
+Let me start by reading the handoff and research map files.
+dsh: reasoning:
+Let me read the handoff and research map.
+dsh: reasoning:
+This is a large research map. Let me understand the task: I'm acting as Astra controller. I need to:
+1. Read ASTRA_HANDOFF.md and research_map.json (done, at least partially)
+2. Consume comms and artifacts
+3. Maintain DAG and gates
+4. Issue bounded assignments
+5. Record hashes and validation
+6. Keep numerics gated
+7. One independent lifecycle then exit
+
+So the concrete action: run one lifecycle pass with the provided tool `python3 research_map/astra_lifecycle.py --label <label>`, which does locked ingest → apply → repair → audit → checkpoint. Then report.
+
+Let me explore the repository structure first. The repo is at /data3/guoshaoyang/workdir/ai4math-swarm. Let me look at the research_map directory, comms, etc.
+
+Let me also check the rest of research_map.json (it's large). Let me get its size and key sections.
+
+Let me plan:
+1. Recon: repo tree, comms state, outbox traffic newer than 00:17:46, current hashes.
+2. Run lifecycle tool once with an appropriate label (e.g., astra-lifecycle-03).
+3. Verify results, ensure numerics lock holds, gates updated with hash-bound reasons.
+4. Record checkpoint/hash, write pass summary, exit.
+
+Let me start recon.
+dsh: reasoning:
+Let me look at the lifecycle tool usage and check current time, then look at the map's gates, numerics_lock, assignments, and validation state. Also I should check comms outbox traffic newer than 00:17:46.
+
+Let me first check current time and the lifecycle tool's help.
+dsh: reasoning:
+Now let's look at the lifecycle tool to understand what it does, and the current map state (assignments, controller_gate_audit, etc.). The handoff says "Pass 02 ran 00:11–00:18... Outbox traffic newer than 00:17:46 is un-ingested; the next lifecycle pass must apply it." So I should run one lifecycle pass now, with a new label like `astra-lifecycle-03`.
+
+Let me first read the lifecycle tool to understand its exact behavior and safeguards.
+dsh: reasoning:
+The lifecycle tool does everything I need for "one independent lifecycle": ingest, apply, repair, audit, checkpoint. My job as controller: run it once with a proper label, then verify results, check that numerics stayed gated, gates have hash-bound reasons, and possibly issue bounded assignments / record hashes and validation.
+
+But note: The handoff says pass 02 was already run through 00:18, and "Outbox traffic newer than 00:17:46 is un-ingested; the next lifecycle pass must apply it." So a fresh lifecycle pass (lifecycle-03) is the right call. I should be careful about the map having run just now (00:19:34 now). Also, the handoff mentions post-pass observation at 00:19: F0 canonical changed to 276009f4f63d etc.
+
+Let me check the current state of key hashes on disk before running so I can compare afterwards. Also, I should check comms ingest state — how many files accepted/rejected/duplicates. Let me look at the ingest function briefly and check outbox mtimes newer than 00:17:46.
+
+Also important: verify what the lifecycle does with `apply_events` regarding assignment events etc. There may also be pass-03 events needed (e.g., new bounded assignments based on un-ingested traffic). The instruction from the user: "Consume comms and artifacts, maintain DAG and gates, issue bounded assignments, record hashes and validation. Keep numerics gated. One independent lifecycle then exit."
+
+So after running the lifecycle, I should:
+1. Inspect the resulting gate audit, ingest results, findings.
+2. Issue bounded assignments if needed (via the events mechanism — probably `astra_lifecycle_02_events.py`-style script, or by writing events to events.jsonl with proper schema). Let me examine how the prior pass issued assignments (astra_lifecycle_events.py / astra_lifecycle_02_events.py) to follow the same contract.
+3. Verify numerics lock remains locked.
+4. Record hashes (checkpoint does this).
+5. Produce a short report and exit.
+
+Let me first look at the events schema, the 02 events script, and check un-ingested outbox traffic. Also check the map's assignments and controller_gate_audit, claims counts, and the current state of the review corpus for coverage.
+
+Let me run a few checks in parallel.
+dsh: reasoning:
+The assignments have different schema keys. Let me inspect one assignment to see the actual structure. Also, the map contains 89 assignments (many from earlier passes). Let me check open ones.
+
+Also let me look at the ingest state: events.jsonl last events, and what's in the new outbox files (astra-lead-formulation 00:17:58, astra-lead-literature 00:18:42, deepseek-flash-10 00:19:10, deepseek-flash-05 00:19:22).
+
+Let me inspect assignment structure and the new outbox traffic.
+dsh: reasoning:
+There is significant ongoing activity. The formulation lead keeps publishing (hash churn), and there are new blocker/status events. The handoff explicitly notes F0 publication is still divergent and there are open assignments. Also there are now events at 00:34 (future-dated, skew ~15 min from now at 00:19:34!) — clock discipline issue CF-14 continues.
+
+My job: one independent lifecycle then exit. Let me be careful and methodical:
+
+1. First, record pre-pass state: map sha, key hashes on disk, ingest counts, open assignments, gates.
+2. Run the lifecycle tool with label `astra-lifecycle-03`.
+3. Inspect the report: ingest accepted/rejected/duplicates, events_applied, gates, numerics lock, hard/soft evidence findings, review coverage, gate audit reasons, checkpoint.
+4. Post-pass: measure key hashes again, verify gates all pending with hash-bound reasons, numerics still locked, and check whether the new traffic changed anything material (e.g., F0 publication now aligned? The 00:19 events say F0 canonical 276009f4 vs authoring c8e979a1 — still divergent).
+5. Issue bounded assignments for un-covered open items if necessary. But CF-12 rule: one canonical path = one owner; assignments already open through 01:00/01:30. Adding more could duplicate. The handoff says older assignments stay open through 01:30 and must not be duplicated. So likely I should NOT issue new assignments unless there is a genuinely new node/path with no owner. There's a risk that the formulation lead's request (3 agents, 6 h) needs a controller decision (approve/deny/redirect) — as controller I can record a decision. But the instruction says "issue bounded assignments" — only if warranted. Since the traffic is mostly status/blocker/resource requests and the existing assignments cover F0 publish, soft flags, C8, L1 spot checks, I might not need new assignments. But I should consume and respond to resource requests? The controller can issue direction updates. Hmm, "One independent lifecycle then exit" — the lifecycle tool handles ingest/apply/repair/audit/checkpoint. Then I should verify and report.
+
+Let me first check the pre-pass state carefully, then run the lifecycle. Important: the lifecycle run itself will consume new traffic (any events since 00:17:46). The workers are actively writing; that's fine.
+
+Let me capture pre-state: map sha, list of measured hashes for key artifacts, FROZEN.json, publication pairs, and events count. Then run lifecycle-03.
+
+One concern: running two lifecycle passes concurrently with swarm writers is fine due to the lock. Let me just run it.
+
+Before that, let me also check `validate_map.py` and `apply_events.py` behavior regarding event validation (some events may be rejected due to future or schema). Also check the events.jsonl count and the astra inbox (comms/inbox/astra.jsonl at 23:44) — read it.
+
+Let me read comms/inbox/*.jsonl for astra and astra-lead-formulation etc. Wait, those inbox files are messages FROM astra TO leads (outbound deliveries). The controller's own inbox is comms/inbox/astra.jsonl. Let me read that plus PROTOCOL.md.
+
+Actually the handoff says "Your assignment is in comms/inbox/<your-agent-id>.jsonl. Read it first." As "Astra" (the controller), my agent id is "astra". Let me read comms/inbox/astra.jsonl.
+
+Let me also check for any other inbox files targeted at astra.
+dsh: reasoning:
+The inbox message from 23:44 is a nudge about the map patch — already handled (FORM-MAP-PATCH-002 superseded per handoff).
+
+Now, let me capture pre-pass state and run the lifecycle. Let me write a small pre/post state capture script to compare.
+
+Key things to measure:
+- map sha256 before
+- measured hashes of F0, F1, F2a, F2b, L0, L1, A0, N0, N1
+- events.jsonl line count
+- gates verdicts
+- assignments count/statuses
+- numerics lock state
+
+Let me do pre-state now with a snippet.
+dsh: reasoning:
+Current state:
+- F0 canonical 276009f4f63d vs authoring c8e979a1eb48 (divergent).
+- F1/F2a/F2b canonical==authoring (aligned) at 9a8bd4c96800 / b6123750b37d / 1bb78ce9b357 (moved from 68392dd8 etc. noted in handoff — formulation kept publishing).
+- numerics lock locked, solver absent, guard present.
+- gates all pending.
+
+Now run the lifecycle pass with label `astra-lifecycle-03`. Note the tool takes the lock and does everything. Let me run it (foreground, should be quick).
+dsh: reasoning:
+The lifecycle ran: 66 events applied, map VALID, gates all pending, numerics locked. Let me now read the full report JSON to inspect:
+- ingest counts (accepted/rejected/duplicates)
+- events demoted
+- evidence hard failures / soft findings
+- review coverage
+- clock discipline
+- gate audit reasons
+- checkpoint id
+- measured hashes
+- map sha before/after
+
+Let me find the newest lifecycle report.
+dsh: reasoning:
+The lifecycle-03 pass ran:
+- ingest accepted 7, duplicates 1096, rejected 1, files 115
+- events_applied 66
+- map VALID
+- gates all pending (correct — no new verdicts)
+- numerics lock locked, solver absent, guard present
+- 1 hard failure (CLASSSEP claims[36] — already adjudicated false positive CF-16)
+- 1 soft finding (F0 dual-tree divergence 276009f4 vs c8e979a1)
+- clock discipline: 73 future-dated events, max skew 6001s (02:00) — CF-14 remains open
+
+Now I need to check:
+1. The new map's gate audit reasons — confirm hash-bound and pointing at current measured hashes.
+2. Whether the ingested events included anything requiring controller action (e.g., resource requests, blockers, new artifact submissions changing hashes).
+3. Whether review coverage changed (e.g., new accepts at current hashes).
+4. Whether F0 publication assignment is now satisfied (canonical==authoring?) — no, still divergent.
+5. Verify gates all pending with correct reasons; verify the numerics lock stayed intact; verify no N1 artifact appeared.
+6. Decide bounded assignments. There may be new traffic after 00:19:58 (workers keep writing). The instruction says one lifecycle then exit. I should complete my review and record the pass summary/handoff update, then exit.
+
+Also need to check application results: 66 events applied — verify none set status=done or validation passed improperly (authority check). Let me check events applied in this window and whether any unauthorized promotions occurred. The apply_events tool demotes worker claims of done/passed per handoff authority. Let me look at the map's nodes: F0/F1 statuses and validation_status, and check for any node with status done.
+
+Let me also review the gate audit reasons in the new map, plus check the newest outbox traffic after 00:19:58 for anything urgent (e.g., the formulation lead's F0 publish completion event). Since the pass already ran, any new traffic will be left for the next pass — that's fine as long as I note it.
+
+Let me now do the post-pass verification.
+dsh: reasoning:
+Good. Gate audit reasons are hash-bound and current. But note G-F0 shows "0 distinct accepts [none]" at the new F0 hash 276009f4 — expected, since F0 changed. The handoff said there was a lead-audit accept at 00:07:29 (for an earlier hash) — superseded.
+
+Interesting: A1 node declared hash 45e191346e59 vs measured be68346cd337 (directory) — mismatch is probably because declared is for a file inside vs directory digest. Not new.
+
+Also: `updated_at` says 00:20:07 while report at 00:19:58 — the apply happened after? Actually the map write happened at 00:19:58; updated_at 00:20:07 might be from an apply_events that ran slightly later? Hmm, actually the report's `map_sha256_after` was computed after the map write, then checkpoint.main ran which may re-apply? No — checkpoint doesn't modify the map. Let me check: the map updated_at 00:20:07 vs report at 00:19:58. The report was written after the checkpoint; map sha after = 60fd43601bdd. Let me re-measure map sha to see if anything modified it after.
+
+Wait — could there be a concurrent controller/worker writing the map? Workers shouldn't write the map. But there's an `apply_events.main` inside the lock. The lifecycle's own map write sets updated_at=now() (00:19:58). Then checkpoint runs. Then report. So updated_at should be 00:19:58. Unless the map was modified after by another process — e.g., another swarm supervisor running a lifecycle (independent_supervisor.sh?) or `apply_events` directly.
+
+Let me check map sha now and look at mtime. Also check runtime/state/current_checkpoint.json.
+dsh: reasoning:
+The map changed after my lifecycle pass: sha256 now a8a73f983baa (report said 60fd43601bdd), mtime 00:20:07. Something applied more events between 00:19:58 and 00:20:07. Probably another agent (astra-lead-numerics?) ran apply_events, or the swarm supervisor runs a cycle. Let me check if there's a concurrent lifecycle. The running process `independent_supervisor_100.sh` is from 00:16 — that's a supervisor shell script (probably launching agents). Let me check what modified the map — maybe another Astra process (the "independent_supervisor" might invoke astra_lifecycle). Let me look at the supervisor scripts and recent checkpoints.
+
+Actually, the important question is whether my pass is complete and consistent. The map changed after my pass (possibly due to another apply_events run by a lead). Since "one independent lifecycle then exit", I ran one lifecycle. But for accurate reporting, I should re-measure at the end and record the final state. Also the handoff update (ASTRA_HANDOFF.md) should record the pass outcome.
+
+Let me see what happened at 00:20:07: check the newest events in events.jsonl and any new checkpoint. Let me look at the last few applied events and the map diff (updated_at).
+dsh: reasoning:
+Interesting: at 00:20:07 and 00:20:12/14, something ran checkpoints (probably a supervisor loop `checkpoint.py`) and applied 13 more events (checkpoint log says events_pending_application 13 at 00:20:12). The map mtime 00:20:07 suggests another `apply_events` ran around then (by a supervisor or lead). The `controller_lifecycles` list still contains my astra-lifecycle-03.
+
+Note also the events tail shows future-dated leadform events at 00:44 — the formulation lead continues to produce future-dated timestamps (clock discipline issue CF-14 persists).
+
+Let me look at what's running: `independent_supervisor_100.sh` and `supervise_loop.sh`/`supervise_swarm.sh` — these were written at 23:49-00:11 and likely run agent loops. They might run `checkpoint.py` periodically. The map change at 00:20:07 might be from a supervisor applying events (`apply_events.py`) — not a second lifecycle (no new lifecycle entry). That's acceptable: the map is live state and other tooling can apply events.
+
+Wait — but the report's map_sha256_after (60fd4360) is now stale (a8a73f98). The checkpoint at 00:20:07 recorded the post-apply state. My lifecycle's own record in the map's controller_lifecycles is what matters. But for hash recording, I should measure the final map sha after the concurrent apply settles and note it. However, more events keep arriving; the exact final sha is a moving target. The handoff pattern is to record the map sha at pass end. I'll measure it as of my close-out and note it as such, plus note post-pass traffic.
+
+Also of note: my pass ingested 7 accepted events; the checkpoint at 00:20:07 showed accepted 0, duplicates 1118 — that's a concurrent checkpoint run after ingest. Then 13 events pending application were applied (map mtime 00:20:07). So the map now includes events beyond my pass.
+
+Since the user's instruction is "One independent lifecycle then exit", I've done that. But I also need to "maintain DAG and gates, issue bounded assignments, record hashes and validation". Let me consider whether any new bounded assignment is needed based on the new traffic:
+
+1. `leadform-blocker-0006` + `leadform-resource-request-2026-09-12T00:44:00+08:00` (future-dated; content unknown). The formulation lead requests 3 agents/6h for independent verification at final hashes (per 00:34 resource request). This is a direction/resource decision for the controller. Should I approve? The handoff's shape: controller issues bounded assignments; resources are controller's call. The G-FORM gate needs 2 independent accepts at current hashes; the audit lead owns A1. The request asks for independent reviewers to re-run the formulation's own tools. Since the audit lead already has open assignments (astra-life01-a1-rebind, astra-life02-softflag-f0f1), and CF-12 says don't dual-assign one canonical path. But assigning independent review at the *new* hash (9a8bd4c9 etc.) is covered by astra-life01-a1-rebind but that assignment was written against older hashes (F1 7a3e1f93...). Its acceptance says "after PUBLISH-FROZEN-01 lands, provide for each target ... at least two verdicts ... citing the measured canonical sha256". It's hash-generic, so still valid; but the targets moved. Hmm.
+
+Given "one lifecycle then exit", a full new assignment round may be out of scope. But the task explicitly says "issue bounded assignments". The safest approach consistent with the handoff and CF-12 is:
+- Do NOT issue a new assignment that overlaps an existing open one (F0 publish, soft flags, C8, L1 spot checks).
+- If there's a genuinely uncovered, bounded, high-value item that is not owned, issue one narrow assignment. Candidate: independent G-FORM verification at the *current* final hashes (F1 9a8bd4c96800, F2a b6123750b37d, F2b 1bb78ce9b357) — but that's owned by astra-life01-a1-rebind (lead-audit). Better: issue a *narrow successor* to astra-life01-a1-rebind? That would be "narrow or supersede, not duplicate" (CF-12 rule). Hmm, but astra-life01-a1-rebind acceptance is already hash-generic and covers exactly this. So no new assignment needed; instead a direction_update noting the moving target and re-binding requirement could be useful.
+
+Actually, wait. Let me check the assignments list in the map more carefully to see open vs closed statuses. The earlier print showed many assignments with no 'status' key — let me check the actual schema of an assignment entry (the last printed ones were raw event payloads, not map assignment entries; the map's `assignments` list entries have different fields: deadline, event_id, node_id, assignee, artifact, gate, class_id, acceptance, etc.). Let me print the last few assignments with the fields that exist and check for any 'status' field. Also check which are referenced by claims of completion.
+
+Also the more important controller duties per the handoff:
+- Maintain DAG: ensure dependencies (F1/F2 depend on F0) are consistent; no done without artifact.
+- Gates: already pending with hash-bound reasons (post-pass audit done).
+- Record hashes/validation: checkpoint wrote artifact_hashes.json. Let me verify artifact_hashes.json includes the current measured hashes for F0/F1/F2a/F2b/L0/L1/N0/A0/A1/A2 and N1 absent.
+- Keep numerics gated: verified.
+
+Let me check artifact_hashes.json and the checkpoint file.
+
+Then, decide on bounded assignment/direction update. Let me look at the newest events (00:20:09 review-a2-w18) and the 00:34/00:44 formulation events to know what's new. The formulation events at 00:34/00:44 are future-dated but the file mtime was 00:17:58... wait, that's odd: outbox file modified 00:17:58 but contains created_at 00:34:00. That's CF-14 pre-dating/future-dating: they wrote events with future timestamps at 00:17:58. Actually the earlier find showed astra-lead-formulation.jsonl mtime 00:17:58 and the tail contains created_at 00:34:00 — so the author stamped future times. That's exactly CF-14.
+
+Let me inspect the newest events in events.jsonl from 00:20 onward to see if anything changes gates/needs action. Also let me check the `review-a2-w18-20260912T002009` event — an A2 review! That could be relevant to A2 node and G-AUDIT. Let me look.
+
+Let me pull the last ~40 events with key fields.
+dsh: reasoning:
+Now the picture is clear. Key new state after my pass:
+- worker-001 submitted an independent full-schema **accept** for F2b at canonical hash 1bb78ce9b357, score 4.0 (review event at 00:20:04, ingested).
+- F1/F2a/F2b/F0 artifact events from the lead at "00:44" (future-dated) with the current hashes: F1 9a8bd4c96800, F2a b6123750b37d, F2b 1bb78ce9b357, F0 276009f4f63d, FROZEN.json af24e9c39606, VARIANT_REGISTRY 5eb42f9a384a.
+- A2 review from flash-18: revise, score 3.0, sha 1b2a83ef670b (target A2).
+- deepseek-flash-12 confirmed accept at N0 (checkpoint).
+- worker-053 has no inbox assignment card (fleet launched 00:16:57) — it took initiative; note this: fleet launched with 100 workers and some have no assignment cards. That's a resource/coordination issue the controller should address — potentially with a bounded assignment. Hmm.
+
+Wait: the events at 00:44 are future-dated but appear at the end of events.jsonl — the ingest ordering is by file/line; they were written to outbox at ~00:18-00:20 with future timestamps. So my pass at 00:19:58 ingested 7 accepted; these future-dated ones (00:44) came in the same file and were likely accepted at that point too or later in the 00:20:07 apply. The checkpoint at 00:20:12 said 13 events pending application.
+
+The review from worker-001 accepting F2b at 1bb78ce9 is now in the review corpus — but it was ingested at 00:20:07-ish, after my pass's `review_coverage` computation (00:19:58). So my gate audit's coverage count (F2b 0 accepts) is now stale by one event. This is exactly the moving-target problem. Since "one independent lifecycle then exit", I ran one lifecycle; but my final recorded gate audit may already be stale. I should re-measure the review coverage post-pass and record what changed, and ideally update the gate audit reasons to reflect the newly ingested accept — but that requires another lifecycle/repair run. Hmm.
+
+The instruction says "One independent lifecycle then exit." I did one lifecycle. But "record hashes and validation" and "maintain DAG and gates" suggests the pass must end with an accurate recorded state. The lifecycle tool's own repair already recorded gate reasons from the corpus at 00:19:58. A subsequent ingest (by the supervisor's checkpoint/apply) added the F2b accept. If I want gate reasons not stale, I could run `astra_lifecycle.py` again with a *close* label (as pass 02 did: -close, -final). The handoff describes pass 02 as four invocations of the idempotent lifecycle tool. The user says "One independent lifecycle then exit" — I interpret this as: perform a single control pass (one lifecycle), not multiple independent passes; the idempotent close-out invocations are part of closing the same pass. But to be safe and faithful, I can run one lifecycle as the primary pass and, given new traffic arrived during the pass, a single close invocation (which is the established pattern: pass 02 ran -close-final). The user explicitly says "One independent lifecycle then exit" — one lifecycle, then exit. I think running `astra-lifecycle-03` is the lifecycle; closing with `-03-close` would be a second lifecycle invocation. Hmm. The pass-02 pattern suggests a close invocation is not considered a new pass, just closing the same pass. The label I chose `astra-lifecycle-03` and now I could run `astra-lifecycle-03-close` to apply traffic that arrived during the pass, keeping it one pass. That matches handoff precedent ("four invocations of the idempotent lifecycle tool as traffic kept arriving").
+
+I think that's justified and matches the established controller contract: the pass must consume traffic that arrived during it. But the instruction "One independent lifecycle then exit" might be a guard against infinite looping (keep running lifecycles). A single close invocation is bounded. I'll do exactly one close invocation (`astra-lifecycle-03-close`) to ingest the post-pass traffic (worker-001 F2b accept, lead's final artifacts, A2 review), then stop. That keeps numerics gated and records final hashes. Then update the handoff with the pass summary and exit.
+
+Then, on "issue bounded assignments": I should decide on the formulation lead's resource request (3 agents, 6 h for independent verification at final hashes). Rather than issuing new duplicative assignments, I can approve a bounded independent-verification assignment to the audit lead for F2b/F2a/F1 at the current final hashes... but astra-life01-a1-rebind already covers it generically. Let me check the assignment register to see if the a1-rebind assignment is still "open" in the map (status field?). Let me inspect the map's assignments entries' keys.
+
+Let me check.
+dsh: reasoning:
+Assignments are append-only with no status; deadlines govern. The open ones:
+- astra-life02-publish-f0 (lead-formulation, F0, due 01:00)
+- astra-life02-softflag-f0f1 (lead-audit, A1, due 01:00)
+- astra-life02-n0-c8 (lead-audit, N0, due 01:30)
+- astra-life02-n0-c8-refresh (lead-audit, N0, due 01:30)
+- astra-life02-l1-spotcheck (lead-literature, L1, due 01:30)
+- plus older astra-life01-* open through 01:30.
+
+Now, the formulation lead has now published F1/F2a/F2b and F0 artifacts at current hashes (events at "00:44"), FROZEN rev25 at af24e9c39606. The F0 publication assignment (astra-life02-publish-f0) requires canonical == authoring == FROZEN pin. Current F0 canonical 276009f4 vs authoring c8e979a1 — still divergent. So that assignment is not yet done (unless FROZEN now pins both). Actually the lead's final status says "FINAL status; SUPERSEDES every hash reference..." Let me read the full 00:44 events and FROZEN.json to see whether F0 issue is resolved.
+
+Also the F2b independent accept at 1bb78ce9 (worker-001, score 4.0) is new evidence for G-FORM. G-FORM needs two accepts per class at one frozen hash; worker-001's accept is 1 of 2 for F2b.
+
+Let me pull the full text of the 00:44 status/blocker/resource request events and check FROZEN.json, then run the close lifecycle pass to ingest everything and refresh gate audit. After that, decide the pass summary/handoff update.
+
+Let me read those events in full.
+dsh: reasoning:
+Now I have the complete picture. The formulation lead is frozen at rev25 and requests independent verification.
+
+Controller decisions I should make now (bounded, one pass):
+1. Approve a bounded independent-verification assignment at the *final* hashes for G-FORM (F1/F2a/F2b) and G-F0 (F0 276009f4), owned by the audit lead — but astra-life01-a1-rebind already covers A1 rebind generically. However, the final hashes are new and the acceptance for a1-rebind was written pre-final ("After PUBLISH-FROZEN-01 lands, provide for each target at least two verdicts..."). Since publication has now landed for F1/F2a/F2b and F0 canonical is still divergent, a narrow successor assignment is appropriate and not a duplicate: it narrows the target set and pins the final hashes. CF-12 rule: "a successor assignment must narrow or supersede, not duplicate." I can issue `astra-life03-gform-final-verify` (audit lead + independent reviewer) pinned to final hashes. But wait: the audit lead is already overloaded with 4 open assignments (softflag, C8 x2, a1-rebind). And the request asks for 3 agents/6 hours. As controller with budget authority, I can approve e.g. 2 reviewers × 2-3h.
+
+But do I have the ability/authority to launch a new reviewer? The flash-pool has workers (worker-053 reports no assignment card; 100-worker fleet launched 00:16:57). Issuing a bounded assignment to a specific deepseek-flash agent is the mechanism (like previous passes did). The lifecycle events script `astra_lifecycle_02_events.py` shows how prior pass-02 emitted assignment events. But note the handoff says pass-02 events script is idempotent and already sent; a new pass needs new events.
+
+Given "one independent lifecycle then exit", issuing a bounded assignment is part of the controller's job. The most valuable bounded assignment right now: independent G-FORM/G-F0 verdicts at the final rev25 hashes, plus re-pin of the two downstream corpora (flash-02 taxonomy_cases, flash-04 f1_falsifier_tests) and FORM-HELDOUT-08 re-dispatch — but that's a lot. Bounded means narrow.
+
+Let me think about what's most on the critical path: G-FORM and G-F0 both need two independent accepts at final hashes. The F2b accept from worker-001 at 1bb78ce9 already counts as one (score 4.0, full-schema presumably). So the single highest-value bounded assignment: two independent full-schema reviews at the final rev25 hashes for F1 (9a8bd4c9) and F2a (b6123750), plus one for F0 (276009f4), by reviewers who did not author them. That directly serves G-FORM and G-F0.
+
+Also, the re-pin of `schemas/taxonomy_cases.jsonl` to F0 66bf917b (B4) is a small bounded task for flash-02, and `schemas/f1_falsifier_tests.jsonl` re-pin for flash-04.
+
+And FORM-HELDOUT-08 re-issue against rev25 (B3) — the held-out corpus is key to the "no leakage" claim; re-issuing it is bounded and independent.
+
+However, I must be careful: with ~100 workers already running and orchestrators (independent_supervisor_100.sh), the fleet may already be picking up assignments from inbox cards. worker-053 says "No assignment card exists in comms/inbox for worker-053 (fleet launched 00:16:57). Taking ..." — meaning the fleet expects assignment cards per worker. There may be a supervisor script generating cards. Let me look at the supervisor scripts to understand the current orchestration and how assignments get delivered. That will tell me if issuing an assignment event is enough, or if I need to write an inbox card.
+
+Let me read `independent_supervisor_100.sh`, `supervise_loop.sh`, and check `comms/outbox/assignments/` and `comms/inbox/` for worker cards.
+dsh: reasoning:
+Important: The supervisors loop the controller prompt itself: `independent_supervisor_100.sh` launches a `controller-01` tmux session that runs the same controller prompt I'm executing, and re-launches it every 20s if the session exits. Also `supervise_loop.sh` runs `astra-controller` persistently. So I am one of those controller instances (or a manually-started one). "One independent lifecycle then exit" is the controller prompt's own instruction, and the supervisor will relaunch another controller iteration. Other controller instances may be running concurrently! That explains the map changing at 00:20:07 — another controller instance or lead ran a lifecycle/apply.
+
+This means: my lifecycle pass is one of potentially several. I should keep my footprint bounded: one lifecycle pass (+ its close) then exit, and update the handoff. I must avoid colliding with other controller instances writing the same handoff. The map lock serializes lifecycle runs but handoff edits could race.
+
+Given the environment, the most useful completion is:
+1. Run the close invocation of my lifecycle to ingest traffic that arrived during the pass (this is the same pass, consistent with pass-02 precedent).
+2. Verify final state (gates pending with hash-bound reasons; numerics locked; measured hashes recorded; validation VALID).
+3. Update `ASTRA_HANDOFF.md` LIVE CONTROLLER STATE with the pass-03 summary (this is the controller's own artifact).
+4. Optionally write a pass summary to `runtime/state/controller_verification/astra-lifecycle-03.md` (like pass-02 has astra-lifecycle-02.md).
+5. Exit.
+
+Regarding "issue bounded assignments": With many controllers/leads running and 100 workers actively generating events, issuing a new canonical-path assignment risks duplication. But the formulation lead's FINAL blocker set has specific, bounded, non-overlapping items:
+- Independent verdicts at rev25 final hashes for G-FORM/G-F0 — currently covered by astra-life01-a1-rebind generically, but not pinned to the final hashes; a narrow successor is warranted (one canonical assignment per path... a1-rebind has artifact ["reviews/"], and my new one would also target reviews/. Per CF-12, no two open assignments naming the same canonical path. So issuing another reviews/ assignment duplicates a1-rebind. Better: record a direction_update re-binding astra-life01-a1-rebind to the final rev25 hashes (not a new assignment) — that's the "narrow/supersede" mechanism. But events are append-only in events.jsonl, and the map's assignments list is append-only too; a direction_update won't rewrite the old assignment. Hmm, but I can add an assignment event with a `supersedes` field? Let me check apply_events / schema for supported fields.
+
+Actually, the pass-02 assignment `astra-life02-softflag-f0f1` was a "narrowing" of a1-rebind but targeted a *different* artifact path (reviews/A1-rebind-coverage.json vs reviews/). So the CF-12 rule is about exact canonical paths... reviews/ directory is broad. Two assignments can coexist if they name different concrete artifact files.
+
+Given time and the "one lifecycle then exit" instruction, I think the cleanest bounded controller action is:
+- Emit one `assignment` event for a bounded verification of the FINAL rev25 hashes: assignee `astra-lead-audit`, artifact `reviews/G-FORM-final-verify.json` (a concrete new path not owned by another open assignment), node F1,F2a,F2b, gate G-FORM, deadline 01:30, with acceptance = two independent full-schema verdicts at the pinned final hashes (F1 9a8bd4c9..., F2a b6123750..., F2b 1bb78ce9...), falsifier and stop rule. And another for G-F0 at F0 276009f4 pinned, artifact `reviews/G-F0-final-verify.json`. Hmm, but that's two assignments and the audit lead already has 4 open. The alternative is to leave assignment issuance to the next controller iteration — but the user asked me to issue bounded assignments.
+
+Wait. Let me re-read the user instruction: "Consume comms and artifacts, maintain DAG and gates, issue bounded assignments, record hashes and validation. Keep numerics gated. One independent lifecycle then exit."
+
+This is the standard controller prompt (same as in the supervisor script). The expectation is that during this lifecycle I: ingest, apply, repair (gates/DAG), issue bounded assignments if needed, record hashes/validation, keep numerics gated, then exit. So yes, issuing at most a couple of bounded assignments is in scope.
+
+But there's a strong caveat from CF-12 and the handoff: "one canonical path has exactly one owner". The new final-hash verification is materially different from a1-rebind, which was written before F1/F2 were published at final hashes. The formulation lead's blocker B1/B2 explicitly asks for it. Since a1-rebind's artifact is the whole `reviews/` directory, while my new assignment can point at a uniquely named verdict file (`reviews/G-FORM-final-verify.json`), I'll frame it as a *narrow successor* that supersedes a1-rebind's target set for F1/F2a/F2b/F0 at rev25 — explicitly stating it supersedes the hash-generic version so reviewers don't do double work.
+
+Also, the F2b accept from worker-001 at 1bb78ce9 already counts — one of the needed two. Should I verify that worker-001's review is full-schema and independent? The review event: target schemas/af_scc_c0_vacuum.yaml#1bb78ce9b357..., verdict accept, score 4.0, full? Let me check the review JSON file to see `counts_as_full_schema_verdict` and whether the reviewer is distinct from authors. The lifecycle's review_coverage scan only picks up reviews/*.json files (root reviews dir), not artifacts/worker-001/f2b_review/review.json. That's a coverage gap: worker-001's accept is recorded in events.jsonl but not in reviews/. The audit lead's binding coverage adjudication handles it. Hmm — this is a material observation: G-FORM's coverage scan (F2b 0 accepts) misses events-based reviews stored outside reviews/. The gate audit says "review scan at this hash: 0 distinct accept reviewers" which is currently undercounted for F2b. I should note this as a controller finding (CF-17?) — but the lifecycle's findings_merge rewrites a fixed list CF-7..CF-16. Adding a new finding would require modifying the tool (not appropriate for the controller instance to rewrite its own tool? Actually the controller owns the tool). Modifying astra_lifecycle.py to add CF-17 could be considered maintenance of the controller tool. But risk: concurrent controller instances also run this tool; changing it mid-flight could break others. Given "one independent lifecycle then exit", I should not do risky tool surgery now. Instead, I can record the observation in the pass summary and handoff text, and in my structured events (e.g., a `status` or `direction_update` event from astra with the note). Hmm, but the map's controller_findings is the durable place for findings. 
+
+Alternative: `apply_events.py` may support adding controller findings? Probably not.
+
+Let me look at how much value each action adds vs. risk:
+
+A. Close lifecycle (`--label astra-lifecycle-03-close`): low risk, established pattern, refreshes gate audit with the F2b accept (if review file is in reviews/) — the accept is at artifacts/worker-001/f2b_review/review.json, not reviews/, so coverage scan still shows 0. The close will still ingest the lead's final artifact events and the A2 review. Useful: records measured hashes of final rev25 (F1/F2a/F2b/F0) and publication status; DAG maintained. Also re-measures clock discipline.
+
+Hmm wait, actually — there's a subtlety: the close invocation will *also* re-apply any pending events (13 pending at 00:20:12 were applied by the supervisor checkpoint? checkpoint.py doesn't apply. The map mtime 00:20:07 means apply_events ran at 00:20:07 — probably another controller's lifecycle or a lead). Let me check if pending events remain now: run `comms.py ingest --dry-run`? The ingest is idempotent; a dry run reports. Let me check `runtime/state/current_checkpoint.json` events_pending.
+
+B. Record pass summary + update handoff: important for continuity (the handoff is the controller's memory). But with multiple controller instances (supervisor relaunching every 20s!), there's a real risk another Astra writes the handoff concurrently and we clobber each other. The supervisor launches `controller-01` only if the tmux session doesn't exist; my session (if I'm that one) means no other controller-01. But `supervise_loop.sh` runs `astra-controller` persistently too. Which one am I? The running process list showed `independent_supervisor_100.sh` (bash, pts/6) — that's the launcher that spawns tmux sessions. My own process is inside one of those dsh sessions. There could also be `astra-controller` loop. Let me check tmux sessions.
+
+Actually, my lifecycle ran at 00:19:58 and map changed at 00:20:07 by something else — could be another controller's lifecycle with a different label? The lifecycles list showed only my astra-lifecycle-03 after 02-close-final... but then the map changed at 00:20:07 and its updated_at became 00:20:07 with no new lifecycle entry. So it was `apply_events` run by someone (supervisor checkpoint doesn't apply; maybe a lead ran `comms.py ingest` + apply_events manually, or another lifecycle that failed halfway? Or `run_cycle.py`). Let me check `runtime/state/current_checkpoint.json` for pending.
+
+Let me also check tmux sessions to understand concurrency.
+
+Let me be pragmatic: the environment is a live multi-agent swarm; my job is one bounded controller pass. I'll:
+1. Check tmux/concurrency + pending events.
+2. Run one close invocation to finalize my pass (ingest+apply+repair+audit+checkpoint under lock).
+3. Verify final state; measure hashes; check F2b review file eligibility (read worker-001's review.json for counts_as_full_schema_verdict and independence) — this is artifact consumption.
+4. Emit one bounded assignment event (narrow successor for final-hash G-FORM/G-F0 verification) if not duplicative — decide after checking the map's assignments and pending traffic. Since the assignment event goes through comms/outbox/astra.jsonl → ingest → apply. Hmm, how do controller assignment events get into the map? astra writes to its own outbox? Let me check how pass-02 assignments were emitted: via `astra_lifecycle_02_events.py` which likely used `comms.send` to write downward messages to leads' inboxes AND appended assignment events to events.jsonl? Let me read the script to follow the established mechanism.
+5. Write pass summary `runtime/state/controller_verification/astra-lifecycle-03.md` and update `ASTRA_HANDOFF.md` (careful, minimal, and only if I'm the authoritative controller instance — there is one handoff file; last writer wins; I'll write it near the end).
+6. Exit.
+
+Let me check `astra_lifecycle_02_events.py` structure to reuse the event-emission mechanism.
+dsh: reasoning:
+There are many tmux sessions: `controller-01` created 00:19:19 (that's likely me), `astra-supervisor`, leads, and 100 workers. The `controller-01` session was created at 00:19:19 — my session. Fine.
+
+Current checkpoint says 67 events pending application (as of 00:21:15), accepted 10. The map was last written 00:20:07. So there's a backlog of 67 pending events — mostly worker traffic. This is because checkpoint.py doesn't apply events; lifecycle/apply_events does.
+
+So my close invocation will ingest + apply those 67+ events and refresh the gate audit. That's clearly valuable and is part of "consume comms and artifacts". Then I stop.
+
+Note the risk that other controllers (supervise_loop's `astra-controller` persistent loop) may also be running lifecycles. tmux shows no `astra-controller` session currently (only `controller-01`). Good — I'm likely the only controller instance right now; `supervise_loop.sh` may not be running (checked: process list showed only `independent_supervisor_100.sh` and unrelated supervise.sh procs). So I am the sole active controller. That means I can safely update the handoff.
+
+Plan:
+1. Run close invocation: `python3 research_map/astra_lifecycle.py --label astra-lifecycle-03-close`. It will apply 67+ events.
+2. Verify results and re-measure final hashes.
+3. Consume key artifacts: check worker-001's F2b review file (is it a proper independent review, does it count?), check the lead's rev25 FROZEN.json, check N0 replication status, check the newest reviews at final hashes.
+4. Decide bounded assignments. Given the formulation lead's B1/B2 and the fact a1-rebind is hash-generic, I'll issue a narrow successor assignment pinned to the rev25 final hashes, targeting a NEW concrete verdict path to respect CF-12, plus possibly a bounded re-pin task for flash-02/flash-04 (B4) and FORM-HELDOUT-08 re-dispatch (B3). But "bounded" and "one lifecycle then exit" — I'll issue at most 2-3 assignments via a new events script (following the pass-02 pattern), each with acceptance/falsifier/stop rule, and mirror them to the assignees' inboxes. Actually, wait: assignments are supposed to be events in the accepted stream AND mirrored to inbox. The pass-02 script did that. But does the map apply assignment events into `map.assignments` automatically? Yes, apply_events handles event_type=assignment.
+
+However, there's a real concern: issuing assignments into the 100-worker fleet itself may be orchestrated by the leads, not me. The leads read their inboxes. Fine.
+
+Let me think about what assignments are genuinely needed vs. already covered:
+
+(a) G-FORM final-hash independent verdicts (F1 9a8bd4c9, F2a b6123750, F2b 1bb78ce9). Covered by a1-rebind generically, but a1-rebind was written at 00:05 against superseded hashes; the lead's blocker B1 asks for final-hash verdicts. New assignment: assignee astra-lead-audit, artifact `reviews/G-FORM-final-verify.json` (new path; no other assignment names it). Acceptance: ≥2 independent full-schema verdicts at the three pinned hashes (or 1 per class with a second reviewer), by reviewers who did not author; cite sha256; falsifier: a reviewer finds a non-frozen class id or a legitimate formulation rejected. Stop rule: one verdict per schema at cited hashes.
+
+Hmm, but the audit lead's job is to *adjudicate* coverage, while the independent reviewers are flash workers. Assigning the audit lead to "produce 2 independent accepts" is like asking them to coordinate reviews. Previous pattern: astra-life01-a1-rebind was assigned to lead-audit with acceptance "provide for each target at least two verdicts from distinct reviewers who did not author the artifact". So yes, that's the established pattern.
+
+(b) G-F0 final-hash independent verdict at 276009f4 + publication. Publication is still divergent (canonical 276009f4 vs authoring c8e979a1). astra-life02-publish-f0 is open until 01:00 and covers this. No new assignment; perhaps a direction update superseding its pinned hash note (the assignment text says "if the accepted canonical 565a6e505188 is superseded, say so explicitly" — it was). So it remains valid.
+
+(c) B3 FORM-HELDOUT-08 re-dispatch against rev25: a genuinely new, bounded task. Prior held-out runs exist (worker-16). A re-dispatch assignment to `astra-lead-formulation`? But formulation authored the pipeline; the held-out run should be an independent executor (flash pool). The formulation lead's request item (3) asks Astra to re-issue FORM-HELDOUT-08. This is a controller job. New assignment: assignee `deepseek-flash-16` (ran it before) or a fresh worker; artifact `artifacts/heldout/form_heldout_08_rev25.json`. Hmm, I need to check what FORM-HELDOUT-08's canonical path was. Let me grep.
+
+(d) B4 re-pin corpora (flash-02 taxonomy_cases.jsonl to F0 276009f4, flash-04 f1_falsifier_tests.jsonl to F1 9a8bd4c9): small bounded assignments to deepseek-flash-02 and deepseek-flash-04. These are cheap, concrete, and remove downstream drift. Good candidates.
+
+(e) B5 flash-02 rephrase claims[36] to clear the CLASSSEP hard failure (CF-16). Bounded, cheap, high value (removes the only hard failure in the audit). Assignment to deepseek-flash-02. Note CF-4 policy: controller doesn't edit another agent's claim text; the author must rephrase. So an assignment is exactly right.
+
+But careful: how many assignments is too many? The user says "issue bounded assignments" — plural is fine. The pass-02 script issued 5. I'll issue a small set:
+1. `astra-life03-gform-final-verify` → astra-lead-audit, deadline 01:30 (G-FORM final hashes).
+2. `astra-life03-gf0-final-verify` → astra-lead-audit, deadline 01:30? That may collide with (1) same assignee; but different artifact paths. Actually the a1-rebind assignment covers all targets generically. To avoid overloading, combine F0 into the same assignment? Gate is different (G-F0 vs G-FORM). I could issue one assignment with node_id "F0,F1,F2a,F2b" and gate "G-FORM", noting G-F0's F0 verdict is part of the same review round but the gate itself stays separate. Hmm, cleaner: two assignments, one per gate, both to lead-audit, different concrete artifact paths (`reviews/G-FORM-final-verify.json`, `reviews/G-F0-final-verify.json`). The audit lead can coordinate both.
+
+Actually, wait. Let me reconsider: is it my place to launch reviews now, or should the next controller iteration do it? The user's instruction is explicit: "issue bounded assignments". The swarm is waiting for controller direction (leads asked; workers are idle-ish with no cards). I should issue them.
+
+3. `astra-life03-heldout-rev25` → assign a fresh independent worker (deepseek-flash-16 ran HELDOUT-08 before; better a different worker for independence, e.g., deepseek-flash-13 or a worker-NN). Need to know which agents are available. The outbox has deepseek-flash-01..20 and worker-001..100. The 100-worker fleet uses `worker-NNN` ids? The events show workers like `worker-001`, `worker-053`, `worker-065`, `worker-086`. Their inbox cards are `comms/inbox/worker-01.jsonl` etc. Hmm, the fleet launched 100 workers with ids maybe `worker-001`... Let me check the actual inbox card filenames again: comms/inbox shows worker-01.jsonl, worker-06.jsonl, worker-16.jsonl (2-digit) plus many deepseek-flash. But events show `worker-001`, `worker-053`, `worker-065`, `worker-086`, `worker-16`, `worker-023`, `worker-026`, `worker-07`, `worker-070`, `worker-077`. Mixed. The independent_supervisor_100.sh launches role `worker` slot `01`..`100` (seq -w 1 100 gives 001..100), and the prompt says "worker=$n" → n is 001..100. So agent ids are `worker-001`..`worker-100`. But some agents write `worker-16` (from earlier 20-fleet, supervise_loop uses `deepseek-flash-$n`). So the 100-fleet ids are worker-001..100.
+
+Hmm, delivering an assignment to `worker-053` would require writing to `comms/inbox/worker-053.jsonl`. But the prompt tells workers to read `ASTRA_HANDOFF.md` and the map, and the map's assignments register is how they find work. Also the leads assign their own workers. Issuing assignments directly to workers may bypass leads. The established pattern from pass-02: assignments were mirrored into the *assignee's* inbox, and assignees were leads (astra-lead-formulation, astra-lead-audit, astra-lead-literature) — not individual workers, except older ones like deepseek-flash-19. So I'll assign to leads, who then dispatch their workers. Exception: B4/B5 are specific worker-owned artifacts (flash-02/flash-04) — but those are deepseek-flash-02/-04 from the 20-fleet, and the 100-fleet workers may not have cards. Hmm. The formulation lead can dispatch its own workers; so assign the re-pin items to the formulation lead (they own the corpus files? Actually schemas/taxonomy_cases.jsonl is flash-02's artifact, but the formulation lead owns schema/taxonomy). The request explicitly says "flash-02 rephrases one claim statement and re-pins taxonomy_cases.jsonl, flash-04 re-pins f1_falsifier_tests.jsonl".
+
+Given complexity, the cleanest bounded set issued by Astra:
+- A1: `astra-life03-gform-final` → lead-audit: produce/coordinate two independent full-schema verdicts at F1 9a8bd4c9, F2a b6123750, F2b 1bb78ce9 by reviewers distinct from authors, within 01:30.
+- A2: `astra-life03-gf0-final` → lead-audit: same for F0 276009f4 (G-F0), plus verify publication divergence state (but publication is lead-formulation's task; the F0 verdict should bind the canonical hash once published; if still divergent, the verdict binds canonical and flags non-transferability).
+- A3: `astra-life03-repin-and-heldout` → lead-formulation (narrow successor): re-pin taxonomy_cases.jsonl to F0 276009f4, f1_falsifier_tests.jsonl to F1 9a8bd4c9, re-dispatch FORM-HELDOUT-08 against rev25, and have flash-02 rephrase claims[36]. Hmm, that's 4 items in one assignment — not very bounded. Maybe split: A3 re-pin corpora (formulation lead), A4 held-out re-dispatch (formulation lead / independent worker), A5 claims[36] rephrase (deepseek-flash-02 directly, cheap).
+
+The instruction says "bounded assignments" — each with acceptance, falsifier, stop rule. Multiple small ones is better than one big one. But also "keep numerics gated" — no N1 work.
+
+Do I need a numerics assignment? G-NUM needs C8: an independent verdict on numerics/CONVERGENCE_PROTOCOL.md at 1e6cdf04d7a2. astra-life02-n0-c8-refresh (lead-audit) already covers exactly that, due 01:30. No new assignment.
+
+Literature: G-LIT needs an L0 accept at ce42d205 and the third L1 spot check; astra-life01-l0-revise and astra-life02-l1-spotcheck cover those. No new assignment.
+
+So new assignments: final-hash verification (audit), held-out re-dispatch (formulation/independent), re-pin corpora (formulation), claims[36] rephrase (flash-02). That's 4, all genuinely new, none naming an already-owned canonical path:
+- `reviews/G-FORM-final-verify.json` — new path
+- `reviews/G-F0-final-verify.json` — new path
+- `artifacts/heldout/form_heldout_08_rev25.json` — need to check existing path; let me find FORM-HELDOUT-08 artifacts.
+- `schemas/taxonomy_cases.jsonl` and `schemas/f1_falsifier_tests.jsonl` — existing paths but no open assignment names them (check).
+- claims[36].statement — not an artifact path; the author flash-02 rephrases. Hmm, claim rephrase can't be a new claim event easily; the author can emit a `claim` event superseding? Or edit? CF-4 says controller doesn't edit. Assignment to flash-02: "rephrase claims[36] in a new claim event and mark the old one superseded" — the apply_events may support claim supersede? Unclear. Let me check whether there's a mechanism (`supersedes` field). The leadform-status-0014 uses summary "SUPERSEDES every hash reference...". So the convention is prose-level. For a claim, the author could emit a new claim with `supersedes: <old claim id>`. Let me check apply_events for claim handling.
+
+This is getting deep. Time/scope check: I've already run the lifecycle. The user wants one lifecycle then exit. Let me not over-engineer the assignment round. A focused, high-value set:
+
+1. `astra-life03-gform-final` → lead-audit (G-FORM final-hash independent verification; F2b has 1 accept already from worker-001 at 1bb78ce9).
+2. `astra-life03-gf0-final` → lead-audit (F0 final-hash independent verification at 276009f4; G-F0).
+3. `astra-life03-repin-final` → lead-formulation (B4 re-pins + B5 rephrase by flash-02; bounded, 1.5h).
+4. `astra-life03-heldout-rev25` → lead-formulation or independent worker (B3 re-dispatch FORM-HELDOUT-08 vs rev25; bounded). Let me check where the held-out corpus lives first.
+
+Actually — hold on. Should assignments go to lead-formulation for B4/B5/heldout, when lead-formulation is the one asking for *verification* resources and has no dependency on those? Yes: re-pinning downstream corpora and re-running held-out are authoring-side tasks owned by formulation. Fine.
+
+And what about the resource request approval (3 agents/6h)? I can include a `budget`/`resource` decision event: approve 3 reviewers × 2h = 6h for the verification assignments, drawn from formulation's request, assigned via audit lead. The map has `resource_requests` and `groups[].budget_agent_hours`. A `budget` event type exists in the protocol (downward). Committing budget is reasonable: approve 6.0 agent-hours for the verification round. But previous controller passes may have budget rules; the group budget is 162h with 38 spent; formulation requested 6h. I'll approve the 6h bounded to the verification assignments. Hmm, apply_events may or may not handle `budget` events. Let me check the event schema and apply_events handling.
+
+Let me first run the close lifecycle (apply 67 pending events), then inspect. Then build the events script. Let me also check `comms.append_event` and `comms.send` signatures for the emission mechanism.
+
+Let me do the close pass now.
+dsh: reasoning:
+Close pass applied 150 events, map VALID, gates pending, numerics locked. Let me read the close report and inspect the refreshed gate audit (especially review coverage at final hashes — worker-001's accept may now be visible if the review file landed in reviews/ or if coverage scan picks up the artifact path... it only scans reviews/*.json).
+
+Let me check:
+- report file newest
+- gate audit reasons
+- measured hashes
+- review coverage from report
+- whether worker-001's accept appears (probably not, since it's in artifacts/worker-001/f2b_review/review.json)
+- events pending now
+
+Then consume key artifacts and decide assignments.
+dsh: reasoning:
+Now, reviews are coming in from the 100-worker fleet: F1 revise x2 (worker-090, worker-094) + flash-19 revise; F2b revise (worker-034). These are at the final hashes presumably. The gate audit is now current.
+
+Interesting: no accepts at final hashes except worker-001's F2b accept (stored in artifacts/worker-001/f2b_review/review.json, not in reviews/ so not scanned). I should check worker-001's review file validity and note it as evidence.
+
+Now let me consume the key artifacts to make informed decisions:
+1. `artifacts/worker-001/f2b_review/review.json` — full-schema? reviewer identity? independent?
+2. `artifacts/formulation/FROZEN.json` (af24e9c39606) — revision 25, F0 pin state.
+3. N0 replication verdict state.
+4. The revise verdicts at F1/F2b — are they substantive hard failures? If so, G-FORM may be blocked by real defects, not just missing reviews. Let me read the newest reviews (worker-090/094, worker-034) to see whether they found real defects at final hashes. This matters: if the final schemas have defects, my assignment should target revision, not just more accepts.
+
+Let me find the review files for worker-090/094/034 at final hashes.
+dsh: reasoning:
+There are now review files in reviews/ for the final hashes. The coverage scan in the close report didn't see accepts except F2b revise — because it ran at 00:21:55 and files like F2b-review-worker-001.json might have been written after? Let me check mtimes and contents of the key new review files:
+- reviews/F1-review-090.json (worker-090, revise)
+- reviews/F1-review-094.json (worker-094, revise)
+- reviews/F1-review-19.json (flash-19, revise)
+- reviews/F1-review-lead-audit-r2.json
+- reviews/F0-review-lead-audit-r2.json
+- reviews/F2b-review-worker-001.json (accept, 4.0)
+- reviews/F2b-review-034.json (revise)
+- reviews/F2a-review-19.json
+
+Let me read the verdicts, hard failures, and pinned hashes of the F1/F2b/F0 reviews to determine whether the final schemas have substantive defects. This is critical for deciding whether to issue a "revise-and-re-review" assignment vs "more accepts".
+
+Let me summarize them compactly.
+dsh: reasoning:
+Now I have a clear picture of the substantive state:
+
+- F1 at final 9a8bd4c9: lead-audit r2 says **accept 4.5** (full-schema True); worker-090 revise 3.5 (evidence-binding drift to authoring tree, duplicate YAML keys + future-dated revised_at, undefined AF_{I+}), worker-094 revise 4 (duplicate keys/future-dated timestamps), flash-19 revise 2.5 (HF-06 quantifier contradiction, dangling AF_{I+}). So F1 has 1 full accept + 3 revises with concrete defects (some real: duplicate YAML keys, future-dated revised_at, dangling AF_{I+} symbol, F0 contract pointer to authoring tree).
+- F0 at 276009f4: lead-audit r2 **revise 4.0** (full-schema True). Needs fixes + 2 accepts.
+- F2b at 1bb78ce9: worker-001 **accept 4.0**; worker-034 revise 3.0 with hard findings (quantifier domain, F0 contract pointer not resolving at declared F0 artifact).
+- F2a at 23fec0e9 (older hash!): flash-19 revise 2.0. Note: reviewed_sha256 23fec0e9 is stale vs current b6123750 — so F2a at current hash has no verdicts yet.
+
+So G-FORM is not merely missing verdicts: there are concrete defects found at the final hashes (F1: duplicate keys/future dates/dangling symbol/binding drift; F2b: binding pointer + quantifier domain). These are hash-bound revise verdicts. The right controller action is a bounded **revision + re-review** round, not just more accepts. However, the authors own their artifacts, and the leads will see the reviews. As controller I maintain gates: G-FORM stays pending with a hash-bound reason that now includes the concrete revise findings. The close pass's gate audit reason says "0 accepts at these hashes; verdicts bound to superseded hashes are advisory only" — that's partially stale: at 00:21:55 the scan saw F1 revises (worker-090, 094, flash-19) and F2b revise (worker-034) but no accepts (lead-audit r2 accept for F1 must have landed after 00:21:55 or its `counts_as_full_schema_verdict` handling).
+
+Wait: F1-review-lead-audit-r2.json exists — let me check its mtime. If it was written before 00:21:55, why didn't the coverage include it? Possibly because `target_id: F1` maps to F1, pins `reviewed_sha256` 9a8bd4c9 — the scan should catch it. Unless the verdict key is different (e.g., "accept" but `counts_as_full_schema_verdict: True`) — the scan requires `_targets_in_review(d)` to include F1 and pins to match. It printed F1 verdicts as worker-090 revise, worker-094 revise, flash-19 revise — no lead-audit. So the file must have been written after 00:21:55. Let me check mtimes.
+
+Anyway: the state now is that F1 has 1 accept + 3 revises at the final hash; F2b has 1 accept + 1 revise; F2a has none at current hash (only a stale-hash revise); F0 has 1 revise (lead-audit) at current hash.
+
+Controller decision (bounded, high-value):
+- No gate changes (all pending — correct; G-FORM cannot pass with unresolved hard revise findings).
+- Issue a bounded revision round: the formulation lead must resolve the concrete hard findings at F1/F2b/F0 (duplicate YAML keys, future-dated revised_at, dangling AF_{I+} definition, quantifier-domain ambiguity, F0 contract pointer path to canonical tree), then freeze a new revision; and the audit lead must re-run independent verdicts at the new revision. One canonical path one owner: F1/F2a/F2b/F0 paths are owned by formulation lead (astra-life01-publish-frozen / astra-life02-publish-f0 are open — a revision assignment would name the same paths as those open assignments... CF-12 says no two open assignments naming the same canonical path. But the existing assignments' purpose was *publication/freezing*, which has now landed; the new need is *defect correction*. A successor assignment that supersedes the publication assignments is legitimate: "a successor assignment must narrow or supersede, not duplicate". I can frame the new assignment as superseding astra-life01-publish-frozen for schemas (its publication goal is met) with the new goal of closing the hash-bound revise findings.
+
+Hmm, but perhaps the cleanest is: don't issue a formulation revision assignment (the formulation lead already has the reviews and its blockers; it's actively working and will see the events), and instead issue a controller `direction_update`/`priority_change` telling formulation to treat the F1/F2b/F0 hash-bound revise findings as the next task (superseding further publication churn), and telling audit to re-verify after. Plus issue the G-FORM/G-F0 final verification assignment once the revision lands.
+
+But "issue bounded assignments" suggests assignment events. I'll issue a bounded assignment to lead-formulation:
+`astra-life03-revise-final`: node F1,F2a,F2b,F0; artifact paths = the four canonical files; acceptance = each hash-bound hard finding from F1-review-090/094/19, F2b-review-034, F0-review-lead-audit-r2 is resolved or explicitly dispositioned with evidence, artifact re-frozen (new revision + new sha256), FROZEN.json updated; falsifier = a reviewer at the new hash finds any unresolved finding or new class id; stop rule = one corrected revision per path with all finding IDs enumerated in the revision note.
+Deadline 01:30. Budget maybe 3h.
+
+And a second assignment to lead-audit:
+`astra-life03-reverify-final`: node F1,F2a,F2b,F0; artifact `reviews/G-FORM-final-verify.json` (or reviews/round2/); acceptance = two independent verdicts per class at the post-revision frozen hash, distinct reviewers, citied sha256; stop rule = one verdict per target at cited hashes.
+
+Hmm — but sequencing: re-verify depends on revision. The assignment can state that.
+
+Plus the small bounded items from the lead's blocker:
+`astra-life03-repin-downstream` → lead-formulation: re-pin schemas/taxonomy_cases.jsonl to F0 276009f4 (or post-revision hash) and schemas/f1_falsifier_tests.jsonl to F1 9a8bd4c9; re-dispatch FORM-HELDOUT-08 against rev25; flash-02 rephrases claims[36].
+That's 4 things. Split into two:
+- `astra-life03-repin-corpora` (lead-formulation, 1.0h): re-pin the two corpora and have flash-02 rephrase claims[36] to clear the CLASSSEP hard failure.
+- `astra-life03-heldout-rev25` (lead-formulation, 2.0h): re-dispatch FORM-HELDOUT-08 at rev25 with a fresh independent worker; report union escape with per-case witnesses.
+
+Hmm, but is HELDOUT-08 re-dispatch appropriate now when the artifacts are about to be revised? The held-out corpus tests the pipeline; if schemas get revised, the held-out result will be stale. Better sequence: revise first, then held-out. So maybe skip/延迟 the held-out assignment; note it as queued behind revision. I could issue it with a dependency note: "start only after the revised hashes are frozen". That's fine and bounded.
+
+Also numerics: keep gated. No N1. The N0 C8 review is owned. N0 replication "independently replicated" requirement — deepseek-flash-12's checkpoint confirmed an accept; worth checking whether the replication verdict is still PROVISIONAL. The G-NUM reason says PROVISIONAL on disk. Let me check the N0 replication verdict artifact and the newest N0 events. If a second independent replication has now been recorded, the lock release precondition could move closer — but release still requires G-FORM + G-AUDIT pass, which they don't. So lock stays. No numerics assignment needed.
+
+Also literature: G-LIT needs an L0 accept at ce42d205. Let me check if new L0 verdicts exist (L0-rev2-disposition, etc.). The coverage scan says L0 no verdicts at that hash (only reviews/*.json with proper pins). The lit lead has assignments. Fine.
+
+One more check: apply_events might demote author status=done claims. The close pass reported events_demoted: [] — good.
+
+Now, about emitting assignments: I need to follow the pass-02 mechanism: `comms.append_event(...)` + `comms.send(assignee, ...)`. Let me read the rest of the pass-02 script to see how it appends events and mirrors inbox, and check `comms.append_event` signature. Then write a new script `astra_lifecycle_03_events.py` with idempotent event IDs, run it, and validate.
+
+But careful about the 100-worker supervisor: it relaunches `controller-01` every 20s if the tmux session dies. My session `controller-01` currently exists (I'm running inside it). When I exit, the supervisor will launch a new controller-01 with the same prompt — meaning another Astra pass will run after me. That's the designed continuation. My handoff update ensures continuity.
+
+Wait — actually, the supervisor `independent_supervisor_100.sh` was started at 00:16:56 in bash pts/6. `controller-01` created 00:19:19. Hmm, the launcher creates controller-01 at first loop iteration (00:16:56), but it says created 00:19:19 — maybe the earlier session died and was relaunched; or `worker-001` at 00:20:20 etc. Either way, when my process exits, a new controller will start within 20s. Good: my "one lifecycle then exit" won't stall the swarm.
+
+Also there's `astra-supervisor` tmux session (created 00:16:56) — that's the independent_supervisor_100.sh loop itself.
+
+So my deliverables: 
+1. ✅ one lifecycle (03 + close).
+2. ✅ hashes recorded (checkpoint).
+3. ✅ gates/DAG maintained.
+4. Issue bounded assignments (events).
+5. ✅ numerics gated.
+6. Update handoff + pass summary md.
+7. Exit.
+
+Let me now read the rest of the pass-02 events script (the emission helpers) and comms.py append_event/send.
+dsh: reasoning:
+I now understand the mechanism. Let me plan the bounded assignment events for pass 03.
+
+Before writing them, let me verify current artifact/review state to write accurate acceptance text:
+1. F2a current hash b6123750 — any review at that hash? Reviews list showed F2a-review-19.json pinned 23fec0e9 (stale). Let me grep reviews for b6123750.
+2. F1 review lead-audit-r2 accept (9a8bd4c9) mtime.
+3. F0 review lead-audit-r2 revise (276009f4) — what are its findings?
+4. F2b worker-034 revise findings (quantifier domain, F0 pointer not resolving at declared F0 artifact).
+5. N0 replication verdict current state.
+6. FORM-HELDOUT-08 artifact path.
+7. claims[36] current text (for rephrase acceptance).
+
+Let me gather these efficiently.
+dsh: reasoning:
+Good. Key facts:
+- F1 at 9a8bd4c9: lead-audit r2 accepts (4.5, full-schema True, written 00:22:23 — after my close pass at 00:21:55, so next pass will see it). Workers 090/094/19 revise with concrete defects.
+- F0 at 276009f4: lead-audit r2 revise 4.0 (content conformant but FROZEN.json churn/future-dated timestamps residual).
+- F2a at b6123750: reviews/F2a-review-047.json exists (need verdict).
+- N0 replication verdict still PROVISIONAL.
+- FORM-HELDOUT-08: artifacts/formulation/evidence/heldout_rebased*, worker-068/heldout3, worker-16/heldout2, worker-06/heldout_corpus. Need the exact HELDOUT-08 path. Let me grep for "HELDOUT-08" or "heldout-08".
+
+Let me check F2a-review-047 verdict and find HELDOUT-08 references.
+dsh: reasoning:
+Very useful. Key new facts:
+- F2a at b6123750 has reviews/F2a-review-047.json: worker-047, **accept**, score 4.0, full True. So F2a has 1 accept at current hash.
+- F2b at 1bb78ce9: worker-001 accept 4.0 full-schema (file has independent:true), plus worker-034 revise.
+- F1 at 9a8bd4c9: lead-audit r2 accept 4.5 full True, plus 3 worker revises with concrete findings.
+- F0 at 276009f4: lead-audit r2 revise 4.0.
+- FORM-HELDOUT-08 was run against rev13 with union escape 1.0 (terrible/uninformative: the pipeline catches nothing out-of-sample). Re-dispatch against rev25 is requested.
+
+Now, the defect findings at F1/F2b are concrete. But note lead-audit's accept for F1 — does it address the worker revises? The lead-audit r2 accept was written at 00:22:23, after the worker revises (00:19-00:22), so presumably considered them. Still, 3 independent revises vs 1 lead accept at the same hash is a real disagreement. Gate criteria require "2 independent reviewer verdicts" — usually two accepts. So G-FORM stays pending.
+
+Controller actions (pass 03 bounded assignments) — I'll now decide the final set. Constraints:
+- CF-12: no two open assignments naming the same canonical path.
+- Existing open assignments (through 01:30): publish-f0 (F0 path), a1-rebind (reviews/), l0-revise (theorems.jsonl), n0-proposal (n0_gate_proposal.json), n0-c8 & refresh (G-NUM-protocol-review.json), l1-spotcheck (citation_audit.csv), softflag-f0f1 (A1-rebind-coverage.json).
+
+New items needed:
+(A) Resolve the hash-bound revise findings at F1/F2a/F2b/F0 (formulation lead) — paths: schemas/af_wcc_vacuum.yaml, af_scc_c2_vacuum.yaml, af_scc_c0_vacuum.yaml, research_map/formulation_taxonomy.yaml. Paths F1/F2a/F2b are named by astra-life01-publish-frozen (open until 01:30), whose goal (publish frozen revision) is now achieved; my new assignment narrows/supersedes it to "close finding IDs". F0 path is named by astra-life02-publish-f0 (open until 01:00); the F0 revision is still not published byte-identically, so my revision assignment for F0 overlaps. To respect CF-12, I'll frame the new assignment as *superseding* both publication assignments for the finding-closure scope and explicitly state the old ones are closed by this successor. Hmm, but the old assignments stay in the map register. The CF-12 rule is about not issuing duplicate open assignments; a successor that explicitly supersedes is allowed. I'll write it explicitly: "SUPERSEDES astra-life01-publish-frozen (publication goal met for F1/F2a/F2b) and astra-life02-publish-f0 for the finding-closure scope; F0's byte-identical publication remains required as part of this assignment."
+
+Actually simpler and cleaner: one assignment `astra-life03-close-findings` to lead-formulation with artifact paths = the four canonical files. Acceptance: every hash-bound hard finding in the listed reviews at the pinned hashes is either fixed with a new frozen revision (new sha256, FROZEN.json updated, canonical==authoring) or explicitly dispositioned with evidence; the duplicate-YAML-key and future-dated-timestamp defects (F1: HF-090/094; F2b: HF-034; F0: FROZEN churn) fixed; re-emit artifact events. Falsifier: a reviewer at the new hash finds any listed finding unresolved or a new class id. Stop rule: 3 agent-hours or 2 revision bumps. Deadline 01:30. This supersedes the publication assignments.
+
+Wait — do I have the full finding IDs for F1 worker-090/094? HF IDs: worker-090 has HFs without id fields in my print (closest_taxonomy stuff). worker-094's HF-094-2. flash-19's HF-06. F2b worker-034's HF-034-1/2. I'll reference review files + "all hard findings" rather than enumerate wrong IDs.
+
+(B) Independent re-verification after revision (audit lead) — artifact `reviews/G-FORM-final-verify.json` and `reviews/G-F0-final-verify.json`. But here's the catch: the audits need to bind the *post-revision* hashes, which don't exist yet. The assignment can say: run at the revision frozen under (A); if a hash moves during review, stop and report a moving-target blocker. This matches the established moving-target pattern.
+
+Do I need both G-FORM and G-F0 verification assignments as separate events? They're both lead-audit; artifact paths differ. I'll issue one assignment per gate to keep gate bookkeeping clean:
+- `astra-life03-verify-gform`: assignee lead-audit, artifact `reviews/G-FORM-final-verify.json`, acceptance = for each of F1/F2a/F2b at the frozen post-revision hash, >=2 independent full-schema verdicts from distinct reviewers who did not author (worker-047's F2a accept and worker-001's F2b accept may count if they rebind; lead-audit r2 F1 accept may count as one if it re-pins), all findings dispositioned. Falsifier: accepts at superseded hashes, or reviewer overlap, or an unresolved hard finding. Stop rule: 2 agent-hours/adjudicated coverage table. Deadline 01:30.
+- `astra-life03-verify-gf0`: assignee lead-audit, artifact `reviews/G-F0-final-verify.json`, acceptance = two independent verdicts at the frozen F0 canonical hash, publication aligned (canonical==authoring), findings dispositioned. Deadline 01:30.
+
+(C) Re-pin downstream corpora + claims[36] rephrase (B4/B5): assignee lead-formulation, artifact list `schemas/taxonomy_cases.jsonl`, `schemas/f1_falsifier_tests.jsonl`. These paths are NOT named by any open assignment (check: taxonomy_cases.jsonl named in evidence_refs of gate events but not assignment artifacts; a1-rebind covers reviews/). Acceptance: taxonomy_cases re-pinned to the current F0 hash (post-revision), f1_falsifier_tests re-pinned to current F1 hash; flash-02 emits a superseding claim that rephrases claims[36] (no C0/C2 composite assertion) so audit_evidence reports 0 hard failures; each with new sha256 + artifact event. 1.0 agent-hour. This clears the last hard failure (CF-16). Deadline 01:30.
+
+(D) FORM-HELDOUT-09 (re-dispatch against rev25+): This is a bigger item (3h) and depends on (A). The lead asked Astra to re-issue it. I can issue it to lead-formulation with the explicit dependency "start after the finding-closure revision is frozen; use a fresh worker (not worker-16)". Artifact `artifacts/heldout/form_heldout_09/manifest.json` + report — new path. Deadline 02:00? The portfolio deadline in the map is 03:15. I'll set 02:00 to allow run time. Budget 3.0h (matching the prior HELDOUT-08 budget).
+
+Hmm, but is (D) appropriate to assign now given the artifacts will be revised under (A)? Yes with the dependency note. It's exactly what the lead requested (item 3).
+
+(E) Numerics: no new assignment; keep lock. The existing C8 refresh assignment covers G-NUM. But note deepseek-flash-12 checkpoint accepted N0 — the N0 "independently replicated" requirement may now be met? The fixed_replication_verdict says PROVISIONAL; the G-NUM reason says PROVISIONAL. The lock release precondition includes "N0 convergence order measured and independently replicated". N0 itself is allowed (flat space). No change needed. I will explicitly record the lock unchanged (the lifecycle does). Perhaps I should also re-affirm the lock in the event stream? The lifecycle's gate audit records it; my findings CF-10 verifies it. Sufficient.
+
+Also, is there any authorization issue with issuing a `budget` approval? I could add a `budget` event approving 6.0 agent-hours for the verification round. The protocol's downward `budget` type exists; but does apply_events handle it? Let me check apply_events event handling for unknown types (probably ignored gracefully). The map has `resource_requests` key. Let me check whether apply_events records budget events. I'll skip the budget event if unsupported; instead include `budget_agent_hours` fields in the assignments (as prior assignments did) and mention the approval in the direction text. The pass-02 assignments included budget_agent_hours; apply_events keeps the event fields in the assignment record. Good.
+
+One more consideration: Should assignments be sent as events only, or also mirrored to inboxes? Pass-02 mirrored. I'll mirror to the assignees' inboxes (astra-lead-formulation, astra-lead-audit), using `comms.send`. The workers read their leads' direction; the leads read their inboxes.
+
+Deadline labels: DEADLINE_EARLY = 01:00, LATE = 01:30. It's now ~00:23. Existing early assignments were due 01:00; my new ones: close-findings 01:30, verify 01:45? The map's run deadline is 03:15. I'll set:
+- close-findings: 01:30
+- verify-gform/gf0: 02:00 (after revision)
+- repin-claims: 01:30
+- heldout-09: 02:30
+
+Hmm, the format of deadlines is "+08:00". Fine.
+
+Now, about `apply_events.py` handling of assignment events: it stores fields. Let me quickly check that `event_type: assignment` is accepted and required fields (node_id, assignee, artifact, gate). The pass-02 script's events used exactly those plus acceptance/falsifier/stop_rule/deadline/budget_agent_hours. validate_event will check required fields. Let me check comms.validate_event requirements to ensure my events pass. Let me read it.
+
+Also need `class_id`? Pass-02 assignments include class_id. Let me include class_id.
+
+Let me read validate_event.
+dsh: reasoning:
+Now let me write the pass-03 events script. I'll model it on pass-02's script structure (append_event + send). Let me see the tail of pass-02 script (main function ending) to copy the mirroring logic exactly.
+dsh: reasoning:
+Now let me write `research_map/astra_lifecycle_03_events.py` with:
+- One `direction_update` from astra? A direction update requires group_id, old_direction, new_direction, reason, evidence_refs, budget_delta_agent_hours. I could issue one for formulation: old "publish/freeze churn" → new "close hash-bound revise findings; no further semantic churn". This is useful and legitimate. And maybe one for audit re-binding. Let me include one direction_update for formulation and skip others to stay bounded.
+
+Actually — the assignment acceptance texts themselves carry the direction. Adding a direction_update is cheap and makes the priority change explicit in the accepted stream. I'll include one for formulation (`astra-life03-direction-formulation`).
+
+- Four assignments:
+  1. `astra-life03-close-findings` → astra-lead-formulation, node "F0,F1,F2a,F2b", artifact list of four canonical paths, gate "G-FORM" (and G-F0 for F0). Acceptance, falsifier, stop rule, deadline 01:30, budget 3.0.
+  2. `astra-life03-verify-gform` → astra-lead-audit, node "F1,F2a,F2b", artifact `reviews/G-FORM-final-verify.json`, gate G-FORM, deadline 02:00, budget 2.0.
+  3. `astra-life03-verify-gf0` → astra-lead-audit, node "F0", artifact `reviews/G-F0-final-verify.json`, gate G-F0, deadline 02:00, budget 1.5.
+  4. `astra-life03-repin-claims` → astra-lead-formulation, node "F0,F1,A1", artifact ["schemas/taxonomy_cases.jsonl","schemas/f1_falsifier_tests.jsonl"], gate "G-FORM", deadline 01:30, budget 1.0.
+  5. `astra-life03-heldout-09` → astra-lead-formulation, node "A1", artifact ["artifacts/heldout/heldout-09/manifest.json","artifacts/heldout/heldout-09/report.json"], gate "G-CLASSBIND", deadline 02:30, budget 3.0.
+
+Hmm, that's 5 assignments + 1 direction_update. Is that too many? The prior pass issued 5 assignments. It's fine, each bounded. But I want to be careful about CF-12:
+1. close-findings names F0 (overlaps astra-life02-publish-f0) and F1/F2a/F2b (overlap astra-life01-publish-frozen). Explicitly framed as superseding those for finding closure. I'll state "SUPERSEDES astra-life01-publish-frozen and astra-life02-publish-f0: both publication goals have landed or are folded into this assignment; no other assignment may name these four paths while this is open."
+2. verify-gform names reviews/G-FORM-final-verify.json — new path, no overlap with a1-rebind (which names reviews/ generally). Hmm, strictly "reviews/" as a directory path could be seen as overlapping. I'll note in controller_note: "narrow successor to astra-life01-a1-rebind for F1/F2a/F2b at the post-revision frozen hash; a1-rebind's generic targets are superseded by this pinned round."
+3. verify-gf0 names reviews/G-F0-final-verify.json — same note, F0.
+4. repin-claims names two paths not owned.
+5. heldout-09 names new artifacts dir — no open assignment names artifacts/heldout/.
+
+One more check: is `artifacts/heldout/` a good path? Let me see if such a dir exists or what naming conventions worker-16 used (artifacts/worker-16/heldout2/). A neutral path avoids worker ownership conflicts. I'll use `artifacts/heldout/heldout-09/`. Fine.
+
+Regarding the `verify` assignments: the reviewers must not be authors. The assignment to lead-audit asks it to coordinate. Good.
+
+Now the F1 findings to enumerate in close-findings acceptance: I'll list review files and their key defects generically:
+- reviews/F1-review-090.json + F1-review-094.json: duplicate top-level YAML keys (7x revised_at + 2x revised_at_unused) with PyYAML last-wins, effective revised_at future-dated; class_contract_pointer targets the authoring tree (artifacts/formulation/...) rather than the canonical taxonomy; conclusion.statement_formal uses AF_{I+}(M_D) with no definition.
+- reviews/F1-review-19.json: HF-06 quantifier contradiction (D5 causal-diamond definition vs quantifiers.formal), dangling AF_{I+}.
+- reviews/F2b-review-034.json: HF-034-1 quantifier domain (family-of-statements), HF-034-2 class_contract_pointer does not resolve at declared F0 artifact.
+- reviews/F0-review-lead-audit-r2.json: FROZEN.json manifest churn + future-dated frozen_at; content conformant otherwise.
+- Also the F2a review at current hash is an accept (worker-047) — but F2a had stale revise verdicts at 23fec0e9; those are superseded. For F2a, no action needed besides not regressing. Wait — F2a's current-hash accept exists; good.
+
+Acceptance for close-findings: "Every hard finding in the five listed review files is either fixed in a new frozen revision (new sha256 recorded, FROZEN.json revision bumped, canonical == authoring) or explicitly dispositioned with a hash-bound rationale in the revision note; no new class ids; publication alignment maintained for all four paths. Re-emit artifact events with new hashes. Do not change class semantics to satisfy a reviewer without recording the semantic change as a revision delta."
+
+Falsifier: "any listed hard finding unresolved at the new hash, a new non-frozen class id, canonical/authoring divergence after the re-freeze, or a FROZEN frozen_at later than write wall-clock."
+
+Stop rule: "3 agent-hours or two revision bumps; if a finding is contested, record the disagreement as a disposition instead of looping."
+
+Now for the verify assignments' acceptance:
+- verify-gform: "For each of F1/F2a/F2b at the revision frozen by astra-life03-close-findings: at least two full-schema verdicts from distinct reviewers who did not author the artifact, each citing path#sha256; existing accepts (reviews/F1-review-lead-audit-r2.json, reviews/F2a-review-047.json, reviews/F2b-review-worker-001.json) count only if re-pinned to the new hash. Every hard finding from the closure round is confirmed fixed or listed as an open objection. Output reviews/G-FORM-final-verify.json with a per-class coverage table."
+- verify-gf0: "Two independent full-schema verdicts on research_map/formulation_taxonomy.yaml at the frozen hash, and confirmation canonical == authoring == FROZEN pin. Output reviews/G-F0-final-verify.json."
+
+Falsifier for verify: "a cited sha256 that is not the frozen hash, two verdicts by the same reviewer, a verdict from an author of the artifact, or an unresolved hard finding counted as accept."
+
+Stop rule: "2 agent-hours (G-FORM) / 1.5 (G-F0); a revise verdict with a concrete defect is an acceptable outcome."
+
+Now the direction_update:
+group_id formulation; old_direction: "publish/freeze churn and hash-repoint cycles"; new_direction: "close the hash-bound revise findings at the frozen rev25 hashes, then stop authoring on these paths; independent verification and out-of-sample re-dispatch proceed in parallel"; reason: "three independent reviewers found concrete defects at the final F1 hash and one at F2b; a fourth gate-relevant review at F0 finds manifest churn; more publication does not advance G-FORM/G-F0"; evidence_refs: review files; budget_delta_agent_hours: 4.0 appended for closure+repin? Hmm, budget_delta is a change to group budget. The formulation request was 6h for verification. I can approve +6.0 for the verification round (drawn from requested). I'll set budget_delta_agent_hours 6.0 with reason in the direction update. Actually, mixing may confuse apply_events (it may adjust group budget). Let me check apply_events handling of direction_update and budget to avoid unintended budget mutations. Let me grep apply_events for 'budget' handling.
+
+Also I should double check that `apply_events` doesn't treat assignment events' `artifact` list specially (it worked for pass-02 with lists).
+
+Let me check apply_events quickly.
+dsh: reasoning:
+Important details:
+- `direction_update` adds `budget_delta_agent_hours` to the group's **spent** agent hours (line 340) — not budget. So a direction update with 6.0 would mark 6h spent, which is wrong semantics for an approval. Avoid budget_delta; set 0.0.
+- `resource_request` appends with status pending. A budget approval is recorded via status notices ("resource_request <id>: APPROVED ...") — line 265. So to approve the 6h verification capacity, I could emit an astra `status` event with summary containing `resource_request leadform-resource-request-2026-09-12T00:44:00+08:00: APPROVED 6.0h ...`. Hmm, that's the documented mechanism. Let me check line 260-280 of apply_events to get the exact format.
+
+Let me read that section.
+dsh: reasoning:
+Good. Now let me write the pass-03 events script. Format for resource approval: an astra `status` event with summary starting/containing "resource_request <id>: APPROVED ...". The status event requires node_id, status, hours, summary, evidence_refs, next_falsifier. I'll emit:
+- event_id `astra-life03-resource-approval`
+- event_type status, actor astra, node_id F1, status active, hours 0.0
+- summary: "resource_request leadform-resource-request-2026-09-12T00:44:00+08:00: APPROVED 6.0 agent-hours ... bounded to astra-life03-verify-gform/gf0 + astra-life03-close-findings + heldout-09; no N1 work."
+- evidence_refs, next_falsifier.
+
+Careful: apply_events `status` handler will set F1 status active and last_status from this event — that would overwrite F1's last_status (currently the lead's final status) with my approval notice. Hmm, that mutates the node's last_status to an administrative notice, which is acceptable but slightly noisy. Alternatively use node_id "A1" or "N0"? Any node gets mutated. The node's last_status is a rolling pointer; my approval would become F1's last_status. That could obscure the formulation lead's actual status. Prior controller passes recorded gate decisions as status events? The pass-02 script emitted `gate` events (not status) plus assignments. The resource approval mechanism is designed to ride on status notices, so someone must take the last_status overwrite. I could set node_id "A2"? No, irrelevant.
+
+Option: skip the formal resource approval. Budget approval isn't strictly required for the assignments (they carry budget_agent_hours). The formulation lead requested 6h; I approve implicitly by issuing assignments totaling 7.5h (close 3 + verify 2+1.5 + repin 1 + heldout 3 = 10.5). Hmm, that's more than requested. Let me bound the totals: close-findings 2.0, verify-gform 2.0, verify-gf0 1.5, repin-claims 1.0, heldout-09 3.0 = 9.5h. The formulation group has 162h budget with 38 spent, so it's fine. But being an explicit controller, recording the approval is good practice. I'll include the status-based approval with node_id "F1" — actually, let me use node_id "A1" (audit node) since most of the new capacity goes to audit-side verification? The request is from formulation group but verification is audit capacity. Hmm. The `status` handler overwrites last_status of whichever node; choosing "A1" (audit node, currently active/passed) would replace A1's last_status with an administrative approval. Also noisy.
+
+Let me check how previous resource approvals were done. Search events for "APPROVED".
+dsh: reasoning:
+There's a pattern: `astra-adj1-06-status` with node_id "GLOBAL" and summary "resource_request <id>: APPROVED with scope control (...)". It uses node_id GLOBAL (which isn't a real node, so no last_status overwrite). I can do the same, but note there are now 3 pending formulation requests (00:16, 00:34, 00:44 — superseding ones). I should approve the latest (00:44) and mark the earlier two as superseded (by prose). The apply_events only marks the one matching the id in the summary. I could emit one status event with summary covering the latest and note earlier two superseded; or three events. Bounded: one event approving the latest and declaring the two earlier ones superseded (their hashes are stale by the requester's own statement).
+
+Wait, careful: apply_events' regex `resource_request\s+(\S+?):` matches the first occurrence. If I mention multiple IDs, only the first gets approved. I'll emit three small status events? Or one event per request id. To keep it clean: approve the latest (`leadform-resource-request-2026-09-12T00:44:00+08:00`) and issue a short direction_update/summary marking the earlier two (00:16, 00:34) as superseded-no-action. The earlier ones can be marked approved? No — they're superseded by the requester, so marking them "rejected-superseded" isn't supported by statuses (only approved or pending). I can leave them pending and note in the summary "superseded by the requester; no allocation". That's fine.
+
+Also note `lnum-resource-request-c8-rev3-20260912T002107` (numerics, 1.0h) and `lit-l3-20260912-010` (literature, 3.0h) are pending. Should I approve those too? The instruction says issue bounded assignments and keep numerics gated. The numerics request is for C8 revision work (N0 allowed under lock) — approving 1.0h keeps G-NUM moving without touching N1. The literature request is for L0 rev3 / spot checks. Approving them is within controller authority and low risk. But each approval via status event needs its own summary. That's 3 status events. Hmm, I don't know the details of those requests. Let me read them quickly to approve with correct scope. Actually — the numerics C8 request c8-rev3 at 00:21:07 likely asks for a revised protocol review budget; the literature lit-l3 request asks for spot-check/revision capacity.
+
+Given "one lifecycle then exit" and boundedness, approving the pending resource requests adds value if their scope is legitimate. Let me read those two requests. But careful about approving spend the leads didn't ask for? They did ask. Let me look.
+
+Let me also read the newest numerics outbox to see C8 status and the request.
+dsh: reasoning:
+Both requests are legitimate and bounded:
+- Literature: 2 reviewers × 1.5h = 3h to close G-LIT criterion at frozen hashes. But note astra-life01-l0-revise and astra-life02-l1-spotcheck assignments are already open for L0/L1; the lit lead says the ledger revision is frozen and spot-check requirement met, and what's missing is reviewer verdicts at the pinned hashes. Approving 3h for independent review at pinned hashes is consistent and doesn't duplicate the assignments (those pin earlier goals: L0 revision, L1 spot checks). Wait — "spot-check requirement is met" with 6 spot checks found at 315c19145065 per the gate audit. Good.
+- Numerics: 1 reviewer × 1h for C8 at 1e6cdf04d7a2 — exactly what astra-life02-n0-c8-refresh covers. Approving capacity is fine; no N1.
+
+So resource approvals to record (3):
+1. `leadform-resource-request-2026-09-12T00:44:00+08:00` → APPROVED 6.0h, bounded to verification round; earlier formulation requests 00:16/00:34 superseded, no allocation.
+2. `lit-l3-20260912-010` → APPROVED 3.0h (2 reviewers, L0/L1 at pinned hashes).
+3. `lnum-resource-request-c8-rev3-20260912T002107` → APPROVED 1.0h: C8 protocol review at 1e6cdf04d7a2; N1 stays locked.
+
+Each approval as an astra `status` event with node_id "GLOBAL" (as the prior pattern did). Wait: does "GLOBAL" exist as node? No, so apply_events' status branch does `idx.get(ev["node_id"])` → (None,None) → skips node mutation but still scans summary for resource approval. Good, matches the prior pattern.
+
+Hmm, but validate_event for status requires node_id, status, hours, summary, evidence_refs, next_falsifier. Fine.
+
+Now, total new assignments: 5. Plus 3 approvals + 1 direction_update = 9 events. That's a reasonable pass-03 emission set. Plus maybe one `gate` event re-recording all gates pending with hash-bound reasons? The map's controller_gate_audit already does this; pass-02 emitted explicit gate events. Should I re-emit `gate` pending events with the final measured hashes and the new concrete defect reasons? The gate record in the map (`gates[]`) currently has old `unmet` arrays from pass 02 (e.g., G-F0 unmet references hash 66bf917b, G-FORM references 7a3e1f93/23fec0e9/e6b1af2b — stale). The lifecycle's `controller_gate_audit` has current hash-bound reasons, but the canonical `gates` objects still carry stale `unmet` lists and criteria text. Maintaining gates properly means updating the gate records. Emitting one `gate` event per gate updates `last_verdict_event`/`updated_at`? Let me check apply_events' gate handling to see what it updates.
+
+This matters for "maintain DAG and gates". Let me read the gate branch in apply_events.
+dsh: reasoning:
+Gate events only update verdict, evidence_refs, last_verdict_event, updated_at — they do NOT update `unmet` or criteria. So stale `unmet` entries remain unless another mechanism updates them. The lifecycle's `controller_gate_audit` is the authoritative current reason; the handoff says "All five gates are pending with hash-bound reasons in controller_gate_audit". So the controller_gate_audit is the mechanism. Emitting gate events adds little. I'll skip gate events (or emit them to refresh `updated_at`/evidence refs — low value, adds noise). Actually, re-emitting `pending` verdicts at pass 03 would refresh `last_verdict_event` to the current pass and keep the gate state explicit. Pass-02 did emit gate pending events. I'll emit them too? Hmm — "maintain gates" and continuity: a new pass should record its gate adjudication in the accepted stream, not only in the map's controller_gate_audit. But the map gate `unmet` text is stale, and emitting a gate event won't fix it. I could update `unmet` via a controller repair... but the lifecycle tool's gate_audit writes `controller_gate_audit`; `gates[].unmet` is only updated by... let me check apply_events or another repair. Search for "unmet" in apply_events/lifecycle.
+dsh: reasoning:
+The `gates[].unmet` arrays are stale (F0 references 66bf917b etc.). The controller_gate_audit is current, but a reader of `map.gates` sees stale reasons. The handoff line 9 says "Sole global state is research_map/research_map.json... It carries gates, ... controller_gate_audit". Since gates[].unmet is part of gates, maintaining it matters.
+
+I can emit gate events with pending verdict but they don't update unmet. Alternative: extend the lifecycle tool's gate_audit repair to also refresh `gates[].unmet` from the audit reasons. That is a tool change; the lifecycle tool is controller-owned. Risk: concurrent controller instances. But the map lock is held during the lifecycle; another controller instance running the same tool would just overwrite similarly. Changing the tool now, after my pass, would only take effect next pass (and other controller instances would use the updated tool — which is fine/beneficial). But modifying the tool while other controller sessions may be mid-run could produce inconsistent behavior; the change is small and additive.
+
+Hmm — is this within my mandate? "maintain DAG and gates". Yes, updating stale unmet lists is gate maintenance. But the safer, lower-risk path: write the refreshed unmet lists directly into the map via a small controller repair script that holds the map lock, OR add the logic to astra_lifecycle.py and re-run a repair-only pass. Re-running the lifecycle again would be a third invocation (my pass already has close). "One independent lifecycle then exit" — I've had two invocations (pass + close). A third "repair" invocation is pushing it.
+
+Alternative: do a minimal, lock-held, targeted map repair that updates `gates[].unmet` and `gates[].controller_note` from `controller_gate_audit` reasons, without touching anything else. That's a controller repair, not a lifecycle. But then I'd need to re-run validation and checkpoint to keep the map valid. I can do: acquire map.lock, rewrite unmet/controller_note for the five gates from the audit reasons, write atomically, release, then run validate_map and checkpoint. This is bounded and safe (the lock serializes with other writers).
+
+Actually — wait. Is `unmet` even used by the validator? Probably not. The audit reasons in controller_gate_audit are the controller's authoritative record and were refreshed by my lifecycle at 00:21:55. The stale `unmet` is a quality issue but not a correctness issue for gates (verdict stays pending). The handoff explicitly points readers to controller_gate_audit for hash-bound reasons. However, the stale unmet could mislead a human reading gates[]. I'll do the targeted repair: it's cheap, improves state quality, and is exactly "maintain gates". I'll also update each gate's `criteria`? No — keep criteria stable (they're the standing criteria). Only refresh `unmet` and `controller_note`.
+
+But hold on: the newly ingested traffic (worker reviews etc.) arrived after my close pass at 00:21:55. If I do a targeted repair now from the current controller_gate_audit reasons, they're ~a few minutes stale w.r.t. new reviews (F1 lead-audit accept etc.). Since gate verdicts stay pending, and the reasons contain measured hashes that are still current (F1 9a8bd4c9 etc.), it's fine. But if the formulation lead republishes (hash moves), reasons go stale again — a general moving-target problem; the next controller pass re-measures.
+
+Hmm, actually, let me reconsider: should I instead run the lifecycle tool a third time with `--label astra-lifecycle-03-repair` as the "close-final" invocation? The precedent (pass 02 ran four invocations: 02, -02-close, -02-final, -02-close-final) supports multiple idempotent invocations as one pass. The instruction "one independent lifecycle then exit" means one *pass* — the tool calls are idempotent repair steps. Running a third invocation with a modest label would:
+- ingest/apply any new traffic (there's plenty),
+- refresh controller_gate_audit and publication status,
+- record the pass in controller_lifecycles.
+That's cleaner than a hand-rolled map surgery. And I can add the `unmet` refresh to the tool first so the final invocation applies it. Hmm, but modifying the tool adds risk. Let me evaluate: the change would be in gate_audit return path or main(): after computing `m["controller_gate_audit"]`, set for each gate `g["unmet"] = [reason]`? Better: build structured unmet lists per gate in gate_audit (reasons already contain the needed text). Simplest: in main after gate_audit, do:
+```
+for g in m["gates"]:
+    a = m["controller_gate_audit"].get(g["gate_id"])
+    if a:
+        g["unmet"] = [a["reason"]]
+        g["controller_note"] = "reason refreshed from controller_gate_audit at this pass; verdict unchanged"
+```
+That's a small, transparent change. But it collapses the multi-item unmet list into one reason string. Acceptable? The reason is richer. Alternatively store `g["unmet_reason"]`. Hmm.
+
+Risk assessment: other controller instances (if any) are running the same file; editing it mid-flight could cause a partially-written file read. But writes are atomic-ish (small edit via edit tool rewrites the file; a concurrent python invocation could read a partially written file only if it opens during the write — unlikely but possible). The supervisor relaunches controller-01 after I exit; it will read the updated tool — fine.
+
+Given the emphasis on not overstepping and "one independent lifecycle then exit", I think the targeted map repair via the lifecycle tool's own next invocation is optional. Actually, you know what? The handoff's own note says gate reasons live in `controller_gate_audit`; the map's `gates[].unmet` staleness has persisted across multiple passes (pass 01, 02), so it's a known design choice: `unmet` is a snapshot from whichever pass last wrote it, and `controller_gate_audit` is the current measured reason. Updating the tool is a design change I shouldn't make unilaterally in a single pass without review. I'll note it in the pass summary/handoff as a residual issue (finding) and leave it.
+
+Decision: Don't modify the tool. Instead:
+- Emit pass-03 gate events (pending) with current hash-bound criteria text — this refreshes `last_verdict_event`/`updated_at`/evidence_refs on the five gate records, so the gate tab shows pass-03 currency. Pass-02 did exactly this. The stale `unmet` arrays remain but the handoff points to controller_gate_audit. I'll note the residual in the handoff.
+- Do the close-final lifecycle invocation (third, idempotent) after emitting the events? Order: emit events first (append_event writes to events.jsonl directly, bypassing ingest), then run the lifecycle close-final to apply them to the map and re-audit. That mirrors pass-02 (events script then lifecycle close). Good: my final lifecycle invocation applies the assignments/approvals/gates and re-measures.
+
+Wait, order per handoff: pass-02 events script emitted events; then lifecycle invocations. The events emitted via append_event go straight into events.jsonl with `applied` pending until apply_events runs. So: write+run events script → run lifecycle `astra-lifecycle-03-final` → verify.
+
+Now let me be careful about event content. Let me draft the script.
+
+Also: the previously emitted pass-02 gate events had verdict pending with criteria text describing the then-current withholding. For pass 03, I'll emit gate events with verdict pending and criteria text that includes the current measured hashes and the concrete new reasons. That's a good record.
+
+Let me now decide the final exact event list:
+
+GATES (5) — verdict pending, criteria = standing criteria + current withhold reason with measured hashes:
+1. astra-life03-gate-gf0: F0 276009f4 (rev4), authoring c8e979a1 divergent; lead-audit r2 revise 4.0 (full-schema) at this hash; publication divergent; needs two independent accepts at a published byte-identical hash.
+2. astra-life03-gate-gform: F1 9a8bd4c9 (rev11), F2a b6123750, F2b 1bb78ce9; all aligned canonical==authoring; F1 1 accept (lead-audit r2 4.5) + 3 worker revises (090/094/19) with concrete hard findings; F2a 1 accept (worker-047 4.0); F2b 1 accept (worker-001 4.0) + 1 revise (worker-034) with hard findings; needs findings closed + 2 independent accepts per class at one frozen hash.
+3. astra-life03-gate-glit: L0 ce42d205, L1 315c1914; 6 spot checks bind L1 (>=3 met); L0 no accept at hash; needs 2 independent accepts at L0.
+4. astra-life03-gate-gnum: protocol 1e6cdf04d7a2; recorded review binds 01b2072434cd stale; C8 unmet; solver absent, guard present; lock locked; N0 replication PROVISIONAL.
+5. astra-life03-gate-gaudit: A0 d748a9e3; A1 coverage 0 accepts at measured hashes; F2b soft flags cleared but F0/F1 status; F0 publication divergence; needs 2 independent verdicts per target at cited hashes.
+
+Hmm, is `criteria` limited in length? No. But these events are large; fine.
+
+ASSIGNMENTS (5):
+1. astra-life03-close-findings (lead-formulation)
+2. astra-life03-verify-gform (lead-audit)
+3. astra-life03-verify-gf0 (lead-audit)
+4. astra-life03-repin-claims (lead-formulation)
+5. astra-life03-heldout-09 (lead-formulation)
+
+DIRECTION_UPDATE (1): formulation direction toward finding closure.
+
+STATUS approvals (3).
+
+Total 14 events. That's a solid bounded pass. Let me now write the script carefully.
+
+Actually, one concern about assignment #2: "two independent accepts per class" — but the gate criteria says "reviewers 17,18 accept with cited sha256" for G-FORM; the map criteria: "all three schemas exist with exact quantifiers/topology/regularity/genericity/I+/visibility/conclusion_type; no C0/C2 merge; reviewers 17,18 accept with cited sha256". The controller_gate_audit requires two distinct independent accepts. I'll use "two independent full-schema verdicts (accept) per class from reviewers who did not author" consistent with audit.
+
+Also for assignment #1: should I ask for closure of the worker revise findings? The F1 workers' findings include real issues (duplicate YAML keys, future-dated revised_at, dangling AF_{I+}). Yes.
+
+Note also worker-034's F2b HF-2: class_contract_pointer doesn't resolve at the declared F0 artifact — that's the authoring-tree pointer issue that also appears in F1 worker-090's finding (pointer targets authoring tree). So the closure should repoint pointers to the canonical taxonomy. Good.
+
+Another item: F0's publication divergence (canonical 276009f4 vs authoring c8e979a1). Included in close-findings acceptance (F0 path).
+
+Let me also double-check the F2a current hash accept: reviews/F2a-review-047.json has `reviewed_sha256: None` but `target_id`? It said sha None in my earlier print because I looked at `reviewed_sha256` only — but the coverage scan found it as an accept at b6123750 (from the grep -l). Let me not over-claim in the gate text: "F2a 1 accept at the current hash (reviews/F2a-review-047.json)". Good.
+
+Now, one important check for verify-gform acceptance: existing accepts count only if re-pinned to the *new* hash. But if close-findings changes F1/F2a/F2b, the accepts at the current hash are void (old hash). If close-findings makes only minor fixes, new hashes → all accepts void → need 2 fresh accepts per class. That's the strict rule the gate audit applies. The audit lead can coordinate. Fine.
+
+Let me write the script now. I'll use a `NOW` timestamp generated at import; event_ids fixed so re-running is idempotent.
+
+One more thing: `comms.append_event` uses `_load_seen` / `_save_seen` (ingested_ids.json). Appending directly is the pass-02 pattern. Good.
+
+Let me write the file.
+dsh: reasoning:
+Before running, double check event schema validity:
+- GATES: gate events need gate_id, scope, verdict, criteria, evidence_refs + base. ✓
+- ASSIGNMENTS: node_id, assignee, artifact, gate, evidence_refs, falsifier + base. ✓
+- DIRECTION_UPDATES: group_id, old_direction, new_direction, reason, evidence_refs, budget_delta_agent_hours. ✓
+- APPROVALS: status needs node_id, status, hours, summary, evidence_refs, next_falsifier. ✓ status "active" valid.
+- artifact field in assignments can be a list. ✓ (pass-02 used lists)
+- class_id present. ✓
+
+One concern: the `holdout` assignment gate "G-CLASSBIND" — is that a gate in the map? Gates: G-F0, G-FORM, G-LIT, G-NUM, G-AUDIT. G-CLASSBIND isn't among them; worker-16's events used gate "G-CLASSBIND" though. apply_events assignment handler doesn't validate gate ids. Fine, but for consistency maybe use G-AUDIT (A1 node). Hmm, the FORM-HELDOUT-08 original assignment used gate "G-CLASSBIND" and node A1. I'll keep it for continuity.
+
+Also the validate_event for status: status value must be in STATUSES; "active" ✓.
+
+Now run the script.
+dsh: reasoning:
+Events emitted. Now run the final lifecycle invocation of this pass to apply them and re-audit: `--label astra-lifecycle-03-final`. This is the closing invocation of the same pass (idempotent).
+dsh: reasoning:
+The final invocation applied 301 events, VALID, gates pending, lock locked. Now let me verify:
+1. The assignments were applied to the map (assignments list should now include astra-life03-*).
+2. Resource approvals marked approved.
+3. Gate records' last_verdict_event updated to astra-life03-*.
+4. Direction history updated.
+5. Numerics lock unchanged, solver absent.
+6. Final measured hashes + checkpoint + map sha.
+7. Any new events still pending after this (traffic is continuous; note it).
+8. Check the report for evidence hard/soft failures and clock discipline.
+
+Then write the pass summary markdown and update ASTRA_HANDOFF.md. Let me verify the apply results.
+dsh: reasoning:
+Mostly good, but two issues:
+1. `leadform-resource-request-2026-09-12T00:44:00+08:00` is still `pending` — my approval status event summarized it. Why didn't it get approved? The regex: `resource_request\s+(\S+?):` applied to my summary: "resource_request leadform-resource-request-2026-09-12T00:44:00+08:00: APPROVED 6.0 agent-hours..." — the `\S+?` is non-greedy, so it matches minimally up to the first colon. The ID contains colons (time 00:44:00+08:00), so `\S+?` stops at "leadform-resource-request-2026-09-12T00" — wrong ID. The prior pattern `e08-rr-20260911T2323-f2a` had no colons, so it worked.
+
+Fix: emit a corrected approval whose summary places a colon-free alias first? The matching requires the resource request's `event_id` exactly. Since the event_id has colons, the regex can't capture it (non-greedy `\S+?` up to ':'). Wait: `\S+?` is non-greedy, but regex will still try to match until a `:` allows the rest to match. The rest after ':' is arbitrary (nothing required), so it will match the shortest `\S+?` ending before a colon → "leadform-resource-request-2026-09-12T00". That ID doesn't exist in resource_requests → no approval. So the mechanism cannot approve an id containing colons. Hmm.
+
+The two other requests (lit-l3-..., lnum-...) have no colons and got approved. ✓
+
+For the formulation request, the id has colons. Options:
+(a) Emit a status event with the summary containing an alias that matches an existing resource_request event_id without colons: the 00:16 and 00:34 ids also have colons. All formulation request ids have colons. So no.
+(b) Patch the request status directly in the map via a lock-held targeted repair (controller decision): set status approved for the 00:44 request, decision_at, decision_by astra. That's small map surgery but legitimate controller repair — I should use the map lock and atomic replace, then re-validate + re-checkpoint. The concern is other writers; using the lock ensures safety.
+
+Actually wait — is there an alternative: emit a `budget` event to increase the formulation group budget by 6.0? That records allocation but not the request decision. The request would stay pending. The cleanest is (b), a controller repair consistent with how the controller maintains state.
+
+Hmm, but hand-editing the map could be considered out of process. The controller owns the map though ("Sole global state", "research-map owner"). The lifecycle repair writes the map directly (not via events), so targeted repair is within the tool's pattern. I'll do a minimal, locked, atomic repair:
+- find resource_requests with event_id == "leadform-resource-request-2026-09-12T00:44:00+08:00" → status="approved", decision_at=now, decision_by="astra", decision_note="approved via astra-life03-approve-formulation-verification".
+- Also mark the two earlier formulation requests as "superseded" (status field can be arbitrary; earlier code uses "pending"/"approved"). Setting "superseded" seems informative. But does anything validate status values? apply_events doesn't validate resource status. The map validator might. Let me check validate_map for resource_requests validation. Safer: set them to "superseded-by-requester". Let me check validate_map.py.
+
+- Keep everything else byte-identical.
+- Then run `python3 research_map/validate_map.py` and `python3 research_map/checkpoint.py` to record.
+
+2. Another observation: the map's `updated_at` is 00:24:40, but events are continuously arriving; there will be pending events. Fine, note it.
+
+3. Also I should verify `evidence_hard_failures` and the final report. Let me read the final report (lifecycle_20260912-002440.json).
+
+4. Also check whether `astra-life03-approve-formulation-verification` status event text has the same colon issue... not an issue for the record.
+
+Let me first read validate_map.py to see if it validates resource_requests statuses, then do the repair.
+dsh: reasoning:
+validate_map doesn't check resource_requests statuses. Good.
+
+Now do the targeted controller repair for the formulation resource request approval. I'll write a small Python script that:
+1. Takes the map lock (fcntl).
+2. Loads the map.
+3. Sets the 00:44 formulation request status approved, decision_at/decision_by/decision_note.
+4. Marks the two earlier formulation requests status "superseded-by-requester" with a note.
+5. Writes atomically, computes sha.
+6. Runs validate_map and checkpoint (checkpoint.main writes artifact_hashes.json + checkpoint log).
+
+Wait — should I also handle the event-stream record? The status event astra-life03-approve-formulation-verification is already appended (truthful record of the decision); the map repair just makes the request register consistent. I'll add a `decision_event_id` field referencing the status event.
+
+Also, I realize the status event's summary claims approval; the map should reflect it. Fine.
+
+Let me also double check the remaining pending requests:
+- lnum-resource_request-08289c80b2e0d52d7adf (numerics 1.0, stale hash per the requester's own c8-rev3 supersession note) — leave pending, note superseded.
+- leadform 00:16 / 00:34 — superseded.
+- leadform 00:44 — approve.
+- lnum c8-rev3 — approved ✓.
+- lit-l3 — approved ✓.
+
+I'll mark lnum-resource_request-08289c80b2e0d52d7adf as "superseded" too since the numerics lead explicitly listed it in `supersedes_stale_pins`. And also lnum-resource-request-89be785d412886d5fff6 if it exists (check).
+
+Let me write the repair script as a file for auditability: `research_map/astra_repair_03_resources.py`? Hmm, adding a new file is fine. Or just run an inline heredoc. For auditability, a named script is better, but it's a one-shot repair. The controller has created such scripts before? There are `research_map/promote.py`, etc. I'll write a small script `research_map/astra_repair_03_resource_decisions.py` and run it. Actually — keep it minimal: inline python via bash with the lock. The repair is recorded in the checkpoint log and handoff. I'll do inline but careful.
+
+Actually, for traceability, let me write the script to `runtime/state/controller_verification/`? No — better keep code in research_map like other controller tools. I'll create `research_map/astra_repair_03_resources.py`.
+
+Wait, one consideration: the resource approval mechanism was designed to work via status events; the colon bug means any request id with colons can't be approved via that path. That's a tool limitation worth recording as a finding for the next pass (and optionally fixing apply_events regex from `(\S+?):` to a greedy match `(.+?):\s` — still stops at first colon; better regex to capture the full id up to ': ' followed by uppercase, e.g. `resource_request\s+(\S+):\s+APPROVED`. With greedy `\S+` it would capture through the last colon... risky). I'll record the limitation in the pass summary/handoff and do the direct repair now. Since fixing the regex is a design change, leave it for review.
+
+Let me write and run the repair.
+dsh: reasoning:
+Before running: check whether `lnum-resource-request-89be785d412886d5fff6` exists in the map's resource_requests. If not, no harm. Also checkpoint.main signature takes label and returns dict with checkpoint_id (from lifecycle usage: `rec["checkpoint_id"]`, `rec["evidence_hard_failures"]`).
+
+One issue: `checkpoint.main(label)` may re-validate and also ingest? From lifecycle, checkpoint.main(label) returns rec with evidence_hard_failures, evidence_soft_findings, classsep_regression, checkpoint_id. It writes artifact_hashes.json. Fine.
+
+Run it.
+dsh: reasoning:
+Hmm, the output tail shows the numerics_lock print from checkpoint.py plus "CHECKPOINT ckpt-...". But I didn't see "REPAIRED ..." — it was in the earlier output truncated by `tail -5`. Let me verify the repair took effect and the map is valid. Also re-verify final map sha.
+dsh: reasoning:
+All good:
+- Resource decisions bound; map VALID; map sha 4fd40d4d1e4f.
+- Gates pending, lock locked.
+- 35 events pending application (new traffic arrived since 00:24:40) — expected; note in handoff that the next pass must apply them.
+
+Now let me read the final lifecycle report (00:24:40) for evidence failures and coverage, to include accurate numbers in the pass summary/handoff:
+- ingest counts
+- evidence hard/soft
+- review coverage
+- clock discipline
+- checkpoint id
+
+Then write:
+1. `runtime/state/controller_verification/astra-lifecycle-03.md` — pass summary.
+2. Update `research_map/ASTRA_HANDOFF.md` — LIVE CONTROLLER STATE block (pass 03).
+3. Also consider updating the checkpoint/handoff's map sha reference.
+
+Let me pull the final report details.
+dsh: reasoning:
+Very important update from the final pass (00:24:40): the review corpus has grown significantly:
+- F2a: 2 distinct accept reviewers (astra-lead-audit, worker-047) at the current hash → criterion "two distinct independent accepts" **met in count** for F2a (though there are also revises: worker-088, flash-15).
+- F2b: 4 distinct accepts (astra-lead-audit, flash-07, flash-17, worker-030) + 1 revise (worker-034) at current hash.
+- F1: 1 accept (lead-audit) + 3 revises.
+- F0: 0 accepts + 5 revise/inconclusive verdicts.
+- L0: 3 distinct accepts (lead-audit, worker-006, worker-011) at hash ce42d205! G-LIT criterion "L0 accept" now met in count, plus 6 L1 spot checks. But there are also 2 revises (flash-21, flash-22).
+- A0: 1 accept (lead-audit) + 2 revises (flash-21, flash-22).
+
+So the gate landscape changed during my pass: G-LIT and G-FORM are close to judgeable; the remaining blocker is the hash-bound revise findings (for F1/F2b) and the divergent F0 publication. My assignments remain correct: close findings, then verify. Good. Note that the new accepts mean the verify round may need fewer new verdicts (some accept reviewers already exist).
+
+Hmm, wait — but these accepts (flash-07, flash-17, worker-030, worker-006, worker-011, flash-21/22) — those agents are from the 20-fleet and 100-fleet. Are they independent? Presumably. The audit lead adjudicates.
+
+My gate event text for G-FORM said "F2a accept 4.0 (worker-047)" but by the time of the final pass, lead-audit also accepted F2a; F2b has 4 accepts. The gate event text is now understating coverage. That's fine (it was accurate at emission), but the next pass will refresh.
+
+Given the gates are close, should I update the gate event text? No — moving targets; the controller_gate_audit at 00:24:40 has the current counts. My handoff note will capture the current state.
+
+Now let me write the pass summary and update the handoff. Also, per the "record hashes and validation" requirement, the checkpoint at 00:25:10 (ckpt-20260912-002510) recorded artifact hashes. Let me verify runtime/state/artifact_hashes.json has the key hashes including final measured ones.
+
+Then update ASTRA_HANDOFF.md LIVE CONTROLLER STATE section. I need to be careful: it's a 123-line file; I'll replace the live-state block (lines 3-60) with a new block for pass 03, keeping the rest (Mission onward) intact. Let me draft it.
+
+Key content for the new LIVE CONTROLLER STATE:
+- Timestamp/pass label: 2026-09-12T00:25+08:00, pass astra-lifecycle-03 (3 idempotent invocations: -03 at 00:19:58, -03-close at 00:21:55, -03-final at 00:24:40; plus a locked resource-decision repair at 00:25:10).
+- Map sha at pass end: 4fd40d4d1e4f (re-measure before citing). Note that traffic after 00:25:10 is un-ingested (35 pending at the 00:25:10 checkpoint; likely more now).
+- Pass summary file: runtime/state/controller_verification/astra-lifecycle-03.md; latest lifecycle report lifecycle_20260912-002440.json (VALID); resource repair checkpoint ckpt-20260912-002510.
+- Measured hashes at pass end: F0 276009f4 (canonical) vs authoring c8e979a1 (divergent); F1 9a8bd4c9, F2a b6123750, F2b 1bb78ce9 (all aligned canonical==authoring==FROZEN rev25 af24e9c3); L0 ce42d205, L1 315c1914; A0 d748a9e3; N0 8b52014d; protocol 1e6cdf04d7a2; solver absent; guard present.
+- Gate state: all five pending, hash-bound reasons refreshed in controller_gate_audit. Current review coverage at measured hashes: F0 0 accepts/5 revise-inconclusive; F1 1 accept (lead-audit r2) + 3 revises; F2a 2 accepts (lead-audit, worker-047) + 2 revises; F2b 4 accepts + 1 revise; L0 3 accepts + 2 revises; A0 1 accept + 2 revises; L1 6 spot checks. The binding obstacle is now closed findings at F1/F2b/F0 + publication divergence, not missing verdict count.
+- New assignments issued (pass 03): list 5 with deadlines.
+- Resource decisions: formulation 00:44 approved 6.0h; lit-l3 approved 3.0h; numerics c8-rev3 approved 1.0h; earlier duplicates superseded. Note the apply_events colon-id limitation (finding) and the direct repair.
+- Findings: CF-7..CF-16 as before; add notes: CF-14 remains open (73→ future-dated events, max 02:00, skew ~95 min); CF-16 hard failure still on claims[36] — now assigned to astra-life03-repin-claims; new observation about gate `unmet` staleness (in gates[] vs controller_gate_audit) and the approval-regex limitation.
+- Authority/checkpoints unchanged.
+- Tools for next pass: same.
+
+Let me also write the pass summary md with more detail (ingest counts, applied, demotions, coverage, findings, assignments, resource decisions, residuals).
+
+Let me check artifact_hashes.json first, then write files.
+dsh: reasoning:
+The artifact_hashes.json structure has 'hashes' and 'registry' keys. Let me inspect.
+dsh: reasoning:
+Hashes recorded correctly in the checkpoint registry (artifact_hashes.json). Good — "record hashes and validation" done.
+
+Now write the pass summary markdown `runtime/state/controller_verification/astra-lifecycle-03.md` and update the handoff. Let me first read the existing pass-02 summary to match format.
+dsh: reasoning:
+Now write the pass-03 summary. I'll include:
+- header, session, invocations (-03 00:19:58, -03-close 00:21:55, -03-final 00:24:40, resource repair 00:25:10)
+- final state table: map sha (4fd40d4d1e4f), validator VALID, gates pending, lock locked, evidence 1 hard (CF-16) + 1 soft (F0 divergence — note soft count dropped from 4 to 1 due to class-token fixes), checkpoint ckpt-20260912-002510.
+- publication table with rev25 hashes.
+- gate reasons (from the final pass report).
+- review coverage table at measured hashes (from the final report).
+- events emitted: 5 gate records, 5 assignments, 1 direction update, 3 approvals.
+- resource decisions and the colon-id limitation repair.
+- residuals: CF-14 open (future-dated events max 02:00, skew ~95min), claims[36] hard failure assigned for rephrase, gates[].unmet stale vs controller_gate_audit, review_coverage only scans reviews/*.json (misses artifact-dir reviews, e.g., worker-001's file was mirrored to reviews/ anyway).
+- honest limitations.
+
+Let me get the exact final clock numbers from the final report (clock_discipline: future_dated count). The earlier print was truncated. Let me pull it, plus L0/A0 coverage numbers. Also get the final report sha256 for the summary. And the map sha is now 4fd40d4d (after repair). Let me fetch these quickly.
+dsh: reasoning:
+Now write the pass-03 summary markdown.
+dsh: reasoning:
+Now update the handoff. I'll replace the LIVE CONTROLLER STATE section (lines 3-60, from "## LIVE CONTROLLER STATE" through the line before "## Mission"). Let me construct the new block with pass-03 info.
+
+I'll keep it dense and structured like the previous one. Content:
+
+```
+## LIVE CONTROLLER STATE — read this before doing anything (2026-09-12T00:25+08:00, pass astra-lifecycle-03)
+
+- **Your assignment is in `comms/inbox/<your-agent-id>.jsonl`.** Read it first. Message schema:
+  `comms/PROTOCOL.md`. Pull accepted traffic: `python3 research_map/comms.py ingest`. Report with
+  `status` / `claim` / `artifact` / `blocker` / `direction_update` / `resource_request` events in
+  `comms/outbox/<agent>.jsonl`.
+- **Sole global state** is `research_map/research_map.json` (map sha at pass end `4fd40d4d1e4f`;
+  re-measure before citing; 35+ events were pending at the closing checkpoint). It carries `gates`,
+  `numerics_lock`, `assignments`, `claims`, `reviews`, `publication_status`,
+  `controller_gate_audit`, `controller_findings`, and per-node `artifact_sha256_measured` +
+  `declared_hash_matches_measured`.
+- **Pass 03 ran 00:19:58–00:25:10** (three idempotent lifecycle invocations `astra-lifecycle-03`,
+  `-03-close`, `-03-final`, then a lock-held resource-decision repair). Summary:
+  `runtime/state/controller_verification/astra-lifecycle-03.md`; latest report
+  `runtime/state/controller_verification/lifecycle_20260912-002440.json` (VALID, sha256 d33af1f9653a);
+  resource repair checkpoint `ckpt-20260912-002510`. Outbox traffic newer than 00:25:10 is
+  un-ingested; the next lifecycle pass must apply it.
+- **Measured at pass end (re-measure):** F0 canonical `276009f4f63d` vs authoring `c8e979a1eb48`
+  (divergent); F1/F2a/F2b `9a8bd4c96800`/`b6123750b37d`/`1bb78ce9b357`, all aligned, FROZEN rev25
+  `af24e9c39606`; L0 `ce42d205e761`, L1 `315c19145065`; A0 `d748a9e3574e`; N0 `8b52014dac47`;
+  protocol `1e6cdf04d7a2`; solver absent, lock guard present.
+- **All five gates `pending` with hash-bound reasons in `controller_gate_audit`** (gate records
+  re-emitted as `astra-life03-gate-*`). Current coverage at the measured hashes: F0 0 accepts
+  (3 revise + 2 inconclusive); F1 1 accept (lead-audit r2 4.5) + 3 revises with concrete hard
+  findings; F2a 2 accepts + 2 revises; F2b 4 accepts + 1 revise; L0 3 accepts + 2 revises; A0 1
+  accept + 2 revises; L1 6 independent spot checks (criterion ≥3 met). G-FORM/G-F0 are blocked by
+  unresolved hash-bound findings + F0 publication divergence, not by missing verdict counts.
+- **Open assignments (01:30 unless noted):** `astra-life03-close-findings` (lead-formulation, F0 +
+  three schemas, 01:30), `astra-life03-verify-gform` + `astra-life03-verify-gf0` (lead-audit,
+  02:00), `astra-life03-repin-claims` (lead-formulation, 01:30), `astra-life03-heldout-09`
+  (lead-formulation, 02:30). These supersede the publication-only `astra-life01-publish-frozen` and
+  `astra-life02-publish-f0`; older `astra-life01-*` assignments stay open through 01:30 and must not
+  be duplicated (CF-12: one canonical path, one owner). Each assignment carries acceptance,
+  falsifier and stop rule in `map.assignments`; a message is not a result until the artifact hash is
+  recorded.
+- **`numerics_lock` remains LOCKED:** N1 queued, `numerics/spherical_solver` absent, lock guard
+  `numerics/tests/selfgravity_lock_guard.py` present. N0 is `active/unverified`; the replication
+  verdict on disk is PROVISIONAL. Only G-FORM + G-AUDIT pass *plus* a measured and independently
+  replicated N0 order releases N1 — a proposal or a G-NUM pass alone does not. C8 review capacity was
+  approved at 1.0 h against protocol `1e6cdf04d7a2`; no solver code.
+- **Resource decisions (pass 03):** formulation verification 6.0 h approved (00:44 request; earlier
+  duplicates superseded), literature 3.0 h approved (L0/L1 reviewers at pinned hashes), numerics
+  1.0 h approved (C8). Note: `apply_events.py`'s approval matcher `resource_request\s+(\S+?):` cannot
+  bind ids containing colons, so the formulation decision was recorded by a lock-held repair
+  (`research_map/astra_repair_03_resources.py`); review next pass.
+- **Findings:** CF-1…CF-16 as before. CF-13 partially resolved (F0 only divergence). CF-14 open
+  (92 future-dated events, max 02:00, skew ≈95 min; treat future `created_at` as advisory for
+  ordering). CF-16 raw hard count stays until the author rephrases (now assigned via
+  `astra-life03-repin-claims`; controller does not edit claim text). Residual: `gates[].unmet`
+  strings still carry pass-02 hashes — current reasons are in `controller_gate_audit`.
+- **Authority:** worker events cannot set `status=done`, `validation_status=passed`, or a gate
+  verdict. Only the controller and group leads can move those, with artifact + review evidence.
+- **Checkpoints:** `runtime/state/current_checkpoint.json` and `checkpoint_log.jsonl`;
+  `runtime/state/artifact_hashes.json` holds measured hashes. Fluent text is never promoted.
+- Controller tools for the next pass: `python3 research_map/astra_lifecycle.py --label <label>`
+  (locked ingest → apply → repair → audit → checkpoint; emits review coverage, clock discipline,
+  lock guard and its own lifecycle record), `python3 research_map/astra_lifecycle_03_events.py`
+  (idempotent pass-03 gate/assignment/approval events; re-running skips duplicates), and
+  `python3 research_map/astra_repair_03_resources.py` (idempotent resource-decision repair).
+```
+
+That's good. Let me apply the edit: replace from "## LIVE CONTROLLER STATE" line through the blank line before "## Mission". The old block is lines 3-60. I'll use edit with old_string = the full old block? That's long. Better: replace the header line and then... The edit tool requires exact literal match. I could replace the whole old block, but it's ~58 lines — I have it from the read. Simpler: use a script? No, use edit with a unique anchor: from "## LIVE CONTROLLER STATE" to "## Mission" — I need the exact text in between. I have it from the read output. But it includes special characters (backticks, quotes). Risky but doable. Alternative: use Python to rewrite the file splitting at the markers. But instructions prefer edit tool. However, for a large replacement, doing it with the edit tool is fine if I reproduce exactly. The old text is long; risk of transcription error.
+
+A cleaner approach: use edit twice:
+1. Replace the first line (header with old pass description) with the new full block + a marker, then delete the old lines? No, edit only replaces matching text.
+
+Alternative: Since the old block starts at line 3 and ends at line 60 (line 60 is blank, line 61 is "## Mission"), I can use Python programmatically via bash — but the guidance says use edit for targeted changes and prefer it; using bash python to rewrite a file is allowed too (it's a text file). Yet "Use the write tool to create files or completely replace file contents" — I could read the full file and write it fully. I have the full file content from the initial read (123 lines). I can reconstruct it: new block + lines 62-123 verbatim. That's a complete replacement with the write tool, which is permitted ("write tool ... completely replace file contents"). I must be careful to reproduce the rest exactly.
+
+Given the size, using bash with python to splice is safer for exactness: read file, find the indices of lines starting with "## LIVE CONTROLLER STATE" and "## Mission", replace the slice, write. But that's a bash text manipulation; the harness prefers the edit tool for existing files. The edit tool can do it if I anchor on a smaller unique substring... but I need to replace the entire block.
+
+Hmm, practical approach: use the edit tool with old_string being just the header line and the first bullet? No — that leaves the rest of the old block.
+
+I'll do a full-file write: I have lines 62-123 from the initial read. Let me re-read the file from line 61 to confirm exact content, then use write with new block + tail. Actually `write` replaces entirely; I need the tail exactly. Let me read the tail again to be safe (I have it, but re-reading is cheap).
+
+Actually, simplest robust method: use `edit` with the unique old_string spanning lines 3-4 (header + first bullet line) and new_string = new header + ... no, can't remove the rest.
+
+OK, decision: read tail lines 61-123, then `write` the complete new file. Let me do that. Actually, I can avoid reproducing the tail by using bash+python to splice — this is a legitimate use of a shell command for text manipulation, though the guidance says use edit/write tools. The fs policy is workspace-write; bash can modify files. But the harness explicitly says "Use the write tool to create files or completely replace file contents" and "Use the edit tool for targeted changes". A splice is a targeted change implemented via script — I'd rather follow the tools.
+
+Let me use the edit tool with a longer old_string that covers lines 3-8 (enough to uniquely identify) — no, partial replacement doesn't remove the rest.
+
+Fine: write the whole file. Let me get the exact tail first.
+dsh: reasoning:
+Now I'll write the full file: new live-state block + lines 62-123 unchanged. Let me compose the write content carefully.
+dsh: reasoning:
+Now final verification:
+1. Confirm the handoff is intact and references match reality.
+2. Re-measure the map sha now (it may have changed due to other writers applying events — the checkpoint at 00:25:10 said 35 pending).
+3. Confirm the assignments exist in the map and are also in the leads' inboxes.
+4. Confirm numerics lock still locked and solver absent (re-measure).
+5. Check that no gate verdict moved to pass improperly (all pending).
+6. Check that no node was promoted to done/passed without evidence by the applied events.
+7. Verify validate_map VALID on the current map.
+8. Run final quick checkpoint? The map may have pending events; running another lifecycle would be a 4th invocation, contradicting the "one lifecycle" bound. The resource repair already checkpointed. I'll leave pending traffic to the next pass, as documented.
+
+Also, should I commit to git? The previous passes have git commits (e.g., "astra lifecycle 02: ..."). The repo's git is partly broken (missing pack index for some objects, ._ files). The prior controller committed changes. Let me check whether committing is feasible and consistent: `git status` earlier showed many untracked and modified files; the repo has a broken pack index error for `._pack-*.idx` files but regular `git log` works. A commit of the controller artifacts (research_map/ASTRA_HANDOFF.md, astra_lifecycle_03_events.py, astra_repair_03_resources.py, research_map.json, runtime reports) would preserve state. The prior passes committed (git log shows "astra lifecycle 02: ..." commit). Should I commit? The user's instruction didn't mention committing, but continuity suggests it. The map itself is tracked? Let me check git ls-files for research_map/research_map.json. Earlier `git status --short` showed " M research_map/schemas.py" and " M research_map/validate_map.py" but not research_map.json — maybe research_map.json is untracked? It didn't appear in the untracked list head (truncated at 50 lines). Let me check.
+
+Given the live swarm writes files constantly, a commit could be huge/noisy. The prior controller committed specific files presumably. Let me check what the last commit (86798ba) touched, to follow the same pattern. If it's a bounded commit of controller artifacts, I'll do the same with a clear message. But careful: git operations might be slow with the huge artifact tree. Let me inspect the last commit's stats.
+dsh: reasoning:
+The prior controller committed handoff + tools + map. I'll follow the same pattern: commit `research_map/ASTRA_HANDOFF.md`, `research_map/astra_lifecycle_03_events.py`, `research_map/astra_repair_03_resources.py`, `research_map/research_map.json`, and the pass summary + lifecycle reports (runtime/state/controller_verification/astra-lifecycle-03.md and lifecycle_20260912-002440.json). What did pass 02 commit re: runtime reports? The stat shows only 4 files, so it did not commit runtime reports (maybe runtime/ is gitignored). Let me check .gitignore.
+
+Then commit with an appropriate message. But first, check the current map sha and whether another writer changed it since my repair (other controllers could have run). Let me verify the state now: map mtime/sha, validator, gates, lock, solver, pending events, and that my assignments/inbox cards are present.
+
+Then commit only the controller-owned files.
+
+Note: git commit might fail due to the broken pack index (the errors were from `._pack-*.idx` files, which are macOS resource fork files; git may ignore them). Earlier git log worked. Let me try `git add` on specific files and commit. I need to be careful not to `git add -A` (would add thousands of files from the swarm).
+
+Let me check .gitignore and the current diff scope.
+dsh: reasoning:
+State is stable and valid:
+- map sha 4fd40d4d1e4f, updated_at 00:25:10 (my repair).
+- gates all pending, lock locked, solver absent.
+- 121 events pending at the last checkpoint (00:25:10? no — that tail checkpoint was ckpt-20260912-002510 with 35 pending; now says 121? The tail command read the last checkpoint line; maybe new checkpoints were written by the supervisor since (another checkpoint at e.g. 00:25:5x with pending 121). Let me not worry; pending traffic is documented.
+
+Hmm wait, "events pending 121" from the last checkpoint log line — that means checkpoints continued after mine. Fine.
+
+Now commit. Files:
+- research_map/ASTRA_HANDOFF.md (modified)
+- research_map/astra_lifecycle_03_events.py (new)
+- research_map/astra_repair_03_resources.py (new)
+- research_map/research_map.json (modified)
+- runtime/state/controller_verification/astra-lifecycle-03.md (new; runtime not ignored per .gitignore, but pass 02 didn't commit its summary/report... Actually maybe it did not because the commit stat listed only 4 files. Perhaps runtime/ is untracked and they chose not to commit. I'll include the two pass-03 verification files; is that consistent? The prior commit didn't include runtime files, so to keep the commit focused and consistent with precedent, I'll include only research_map files. Hmm, but the pass summary is valuable. It's in the workspace anyway; the handoff references it. Since runtime/state/ has many files, adding just two is fine and improves auditability. But if runtime/state/controller_verification/lifecycle_*.json files are regenerated constantly and untracked, adding one won't hurt. Let me check if they're untracked: `git ls-files runtime | head`. If runtime isn't tracked at all, I'll follow precedent and skip. Let me check quickly and then commit.
+
+Also stage the two new scripts. Let me do `git add` with explicit paths and commit with a message like:
+"astra lifecycle 03: finding-closure + final-hash verification assignments, resource decisions, hash-bound gate records"
+
+Note git may complain about the broken pack index. `git log` worked. `git add` may also work. Let's try.
+dsh: reasoning:
+The staging worked (M/A shown) despite the pack index warnings (those come from macOS `._pack` files; the actual pack index `pack-848171c7b14c2eac9a2d7bbf10e97d66219f33cc.idx` may actually be broken too? The error names `._pack-...idx` — the AppleDouble file. It's noisy but staging succeeded).
+
+Wait — did the index update properly? `git status --short -- research_map` shows "M  " (staged) for the four files. Good. But I notice `research_map/schemas.py` and `validate_map.py` are modified but unstaged (pre-existing changes from earlier work). I will NOT stage those (not mine).
+
+Now commit. Let me use `git commit -m` with the staged files only. Since other staged changes? `git status --short` earlier (before add) showed ` M research_map/schemas.py` etc. unstaged. My add staged only my four files. Commit should include only staged ones.
+
+Let me commit.
+dsh: reasoning:
+Committed (dfa5484).
+
+Final verification pass. Let me do a concise end-of-pass check:
+1. Map valid, gates pending, lock locked, solver absent.
+2. Assignment inbox cards present for the leads (verify the IDs are in the inbox files).
+3. Handoff references correct (map sha 4fd40d4d matches).
+4. Note events pending (121+) for next pass.
+5. Check if any node status=done appeared (authority enforcement).
+
+Let me run one last consolidated verification and then produce the final report to the user. Also double check that my lifecycle record is in the map (astra-lifecycle-03, -close, -final) and that the report files exist.
+
+One more consideration: the supervisor will relaunch a controller within ~20s of my exit. My handoff tells it what to do. Good.
+
+Let me run the final verification.
+dsh: reasoning:
+Everything checks out:
+1. Map valid, sha 4fd40d4d.
+2. Gates pending, lock locked, solver absent, guard present.
+3. A0/A1 show validation_status=passed but status=active — from earlier passes (A0 rubric passed, A1 passed?). Hmm, "passed" validation on A1 while its coverage is incomplete. That was pre-existing (the handoff said A1 validation passed). Not something I changed; the gate remains pending. Note: validate_map only errors on status=done without validation; active+passed is allowed. Fine.
+4. Three pass-03 lifecycle records.
+5. Deadlines present.
+6. Inbox cards delivered.
+7. Reports exist.
+8. Summary exists.
+
+Also I committed the controller artifacts. The pass is complete. I have consumed comms and artifacts, maintained DAG/gates, issued bounded assignments, recorded hashes/validation, kept numerics gated, and run one independent lifecycle (with idempotent close invocations) — now exit.
+
+One last thing: should I clean up? No. There's a background job? None started. No goals to manage. I should give the final answer summarizing the pass for the user (the Human PI / whatever reads this).
+
+Let me write a concise final report:
+- Pass identity, map hash before/after.
+- Ingest/apply numbers.
+- Gate state and what changed (review corpus growth: F2a 2 accepts, F2b 4 accepts, L0 3 accepts; F1 1 accept + 3 revises; F0 divergence).
+- Assignments issued (5) + supersessions.
+- Resource decisions (3 approvals + supersessions) + the regex limitation.
+- Numerics locked.
+- Artifacts recorded (checkpoint ckpt-20260912-002510; report; summary; commit dfa5484).
+- Residuals for the next pass (121+ pending events, F0 divergence, CF-14, stale gates[].unmet).
+- One lifecycle then exit confirmation.
+
+Keep it tight and factual.

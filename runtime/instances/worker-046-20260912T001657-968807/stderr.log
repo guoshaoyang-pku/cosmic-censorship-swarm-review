@@ -1,0 +1,573 @@
+dsh: reasoning:
+Let me start by exploring the workspace to find the handoff/map and comms.
+dsh: reasoning:
+The glob for `**/handoff/**` found nothing. Let me look for directories named handoff, and comms. Let me search more broadly.
+dsh: reasoning:
+The workspace is huge. There's a "workdir" directory in the results — interesting, the glob returned paths like "workdir/deepseek-harness/..." which suggests the actual session workspace might be a different root. Let me check DSH_* environment variables and the actual workspace root.
+
+Let me check `pwd`, `$DSH_*` vars, and look for a `workdir` directory.
+dsh: reasoning:
+Found it: `/data3/guoshaoyang/workdir/ai4math-swarm/` contains `HANDOFF.md`, `comms`, `research_map`. Let me explore that directory.
+dsh: reasoning:
+Now let's look at the comms, the inbox, outbox, PROTOCOL.md, and the runtime directory. My task: "Read handoff/map and comms. Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit. worker=046"
+
+Let me read PROTOCOL.md, the comms inbox, and the runtime directory (likely where worker task assignments are).
+dsh: reasoning:
+I'm worker=046. The task says: "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit."
+
+Note: worker ids go up to 020 or so in runtime/instances. But worker=046 suggests there's a newer batch. Let me look for a task assignment for worker-046. Let me check the runtime/instances for worker-046, comms/inbox, and the latest assignments.
+
+Let me search for "046" across the workspace.
+dsh: reasoning:
+I see. There are runtime instances for worker-046. Let me inspect `runtime/instances/worker-046-*` to find my assignment. Also the place where assignments are dispatched is `comms/outbox/assignments/`.
+
+Let me check the worker-046 instance dirs and the assignments dir.
+dsh: reasoning:
+Interesting — I see my own prior attempt stderr log (worker-046-20260912T001657-968807 is THIS session, presumably). Actually the second instance started 00:16:57 — that's likely me, the current session. The earlier one at 00:12:30 was a previous attempt that got cut off (its stderr ends mid-thought about class-bound tasks).
+
+I need to be efficient. Let me:
+1. Read ASTRA_HANDOFF.md (the map/handoff for the current swarm run).
+2. Inspect research_map.json structure to find class-bound tasks/open assignments.
+3. Check my inbox (deepseek-flash-046? worker-046?) — but inbox has no 046 file. So no explicit assignment; "Take one class-bound task" means pick one from the map.
+
+Let me read ASTRA_HANDOFF.md and ARCHITECTURE.md, and look at the map's assignments/nodes/classes.
+
+Also important: the checkpoint requirement. There's `research_map/checkpoint.py`. And the emit JSON with IDs evidence hash falsifier — I should write to comms/outbox/<agent>.jsonl with a status/claim/artifact event and then run the ingest + checkpoint.
+
+Let me first understand the map. I'll use python to summarize.
+
+Let me read ASTRA_HANDOFF.md first.
+dsh: reasoning:
+Now let me examine assignments: 89 assignments, opening/pending ones. The ASTRA_HANDOFF says open assignments issued 00:09, deadline 01:30: astra-life01-publish-frozen (lead-formulation), astra-life01-a1-rebind (lead-audit), astra-life01-l0-revise (lead-literature), astra-life01-n0-proposal (lead-numerics).
+
+But I'm a worker (execution). Those are lead assignments. I need a "class-bound task". Let me inspect assignments to find ones that are unassigned/for workers, and check claims for class-bound tasks.
+
+Let me dump assignments compactly.
+dsh: reasoning:
+Assignments are event-shaped (assignment events as ingested). Keys: event_id, node_id, assignee, artifact, gate, class_id, acceptance, budget_agent_hours, expected_information_gain, falsifier, stop_rule, deadline.
+
+Let me dump the last several assignments with full detail, especially recent ones and those for workers. Also look at what tasks are "class-bound" — i.e., have class_id.
+
+Also I should check the `claims` and `gates` to see where a worker can add value. And check `comms/inbox/` for a file addressed to me. There's no worker-046 inbox, but perhaps the latest dispatch round creates inbox files per worker slot. Let me check the newest inbox files by time and also search for "worker-0" in inbox.
+
+Actually, looking at ls -la comms/inbox: newest files are astra-lead-*.jsonl (00:15) and deepseek-flash-17/18/19 (00:07). No worker-046. So no direct assignment: "Take one class-bound task" = choose from the map.
+
+Let me look at recent assignments (last 20) in detail, plus gates, and controller_findings to identify an unmet, class-bound, worker-executable task.
+
+Let me also check `research_map/formulation_taxonomy.yaml` classes and the artifacts/ dir.
+
+Given time budget, let me be systematic: dump last 15 assignments fully.
+dsh: reasoning:
+Now I understand the state. As worker-046, I'm an extra execution worker (breadth executor, per Hard decision 3: "Treat DeepSeek Flash as a breadth executor"). The task: "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit."
+
+I should choose a class-bound task that is:
+1. Not already assigned to someone else (or a task that is a verification/independent check that helps).
+2. Executable by me without a model API, deterministic, machine-checkable, within the workspace-write sandbox.
+3. Produces an artifact with sha256, then emit an upward event (status/claim/artifact) in comms/outbox/<my agent>.jsonl, run `comms.py ingest`, `checkpoint.py`, and exit.
+
+Given the numerics lock and the gate structure, good candidate class-bound verification tasks:
+
+- The `astra-life02-softflag-f0f1` task assigned to lead-audit: extend F2b soft-flag disposition method to F0 canonical 565a6e505188 and F1 canonical b65fcc0f0118. That's class-bound (class ids in soft flags). I could INDEPENDENTLY do the disposition analysis (which is what the lead-audit needs) — but careful not to duplicate/contradict.
+
+- A worker-friendly class-bound task: census class tokens (like CF5), but that was assigned to flash-19.
+
+Hmm. The instruction "Take one class-bound task" — maybe there ARE class-bound tasks defined for workers in some registry. Let me check the `runtime/bin/issue_assignments.py` and check if there's a task pool for worker slots. Also let me check `comms/inbox/` newest file... Actually let me check what the last dispatch did. Let's check `runtime/logs/` and the supervisor log for worker-046 assignment.
+
+Actually, importantly: maybe the current swarm run has a script that issues assignments per worker, and worker-046's assignment exists in some queue file. Let me grep for "worker-046" across the ai4math-swarm tree (excluding node_modules).
+dsh: reasoning:
+100 workers were launched, all with the same generic prompt: "You are a bounded execution worker. Read handoff/map and comms. Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit." So there's no per-worker assignment; each worker picks one class-bound task from the map.
+
+Given 100 workers launched simultaneously, there's a risk of duplicate work. I should pick something that is:
+- genuinely needed,
+- class-bound,
+- deterministic/verifiable,
+- unlikely to collide (or where collision is fine as independent replication — actually independent replication is valued here! "two independent verdicts").
+
+The most valuable and clearly-needed worker-level (non-authority) task: independent verification tasks. Workers cannot set done/gate verdicts. So I should produce an artifact + status/claim event with evidence and falsifier.
+
+Key candidates from the map:
+
+1. **CF-5 class-token census** (assigned to deepseek-flash-19, artifact artifacts/flash-19/class_token_census.json). Already assigned; duplicating may be fine but wasted.
+
+2. **Soft-flag disposition for F0/F1** (astra-life02-softflag-f0f1, assigned to lead-audit): I could run `class_separation.py` against F0 canonical 565a6e505188 and F1 canonical b65fcc0f0118 to independently measure which tokens trigger flags, with an exact falsifier. That's class-bound and directly useful — the lead-audit needs to dispose of the flags; an independent worker measurement gives evidence. But careful: the controller says soft flags are "4 class-separation annotation flags" and the audit lead owns the disposition.
+
+3. **Verification of the FROZEN publication** (astra-life01-publish-frozen): byte-identity of canonical vs authoring + verify_frozen.py. I could independently run `artifacts/formulation/tools/verify_frozen.py` and record the result, plus byte-compare. This is exactly verifiable, class-bound (F1/F2a/F2b class ids), and it's the critical path for G-FORM/G-AUDIT. An independent worker can produce a hash-bound verification report. Very valuable and unlikely to be harmful. Actually the acceptance for astra-life02-publish-f0 covers F0 byte-identity. Let me check whether FROZEN.json is now consistent (the handoff says F1/F2a/F2b landed byte-identically at 00:10:15, and F0 publish is pending).
+
+Let me check the current state: FROZEN.json, canonical hashes, verify_frozen.py run.
+
+4. **N0 replication**: The replication verdict on disk is PROVISIONAL. Independent replication of N0 convergence order would be extremely valuable but may be compute-heavy. There's `numerics/tests/flat_wave.py` (27KB). Let me check if it's runnable quickly. The N0 gate needs "N0 convergence order measured and independently replicated". A worker doing an independent replication run would be a strong contribution. But time/compute?
+
+Let me check the current state of these artifacts and the map's assignments for anything explicitly looking for independent replication ("two independent verdicts per class", "an independent reviewer verdict"). Workers can't issue review verdicts (that's for reviewers... actually `review` is an upward message type available to any agent, with reviewer field). Hmm, PROTOCOL says upward message types include `review`. So a worker could emit a review verdict. But authority is: "worker events cannot set status=done, validation_status=passed, or a gate verdict."
+
+Given "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit" — the deliverable is:
+1. An artifact on disk (deterministic evidence).
+2. A JSON event line in comms/outbox/<agent>.jsonl with event_id, event_type, created_at, actor, class_id, evidence_refs, artifact_refs (with sha256), falsifier.
+3. Run checkpoint.py.
+4. Exit.
+
+The strongest choice: independent verification of a critical-path, hash-pinned claim, with a real falsifier, producing a machine-checkable artifact. The N0 convergence replication is the "only numerics work the lock permits" and is on the critical path; and it explicitly wants independent replication. Let me examine numerics/ and the N0 adjudication to see if a bounded independent replication is feasible in minutes.
+
+Let me look at:
+- numerics/CONVERGENCE_PROTOCOL.md
+- numerics/tests/flat_wave.py (run interface)
+- artifacts/numerics/n0/lead_calibration_report.json
+- runtime/state/controller_verification/N0_adjudication.md
+- artifacts/formulation/FROZEN.json + verify_frozen.py
+
+Let me inspect these in parallel.
+dsh: reasoning:
+The N0 flat_wave.py is runnable in <60s with `--all`. Independent replication is exactly what G-NUM needs: "N0 convergence order measured and independently replicated". The existing verdict `numerics/protocol/fixed_replication_verdict.json` is PROVISIONAL. Let me read it, plus the N0_adjudication.md and the CONVERGENCE_PROTOCOL.md to see what the exact unmet criterion is.
+
+This is a great class-bound task (class_id AF-WCC-SCALAR-SPH), bounded (<60s), deterministic, and directly on the critical path. My deliverable: independent replication artifact (JSON with measured orders per scheme, hashes), an upward event, checkpoint.
+
+But caution: is independent replication already done? Let me read fixed_replication_verdict.json and replication_triage.md. Also check whether other workers have already picked this (many workers launched). Let me check existing outbox of workers... there's no worker-NN outbox yet except worker-06 etc. Let me check for recent files in artifacts/ referencing n0 replication.
+
+Let me read:
+- numerics/protocol/fixed_replication_verdict.json
+- numerics/tests/replication_triage.md
+- runtime/state/controller_verification/N0_adjudication.md
+- numerics/CONVERGENCE_PROTOCOL.md (head)
+
+Then decide.
+dsh: reasoning:
+This tells me a lot. The N0 protocol requires a 4-rung replication artifact `numerics/tests/n0_order_4rung.json`. Let me check whether that exists. Also check `numerics/protocol/lead_4rung_replication.py` — the driver exists. The current unmet criterion is the independent A1 numerical-protocol review (assigned to lead-audit: astra-life02-n0-c8-refresh).
+
+Wait — the assignment astra-life02-n0-c8-refresh says: "Re-issue the C8 verdict against the protocol hash measured at review time; as of issue 1e6cdf04d7a2... A verdict on CONVERGENCE_PROTOCOL.md — an independent verdict (accept|revise|reject)... citing scheme-appropriate invariant functional, resolution-aware drift criterion, order fit with uncertainty, negative controls."
+
+As an execution worker I cannot issue an authoritative audit verdict, but I *can* produce independent verification evidence that the protocol's stated criteria are met by the artifacts — or find a discrepancy. That's genuinely valuable and the sort of breadth-executor task that fits.
+
+Alternatively, the cleanest class-bound task with a hard, machine-checkable falsifier: **independently replicate the 4-rung order measurement** using the lead 4-rung replication driver and verify the published `n0_order_4rung.json` numbers, including uncertainty (R5) and cross-scheme agreement. Let me check if `numerics/tests/n0_order_4rung.json` exists.
+
+Let me check what's in numerics/tests/ and read the 4-rung driver + protocol revision log. Also check whether the file is missing → then producing it would be the task. Let me look.
+dsh: reasoning:
+The 4-rung artifact exists. Now, what is genuinely missing/unmet? The key remaining criterion for G-NUM is the independent A1 review of the protocol (astra-life02-n0-c8-refresh, assigned to lead-audit). Another possible worker contribution: independent verification that the published 4-rung artifact's numbers are reproducible, and that the R5 uncertainty and cross-scheme agreement criteria (protocol §3.8, §6) hold in the published data.
+
+But wait — maybe a better fit for "one class-bound task" for a *worker*: the protocol §6 might have an "6. Gate criteria" table with amendment (e). Let me read §5-6 and the 4-rung JSON to find a machine-checkable acceptance.
+
+Also, importantly, the map might have an assignment specifically for a worker that is unfulfilled. Let me look for controller findings mentioning open worker tasks and CF items. Let me look at controller_findings (16) and claim/review statuses to pick something with a clear unmet acceptance.
+
+Actually, let me reconsider the deliverable format the harness expects: "emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit." In this swarm, that means:
+- Write an artifact file (machine-checkable).
+- Emit an event JSON line to `comms/outbox/<my-agent>.jsonl` (my agent id: as a worker slot 046, what agent id do I use? The PROTOCOL says agent ids: astra, leads, deepseek-flash-01..20. Workers launched as worker-046 don't have a listed id. Earlier logs show worker-06 had an outbox? Let me check comms/outbox/deepseek-flash-07 (a directory) and see how other workers identified themselves. There was `comms/inbox/worker-06.jsonl` and `worker-16.jsonl`. So workers use `worker-06` / `worker-16` ids. So I should use actor `worker-046` and outbox `comms/outbox/worker-046.jsonl` — ingest should accept it (the ingest gate may validate actor ids? Let me check comms.py for allowed actor handling).
+
+Let me check comms.py ingest to understand validation: event_id, event_type, created_at, actor required; schemas.py validates. Need to ensure my event passes ingest (not rejected).
+
+Plan:
+1. Pick the class-bound task: **independent reproducibility verification of the N0 4-rung order artifact** (`numerics/tests/n0_order_4rung.json`, class AF-WCC-SCALAR-SPH, node N0, gate G-NUM). Concretely: re-run the 4-rung replication driver (`numerics/protocol/lead_4rung_replication.py`) in a scratch output path, recompute orders/uncertainty from the published rows using the protocol's formulas (R5: p ± max(pair-spread half-range, lsq standard error), agreement |pA - pB| <= max(0.25, sqrt(dA²+dB²)), norm named), and check that the published JSON's numbers reproduce. Produce artifact `artifacts/worker-046/n0_4rung_independent_verification.json` with hashes of all inputs and a clear pass/fail per criterion plus explicit falsifiers.
+
+Wait — need to be careful: writing to artifacts/ for another node? PROTOCOL says workers shouldn't edit other workers' artifacts; a new verification artifact under artifacts/worker-046/ is fine. Also numerics lock: N0 allowed. No self-gravity. Fine.
+
+But is re-running lead_4rung_replication.py safe and bounded? Let me inspect it first. Also `n0_order_4rung_addendum.py`. The full flat_wave --all is <60s. Let me check the driver's runtime.
+
+2. Check if another worker already did exactly this (100 workers!). Look for artifacts/worker-*/ dirs created in the last minutes, and outbox worker files. Let me check what artifacts exist under artifacts/ for worker-0xx and read a couple to avoid duplication. Given 100 workers all reading the same prompt, collision is likely; I should pick something with a distinct angle. Let me check.
+
+Let me look at the newest artifacts and see what other workers are doing right now.
+dsh: reasoning:
+Other workers are already doing: worker-002 softflag-disposition, worker-007 L0 artifact_refs, worker-077 L1 spotcheck, worker-041 citation spotcheck. So workers pick tasks.
+
+I need to pick a class-bound task not obviously taken. Options:
+
+A. **N0 4-rung independent reproduction** (class AF-WCC-SCALAR-SPH, node N0, gate G-NUM). Verification: re-run the frozen replication module at the pinned hash over 4 rungs and confirm the published `n0_order_4rung.json` numbers bitwise/within tolerance; recompute R5 deltas and pairwise agreement; record input hashes. Nobody seems to be doing this yet (worker lists: 002 softflag, 007 L0, 077 L1, 041 citation). This is high-value on the critical path and clearly class-bound.
+
+B. Soft-flag disposition for F0/F1 — worker-002 is already on it.
+
+C. Class-token census (CF5) — assigned flash-19, maybe done already.
+
+D. Independent verification of the frozen canonical bytes (verify_frozen.py) — the F0 publication task. Could collide with lead-formulation.
+
+E. N0 protocol review criteria check — the A1 review is lead-audit's; a worker could independently check each protocol claim's machine-checkability. That overlaps with the audit authority though.
+
+A is the best: it is execution-only, deterministic, bounded (<60s), and produces hard numbers with a real falsifier. And it's exactly the kind of "breadth executor" work the swarm wants. Note that the map explicitly values independent replication ("an order claim ... independently replicated") and the A1 review will need to know whether the 4-rung artifact reproduces.
+
+Also the r5 uncertainty in the 4-rung JSON: I noticed pairwise agreement R5 bounds all say 0.25 — consistent with `max(0.25, sqrt(dA^2+dB^2))`. Good.
+
+Let me check the addendum script's interface and ensure re-running is feasible without modifying anything. I'll run it with a scratch output. Let me read `numerics/tests/n0_order_4rung_addendum.py` (5849 bytes) and `numerics/protocol/lead_4rung_replication.py`.
+
+Actually, to be most defensible: the published artifact pins "frozen module hash guard" — the addendum imports `flat_wave_replication.py` and verifies its sha256 == 8ade1cdc. I'll run the addendum script (which regenerates its JSON) into a scratch dir, then compare its measured numbers against the published JSON. But careful: running the addendum may write over `numerics/tests/n0_order_4rung.json` (it's owned by another node). I must not clobber it — I'll copy the script? No: better to run it with output redirect if it supports --json-out. Let me read it.
+
+Let me read both scripts.
+dsh: reasoning:
+Good. `lead_4rung_replication.py` supports `--json-out` so I can write to my own artifact path. It's read-only regarding pinned artifacts. Runtime: order_study for 3 schemes × 4 resolutions at r_max=30, t_end=6 — the fixed run took 0.91s per the verdict (that was probably a smaller config). Let me just run it and time it.
+
+Now, my task plan (bounded):
+
+**Task**: Independent (worker-046) re-measurement and R5-criterion audit of the N0 4-rung order evidence, class-bound `AF-WCC-SCALAR-SPH`, node N0, gate G-NUM.
+
+**Artifacts**:
+1. `artifacts/worker-046/n0_4rung_independent/` containing:
+   - `run_lead_4rung.json` — fresh run output of `numerics/protocol/lead_4rung_replication.py --json-out ...` (this script's numbers).
+   - `recompute_r5.py` — script that reads the published `numerics/tests/n0_order_4rung.json`, independently recomputes fit order, pair orders, R5 delta, and pairwise agreement from the published per-rung rows using its own formula implementation (not importing the addendum), and compares against published values.
+   - `verification.json` — machine-readable verdict with input hashes (sha256 of the two pinned scripts, the published 4rung JSON, the fixed controller run), recomputed values, per-criterion pass/fail, falsifier statement, and explicit "authority boundaries" (no gate verdict).
+   - `README.md` — short summary.
+   - `.sha256` sidecars.
+
+2. Upward event JSON in `comms/outbox/worker-046.jsonl`:
+   - one `artifact` event for verification.json with sha256 and validation_status (unverified — workers can't set passed).
+   - one `status` event (node_id N0, status active, summary, evidence_refs, next_falsifier).
+   - Maybe a `claim` event with conclusion_type `numerical_evidence` (not theorem, so artifact_refs not strictly required, but I'll include them). Careful: claim requires class_id, statement, conclusion_type, assumptions, falsifier, evidence_refs.
+   - Keep it to 2-3 events, all valid.
+
+3. Run `python3 research_map/comms.py ingest` (check my events get accepted, not rejected).
+4. Run `python3 research_map/checkpoint.py`.
+5. Exit with a summary.
+
+But hold on. Two considerations about the "independent verification" angle:
+- The addendum script `n0_order_4rung_addendum.py` itself is the source of the published JSON; the R5 computation within it is deterministic. My independent check should recompute from published rows using an independent implementation, and additionally re-run the frozen replication module fresh and compare each rung's l2_error against the published values. That gives genuine independent evidence (re-execution + independent arithmetic), not just re-reading.
+
+- Also verify the pinned controller run `n0_replication_astra_run2_FIXED.json` hash matches 6542db93... as claimed, and frozen module hash 8ade1cdc... This is provenance checking, which the audit needs.
+
+This is a solid, bounded, class-bound task with a genuine falsifier: if any recomputed number disagrees beyond documented tolerance, the published order claim is falsified. And I can report the actual result honestly.
+
+Potential collision: another worker might be doing the same right now. Let me quickly check for `artifacts/worker-046` or any n0 verification already in progress. Since I can't see other workers' live plans, I'll check for existing files and just go — if duplicate, it's independent replication, which is explicitly valued ("two independent verdicts"). Also 100 workers doing this would be wasteful, but I can only control my slot.
+
+Actually, let me reconsider — is there something MORE clearly "class-bound task" that's unclaimed and unmet? The map's open acceptance items:
+- F0/F1 soft-flag disposition (worker-002 doing it).
+- L0 revise (lead-literature).
+- L1 spot checks (worker-077 doing).
+- N0 4-rung + protocol review (open).
+- Class-token census CF5 (flash-19 assigned; worker-002 did a token census for softflags, different).
+
+The N0 angle is best for me. Let me also double check the `counts.tsv`/metrics around artifacts to see if a worker-046 artifact already exists — no.
+
+Let me first read the fixed controller run's hash on disk and confirm hashes, then run the replication.
+
+Let me get precise hashes:
+- numerics/tests/flat_wave_replication.py → expect 8ade1cdc163ea420790b9fdfdab41157b4f3d4219d6a0bcf827baafe69a6f422
+- runtime/state/controller_verification/n0_replication_astra_run2_FIXED.json → expect 6542db93...
+- numerics/tests/n0_order_4rung.json → sha (protocol cites #c88146a1375c50f0)
+- numerics/protocol/lead_4rung_replication.py
+- numerics/tests/n0_order_4rung_addendum.py
+
+Then run lead_4rung_replication.py --json-out artifacts/worker-046/...
+
+Let me set up the todo list and proceed.
+
+One more check: python3 available with numpy 2.2.6? The verdict says numpy 2.2.6 python 3.10.12. Fine.
+
+Let me create the directory and run. Time the run.
+
+Also note: `artifacts/worker-046/` — is artifacts/ writable? Yes workspace-write.
+
+Let me start. First, hash provenance and a quick timing run of one scheme? Just run the full driver; it should be fast (r_max=30, t_end=6, 4 rungs × 3 schemes). If it takes too long I'll cap with timeout.
+
+Let me set todos.
+dsh: reasoning:
+All pinned hashes match:
+- frozen module 8ade1cdc163ea420... ✓ (matches verdict + addendum FROZEN_SHA)
+- fixed controller run 6542db93... ✓
+- published 4rung c88146a1375c50f0... ✓ (matches protocol cite)
+- protocol 1e6cdf04d7a24313... ✓ (matches astra-life02-n0-c8-refresh "current" hash 1e6cdf04d7a2)
+
+Now re-run the lead 4-rung driver into my artifact dir. Let me create artifacts/worker-046/n0_4rung_independent/ and run with timing + timeout.
+dsh: reasoning:
+The re-run took 2.35s and produced the artifact. Now I need to compare:
+1. The re-run's numbers vs the published `numerics/tests/n0_order_4rung.json` numbers, rung by rung (l2_error), and fit orders.
+2. Independently recompute R5 from published rows (using a separate implementation).
+
+Let me write an independent verification script that:
+- reads published 4rung JSON
+- reads my rerun JSON
+- reads fixed controller run JSON (to compare 3-rung rows)
+- recomputes from published rows: pair orders p_i = log(e_i/e_{i+1})/log(h_i/h_{i+1}), lsq fit, residuals, SE, pair half-range, delta = max(...), pairwise agreement bound max(0.25, sqrt(dA²+dB²)).
+- compares to published claims with tolerances (I'll use exact match for pair orders, and 1e-9 relative for fit order; but the two runs may differ in last ulps due to same deterministic code — should be bitwise or near). Use tolerance 1e-12 absolute for published-vs-recomputed, and 1e-12 for rerun-vs-published (deterministic same code, should be identical; report max abs diff).
+- checks the falsifier conditions explicitly: monotone, |p-2|<=0.3, pairwise R5 agreement, hash guards.
+- Also verify all 7 pinned input hashes.
+
+Let me first look at my rerun JSON fully to see its structure (fit_order, etc.).
+dsh: reasoning:
+The structure differs slightly. Let me dump the actual rerun JSON.
+dsh: reasoning:
+Excellent. Comparing the rerun to the published `n0_order_4rung.json`:
+
+Published lffd rows: l2_error 0.005082429578323704, 0.0012752648214223426, 0.0003195202587726915, 7.997583488268187e-05 → identical.
+cnfd rows: identical. cnfem rows: identical.
+fit orders: lffd 1.9966248643204345 = same; cnfd 1.9953510343613228 same; cnfem 1.9888598802332438 same.
+pair orders: same.
+deltas: lffd 0.0017749505081917638 same; cnfd 0.004172438339596352 same; cnfem 0.005142648496443636 same.
+pairwise agreement: same (0.0012738299591117386, 0.007764984087190729, 0.006491154128078991).
+
+So the published 4-rung artifact reproduces bitwise in l2_error values and fit orders. Note the least_squares_standard_error differs in the last few digits between addendum (0.0005631231918086576) and rerun (0.000563123191808489) — tiny float difference due to different lsq implementation (np.polyfit cov vs explicit formula). That's worth noting as a minor observation: delta is driven by pair half-range in all three cases, so R5 deltas are identical. Good nuance to report.
+
+Now write the independent recompute script. It must be self-contained (own implementation) and produce verification.json.
+
+Design of `verify_n0_4rung.py`:
+- ROOT = repo root; uses pathlib.
+- sha256 function.
+- PINS dict of expected hashes; check each on disk; record pass/fail.
+- Load published JSON, rerun JSON, fixed controller run JSON.
+- For each scheme:
+  - published rows: drs, errs
+  - recompute pair orders with own formula: p_i = ln(e_i/e_{i+1})/ln(h_i/h_{i+1})
+  - recompute lsq slope + SE with explicit normal equations (independent implementation): slope = Sxy/Sxx; intercept = ybar - slope*xbar; residual variance = SSR/(n-2); SE = sqrt(sigma2/Sxx).
+  - half_range = (max(pair)-min(pair))/2; delta = max(half_range, SE)
+  - compare recomputed vs published pair_orders, fit_order, delta, SE (with abs tolerance 1e-9 for SE since implementations differ ~1.7e-13; actually use rel tol 1e-6 or abs 1e-9).
+  - monotone: errs strictly decreasing.
+  - within band |fit - 2| <= 0.3.
+  - rerun-vs-published l2 row comparison: exact equality (report max abs diff) — since deterministic same code, expect 0.0.
+- Pairwise agreement: recompute |dA-dB| <= max(0.25, sqrt(dA²+dB²)); compare to published `pairwise_agreement_R5`.
+- Falsifier evaluation: list each falsifier clause and whether it triggered.
+- Also cross-check the fixed controller run (3-rung) rows against the published 4-rung first 3 rows — expect exact equality, which validates chaining.
+- Verdict: overall "REPRODUCED" if all checks pass; else "FALSIFIED"/"DISCREPANT" with details.
+- Explicit authority boundary: no gate verdict, no node completion.
+- Write verification.json + print summary.
+
+Also should I check the `within_harness_tol` claim? The published sets it True. The protocol says harness tol; what is it? In flat_wave_replication, `within_harness_tol` presumably |p - 2| <= 0.3. I'll recompute using the p_tol=0.3 from config, and note it.
+
+Additionally: the protocol rev 3 requires >=4 rungs — the published artifact has 4 rungs per scheme → satisfies. Also requires name of the error norm (R5a): published uses `l2_error` (weighted L2) — I should check the published JSON names the norm. In the 4rung JSON, rows have `l2_error` and `l2_error_u`, but there's no explicit "norm" field. The protocol §3.8 requires "names the error norm (L2 integral or L-infinity) that was fitted (R5a)". The addendum JSON's config doesn't explicitly state norm name; the fitted errors are `l2_error`. Hmm — is that a finding? The protocol review (lead-audit) needs to decide whether implicit field naming satisfies R5a. I can record it as a **soft observation / open item** for the reviewer rather than assert a failure: "the fitted norm is the `l2_error` field, i.e. the weighted-L2 norm; the artifact does not carry an explicit `norm_fitted` string, so R5a compliance depends on field-name interpretation." That's honest and useful, and it's exactly the kind of nuance an executor can surface without issuing a verdict.
+
+Let me also check `l2_error` definition in flat_wave_replication.py to say which norm it is precisely. Let me grep.
+
+Also, a stronger independence check: run the *canonical candidate* `numerics/tests/flat_wave.py --all` (the other artifact, class-bound) — but that's a broader check and the protocol says the candidate's 4th rung is its owner's item. I'll skip; keep scope tight.
+
+One more independent measurement worth adding: since the driver and addendum both use the *same* frozen module, my re-run is not methodologically independent of the module — it's a reproducibility check of the published numbers. I must state that clearly: "this is a re-execution + independent arithmetic check of the published evidence, not a new independent scheme." The falsifier is about non-reproduction. That's honest.
+
+Let me check the l2_error norm definition and `within_harness_tol` in the module. Then write the script.
+dsh: reasoning:
+Let me see lines 395-440 to understand `l2_error` precisely.
+dsh: reasoning:
+Confirmed: `l2_error` is an unweighted (plain) L2 norm scaled by sqrt(dr): sqrt(sum(diff²)·dr), and `l2_error_u` uses the reduced variable u=psi with r-weighting removed (division by r). The protocol §3.2 says "errors in a weighted L2 norm (sum V_i e_i^2 / sum V_i) and L-infinity". Actually the harness uses plain sqrt(sum e²·dr), not the volume-weighted sum V_i e_i²/ΣV_i. This is a legitimate nuance: the protocol says "weighted L2 norm (sum V_i e_i^2 / sum V_i)" but the frozen harness's `l2_error` is `sqrt(sum(e_i²)·dr)`, which for uniform grid differs from the volume-weighted norm by a factor. Hmm, is this a discrepancy worth flagging? It could be a genuine protocol-vs-implementation divergence (R5a norm naming).
+
+Wait — careful. Protocol rev 3 §3.2: "errors in a weighted L2 norm (`sum V_i e_i^2 / sum V_i`) and L-infinity." The harness defines l2_error = sqrt(sum(diff²) * dr). Those are different functionals (one is an RMS-type normalized norm, the other is a grid-scaled L2). Since both scale as h^p, the measured order is the same, so the order claim is unaffected. But the protocol's declared norm does not match the harness's implemented norm exactly. The published addendum reports `l2_error` without defining it. This is exactly the kind of "norm naming" R5a issue.
+
+I should record this as an observation/soft finding, clearly labelled as a documentation-vs-implementation divergence that does not change the order exponents (both are L2-equivalent up to a resolution-dependent factor: sqrt(sum e²·dr) = sqrt(dr·N)·RMS... let's compute: weighted norm W = sum V_i e_i² / sum V_i with V_i ∝ r_i² dr for spherical? Actually the protocol defines weighted L2 with V_i as cell volumes, and r_max=30, uniform dr. The harness l2_error is sqrt(Σ e² dr). So ratio depends on dr. Both converge at same order in h since error field e itself scales as h² and the norm factor sqrt(dr) = sqrt(h) is the same... careful: if e_i ~ C h² then sqrt(Σ (C h²)² h) = C h² sqrt(N h) = C h² sqrt(R) → O(h²). And weighted norm with V_i = 4π r_i² h: sqrt(Σ V_i e²/ΣV_i) = sqrt(Σ 4πr²h·C²h⁴ / Σ4πr²h) = C h² · sqrt(Σr²/Σr²) = C h². So both give O(h²). Orders identical. Fine: no effect on the measured order; but the named norm issue remains a documentation mismatch.
+
+This is a valuable, honest independent finding for the A1 reviewer: **the frozen harness's `l2_error` is sqrt(Σe²·dr), and the published 4-rung artifact does not name the norm explicitly (R5a); the protocol text names a volume-weighted L2. Order exponents are invariant to this choice (both O(h) factors cancel), so the order claim stands; but R5a's "names the error norm" is only satisfied by field-name convention, not by an explicit declaration.** I'll record it as `open_item_for_reviewer`, not as a falsifier trigger.
+
+Let me now also double check: does the published addendum's rows come from the same `l2_error`? Yes.
+
+Additional check: the fixed controller run `n0_replication_astra_run2_FIXED.json` — compare its 3-rung rows with published 4-rung first 3 rows. Let me check its structure in the verify script.
+
+Now write the verification script. Key: independent arithmetic implementation (normal equations, not polyfit cov). Compare:
+- published pair_orders vs recomputed (abs tol 1e-12)
+- published fit_order vs recomputed (abs tol 1e-12)
+- published least_squares_se vs recomputed (rel tol 1e-6 — implementations differ)
+- published delta vs recomputed max(half,se) (abs tol 1e-12; since half-range dominates, should match exactly)
+- published verdict booleans vs recomputed
+- rerun-vs-published l2_error per rung (abs diff, expect 0.0)
+- fixed-run-vs-published rows for the 3 common rungs (abs diff, expect 0.0)
+- pairwise agreement published vs recomputed from recomputed deltas and orders
+
+Exit code 0 if REPRODUCED, 1 if any hard check fails. Write verification.json.
+
+Careful about `least_squares_se` in published: addendum uses explicit formula, rerun uses polyfit cov. Both should be within ~1e-12 relative. Use tolerance: abs diff <= 1e-9 (values ~1e-3).
+
+Let me write the script into artifacts/worker-046/n0_4rung_independent/verify_n0_4rung.py. Then run it.
+
+Note on file naming: I'll produce:
+- `lead_4rung_replication_rerun.json` (done)
+- `verify_n0_4rung.py`
+- `verification.json` (output)
+- `README.md`
+- sha256 sidecars for each (`.sha256` files), as worker-007 did.
+
+Let me write the verifier now.
+dsh: reasoning:
+Bug: `per_scheme[name]` doesn't include "monotone" at top level (it's in checks). Fix: use checks dict. Let me patch.
+dsh: reasoning:
+Interesting results:
+1. All checks pass except `chains_to_controller_verified_run`. Let me look at what that failure is — probably the fixed run's structure differs (maybe it stores a different error field or key names), or genuinely the fixed 3-rung run used a different configuration/harness revision (the "FIXED" run at 23:40 used harness 0646de3f, while the frozen module is 8ade1cdc — different harness!). Indeed: `fixed_replication_verdict.json` chained_evidence_hashes lists harness `artifacts/flash-04/n0_acceptance/harness.py` 0646de3f... and the replication script 8ade1cdc. So the FIXED run may come from the harness in artifacts/flash-04, not from flat_wave_replication.py. Its rows may legitimately differ.
+
+Let me inspect the fixed run JSON structure and values to see whether non-equality is expected (different config, e.g., r_max/t_end or error functional), and report it accurately rather than as a false alarm.
+
+2. Note the recomputed fit orders differ in the last ulp from `numpy.polyfit` values (1.9966248643204347 vs ...45; 1.9953510343613226 vs ...28; 1.9888598802332436 vs ...38). My TOL_ORDER = 1e-12 allowed that (diff ~2e-16). Fine — that's why independent_arithmetic_matches=true.
+
+Let me examine the fixed run.
+dsh: reasoning:
+The FIXED run stores order studies under `order_studies` (not `studies`), and it used `n0_harness_sha256: 0646de3f...` — a separate harness in artifacts/flash-04. So my chaining check looked in the wrong place and compared against the wrong source entirely. Let me inspect `order_studies` structure and compare.
+
+Note also: the FIXED run's row values for lffd in fixed_replication_verdict.json are harness drift values, not l2 errors. Let me check `order_studies`.
+dsh: reasoning:
+The FIXED run's `order_studies` is a list with per-scheme rows that exactly match the first three rungs of the published 4-rung artifact (lffd: 0.005082429578323704, 0.0012752648214223426, 0.0003195202587726915 — identical). So chaining works; my script just looked under `studies`/`schemes` instead of `order_studies` (list). Let me fix the chaining check to handle the list form, and also record the FIXED run's harness sha (0646de3f) vs the frozen module (8ade1cdc) — note that the row values agree exactly, so the harness difference didn't change the l2 errors for the common rungs (or the FIXED run's rows were produced using the frozen module; provenance says script_sha256 = 8ade1cdc, harness 0646de3f is the acceptance harness used for the invariant gate).
+
+Let me fix the chaining block: build a dict from the list by `scheme`.
+
+Also I want to handle both dict and list forms robustly. Let me edit.
+dsh: reasoning:
+Also, I should record the FIXED run's provenance note (harness sha 0646de3f vs script 8ade1cdc) in the observation list. Let me add an observation O3 capturing the chaining source's provenance. Actually the `chaining_vs_fixed_3rung_run` block can note `fixed_run_harness_sha256`. Let me add it inline after the chain computation.
+
+Let me edit to add fixed provenance into out.
+dsh: reasoning:
+The verification passes: REPRODUCED.
+
+Now let me finalize the artifact bundle:
+1. `verification.json` — written.
+2. Add a README.md summarizing.
+3. Generate `.sha256` sidecars for all files.
+4. Then emit comms events.
+
+But first, let me double-check the verification.json content fully, especially the observation about the norm and the R5a item, and confirm the content is accurate.
+
+Let me read verification.json.
+dsh: reasoning:
+The verification artifact is solid. Now:
+
+1. Write README.md.
+2. Generate .sha256 sidecars.
+3. Emit comms events.
+
+Before emitting, I need to check the comms ingest validation rules to ensure my events are accepted. Let me read `research_map/comms.py` relevant parts (event types, required fields) and `research_map/schemas.py`.
+
+Let me grep schemas.py for the event schema requirements.
+dsh: reasoning:
+Now I know the required fields:
+
+- `artifact`: node_id, artifact_type, path, sha256, validation_status (unverified). Plus common: event_id, event_type, created_at, actor. Plus optional class_id, evidence_refs.
+- `status`: node_id, status, hours, summary, evidence_refs, next_falsifier. Status must be one of queued/active/blocked/done/rejected/killed. I must not set done. Use "active" for N0 (N0 is active/unverified) — that's within worker authority? Workers cannot set status=done; active is fine but note "worker events cannot set status=done, validation_status=passed, or a gate verdict". So status=active is allowed.
+- `claim`: class_id, statement, conclusion_type, assumptions, falsifier, evidence_refs. conclusion_type numerical_evidence is allowed. Not theorem, so artifact_refs optional but I'll include.
+
+Now check `comms.py ingest` for actor validation and whether it filters by UPWARD types. Let me grep for how it decides accepted/rejected and whether worker-xxx actors are allowed. Also the ingest might only read certain outbox files. Let me read relevant parts of comms.py.
+dsh: reasoning:
+Ingest picks up any file under comms/outbox (rglob), sets actor from path stem if missing, validates, and rejects invalid ones. There may be an event_id dedup via ingested_ids.json. Good.
+
+Let me also check lines ~105-170 for `enrich`/defaulting rules and the "pending" concept, plus whether `_source_actor` matters. Actually, let me just create the events carefully with all required fields.
+
+I'll write `comms/outbox/worker-046.jsonl` with 3 events:
+1. `artifact` for verification.json.
+2. `claim` (numerical_evidence) stating the reproduction result.
+3. `status` for N0 (active) with summary, evidence_refs, next_falsifier.
+
+Event IDs must be unique: e.g. `worker-046-n0-4rung-artifact-01`, `worker-046-n0-4rung-claim-01`, `worker-046-n0-4rung-status-01`.
+
+Careful with `created_at` format — ISO with timezone like other events: "2026-09-12T00:22:00+08:00".
+
+Also `hours`: measured agent-hours. I should put a small number, e.g. 0.2 (I've spent ~15 min). Let me compute elapsed from session start (00:16:57) — put 0.15.
+
+Also the artifact event: `path` should be relative to repo root: "artifacts/worker-046/n0_4rung_independent/verification.json". `artifact_type`: e.g. "verification_report". `sha256`: measured. `validation_status`: "unverified" (workers can't set passed). Also include `class_id`, `evidence_refs`, `falsifier`? artifact schema doesn't require falsifier but extra fields are allowed (validate_event only checks required keys). I'll add `class_id`, `gate`, `evidence_refs`, `falsifier` for completeness.
+
+The claim event: class_id, statement, conclusion_type numerical_evidence, assumptions, falsifier, evidence_refs, artifact_refs. 
+
+The status event: node_id N0, status active, hours, summary, evidence_refs, next_falsifier.
+
+Then run ingest and check accepted/rejected.
+
+Before that, write README.md and sha256 sidecars. Let me do that now.
+
+README content: concise, states what was done, why (class binding, gate), verdict, hashes, how to reproduce, authority boundary, falsifier.
+
+Also generate a `MANIFEST.json` maybe? Worker-007 used .sha256 sidecars. I'll create `.sha256` sidecars for: verify_n0_4rung.py, lead_4rung_replication_rerun.json, verification.json, README.md.
+
+Order: write README → compute sidecars → then compute verification.json's own sha for the event.
+
+One concern: `comms/outbox/worker-046.jsonl` — file name stem is `worker-046`, so actor default would be worker-046, but I'll set actor explicitly.
+
+Let me write README.
+dsh: reasoning:
+Now generate .sha256 sidecars. Then also re-run the verifier one final time to ensure verification.json reflects the final script state (the script changed since verification.json was generated? No — I changed the script and then re-ran it, which regenerated verification.json with REPRODUCED. But then I haven't changed the script after that. Good. Wait — I edited the script (chaining fix + provenance block) and then ran it → REPRODUCED. No edits after. Good.)
+
+Now sidecars: write `<file>.sha256` with just the hex digest (matching worker-007's convention? Let me check one: artifacts/worker-007/l0_hf01_artifact_refs/verification.json.sha256). Let me look at the format.
+dsh: reasoning:
+The sidecar format is just the hex digest. Let me generate sidecars for all four files, then also produce a top-level `MANIFEST.json` mapping file→sha256 (useful and self-describing). Then emit the events.
+
+Let me generate the manifest and sidecars.
+dsh: reasoning:
+The bundle is complete:
+- verification.json sha256 = 28d9062157c9bce584ff4817dd1dbbe85c63c9010a52124501cd9f00fa273a42
+
+Now emit the comms events. Three events in `comms/outbox/worker-046.jsonl`:
+
+1. artifact: 
+```json
+{"event_id":"worker-046-n0-4rung-artifact-01","event_type":"artifact","created_at":"2026-09-12T00:21:00+08:00","actor":"worker-046","node_id":"N0","class_id":"AF-WCC-SCALAR-SPH","gate":"G-NUM","artifact_type":"independent_verification_report","path":"artifacts/worker-046/n0_4rung_independent/verification.json","sha256":"28d90621...","validation_status":"unverified","evidence_refs":["artifacts/worker-046/n0_4rung_independent/verification.json#28d9062157c9","numerics/tests/n0_order_4rung.json#c88146a1375c","numerics/tests/flat_wave_replication.py#8ade1cdc163e","runtime/state/controller_verification/n0_replication_astra_run2_FIXED.json#6542db93eebc"],"falsifier":"..."}
+```
+
+2. claim:
+```json
+{"event_id":"worker-046-n0-4rung-claim-01","event_type":"claim","created_at":"...","actor":"worker-046","class_id":"AF-WCC-SCALAR-SPH","node_id":"N0","gate":"G-NUM","statement":"...","conclusion_type":"numerical_evidence","assumptions":[...],"falsifier":"...","evidence_refs":[...],"artifact_refs":["artifacts/.../verification.json#28d9062157c9"]}
+```
+Statement: "The published N0 4-rung order evidence (n0_order_4rung.json#c88146a1375c50f0) reproduces under an independent re-execution and independent normal-equation recomputation: per-rung l2_error bitwise-equal, orders lffd 1.99662±0.00177 / cnfd 1.99535±0.00417 / cnfem 1.98886±0.00514, all pairwise R5 agreement, no published falsifier clause triggered. This is supporting numerical evidence for G-NUM, not a gate verdict."
+
+Assumptions: pinned frozen module 8ade1cdc unchanged; deterministic no-RNG harness; R5 rule as in protocol rev3; l2_error field is the fitted norm.
+
+3. status:
+```json
+{"event_id":"worker-046-n0-4rung-status-01","event_type":"status","created_at":"...","actor":"worker-046","node_id":"N0","status":"active","hours":0.15,"summary":"...","evidence_refs":[...],"next_falsifier":"..."}
+```
+
+Note: "hours" — measured agent hours. I'll put 0.15.
+
+Also maybe a `review`? No — that could be mistaken for authoritative A1 verdict. The handoff says workers can't set gate verdicts; a review event with verdict accept might be misused. Better to stick with artifact/claim/status and explicitly *not* issue a review. Good.
+
+Let me check the ingest code's handling of `claim` for extra fields and how it dedups event ids. Should be fine.
+
+Now, before writing: is it acceptable to create a new outbox file? Yes — PROTOCOL says upward `comms/outbox/<agent>.jsonl`, writer "any agent". Good.
+
+Let me write the JSONL. I'll generate with python to guarantee one JSON object per line and valid formatting.
+
+Then run `python3 research_map/comms.py ingest` and check result (accepted/rejected/duplicates). Note ingest may be run concurrently by the controller; the map.lock exists. Ingest writes events.jsonl and rejected.jsonl. Let me check if comms.py ingest takes a lock. There's map.lock in runtime/state. Let me check comms.py for locking to avoid corrupting under concurrency. Let me peek at ingest function lines 288-340.
+dsh: reasoning:
+No locking in ingest, but it's append + seen-set. Concurrent ingestion could race, but appends are small; acceptable. Note: ingest is "controller-only" per PROTOCOL ("accepted stream writer: comms.py ingest only"). The controller commands list `python3 research_map/comms.py ingest`. As a worker, should I run ingest myself? The task says "emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit". The handoff says "Pull accepted traffic: python3 research_map/comms.py ingest" — that's addressed to agents generally. Running ingest is idempotent (seen-set prevents duplicates). I'll run it; it's the documented controller command but also the documented way to get events pulled. Risk: concurrent `apply_events` reading events.jsonl — appends are atomic-ish for small lines. I'll proceed but first do a dry-run to confirm my events validate, then real ingest.
+
+Let me write the JSONL file.
+
+Time now ~00:21. created_at: "2026-09-12T00:21:30+08:00".
+
+Let me construct carefully with python and validate locally using schemas.validate_event before writing (import path research_map). That guarantees no rejects.
+dsh: reasoning:
+Events written and schema-validated. Now run ingest (dry-run first, then real). Then checkpoint.
+
+Let me do a dry-run to see what would be accepted:
+`python3 research_map/comms.py ingest --dry-run`? Let me check the CLI: sub.add_parser("ingest") — does it have --dry-run? Let me check lines 375-393.
+dsh: reasoning:
+The dry run shows my 3 events accepted (plus 2 from other workers) with 0 rejected. Now run the real ingest.
+dsh: reasoning:
+Accepted (5 total including 2 other workers; my 3 are in). Now:
+1. Verify my events are in research_map/events.jsonl with the right hashes.
+2. Run `python3 research_map/checkpoint.py`.
+3. Optionally run `validate_map.py`/`audit_evidence.py`? The task says "checkpoint". Let me run checkpoint.py.
+
+But wait — checkpoint.py might be a full 15-min checkpoint snapshot, possibly slow. Let me check it quickly and then run. Also there may be concurrent controller activity. Let me just run it.
+
+First confirm events in events.jsonl.
+dsh: reasoning:
+All 3 events are in the accepted stream, 0 rejects.
+
+Now run checkpoint.py. Let me check what it does and run it. It may take a while; use a generous timeout, run in foreground (bounded).
+dsh: reasoning:
+checkpoint.py itself ingests comms (so my run of ingest was helpful), validates map, audits evidence, writes snapshot. Let me run it with a label. `--label auto` or a custom label like `worker-046-n0-4rung`. Let me run: `python3 research_map/checkpoint.py --label worker-046-n0-4rung`. Check arg parsing first — likely `--label` with default auto. It's fine.
+
+Timeout: maybe 120s. Run.
+dsh: reasoning:
+Checkpoint ran, exit 0. Let me verify the checkpoint record contains my artifact hash and node N0, and see the hard failures count. Let me query the latest checkpoint.
+
+Also, let me confirm the checkpoint log line and current_checkpoint.json includes my artifact (artifact_hashes). Note: checkpoint.py does not write to runtime/state/artifact_hashes.json (that's probably the controller's lifecycle). It writes checkpoints.
+
+Let me check the newest checkpoint file and log tail.
+dsh: reasoning:
+The checkpoint record has `worker-046` mentioned — likely via the accepted events stream? Let me check where. Actually `artifact_hashes` is measured from declared artifacts? The verification.json sha isn't in the record. Let me check where "worker-046" appears — probably in `artifact_registry` (from artifact events). Let me check.
+
+The checkpoint's `artifact_hashes` is the measured hash registry from runtime/state/artifact_hashes.json (not including my artifact since the controller hasn't applied my event yet — events_pending_application=57). My artifact event is in the accepted stream and will be applied by the controller's next lifecycle pass. That's consistent with PROTOCOL: only controller applies events to the map.
+
+Let me confirm `artifact_registry` includes my path with the hash (i.e., the checkpoint did notice the event). Let me grep.
+
+Also note: events_pending_application = 57 means my events are pending application — expected, since only astra_lifecycle apply_events.py applies them.
+
+Should I run `apply_events.py`? That's a controller command (`astra_lifecycle.py` locked ingest → apply → repair → audit → checkpoint). As a worker, I should NOT apply events to global state (authority: controller only). The task says emit JSON, checkpoint, exit. So I stop here. But let me verify my artifact is discoverable in the checkpoint record via artifact_registry.
+dsh: reasoning:
+My 3 events are recorded as pending application (events_total=1293, pending=57). The artifact_registry doesn't include the artifact yet because it's populated on apply. That's the correct boundary: controller applies.
+
+Now, one consideration: should I also measure the artifact hash into `runtime/state/artifact_hashes.json`? PROTOCOL rule 2: "A node is done only when its declared artifact exists on disk, carries a sha256 in runtime/state/artifact_hashes.json, and has a reviewer verdict." But that's for node completion — and only the controller writes that (runtime/state is controller state; my artifact event carries the hash). The audit_evidence.py might expect artifact hashes for declared artifacts; my event is pending apply, so it'll be handled by the controller. I should not hand-edit runtime/state/artifact_hashes.json (would be overreach and could conflict).
+
+However, let me double check whether `audit_evidence.py` flags my new artifact as a hard failure because it's an artifact event referencing a path not in artifact_hashes.json... The checkpoint ran with 1 hard failure (pre-existing CLASSSEP) — no new failure about my artifact. Good.
+
+Let me also verify that the artifact event's declared hash matches the measured file (audit_evidence will do `validate_artifact_hash`). Let me self-check: sha256(verification.json) == event sha. Already computed.
+
+Let me do a final self-review against PROTOCOL rule 5 ("Reject your own output before sending: does the artifact exist? does the falsifier actually falsify? does the class id match the file?"):
+1. Artifact exists: yes, 30 KB bundle with hashes.
+2. Falsifier actually falsifies: yes — non-reproduction yields FALSIFIED exit 1; the published artifact's own falsifier clauses are evaluated individually.
+3. Class id matches the file: verification.json class_id AF-WCC-SCALAR-SPH; the N0 flat_wave.py declares class AF-WCC-SCALAR-SPH (PROVISIONAL). The frozen replication module — does it declare class_id? Let me check: `flat_wave_replication.py` has HARNESS_CONFIG; let me grep for class_id in it and in the fixed run (it had class_id AF-WCC-SCALAR-SPH). The fixed run JSON has class_id AF-WCC-SCALAR-SPH. Good.
+
+One more possible check: verify class_separation.py doesn't flag my artifact (it flags class token misuse). My artifact uses frozen ids only. Let me run class_separation on my file just to be safe? It's designed for the ledger/formulation. Skip.
+
+Now let me update the todo and finalize. Also, the task says "then exit." I should give a concise final summary.
+
+Wait — one more thing worth doing: the `runtime/instances/worker-046-*` trajectory/stdout logs are managed by the harness, not me. Fine.
+
+Let me also do a final integrity check: re-run the verifier one last time to prove the bundle is stable and exit 0, and confirm sidecar hashes still match (MANIFEST excludes itself). Then finish.
+
+Actually, careful: re-running verify_n0_4rung.py rewrites verification.json — its bytes include no timestamp, so it should be byte-identical (deterministic). Let me verify idempotency: run twice and compare hashes. This also confirms the artifact hash is stable. Quick.
+dsh: reasoning:
+Everything is stable. The verification.json hash remains 28d9062157c9... so the emitted event hash is correct.
+
+Final todo update → all completed. Then give the concise final summary and exit.
+
+Let me also double-check the outbox file content one more time (valid JSONL, 3 lines).

@@ -1,0 +1,601 @@
+dsh: reasoning:
+No handoff dir at top-level of workspace. Let me look for "handoff" directories. The task mentions "Read handoff/map and comms". Let's search.
+dsh: reasoning:
+The workspace is /data3/guoshaoyang/workdir/ai4math-swarm. Let me read HANDOFF.md, README.md, comms, and the numerics dir.
+dsh: reasoning:
+Now let me read the comms, the numerics group dir, and the research_map.
+dsh: reasoning:
+There's a prior lead-numerics-01 instance. Let me read its prompt, meta, stdout/trajectory to understand lifecycle. Also check comms for numerics-relevant messages (inbox?).
+
+The task says: "You are a group lead. Read handoff/map and comms. Review artifacts, consume queue, emit structured events and checkpoints, report blockers. One independent lifecycle then exit. group=numerics"
+
+This suggests there's an established protocol: group leads run a lifecycle, emit events, consume a queue. Let me look at the previous lead-numerics-01 instance and the research_map (ASTRA_HANDOFF, ARCHITECTURE), plus comms inbox.
+
+Let me look for a queue directory.
+dsh: reasoning:
+Big swarm. Let me read comms/PROTOCOL.md, the inbox, and the previous lead's trajectory to see what a lifecycle looks like. Also read research_map/ASTRA_HANDOFF.md and ARCHITECTURE.md.
+
+Let me be efficient — read PROTOCOL.md, inbox listing, and predecessor stdout/trajectory.
+dsh: reasoning:
+Now I understand the pattern. My predecessor (lead-numerics-01) did a full lifecycle at 00:16:56 and exited. Now I'm presumably lead-numerics-02 running a new instance. I need to do one independent lifecycle then exit.
+
+Let me check:
+1. Current time
+2. My instance dir (is it created?)
+3. research_map current state, gates, numerics_lock
+4. Inbox for astra-lead-numerics (latest assignments)
+5. Artifacts/queue to consume
+6. Emit structured events and checkpoints
+7. Report blockers
+
+Let me check whether a lead-numerics-02 instance dir exists and what the current time is. Also check the swarm launch script (launch_swarm.sh) to understand the lifecycle expectations.
+
+Let me read the predecessor trajectory log too — it shows how it worked (commands run). That's valuable to be consistent.
+
+Let me first check current state efficiently.
+dsh: reasoning:
+Important: there are multiple lead-numerics-01 instances being launched concurrently (01:08:20, 01:15:27, and mine). The swarm supervisor launches many instances. My instance is likely lead-numerics-01-20260912T011527-968807? Wait, that was launched at 01:15:27 and its prompt matches exactly mine. The running process at 01:15:27 is `lead-numerics-01-20260912T011527-968807` — that could be ME. Let me check: my session started presumably ~01:15:27. The instance dir was created at 01:15 and its prompt.txt is my prompt.
+
+Actually, I should verify by checking whether that instance's stdout.log is currently being written by my own process. Let me check the PID of my own shell's ancestry. Hmm, careful: If I'm running under that instance, my bash commands' parent should trace back to that dsh_fixed.sh process.
+
+Let me check `ps -o ppid= -p $$` chain.
+
+This matters for two reasons: (1) I must not collide with a concurrent sibling lead instance (duplicate events), and (2) I need to know whether there's another lead-numerics running right now — that's a coordination hazard worth reporting.
+
+Note also several workers launched at 01:15:27 with the same batch (worker-014, 027, 031, 035, 046, 064) — these are likely numerics workers assigned by a lead. Hmm, but who assigned them? Maybe the supervisor assigns based on research_map assignments. Or maybe an earlier lead launched them.
+
+Actually wait — there was a lead-numerics-01 at 01:08:20 and another at 01:15:27. The lifecycle instances repeated: 00:16:56, 01:08:20, 01:15:27. The supervisor (supervise_loop.sh / launch_swarm.sh) launches lead instances repeatedly. If two leads run concurrently on the same group, they'd conflict. Let me check the supervisor script to understand.
+
+Let me check my own process ancestry first.
+dsh: reasoning:
+I am `lead-numerics-01-20260912T011527-968807` (the process bash -c wrapper PID 2061570 is my ancestor). And there is NO other lead-numerics currently running (the 01:08:20 one already exited — I see its dir but no process). Good: sole lead-numerics instance. The supervisor launches a fresh lead-numerics every ~7 minutes (00:16:56, 01:08:20, 01:15:27). Mine is the current one.
+
+My sibling workers launched at 01:15:27 (worker-014, 027, 031, 035, 046, 064) are probably numerics-group workers assigned by the supervisor's schedule... Actually let me check launch_swarm.sh to see what workers get assigned to which group.
+
+Wait: worker-014 at 01:15:27 — the earlier instance worker-014-20260912T010618 also existed. These worker instance names repeat across slots. Let me look at how workers get their prompts — their prompt.txt will say which group/task.
+
+Important: I have limited context budget; the swarm is huge. My job:
+1. Read handoff/map and comms ✓ (in progress)
+2. Review artifacts
+3. Consume queue
+4. Emit structured events and checkpoints
+5. Report blockers
+6. One independent lifecycle then exit
+
+Let me now:
+- Read research_map/ASTRA_HANDOFF.md (the "map" handoff) — key
+- Read research_map.json state relevant to numerics (nodes N0, N1, gates G-NUM, assignments, recent events)
+- Read numerics inbox messages after 00:08 (predecessor saw none after 00:08; now maybe new ones? the file mtime is 00:36 for astra-lead-numerics... wait ls showed 00:36 mtime. Tail showed astra-life04-n0-stoprule created 00:36. So new assignment since predecessor's lifecycle at 00:16-00:22!)
+- Review newest numerics artifacts (rev3 convergence, lifecycle08 finalize, etc. — many protocol files, look at mtimes)
+- Check what workers are doing for numerics group (the queue)
+- Check controller decisions since 00:22
+
+Let me check the numerics inbox messages newer than 00:08, and the runtime/state for controller decisions.
+
+Let me read ASTRA_HANDOFF.md first (handoff/map).
+dsh: reasoning:
+Key facts from ASTRA_HANDOFF (pass 07, 01:11):
+- G-NUM protocol C8 MET, standing accept 4.5
+- N0 node verdict is still revise 3.5 → open assignment `astra-life04-n0-verify` (lead-audit, 03:00)
+- My open assignment: `astra-life04-n0-stoprule` (lead-numerics, deadline 02:30), artifact `numerics/results/flat_wave_convergence_rev3.json`
+- numerics_lock LOCKED: no solver, no N1
+- C4 registration issue from predecessor: `n0_replication_astra_run2_FIXED.json#6542db93` not registered in artifact_hashes.json
+
+So my lifecycle should:
+1. Consume the queue: check inbox for numerics (new messages after 00:36?), check assignments targeting lead-numerics
+2. Review artifacts: the rev3 convergence result, lifecycle08 protocol files (the numerics/protocol has many files with lifecycle07/08 — those may be from workers/deepseek-flash-07). Actually numerics/protocol/* contains lots of files. Let me check mtimes to see what's new since my predecessor's pass (00:22).
+3. Verify claims independently (re-run verifiers)
+4. Emit events: status, artifact, gate (G-NUM/N0), blocker, checkpoint
+5. Report blockers
+
+Let me be strategic about time and context. Important: the supervisor launches a new lead every ~7 min. I have one lifecycle. Predecessor took ~5-6 minutes (00:16:56 → ~00:22). I should be efficient.
+
+Let me set up a todo list and then work.
+
+Key checks:
+1. What's new in numerics since 00:22? (mtime-sorted numerics files)
+2. What did the numerics workers produce? (worker instances with numerics prompts)
+3. Inbox messages for astra-lead-numerics newer than 00:36.
+4. Re-run the key verifiers: verify_convergence_rev3.py, gate check, lock guard, lifecycle08 stoprule closure verify.
+5. Emit events via numerics/protocol emit scripts? Those were made by prior workers maybe.
+
+Let me look at the newest numerics files and the lifecycle08 protocol. Also check runtime/state/controller_verification for notes about N0 since 00:36 (astra-life04-n0-stoprule assignment is mine, deadline 02:30).
+
+Let me check what evidence exists that satisfies the stoprule:
+(1) 4th resolution rung — `lifecycle08_stoprule_closure_verify.json`? and `report_lffd_4rung.json`, `n0_order_4rung.json`, `n0_order_4rung_addendum.py`
+(2) class binding to F0 rev5 0abb9ed8a961 — `numerics/N0_CLASS_BINDING_AUTHORITY.json`
+(3) independent replication verdict at frozen run hash — `numerics/results/flat_wave_replication.json`, `fixed_replication_verdict_rev2.json`, `rebind_fixed_replication_verdict.py`
+
+Let me list numerics files by mtime (newest first) to see the latest state.
+dsh: reasoning:
+Very interesting — the newest file `numerics/protocol/emit_lifecycle08_finalize.py` was modified at 01:15 — that's *right now*, likely written by a worker running concurrently (maybe worker-009? no, that's audit. Perhaps a deepseek-flash or my sibling workers: worker-014/027/031/035/046/064 launched at 01:15:27). Wait, emit_lifecycle08_finalize.py modified at 01:15 — it may be being written by a concurrently running worker.
+
+Hmm. So there are concurrent numerics workers actively writing artifacts. There's a risk: a worker is mid-lifecycle08. Let me check which worker instance has a prompt about lifecycle08 numerics. Let me grep the runtime/instances/*/prompt.txt for 'lifecycle08' or 'numerics'.
+
+Also note `lifecycle08_stoprule_closure_verify.json` at 01:14 — a lifecycle-08 closure verification exists. That's very relevant to my stoprule assignment. But it's being actively worked on right now by someone.
+
+Given "One independent lifecycle then exit" — I should do my own independent verification (not trust the in-flight worker output), emit my events, and exit. But I must be careful not to collide with the concurrent worker(s): e.g., both of us emitting checkpoint/artifact events for the same thing could cause duplicate/reject.
+
+Let me check:
+1. Which workers are running with numerics prompts (grep prompt.txt).
+2. The latest events in research_map/events.jsonl for numerics (recent activity).
+3. The lifecycle08 closure verify JSON content.
+
+Let me run these.
+dsh: reasoning:
+Wait — timestamps in events.jsonl show 01:26, but `date` says 01:16. That's odd. Actually the events at "2026-09-12T01:26:00+08:00" — maybe wall clock has moved on? Let me re-check date. Actually the events might be from a future-labeled run (workers may set their own timestamps, possibly drifting). Anyway.
+
+Important: no other running instance has a numerics prompt except lead-numerics-01-20260912T010820 (my predecessor's dir; process not in ps output... let me re-check). Actually ps showed lead-numerics at 01:15:27 only (mine). The 01:08:20 dir exists but whose process? In the earlier ps listing, I did see `lead-numerics-01-20260912T010820-968807` directory listed in ls -lat but there's a lead-numerics-01-20260912T010820 dir; is there a live process? The ps grep for 'lead-numerics' showed only 2061570 (mine, 01:15:27). So 01:08:20 lead exited already. Good.
+
+Also I see numerics workers were launched at 01:15:27 (worker-014, 027, 031, 035, 046, 064). Their prompts may not contain "numerics" literally. Let me check one worker prompt to see what task they got. Actually let me check the newest few worker prompts quickly.
+
+But more importantly: who wrote `emit_lifecycle08_finalize.py` at 01:15? Let me check its content and whether a process is running it. Let me look at recent numerics-related events by actor (worker numbers) in events.jsonl, filtering for numerics paths.
+
+Let me also check the artifacts/numerics/status.jsonl tail and artifacts/numerics/lifecycle_08_20260912.json.
+
+Strategy: I should focus on producing a *high-value independent lifecycle*:
+1. Consume queue: the deadline-02:30 assignment `astra-life04-n0-stoprule` is mine. There's already lifecycle08 work in flight (worker). I should verify it independently and emit the lead-level closure events.
+2. Independently re-run: verify_convergence_rev3.py, lifecycle08_stoprule_closure_verify.py, gates.py --check, lock guard.
+3. Emit lead events: status + artifact (lead verification record) + gate (N0 pending/status) + blocker if any + checkpoint.
+4. Report blockers.
+
+Key risk: concurrent worker mid-write may make my verification see partial state. I'll hash before/after each read to detect drift, and I'll record hashes at verification time.
+
+Let me look at the key numerics protocol artifacts: lifecycle08_stoprule_closure_verify.json, emit_lifecycle08_finalize.py, numerics/results/flat_wave_convergence_rev3.json, N0_CLASS_BINDING_AUTHORITY.json. And check what the numerics workers at 01:15 were tasked with.
+
+Let me read several files at once.
+dsh: reasoning:
+Critical finding: There's already a complete "NUMERICS LEAD LIFECYCLE 08" emitted at 01:12:30 and 01:14:13, 01:15:04 — by a previous lead-numerics instance (the 01:08:20 one), which was finalized at 01:15:04. So lifecycle 08 is done. Those events are in `artifacts/numerics/status.jsonl` (outbox artifact summary) — but are they ingested? Let me check if they're in research_map/events.jsonl.
+
+My task says "One independent lifecycle then exit". So I am a new lifecycle (09). I must not duplicate lifecycle 08's work. My value-add: an *independent* verification pass with fresh measurements, plus consume any queue changes, and emit my own events (distinct event ids).
+
+Key risk of duplication: The predecessor lead lifecycle 08 already emitted status/blocker events. Astra's controller pass may already have processed them. My events must be additive and not duplicate.
+
+What's genuinely new for me to do:
+1. Check for new inbox messages since 00:36 (none reported at 01:12 by predecessor — verify myself).
+2. Independent re-verification: re-run `lifecycle08_stoprule_closure_verify.py` myself? That would rewrite the JSON and change its hash, which would move the pin — bad. The predecessor's finalize pinned `lifecycle08_stoprule_closure_verify.json#88ec0bf298cb`. Wait — earlier read showed the file content had `310767d1db90` referenced in the 01:12 status, but the current file content I read seems to be a different revision (the 01:14 rev, `88ec0bf298cb`). Note the generator script `lifecycle08_stoprule_closure_verify.py` is a generator; re-running would change bytes. The finalize note says "next_falsifier: A later re-run of the generator changing bytes without a measurement change". So I should NOT re-run the generator; I should independently *recompute* from raw data without writing to registered paths (write to /tmp or my own new path).
+
+This is exactly what predecessor lead-numerics-01 (lifecycle 01) did: independent verification with outputs to /tmp, no pinned file touched.
+
+So my lifecycle 09 plan:
+1. Read inbox for new cards (verify none new since 00:36).
+2. Independent verification (my own scripts, read-only, outputs to a NEW artifact path under numerics/protocol/ or /tmp):
+   - Recompute the 4-rung fit orders from raw rows of n0_fixed_dt_certification.json (log-log LSQ) — independent implementation, compare to closure verify's declared values.
+   - Verify F0 rev5 live hash + class id presence.
+   - Verify the three replication verdict hashes on disk match the closure record.
+   - Recompute the 4-rung addendum from raw data.
+   - Lock guard: run numerics/tests/selfgravity_lock_guard.py? Let me check its path.
+   - gates.py --check → expect N1_BLOCKED, exit 3.
+   - Check numerics/spherical_solver absent.
+   - Check registry drift: which evidence paths unregistered.
+3. Emit my own structured events to `comms/outbox/astra-lead-numerics.jsonl` (upward), then run `research_map/comms.py ingest` to pull into events.jsonl? Wait — the protocol says ingest is controller-only ("accepted stream ... writer: research_map/comms.py ingest only"). As a lead, I write to my outbox; the controller ingests. But predecessor lead ran "dry-run ingest" to validate and apparently its events were accepted. Hmm, predecessor's report said "Emitted (all accepted by dry-run ingest, 0 rejects; map validator VALID)". So it wrote to outbox and dry-ran ingest. The controller then ingests for real. Actually the events might get ingested by run_cycle.py every 15 min. Let me check `research_map/run_cycle.py` — the handoff says the 15-minute auto-cycle applies accepted events between controller passes. So writing to outbox is enough; the cycle ingests.
+
+Hmm, but should I run the real ingest? The protocol table says writer of events.jsonl is `research_map/comms.py ingest` only — that's a tool, not necessarily the controller. If run_cycle.py runs ingest every 15 min, then events flow. Predecessor did a dry-run and left the real ingest to the cycle. To be safe: write outbox, run dry-run to validate 0 rejects, and let run_cycle ingest. But I could also run the actual ingest — it's idempotent (event ids dedup). The predecessor didn't. Let me check whether lifecycle08 events are already in events.jsonl — if the 15-min cycle ingested them, then the mechanism works and I just need to write outbox.
+
+Let me check: grep events.jsonl for 'lnum-status-9da3989097cfe3ba0b49'.
+
+4. Checkpoint: run numerics/checkpoint.py to emit a checkpoint (artifacts/numerics/checkpoints/num-ckpt-...). That's a TRACKED extension. And maybe research_map/checkpoint.py.
+
+5. Emit blocker(s): the residuals — 3 unregistered replication verdicts + mispinned G-NUM evidence ref. But predecessor already emitted a blocker about the mispin? Let me check status.jsonl blockers and see. If already emitted by lifecycle08, I should not duplicate; instead my blocker should be new/updated (e.g., controller actions still outstanding).
+
+Actually, careful: my remit is "report blockers". If the same blockers persist, I should re-report with a refresh (the protocol seems to expect each lead pass to refresh stale evidence refs — predecessor lifecycle 01 did exactly that: "refreshes the stale N0.blockers[0] pre-fix text").
+
+Let me now check:
+- events.jsonl for lnum events (ingested or not)
+- comms/rejected.jsonl tail for lnum rejects
+- blockers.md
+- the numerics/checkpoint.py and selfgravity_lock_guard location
+- gates.py check
+
+Let me batch these.
+dsh: reasoning:
+The lifecycle-08 pass is fully ingested into the accepted stream (153 lnum events, 0 rejects). Good — the outbox→ingest flow works automatically.
+
+So my lifecycle 09 should be a genuinely independent pass. Key considerations:
+
+1. The whole numerics group's evidence is now quite mature. What remains:
+   - `astra-life04-n0-verify` (lead-audit, 03:00) — not mine.
+   - My assignment `astra-life04-n0-stoprule` (deadline 02:30) was discharged by lifecycle 08. Confirmed by lifecycle08 status: "inbox unchanged since 00:36; astra-life04-n0-stoprule discharged".
+   - Residual controller actions: 3 unregistered replication verdicts + mispinned G-NUM evidence ref (in map).
+   - gates.py re-pin request (map cites superseded gates.py#907a88b141bf4394).
+
+2. Independent verification is my core duty. I should independently re-verify at current hashes, WITHOUT writing to registered paths, and emit a fresh lead-verification artifact with a NEW path (not overwriting the lifecycle08 one) — or, alternatively, verify the lifecycle08 closure record itself (hash-stability check) rather than regenerate.
+
+Actually, wait. Let me think about what "independent lifecycle" means and what has real value here. The previous pass (08) verified closure. A new pass that simply repeats is low value but the instructions explicitly say "One independent lifecycle then exit". The swarm architecture expects each lead instance to do its own pass. My best value-add:
+
+(a) Independently re-measure the stop-rule closure (fresh computation, my own code, output to my own new artifact path `numerics/protocol/lifecycle09_lead_verify.json`), and check hash-stability of the lifecycle08 closure record.
+
+(b) Check whether anything changed since 01:15 (drift detection): re-hash the key artifacts and compare to the pins; check gates.py current hash vs map pin; check numerics/spherical_solver absence; run lock guard + gate check.
+
+(c) Emit my own events with distinct ids; refresh the blocker with current hashes; emit checkpoint.
+
+(d) Specifically look for *new* findings the previous pass may have missed. Let me hunt for defects:
+   - The `live_revision: 5 / live_sha256: 0abb9ed8...` claim in closure JSON — verify the live taxonomy hash matches F0 rev5 and the class id present.
+   - The three replication verdicts' hashes on disk.
+   - Check the `error_field_orthogonality_check.json` (claims corr=-0.9996).
+   - Check registry: which of the required evidence paths are unregistered → the blocker.
+   - Check the map's G-NUM evidence refs for the mispin.
+   - Potential new issue: the closure record's `registration.gnum_broken` says two map refs are "unparsed" (research_map/research_map.json#controller_gate_audit and #numerics_lock) — that's a tooling artifact of the drift auditor, not necessarily a real defect.
+
+Let me also check if the map has been updated since 01:09 (astra-lifecycle-07) — controller passes are landing every ~7 min as well (controller-01 at 01:11:43). A newer astra pass may have ingested the lifecycle08 events and updated the map. Let me re-read the map's updated_at and N0 node/gate state.
+
+Given limited time (~5-7 min before the next lead instance spawns at ~01:22), I should move fast and in parallel.
+
+Plan of concrete commands (read-only, outputs to /tmp or new path):
+1. `python3 -m numerics.gates --check` (expect exit 3)
+2. `python3 numerics/protocol/verify_convergence_rev3.py` (expect VERIFIED) — this is a verifier that re-measures pins; does it write? Let me check it writes only to stdout. The predecessor ran it and output stayed clean. It's "verify" — probably read-only. I'll run and check `git status` after to ensure no registered file changed.
+3. My own independent recompute script → /tmp.
+4. Lock guard.
+5. Map state re-read: updated_at, N0 status, G-NUM verdict, REC-34/35.
+
+Let me write my own independent verification script. It should:
+- Load n0_fixed_dt_certification.json raw rows, recompute log-log LSQ order per scheme, compare with rev3 report and closure record.
+- Hash-check: rev3 report hash, closure record hash, taxonomy live hash & class id, three replication verdicts.
+- Check spherical_solver absence, N1 status.
+- Check gates.py disk hash vs map pin.
+- Output JSON to `numerics/protocol/lifecycle09_lead_verify.json` (new path, not overwriting anything) — wait, is creating a new file under numerics/protocol OK? Yes: preceding lives did exactly that (each lifecycle emitted its own record). But careful: writing a *new* artifact creates a new pin obligation. That's normal and expected — the lead emits an artifact event with sha256.
+
+Hmm, but should I add yet another file to numerics/protocol? It seems to be the established pattern (lifecycle05/06/07/08 emit scripts + records). Yes, consistent.
+
+Let me first look at the structure of n0_fixed_dt_certification.json raw rows and verify_convergence_rev3.py to reuse the correct raw data, and check the lifecycle08 generator to understand what it computed (so my computation is independent but comparable). Also check checkpoint.py usage.
+
+Let me do this efficiently: read the certification JSON keys and the verify script header.
+dsh: reasoning:
+Now let me write my own independent verification script for lifecycle 09. It should not import the builder or solver, and should recompute from raw rows.
+
+Key raw rows: `schemes.<scheme>.fixed_dt_1e-4.rows` presumably. Let me check the structure of a scheme in full to find the 4-rung fixed-dt rows.
+
+Let me dump the cnfd scheme keys.
+dsh: reasoning:
+Now I'll write my own independent verification script for lifecycle 09. I'll write it to a new path: `numerics/protocol/lifecycle09_lead_verify.py`, and its output record to `numerics/protocol/lifecycle09_lead_verify.json`.
+
+My script will:
+1. Recompute log-log LSQ fit (slope + SE) from raw `fixed_dt_certification.rows` per scheme. Compare to declared fit_order/SE.
+2. Verify the 4 rungs present, dt fixed at 1e-4, dr halving.
+3. Check monotonicity of l2_error.
+4. Cross-scheme max pairwise |dp| ≤ 0.25.
+5. Hash checks: rev3 report, cert, closure record (lifecycle08), taxonomy live vs F0 rev5 declared, class id `AF-WCC-SCALAR-SPH` present in live taxonomy.
+6. Replication verdicts: three files, hash-match + verdict content.
+7. Lock compliance: numerics/spherical_solver absent; numerics_lock state locked; N1 status queued.
+8. gates.py disk hash vs map pin (re-pin status).
+9. Registration drift: check runtime/state/artifact_hashes.json for the required evidence paths.
+10. Check the closure record's declared hashes stay stable (pin stability).
+
+Also compute a fresh checkpoint.
+
+Wait — a key design question: does the class id `AF-WCC-SCALAR-SPH` appear in the live taxonomy? The closure record says yes. I'll verify by grep.
+
+Let me check what `numerics_lock` and N1 status look like in the map, plus the map's N0 node and gates[] G-NUM verdict. Let me grab that now, then write the script.
+
+Also: time check. It's ~01:17-01:18 now. Next lead instance spawns ~01:22:30. I should aim to finish by then-ish; my lifecycle should be reasonably quick (predecessors took 2-6 min).
+
+My independent script is the main work. Let me write it now.
+
+One important consideration: my script should output to a new JSON file whose sha256 I then reference in my events. I'll write both the script and the record.
+
+Let me get the map details for N0/N1/G-NUM, and gates.py disk hash + map pin.
+dsh: reasoning:
+Key state:
+- Map updated_at 01:16:26 (astra pass ingested lifecycle08 events).
+- G-NUM pending: unmet items still say "Stop-rule items 1-3 above are open (astra-life04-n0-stoprule, lead-numerics, ...)" — this is now STALE because lifecycle 08 closed all three items and the map was updated at 01:16:26 (after the closure verify at 01:13). So this is a real, actionable finding for me: the map's G-NUM unmet list still carries the pre-closure text, even though the controller pass at 01:16 ingested the closure evidence. That's exactly the kind of stale-state refresh a lead should emit.
+
+Wait — careful. G-NUM pending has unmet: ['N0 node verdict is revise 3.5 ...', 'Stop-rule items 1-3 above are open (astra-life04-n0-stoprule, lead-numerics, ...)']. The first item is legitimately still open (lead-audit owned, astra-life04-n0-verify). The second is stale as of lifecycle-08 closure. Let me verify what the full unmet text says. Let me print it fully.
+
+Also: gates.py disk sha `fcd1d70991b6eade` vs map pin `907a88b141bf4394` — confirms the re-pin request is still outstanding. That's a real audit/traceability defect (map cites superseded gates.py). Let me confirm the map's actual evidence_ref containing gates.py#907a... 
+
+Let me search the map JSON for "907a88b141bf4394".
+
+Now let me build my independent verification script. I'll do the whole thing in one script, writing JSON to numerics/protocol/lifecycle09_lead_verify.json, then hash it and emit events.
+
+Let me first quickly confirm the full G-NUM unmet list and find where 907a88 is cited.
+dsh: reasoning:
+- G-NUM unmet[1] is now stale: stop-rule items 1–3 were closed by lifecycle 08 (independently re-verified), and the last verdict event is `astra-life08-gate-gnum` at 01:16:25. So the controller's own pass-08 gate event kept the stale text. This is a genuine, actionable refresh finding.
+- gates.py pins: G-NUM evidence refs include both `fcd1d70991b6` variants — so G-NUM itself cites the CURRENT hash. The 907a88 pin appears elsewhere (6+1 times), not in G-NUM's evidence list. So the "re-pin requested" item from blockers.md is partly already satisfied inside G-NUM but stale elsewhere in the map. Let me find where 907a88 is cited to characterize precisely. Actually, that's a controller/audit matter; I'll note it as residual with the exact counts.
+
+Also unmet[0] legitimate (lead-audit owned).
+
+Now let me write my independent verification script. Time: ~01:19. Let me be quick but rigorous.
+
+Script contents (lifecycle09_lead_verify.py):
+- Read raw certification, recompute fits (independent log-log LSQ: slope = cov/var, SE from residuals: se = sqrt(SSE/(n-2)/Sxx)).
+- Compare with declared.
+- Check dt constant, dr ladder, monotone.
+- Cross-scheme max pairwise |dp|.
+- Hash + presence checks for rev3 report/cert/closure/taxonomy/3 verdicts.
+- Verify class id in taxonomy.
+- Lock checks (solver absent, lock state, N1).
+- Registry drift (read runtime/state/artifact_hashes.json).
+- gates.py disk digest vs map pins (count).
+- Emit JSON record with `generated_at`, `items`, `findings`, `residuals`.
+- Exit 0 if all closed else 1.
+
+The output goes to numerics/protocol/lifecycle09_lead_verify.json — a NEW path.
+
+Let me check the artifact_hashes.json structure first, quickly, and check whether `reviews/flash-13-N0-rev3-verdict.json` verdict is accept. Then write the script.
+
+Actually, to save context, I'll write the script to handle these generically, then inspect its output.
+
+Let me check artifact_hashes.json structure briefly.
+dsh: reasoning:
+Now write the independent verification script. I'll place it at `numerics/protocol/lifecycle09_lead_verify.py` and output `numerics/protocol/lifecycle09_lead_verify.json`.
+
+Let me write it carefully with stdlib only, no imports of builders/solvers.
+
+Key computations:
+1. Fit: given rows (dr, l2_error) sorted by dr descending, x=log(dr), y=log(err); slope = -? In these certification files, fit_order is positive ~2.0. The error scales as err ~ dr^p, so log(err) = p*log(dr)+c, slope = p. Since dr decreases, err decreases → slope positive (both logs negative, ratio positive). Let me compute slope = Sxy/Sxx where x=log(dr), y=log(err). For dr=0.2→err=0.00665; dr=0.025→err smaller. x: -1.609, -2.303, -3.0, -3.689; y decreasing. Sxy>0, Sxx>0 → slope positive ~2. Good.
+2. SE = sqrt( (SSE/(n-2)) / Sxx ).
+
+Then compare to declared fit_order/least_squares_se.
+
+3. Verdict file checks: read the 3 verdict JSONs, find verdict fields, confirm hash.
+
+For `artifacts/worker-046/...` let me not over-engineer; just record hash match and top-level verdict strings found by a small recursive search for keys 'verdict'/'status'.
+
+4. Registry: `runtime/state/artifact_hashes.json` → check if path in `hashes` or `registry` with matching sha.
+
+5. Map checks: numerics_lock state, G-NUM verdict, gates.py pin counts (907a88 vs fcd1d7), N0 unmet[1] text (stale).
+
+6. Solver absence.
+
+Output structured JSON with `all_items_closed`, per-item details, findings, residuals, falsifier.
+
+Let me write it now. I'll make the script print a compact summary and write the JSON.
+
+Note: I must be careful about the taxonomy hash: F0 rev5 declared sha `0abb9ed8a961...`. Compute live sha of research_map/formulation_taxonomy.yaml and compare.
+
+Let me write and run.
+dsh: reasoning:
+Now run it. Note I left a weird placeholder line: `rev = dig(json.loads(json.dumps({"t": None})), "revision")` — harmless but ugly. Let me remove it before running... it's already written. It's harmless (computes None). Better to clean it up for audit quality. Let me edit it out quickly and run.
+dsh: reasoning:
+My independent verification passes: exact reproduction of declared fits (max |dp|=0 presumably), spread 7.958e-05, item2/item3 closed, 0 fails. Findings: L09-F1 (stale unmet text), residuals R1 (gates.py pin), R2 (unregistered paths).
+
+Let me inspect the output JSON's key fields to double-check registration counts and verdict checks, then run the guard suite:
+- `python3 -m numerics.gates --check` (expect exit 3)
+- lock guard: `python3 numerics/tests/flat_wave.py --lock-guard`? That might be slow (runs flat wave?). The predecessor ran "Lock guard: real run PASS violations=[]; self-test PASS". The canonical quick one is `numerics/tests/lead_calibration.py --selftest`? Let me check what's fast. `python3 -m numerics.gates --check` is fast. `selfgravity_lock_guard.py` has a self-test.
+
+Let me check the diagnostics and run the guards in parallel.
+
+Also verify no registered file changed by my script: check git status (repo is a git repo) — I only added 2 files. Let me confirm.
+
+Then emit events.
+
+Let me batch: (1) inspect my JSON summary; (2) run gates --check; (3) run lock guard self-test; (4) git status short.
+dsh: reasoning:
+Excellent. Rich results:
+
+1. `gates --check` exit 3 → N1_BLOCKED, production_allowed=false. Consistent with lock.
+2. The gates report is much more informative than the map: **G-NUM criteria text is ALSO stale** — it says "the stop-rule deliverable da7c36071995 still needs: (1)... (2)... (3)..." even though all three are closed. Note: the gates report is generated by `numerics/gates.py` from the map? No — gates.py reads the map for gates. The "criteria" text for G-NUM comes from the map's gate entry (criteria string). So the map's G-NUM `criteria` and `unmet[1]` both still carry pre-closure text. This strengthens finding L09-F1.
+
+Wait, interesting: the gates output shows `"criteria": "...N0 node verdict on disk is revise 3.5 and the stop-rule deliverable da7c36071995 still needs: (1) a fourth resolution rung... (2)... (3)..."`. Yes, that's from the map. And `passing_gate_events: []` for G-NUM. Yet the map updated_at is 01:16:26 with last_verdict_event astra-life08-gate-gnum.
+
+Hmm — but actually, is that gates.py criteria text hardcoded in gates.py rather than the map? Let me check. `numerics/gates.py` builds the report; the G-NUM criteria text looks like it could be hardcoded in `_gate_report`. Either way, my finding is: the map's G-NUM unmet[1] + criteria still describe items 1–3 as open. That's a stale representation issue for the controller to refresh.
+
+3. Lock guard selftest flag is `--self-test` (with hyphen), not `--selftest`. Let me run the correct command.
+
+4. gates output reveals `protocol_review.contest: true` with accepting_reviews including `w081-20260912T002140-c8-review` (the withdrawn/defective one noted in blockers.md guard defect). The blockers.md says `_protocol_review` still counts the withdrawn accept. Still true: accepting_reviews includes it. That's a known reported defect (guard defect, disposition controller call).
+
+Also I notice `numerics/gates.py` G-NUM criteria text mentions stop-rule open items — this is likely hardcoded in gates.py, meaning gates.py's own report is stale w.r.t. closure. Let me check if that string is in gates.py or the map.
+
+Let me now:
+- Run the correct lock guard self-test.
+- Check where the G-NUM criteria string comes from (map vs gates.py).
+- Then write my event emission script.
+
+Also I should decide the final state of my lifecycle:
+- My independent verification: PASSED (items closed).
+- Findings: L09-F1 stale unmet/criteria text (medium) → blocker event.
+- Residuals: L09-R1 gates.py pin, L09-R2 unregistered evidence.
+- Artifact: lifecycle09_lead_verify.json + .py (hash-pinned).
+- Checkpoint: run numerics/checkpoint.py --once.
+- Events: artifact (x2: py + json), status (active, N0), blocker (L09-F1), status (GLOBAL done), maybe resource_request? No — not needed. A gate event? Lead can emit gate events... but G-NUM stays pending and I shouldn't claim a verdict. Predecessor lifecycle-01 emitted a `gate` event with pending verdict. I could emit a gate event: `gate_id: G-NUM, scope: N0, verdict: pending` with refreshed criteria/evidence. Hmm — would that conflict with the controller's astra-life08-gate-gnum? The predecessor lifecycle-01 did emit a pending gate event. It seems acceptable: leads may emit gate events (protocol says only controller and group leads can set gate verdicts). A pending refresh is safe and useful: it explicitly states items 1-3 are now closed and the only remaining blocker is the lead-audit accept. That directly counters the stale text. I'll emit `verdict: pending` with `criteria` reflecting closure status, `evidence_refs` pinned to my verify record + l08 closure + rev3.
+
+Let me check the precedent for gate event schema from lifecycle01's outbox to match shape. Let me grep the last lnum gate event.
+
+Let me batch: lock guard self-test (correct flag), grep gates.py for the stale string, and look at a prior lnum gate event from comms/outbox/astra-lead-numerics.jsonl (or events.jsonl).
+dsh: reasoning:
+Confirmed: the stale "stop-rule deliverable ... still needs (1)(2)(3)" text lives in `research_map/research_map.json` (3 occurrences), not gates.py. So the map's G-NUM criteria + unmet are stale — controller must refresh.
+
+Lock guard self-test: the output shows a planted-violation case with "got": "FAIL" and violations listed — that's the expected behavior for the planted case (self-test passes by demonstrating FAIL). exit=0. Let me check the summary part (head) to confirm PASS overall. Let me look at the top of the output.
+
+Now the plan for emission. Let me write an emission script (idempotent, distinct event ids with timestamp) following the established patterns. I'll model it on the lifecycle08 emit scripts. Let me peek at emit_lifecycle08_finalize.py briefly to match the outbox write path/format and how it validates (dry-run ingest).
+
+Actually, let me check how prior lead scripts wrote events: to `comms/outbox/astra-lead-numerics.jsonl` (one JSON per line) plus `artifacts/numerics/status.jsonl` summary. Let me read emit_lifecycle08_finalize.py quickly (it's ~small).
+dsh: reasoning:
+There's a `numerics/events.py` module with helpers: emit_artifact, emit_status, det_id, sha256_file. It writes to the outbox presumably. Let me inspect numerics/events.py to know its API (emit_gate, emit_blocker?).
+
+Let me read it.
+dsh: reasoning:
+The `numerics/events.py` helper handles everything: writes to `comms/outbox/astra-lead-numerics.jsonl` and mirrors to `artifacts/numerics/artifacts.jsonl`/`status.jsonl` presumably. Good.
+
+Now let me write `numerics/protocol/emit_lifecycle09_lead_events.py` that emits:
+1. artifact: lifecycle09 verify generator (`numerics/protocol/lifecycle09_lead_verify.py`) — validation_status unverified
+2. artifact: lifecycle09 verify record (`numerics/protocol/lifecycle09_lead_verify.json`) — unverified
+3. gate: G-NUM / N0 / pending — refreshed criteria showing items 1–3 now closed by fresh measurement; remaining blockers: N0 accept (lead-audit), lock, G-FORM/G-AUDIT. Evidence refs pinned.
+4. blocker: L09-F1 stale G-NUM unmet/criteria in the map (medium/high) — needed_to_unblock: Astra refreshes the map's G-NUM criteria+unmet text; evidence refs: my verify record, l08 closure, map updated_at.
+5. status N0 active — summary of lifecycle 09.
+6. status GLOBAL done — lifecycle complete.
+
+I'll use `det_id` for deterministic ids where possible, but I want ids unique per lifecycle — use det_id with lifecycle09 parts. But note: my record JSON has `generated_at` inside, so re-running my generator rewrites the JSON → hash changes each run (non-deterministic). The lifecycle08 experience flagged exactly this ("generated_at is excluded from the stability comparison"). To be safe: emit artifacts using the CURRENT hash (computed at emit time), and make the emitter use det_id based on the current hash. That way re-running the emitter after a re-run of the verifier would produce a *new* event id (duplicate-ish). Better: run the verifier once, then emit once, and don't re-run.
+
+Alternatively, make my verifier's output deterministic by excluding `generated_at`... but the timestamp is useful. Lifecycle08's finalize wrote a second artifact event when the generator changed. I'll just run the verifier once and emit once. I'll set an explicit id: `det_id('artifact', path, sha, 'lifecycle09')`.
+
+Also worth noting: `emit_artifact` writes a mirror line into `artifacts/numerics/artifacts.jsonl`.
+
+For the blocker: severity — the stale text is a representation defect (medium), but it's the map that Astra adjudicates from. I'll call it medium and be precise.
+
+Let me also consider emitting a `review` event on the protocol contest? No — that's audit's job; numerics cannot self-review (blockers.md is explicit). Skip.
+
+Should I emit a resource_request? No.
+
+Checkpoint: run `python3 numerics/checkpoint.py --once` to add a fresh checkpoint. It writes to artifacts/numerics/checkpoints/... and CHECKPOINTS.jsonl/md. Let me check its CLI (`--once`). Then optionally `research_map/checkpoint.py`? The controller does the global checkpoint; protocol says checkpoint command is controller's. The numerics-local one is mine (group checkpoint). Predecessor extended TRACKED to 19 files — checkpoint.py already includes numerics/protocol files; my new files may not be in TRACKED, but that's fine.
+
+Let me now write the emitter script. I need to double check `emit_status` mirror behavior and how it handles hours. Fine.
+
+Also: should the gate event use `verdict: pending`? Yes — refresh without claiming. The criteria text should be precise:
+
+"Independent lifecycle-09 re-measurement at current hashes: (1) order measured = MET (4 rungs/scheme, fixed dt=1e-4; recomputed fits lffd 1.999943 / cnfd 1.999864 / cnfem 1.999916; max |dp| vs declared 0.0; all monotone; all within ±0.3); (2) F0 rev5 re-bind = MET (live taxonomy 0abb9ed8a961 rev5, class AF-WCC-SCALAR-SPH present); (3) independent replication = MET (3 hash-matched verdicts W046 SUPPORTED / W057 REPRODUCED / W081 accept, frozen run hash da7c36071995). Stop-rule items 1–3 CLOSED — the map's G-NUM criteria/unmet[1] text still describes them as open and must be refreshed. Remaining: N0 accept verdict is lead-audit-owned (astra-life04-n0-verify); protocol review contested at 1e6cdf04; lock LOCKED and N1 queued regardless. Verdict held at pending: numerics does not self-pass."
+
+That's a lead gate event with pending — allowed.
+
+Then blocker event: node N0, description of stale text, needed_to_unblock "Astra refresh of research_map.json G-NUM criteria + unmet[1] to reflect closure; no numerics action can edit the map (CF-12 one canonical path/owner)". Evidence refs.
+
+Wait — the map is controller-owned; leads shouldn't edit it. Right.
+
+Let me write and run the emitter. Then validate with dry-run ingest (is there a dry-run flag? predecessor said "dry-run ingest"). Let me check `research_map/comms.py` usage for dry-run. I'll check quickly with `--help`.
+
+Let me write the emitter now.
+dsh: reasoning:
+6 events emitted. Now:
+1. Validate via dry-run ingest to ensure 0 rejects.
+2. Run the numerics checkpoint --once.
+3. Run the real ingest? The accepted stream is written by `research_map/comms.py ingest`. run_cycle.py runs every 15 min presumably and ingests. Let me check whether ingest is safe to run as a lead (predecessor used dry-run). I'll run dry-run first and see options.
+
+Let me check `python3 research_map/comms.py --help`.
+
+Then checkpoint. Also verify my events would be accepted (schema) — dry-run.
+
+Also: verify no registered file was modified by me — git status.
+dsh: reasoning:
+Checkpoint written: num-ckpt-20260912-011819 — wait, "changed": [] means no tracked files changed since last checkpoint? But my new files aren't in TRACKED, so that's fine. Actually, it says verdict N1_BLOCKED and changed empty — good.
+
+Hmm, one thing: checkpoint at 01:18:19. Note a checkpoint `num-ckpt-...011455` existed from lifecycle08 at 01:14:55.
+
+Now, `comms.py ingest` has no dry-run flag shown; let me check `ingest --help`.
+dsh: reasoning:
+Dry-run accepted my 6 events (no rejects shown; exit 0). Let me check the summary counts — the tail only shows the event list. Let me grep for "rejected" count. Actually the JSON printed at top was truncated by `tail`. Let me run again capturing the JSON summary only... it's fine; the important thing is exit 0 and my events listed. Let me verify rejected count quickly.
+
+Then:
+- Validate map: `python3 research_map/validate_map.py`.
+- Check git status to confirm only my new files added (no registered artifact edited).
+- Re-hash my key artifacts to confirm stability.
+- Update todos.
+- Write final report.
+
+Also, should I run the real ingest? The run_cycle every 15 min will ingest. The previous lead relied on the cycle. But: my events' value decays if not ingested before Astra's next pass. Astra passes are frequent (controller-01 at 01:11:43, astra-lifecycle-08 at 01:16). If run_cycle runs every 15 min, next ~01:26. Hmm.
+
+Is it within my authority to run the real ingest? PROTOCOL.md says the accepted stream writer is `research_map/comms.py ingest` only — the command itself, and the controller runs it as part of run_cycle. Predecessor (lifecycle 01) explicitly did dry-run only, and lifecycle 08's events were ingested by 01:16 (the controller pass did it). To stay consistent with the established division of labor and avoid racing the controller's cycle, I'll do dry-run only and leave ingestion to the controller/cycle. But I should note in my final report that events await ingest.
+
+Hmm, but wait: there's a risk the controller only ingests *some* outboxes? No — comms.ingest ingests all outbox files.
+
+Actually, let me reconsider: the instruction to me is "consume queue, emit structured events and checkpoints, report blockers". Emitting into the outbox is the correct protocol act for a lead. Fine.
+
+Let me now do the final consistency checks. Also I want to double-check one thing: my `emit_gate` with verdict `pending` — will the controller's apply step treat a lead gate event as authoritative? PROTOCOL says leads may set gate verdicts with artifact + review evidence. A pending verdict can't hurt; it's a proposal. Good.
+
+One more important check: the gate event evidence_refs include `f"{GATES}#{H(GATES)[:12]}"` = gates.py#fcd1d70991b6 — correct current hash.
+
+Let me also double check that the `emit_artifact` for the generator/JSON wrote mirror lines that are consistent, and that no file I own got clobbered.
+
+Run: git status --short (limited), validate_map, dry-run rejected count, sha256 of my two artifacts + l08 stability re-check.
+dsh: reasoning:
+- Dry-run: 29 accepted (mine + others), 0 rejected. 
+- Map validation: VALID.
+- My artifacts stable, l08 record stable at 88ec0bf298cb.
+- git status: modified files are controller-owned (ASTRA_HANDOFF, apply_events, astra_lifecycle, research_map.json) — those are the controller's own edits, not mine. numerics/ files untracked in the `?? artifacts/` etc. — I didn't modify any registered file.
+
+Now, final checks per my task list:
+1. ✅ Read handoff/map and comms
+2. ✅ Review artifacts
+3. ✅ Consume queue (no new owned card; stoprule already discharged)
+4. ✅ Emit structured events (6) + checkpoint (num-ckpt-20260912-011819)
+5. Blockers: report in final answer + emitted blocker event
+
+One more valuable thing: confirm the inbox has nothing new for me since 00:36 (my claim in events). Let me verify the inbox mtime/tail count. Earlier: `comms/inbox/astra-lead-numerics.jsonl` mtime 00:36. Let me re-check mtime + count lines = 7? and that no newer assignment exists.
+
+Also — since I emitted a "medium" blocker, let me double check the claim "3 places" stale text: grep count showed 3 occurrences of "stop-rule deliverable" in research_map.json. And unmet[1] "Stop-rule items 1-3 above are open". Good.
+
+Let me also verify the exact map G-NUM criteria quote is accurate (I quoted "still needs: (1) a fourth resolution rung ... (2) class re-binding ... (3) one independent replication verdict" — from gates.py output criteria text which came from the map). Confirmed by grep count 3 in map.
+
+Let me do the final inbox check and update todos, then write the final report.
+
+Time: ~01:19. Predecessor instances: launched every ~7 min; next lead-numerics should be ~01:22:30+. I'm nearly done.
+
+One consideration — should I wait for ingest and confirm my events land in the accepted stream? The task says "One independent lifecycle then exit." I've emitted to the outbox with 0 rejects on dry-run. Predecessor lifecycle 01 did the same and reported it would be ingested by the controller. I could run the real ingest since run_cycle does exactly that (`comms.ingest(dry_run=False)`) and it's idempotent — it would make my events durable in the accepted stream immediately, which strengthens the lifecycle. Is that overstepping? The PROTOCOL table says writer of events.jsonl is `research_map/comms.py ingest` only — a tool; the controller runs it. A lead running the same tool isn't forbidden, but the "one canonical path, one owner" principle (CF-12) suggests not racing the controller's cycle.
+
+Hmm. Risk assessment: running ingest is idempotent and dedups by event_id; the controller's cycle will simply see duplicates. Predecessors did NOT run it. I'll respect the established boundary: dry-run only, leave ingest to the controller/15-min cycle. That is the conservative, protocol-consistent choice, and I'll state it explicitly in the report.
+
+Let me do the final inbox verification and check whether the run_cycle already ingested my events (it may run soon). Then finalize.
+
+Actually — one more genuinely useful independent check I should do since I'm the numerics lead: verify that the *3 required evidence paths* being unregistered (W046/W057/W081) is a controller action, and that my own emitted artifact is registered? No — registration is controller action via `runtime/state/artifact_hashes.json`. I've flagged it.
+
+Let me finalize with the inbox check and a final combined verification summary.
+dsh: reasoning:
+A NEW inbox message arrived at 01:16:23: `astra-life08-notice-lock`. My earlier claim "inbox unchanged since 00:36" was based on predecessor's status, but there's now a new notice at 01:16:23! I must read it — it's likely the controller's response to lifecycle-08, possibly about the lock. This changes my "queue" consumption.
+
+Let me read that message. This is important: it may contain a directive (e.g., lock changes or acknowledgment).
+dsh: reasoning:
+The 01:16:23 card (REC-42) is Astra's ruling issued at nearly the same time as my predecessor's finalize (01:15:04). It repeats the stop-rule as still open — likely emitted before/independently of the lifecycle-08 closure ingestion (the controller pass at 01:16:25/26 did ingest it, but the card text was authored at the pass boundary).
+
+This means: the *downward* card itself also carries the stale framing ("G-NUM stays pending on the N0 stop rule: fourth rung... class re-bind... one independent replication verdict"). My finding L09-F1 covers the map; I should extend it to note the REC-42 notice repeats the pre-closure framing, and — importantly — my response should state clearly that all three stop-rule items are closed and independently re-verified, so the only remaining path item is the lead-audit N0 accept.
+
+Actually, my emitted gate event + blocker already say exactly this. But I should respond to the downward card as part of "consume queue": the card requires no new action beyond confirming closure and keeping the lock. My lifecycles' gate event does that.
+
+However, there's one thing worth doing: the REC-42 notice says "then astra-life04-n0-verify lands the N0 verdict". So the sequencing is consistent with my finding: the only open item is the audit accept.
+
+Given this new card arrived after my emission, should I emit a short additional status acknowledging REC-42 and correcting the framing? That would be a genuinely useful, protocol-correct act: the lead responds to the controller's notice. I'll emit one more event: a `status` event on N0 acknowledging REC-42, confirming lock compliance, and stating that items 1–3 were already closed before REC-42 was authored (with hashes), so the only remaining step is astra-life04-n0-verify.
+
+Better: emit it as a `status` (the card is type status). Or `direction_update`? No. A status with evidence refs is right.
+
+Hmm, but note: the card's `event_type` is `status` and it's a downward notice; the protocol's upward types include status. I'll add one status event: `lnum-status-...-rec42-ack`.
+
+Also, I should update my verify record? No — I don't want to change its hash after emitting the artifact pin. I'll put the REC-42 acknowledgment in the new status event only.
+
+Let me write a tiny emitter for that one event, reusing numerics/events.py. Then re-run dry-run to confirm acceptance.
+
+Also — I claimed in my already-emitted status "inbox unchanged since 00:36". That's now inaccurate because the 01:16:23 card arrived before my emission? Let me check timing: the card was written at 01:16:23. My emission happened at ~01:19:0x. So at emit time the card was already there, and my status text says "inbox unchanged since 00:36" — that's factually wrong! I based it on the predecessor's claim without re-checking (I did check mtime earlier at 01:16:5x... wait, earlier `ls -la comms/inbox` showed astra-lead-numerics.jsonl mtime 00:36 — that was at ~01:15:44. The card arrived at 01:16:23, after that listing).
+
+So my emitted status contains an inaccuracy. I must correct it — that's exactly the "reject your own output before sending" discipline. I'll emit a corrected status (superseding note) that explicitly acknowledges the 01:16:23 card and retracts the "inbox unchanged" clause.
+
+This is a good demonstration of epistemic hygiene: my own event had a stale claim; correct it with a follow-up event rather than letting it stand.
+
+Let me emit:
+- status N0: "REC-42 ACK + SELF-CORRECTION": the 01:16:23 card astra-life08-notice-lock WAS present at emission (my earlier status line 'inbox unchanged since 00:36' is superseded/wrong); REC-42 rules lock stays LOCKED (accepted, complied); its stop-rule framing predates lifecycle-08 ingestion — items 1-3 are closed at current hashes per my lifecycle-09 re-measurement; only astra-life04-n0-verify remains. Evidence refs.
+
+Event id deterministic with my verify hash.
+
+Then dry-run again, and finalize.
+
+Let me write it quickly.
+dsh: reasoning:
+The correction event is accepted (1 new accepted = my new event; the others are now duplicates because the *previous dry-run* seems to have... hmm, interesting: "duplicates 7217" and only 1 accepted. That suggests the real ingest already happened (run_cycle) between my runs — my 6 earlier events are now in the accepted stream as duplicates. Let me verify: grep events.jsonl for my event ids.
+
+Let me check whether lnum-artifact-0322ed88247b4e3b8b93 is in research_map/events.jsonl. If yes, the 15-min cycle ingested them.
+
+Then finalize: update todos, write report.
+
+Let me also run the numerics checkpoint once more? My last checkpoint was before the correction event; checkpoint captures tracked artifact hashes, not events. The correction emitter isn't in TRACKED. Not needed. But maybe run checkpoint again to capture a final record — it's cheap and gives a closing checkpoint. Let me run `python3 numerics/checkpoint.py --once` once more at the end (it will write a new ckpt with changed=[]). Actually the earlier one at 01:18:19 is a fine closing checkpoint. But the lifecycle closing checkpoint is good practice. I'll run it once more.
+
+Let me verify ingestion and run final checkpoint.
+dsh: reasoning:
+The first 6 events are already in the accepted stream (ingested by the 15-min run_cycle between my dry-runs). The correction event `lnum-status-dc63a3da734555f3670d` isn't yet — it will be ingested on the next cycle (~01:26) or by the next controller pass. That's fine and expected.
+
+Final checkpoint written: num-ckpt-20260912-011907.
+
+Now let me update todos and write the final report. Let me also double check the final state of my key numbers:
+- Verify record: numerics/protocol/lifecycle09_lead_verify.json#baa93446d370
+- Generator: numerics/protocol/lifecycle09_lead_verify.py#2d58bb2354c5
+- Events: 6 ingested + 1 pending (correction)
+- Checkpoints: num-ckpt-20260912-011819, num-ckpt-20260912-011907
+- Gate: pending; N1_BLOCKED; lock LOCKED; solver absent; map VALID
+- Finding L09-F1: stale G-NUM criteria/unmet + REC-42 framing
+- Residuals: gates.py 907a88 pin x6 elsewhere; 3 unregistered verdicts
+
+Let me confirm the sha of the correction emitter + verify one more time everything is stable. And check what `changed` means — checkpoint changed=[] means no tracked artifact moved since last checkpoint. Good, i.e., I didn't modify any registered artifact.
+
+Final answer should be a concise report with:
+- Instance, group, sole lead
+- Consumed
+- Independent verification results (table)
+- New finding + blocker
+- Emitted events + checkpoints
+- Residuals/blockers
+- State and exit
+
+Let me mark todos complete first.
+dsh: reasoning:
+Everything is verified and emitted. Let me write the final report concisely.
+
+One last thing: the emitted artifact events referenced `emit_lifecycle09_lead_events.py`? My artifact evidence for the verify record referenced the generator `lifecycle09_lead_verify.py`, not the emitter. That's fine.
+
+Also, my correction event is pending ingest (next cycle ~01:26). I'll note it.
+
+Final report structure (concise, evidence-pinned). I'm exiting after this.

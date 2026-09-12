@@ -1,0 +1,610 @@
+dsh: reasoning:
+Let me start by understanding the task. I'm worker=012, a bounded execution worker. I need to read handoff/map and comms, take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit.
+
+Let me explore the workspace.
+dsh: reasoning:
+No handoff directory at top-level. Let me look for "handoff" and "map" and "comms" directories. Probably related to the swarm in /data3/guoshaoyang/workdir or ai4math-swarm. Let me check.
+dsh: reasoning:
+The handoff is in /data3/guoshaoyang/workdir/ai4math-swarm/. Let me read HANDOFF.md and research_map, and comms.
+dsh: reasoning:
+Now read the comms PROTOCOL.md, inbox, ASTRA_HANDOFF.md, and schemas to understand how a worker=012 should emit JSON with IDs, evidence, hash, falsifier, checkpoint.
+
+Let me read those.
+dsh: reasoning:
+Now let's check comms/inbox for worker ids. The task says worker=012. Agent IDs include deepseek-flash-01..20. Let me check inbox and outbox.
+dsh: reasoning:
+Now I need to find the assignment for worker=012. The task says "worker=012". There's no worker-012 inbox file. But there is deepseek-flash-12.jsonl in inbox. There are also outbox entries for deepseek-flash-12. Also there is a "proposed" dir and "proposals" dir. Also runtime/ may hold swarm worker state. Let me check the runtime dir and any recent worker files, plus the inbox for deepseek-flash-12 and see what's there.
+
+Also, the phrase "Take one class-bound task" — the swarm has classes (AF-WCC-VAC-GEN, AF-SCC-C2-VAC-GEN, AF-SCC-C0-VAC-GEN, AF-WCC-SCALAR-SPH). Let me look for worker-012 assignments. Let me search for "012" in the swarm directory.
+dsh: reasoning:
+There are runtime/instances/worker-012-... with meta.json. Let me read those. This is the worker=012 assignment. Let me look.
+dsh: reasoning:
+So worker-012 is a slot, and the prompt.txt has the instructions. Let me read prompt.txt, trajectory.log, stderr.log of the first instance (the one that ran at 00:12). The current instance is the 00:16:56 one — probably me. Let me read the prompt.
+dsh: reasoning:
+Interesting — the stderr log of the previous worker-012 instance (001229) shows the previous worker was working on a flat_wave lock-guard verification task (N0, AF-WCC-SCALAR-SPH). It appears the stderr log is the previous worker's reasoning trace... Wait actually that trace looks like MY trace. Hmm, the stderr tail for 001229 contains reasoning similar to mine but further along (writing artifacts). Wait no — the 001229 stderr contains reasoning about flat_wave.py lock-guard and evidence artifact sha256 c506dc... That's a *previous* worker 012 run (started 00:12:29), which apparently got quite far. My current run is 001656, and its stderr contains my current trace (exploring). So the 001229 run did work on N0 flat-wave/lock-guard verification and produced an artifact hash c506dc504e...
+
+So the previous worker-012 instance may have already produced an artifact. Let me check whether the artifact exists and whether there are outbox events from deepseek-flash-12 or a worker-012 outbox. There's no outbox/deepseek-flash-12.jsonl? Actually there is: comms/outbox/deepseek-flash-12.jsonl (49370 bytes). Let me check its tail. Also artifacts/flash-12/CHECKPOINTS.md exists.
+
+The instruction: "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit." So I should:
+1. Read handoff/map and comms ✓
+2. Take ONE class-bound task. The natural one: the assignment in comms/inbox/deepseek-flash-12.jsonl (N0, class AF-WCC-SCALAR-SPH, artifact numerics/tests/flat_wave.py, gate G-NUM).
+3. Emit valid JSON with IDs, evidence, hash, falsifier.
+4. Checkpoint.
+5. Exit.
+
+But wait — the previous worker-012 instance seems to have already done this. Let me check the state of things: does numerics/tests/flat_wave.py exist? Does artifacts/flash-12/... exist? Is there an outbox for worker-012? Let me inspect.
+
+Let me check:
+- comms/outbox/deepseek-flash-12.jsonl tail
+- artifacts/flash-12/
+- numerics/tests/flat_wave.py exists?
+- runtime/state/w12* checkpoint?
+- comms/inbox/deepseek-flash-12.jsonl full content (assignment cards)
+
+Let me be careful about duplication: if the previous worker-012 run already emitted the artifact and events, then my job might be to verify/checkpoint rather than duplicate. But actually the previous run's stdout.log is empty and there's no trajectory beyond start; the instance may have been killed. The stderr shows reasoning up to "Then emit outbox events". So it may have not written the outbox events yet. Let me check the filesystem state.
+dsh: reasoning:
+So deepseek-flash-12 has already done a lot of work: artifacts/flash-12/n0/... and outbox events. But the *slot* worker-012 (runtime instance) is a separate identity? Hmm. Actually, the previous worker-012 instance (001229) was working on the lock-guard verification on N0 with artifact c506dc504e... Let me check if that artifact exists. The stderr trace ended with "Then emit outbox events". Perhaps it never finished (was killed at 00:16 when the supervisor restarted). Let me check for the artifact with sha c506dc50 and look at what exists in artifacts/flash-12/n0.
+
+Wait — but is worker-012 = deepseek-flash-12? The swarm launcher maps slots to agent names. Let me check launch_swarm.sh / supervise_swarm.sh at /data3/guoshaoyang/. The slots: worker-01, worker-03, worker-06, worker-09, worker-16 appear in outbox. And deepseek-flash-01..20 in inbox. Probably two different naming generations. The runtime instances are "worker-0NN" slots and they are given agent ids? Let me check the supervisor script and runtime/bin.
+
+Let me read runtime/instances/worker-012-.../ and the supervisor log around 00:12 to 00:16 to understand what happened to the previous worker-012 run, and check the supervisor script ($DSH_* env, independent_supervisor.sh, launch_swarm.sh).
+
+Key question: what should I do now? The instruction says take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit. I should avoid duplicating the prior deepseek-flash-12 work. The previous worker-012 run appears to have been doing a *verification* of the lock-guard acceptance on N0 — perhaps a fresh worker has to do something distinct.
+
+Let me check:
+1. artifacts/flash-12/n0 contents
+2. whether c506dc50 exists
+3. supervisor log around worker-012
+4. runtime/state/checkpoints and how checkpoint is done (checkpoint.py usage)
+5. whether there's a worker-012 outbox channel: comms/outbox/worker-012.jsonl?
+
+Let me look.
+dsh: reasoning:
+Now it's clearer. There are two supervisors running:
+1. `supervise_swarm.sh` — launches `deepseek-flash-NN` tmux sessions with "worker N" prompt.
+2. `independent_supervisor.sh` — launches `worker-NN` tmux sessions with the bounded worker prompt, writing to runtime/instances/worker-NN-<stamp>/.
+
+I am the `worker-012` slot instance (bounded execution worker, one lifecycle, then exit), launched by independent_supervisor.sh. The previous worker-012 instance at 00:12:29 was killed/restarted at 00:16:56 (it seems each worker gets restarted after some periodic check; supervisor loop sleep 20 and `launch` checks tmux session existence... Actually the session name is "worker-012"; `launch` returns if session exists. So the old one must have died or been recycled — maybe the dsh harness caps turns). The stderr for 001229 shows it was mid-way through building an artifact about the N0 lock-guard verification.
+
+My job: take ONE class-bound task, emit valid JSON with IDs, evidence, hash, falsifier; checkpoint; exit.
+
+Important: don't duplicate prior work. The prior instance 001229 was working on verifying the N0 lock-guard acceptance (task `lnum-rev-20260911T2333-N0-12`) — the revision request on numerics/tests/flat_wave.py. Its intended artifact was a JSON with fields controls, fail_closed_probes, evidence_files, falsifier, claims_completion, validation_status, notes, sha256 c506dc50... which does not exist on disk (grep only found it in stderr). So that work is incomplete.
+
+But wait — deepseek-flash-12 (the other naming) already has outbox events flash-12-n0-artifact-0010/0011 etc. The artifacts/flash-12/n0/rev3/revision_acceptance_recheck.json and audit_finding_closure.json exist. So the acceptance for lnum-rev task may already be covered by artifacts/flash-12/n0/rev3/revision_acceptance_recheck.json.
+
+Let me check what flash-12's outbox already contains and what the current state of the acceptance is. Since worker-012 ≠ deepseek-flash-12 necessarily... but they may be the same agent identity in the swarm (deepseek-flash-12). Hmm. The `worker N` prompt from supervise_swarm.sh is different from the bounded worker prompt. Two swarms may be running concurrently, both writing. The slot worker-012 is my identity. The instruction says "worker=012". So my agent id might be "worker-012" for outbox purposes. There's no comms/inbox/worker-012.jsonl though. And outbox has worker-03, worker-059, worker-06, worker-09, worker-16 — so workers do write to comms/outbox/worker-NN.jsonl. So the convention exists: worker-NN.
+
+So I should:
+1. Pick ONE class-bound task. Best candidate: the `lnum-rev-20260911T2333-N0-12` revision/acceptance recheck on N0 / AF-WCC-SCALAR-SPH — it's directly addressed to worker 12 (deepseek-flash-12 slot), bounded, class-bound, and has a clear acceptance test that I can actually run and verify. The previous worker-012 run was doing exactly this and didn't finish. This is a verification task (not duplicating flash-12's own work): independently re-run the acceptance test and emit an artifact + events + checkpoint.
+
+But careful: "Take one class-bound task" — I need to avoid duplicating what flash-12 already produced. Let me check the outbox events for flash-12 to see whether the revision acceptance was already claimed with evidence. Then my contribution should be distinct: an independent recheck? The prior 001229 run seemed to be doing exactly an independent verification with controls and fail-closed probes — a JSON artifact. That artifact doesn't exist, so it's new work. Since worker-012 may be a distinct worker from deepseek-flash-12, an independent recheck is genuinely valuable (and the map requires two independent reviewers/replications).
+
+Let me first read:
+- artifacts/flash-12/n0/rev3/revision_acceptance_recheck.json
+- artifacts/flash-12/n0/lock_guard_run.json, canonical_lock_guard_stdout.json
+- numerics/tests/flat_wave.py --lock-guard and --all behavior
+- research_map.json assignments/gates for N0
+- runtime/state/artifact_hashes.json for measured hash of flat_wave.py
+- checkpoint.py usage (numerics/checkpoint.py or research_map/checkpoint.py)
+
+Then run the acceptance test myself and build the artifact.
+
+Also check the current map state to see whether the revision request is still open and whether N0 acceptance has been recorded. Let me read map assignments for N0 and gates.
+
+Let me be efficient. Start with map query + files.
+dsh: reasoning:
+So deepseek-flash-12 already produced `revision_acceptance_recheck.json` (PROVISIONAL, unverified). It's a full acceptance recheck. The previous worker-012 instance's stderr trace describes building a *similar but distinct* artifact — with controls and fail_closed_probes — apparently an independent verification of the flash-12 acceptance recheck (its own artifact). The prior worker-012 was likely doing an independent re-derivation. Since that artifact (c506dc50) doesn't exist, I can complete that work as my one class-bound task.
+
+But hold on: is there value in duplication? The instructions for me are bounded: take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, exit. The cleanest and most defensible choice:
+
+**Task: independent verification of the N0 frozen-artifact acceptance (revision lnum-rev-20260911T2333-N0-12) at class AF-WCC-SCALAR-SPH, node N0, gate G-NUM.** Run the acceptance test myself, hash evidence, emit artifact + claim + status events to outbox/worker-012.jsonl (or deepseek-flash-12? I am worker=012; the outbox convention is per-agent-name. My agent id per the runtime meta is `worker-012`. But the inbox assignment was addressed to deepseek-flash-12. Hmm.)
+
+Wait: what agent name do the worker-NN outbox files correspond to? There are outbox/worker-03.jsonl, worker-059.jsonl, worker-06.jsonl, worker-09.jsonl, worker-16.jsonl. Let me check the actor fields in those files to see what actor they use. Likely "worker-03" etc. Let me check quickly. Also check whether comms.py ingest accepts arbitrary actors.
+
+Also, is there a naming map? The `independent_supervisor.sh` slot is worker-NN, and the prompt says "worker=$n". So my actor id should be `worker-012`. The outbox file should be comms/outbox/worker-012.jsonl.
+
+Let me check worker-16.jsonl head to confirm actor naming and event style (worker-16 is one of the recent, biggest outbox files, probably a good model).
+
+Also, the checkpoint: how do workers checkpoint? `numerics/checkpoint.py` or `research_map/checkpoint.py`? Let me check what worker-16 did. And the stderr of the prior worker-012 mentions "checkpoint" not yet. Let me check runtime/state/checkpoints/ and how they're created. `research_map/checkpoint.py` does "full 15-min checkpoint snapshot". Workers like w06/w07/w08/w13/w14 wrote runtime/state/wNN_checkpoint_N.json.
+
+Let me inspect a worker-16 outbox event and the checkpoint.py interface. Also check `comms.py ingest` accepts actor worker-012 (probably any).
+
+Plan:
+1. Run acceptance test on the frozen artifact: `python3 numerics/tests/flat_wave.py --all` and `--lock-guard`, capture stdout/exit codes to artifacts/worker-012/n0/ (my own path, distinct from flash-12).
+2. Independently verify evidence claims: sha256 of flat_wave.py = 8b52014dac47, no numerics/spherical_solver/, map numerics_lock state, gates pending. Also verify the flash-12 recheck artifact's evidence file hashes match on disk (an independent spot-check: does its cited evidence exist and hash correctly?). That's a real independent-verification contribution: verify `revision_acceptance_recheck.json` + its evidence files by hash, re-run the commands from scratch, and compare measured orders. This is not duplication; it's independent replication/review of a worker artifact.
+3. Write artifact JSON artifacts/worker-012/n0/independent_acceptance_verdict.json with IDs (assignment id, node, class), evidence (path#sha256), falsifier, claims_completion=false, validation_status=unverified, no gate verdict.
+4. Emit events to comms/outbox/worker-012.jsonl: artifact, claim, status (and maybe review event since I'm independently verifying — review is a valid upward message type: target_id, reviewer, verdict accept|revise|reject|inconclusive, score 0-5, hard_failures, findings).
+5. Checkpoint: write runtime/state/w12_checkpoint_1.json (+ append to a log) and/or run research_map/checkpoint.py? The PROTOCOL says `python3 research_map/checkpoint.py` is the controller's full snapshot. Workers wrote their own wNN_checkpoint_N.json. I'll write runtime/state/w12_checkpoint_1.json and also append to artifacts/worker-012/checkpoints.jsonl maybe. Actually there's already `artifacts/flash-12/CHECKPOINTS.md`. For worker-012, I'll create runtime/state/w12_checkpoint_1.json with hash-bound summary, and note it in the outbox status event. Careful not to run the global checkpoint.py if it's controller-only (could conflict with map.lock). Let me check checkpoint.py quickly.
+
+Let me first check event conventions from worker-16 and how workers checkpoint, then check whether --all takes long. Let me run both.
+dsh: reasoning:
+Confirmed conventions:
+- Worker actors use their agent name (e.g., deepseek-flash-13, worker-16 is odd: actor "deepseek-flash-16" in worker-16.jsonl). Hmm, worker-16.jsonl events have actor "deepseek-flash-16". Let me check worker-03/worker-06/worker-09/worker-059 to see actor names. Presumably worker-NN outbox files may be written by deepseek-flash-NN. The independent_supervisor's slot worker-012 prompt says "worker=012" — the actor might be "worker-012" or "deepseek-flash-12". Given the existing convention where the slot "worker-16" writes events with actor "deepseek-flash-16", and there's already comms/outbox/deepseek-flash-12.jsonl (49KB from flash-12), plus comms/outbox/worker-16.jsonl with actor deepseek-flash-16...
+
+Let me check actor fields in worker-03.jsonl, worker-06.jsonl, worker-09.jsonl, worker-059.jsonl.
+
+Also, comms.py ingest may have a whitelist of agent ids (AGENTS). Let me check comms.py to see valid actors — if "worker-012" is not in the list, it might be rejected. PROTOCOL says agent ids: astra, astra-lead-*, deepseek-flash-01..20. So my actor should be deepseek-flash-12 to be ingestible, or worker-012 might be rejected. Let me check comms.py's actor validation.
+
+Actually, given the risk of identity collision with an already-running deepseek-flash-12 session (from supervise_swarm.sh), I should think. There may be two live swarms: the older `supervise_swarm.sh` launched deepseek-flash-NN tmux sessions, and the new `independent_supervisor.sh` launching worker-NN. Both may be live right now. Let me check tmux sessions.
+
+If deepseek-flash-12 is live and actively writing, then my writing to comms/outbox/deepseek-flash-12.jsonl as actor deepseek-flash-12 could interleave confusingly but is still append-only lines — fine. But better to use my own identity: outbox/worker-012.jsonl with actor worker-012, unless ingest rejects it. Let me check comms.py for actor validation and tmux list.
+dsh: reasoning:
+Interesting: the independent supervisor is launching worker-001... worker-0NN slots; there are many (up to 025 or more). The actors used in outbox files are mixed: "worker-03", "worker-059", "worker-06", "deepseek-flash-09", "deepseek-flash-16". So both identities occur. `comms.py ingest` doesn't seem to validate actor against a whitelist (line 154 just maps actor). Let me check if there is a validation of agent ids anywhere, e.g., in validate_map.py or events.schema.json. The events.schema.json may require actor pattern. Let me check.
+
+Also, there are already worker-0NN instances beyond 020 (worker-059!). The supervisor spawns unboundedly: `for n in $(seq -w 1 20)`... but worker-059 exists. Maybe a different supervisor version (independent_supervisor_v2.sh / _100.sh). Let me check independent_supervisor_v2.sh and _100.sh. Not critical.
+
+Decision on identity: I'll use actor `worker-012` and write to `comms/outbox/worker-012.jsonl` (following worker-03/06/059 convention). To be safe about ingest, let me check events.schema.json and validate_events for actor constraints. If schema requires `deepseek-flash-NN` pattern, I'll use actor deepseek-flash-12 in the event but... no, worker-03/worker-059 have been ingested? Let me check if worker-059 events are in events.jsonl or rejected.jsonl. Quick grep.
+
+Also check the assignment addressed to me: inbox for worker-012 doesn't exist; but there's deepseek-flash-12.jsonl. Since the class-bound task is the N0 revision acceptance (assignee deepseek-flash-12), and I'm worker-012 in the same slot family, taking that task is right.
+
+Let me validate the actor admissibility: grep rejected.jsonl for worker-059 or worker-03.
+dsh: reasoning:
+No actor whitelist; actor is any string. Rejected.jsonl has no worker-0 rejections (the grep output was empty before "=== schema"), meaning worker-03/059 events weren't rejected for actor reasons (they may not have been ingested yet, but no actor-based rejects).
+
+Note: the schema `oneOf` doesn't include `status` or `blocker` types! baseClaim requires class_id... A `status` event would match none of the oneOf branches → schema-invalid? But status events are ingested by comms.py (which may have its own normalization rather than this schema). validate_events may only validate a subset. In events.jsonl, many status events exist and are ingested with `_normalized`. So fine; the schema is probably only used for specific types. I'll follow the working convention of other workers: emit artifact, claim, status, review. The claim requires class_id, statement, conclusion_type, assumptions, falsifier, evidence_refs. Artifact requires node_id, artifact_type, path, sha256, validation_status. Good.
+
+Now, about checkpoint: worker checkpoints go to runtime/state/wNN_checkpoint_N.json, plus optionally artifacts/<agent>/checkpoints.jsonl. I'll write runtime/state/w12_checkpoint_1.json (worker slot 012) hashed, and reference it in the status event.
+
+Now let me decide the exact task and do real verification work. Let me be careful and rigorous — this is the whole point of the exercise: produce hard, independently verified evidence with a real falsifier.
+
+**Chosen task**: N0 / class AF-WCC-SCALAR-SPH / gate G-NUM, assignment `lnum-rev-20260911T2333-N0-12` (revision acceptance) — independent bounded recheck of the canonical frozen artifact `numerics/tests/flat_wave.py` at 8b52014dac47.
+
+What I will actually measure (fresh, in my own process, writing to artifacts/worker-012/n0/):
+1. `python3 numerics/tests/flat_wave.py --lock-guard` → capture stdout+exit code; check verdict == N1_BLOCKED, exit 0, production_allowed false, map lock state locked.
+2. `python3 numerics/tests/flat_wave.py --all` → capture stdout+exit code; parse JSON report (the CLI may print JSON). Check exit 0, all 11 gates pass, G11 true, and hash of flat_wave.py unchanged before/after.
+3. Negative/fail-closed control probe: run the lock-guard with a corrupt map / nonexistent root to confirm it fails closed (production_allowed=false, N1_BLOCKED) — the flash-12 artifact claims 3 probes; I can independently re-run at least one or two. The prior worker-012 intended exactly this.
+4. Independent hash verification of the flash-12 recheck artifact and each of its cited evidence files (does the artifact's claimed sha match the file on disk? do the cited evidence refs resolve?). This is an independent review of a worker artifact, valuable and distinct.
+5. Check no numerics/spherical_solver/ exists; check map numerics_lock == locked, gates G-FORM/G-AUDIT pending.
+
+Then compare my measured orders to the flash-12 artifact's measured_orders to see whether the numbers reproduce (independent replication of the reported values). Also verify the `recheck_all_report.json` claims.
+
+Caveat: running `--all` may take time (Ns up to 1024, 3 studies). The flash-12 run produced results, so it's bounded — let me time it. Probably under a few minutes. I'll run with a timeout and capture.
+
+Then write artifact `artifacts/worker-012/n0/independent_acceptance_verdict.json` containing:
+- schema/kind, generated_at
+- assignment_ids, node_id, class_id, gate
+- canonical artifact path + sha256 before/after
+- commands with stdout/stderr evidence files + their sha256
+- measured results (lock guard JSON, all-run gate table, measured orders extracted)
+- hash audit of flash-12 recheck evidence (each path exists + sha matches claimed)
+- map state at check
+- verdict per item: e.g. "ACCEPTANCE_ITEMS_INDEPENDENTLY_CONFIRMED_AT_FROZEN_SHA" but with validation_status=unverified and claims_completion=false; note it cannot move node/gate.
+- falsifier (specific, checkable)
+- evidence_files list with hashes
+
+Then emit outbox events:
+- `artifact` event (path, sha256, validation_status=unverified, node N0)
+- `review` event: target_id = artifacts/flash-12/n0/rev3/revision_acceptance_recheck.json#845f... hmm target_id conventions; target might be the artifact path or event id. I'll use the artifact path + sha prefix. verdict=accept or revise? Given everything reproduces, verdict accept at score, hard_failures [] — but caution: accepting the recheck isn't accepting the gate. I'll say verdict "accept" for the recheck artifact as an item of evidence, with findings noting it cannot bind a gate and that independent replication of the lead calibration (flash-13/flash-14) is still what C8/G-NUM needs. Actually maybe "accept" is risky; the review's purpose is the recheck artifact's mechanical correctness, which I can verify. I'll use "accept" with explicit scope, or "inconclusive"? Let me decide after the actual measurements. If the numbers reproduce and the hash audit passes, "accept" with narrow scope is honest.
+- `claim` event: statement of what was independently measured, conclusion_type: "empirical_measurement" or "replication" (not theorem!). Must include class_id, assumptions, falsifier, evidence_refs, plus artifact_refs optional.
+- `status` event.
+
+Hmm, but the instruction says "emit valid JSON with IDs evidence hash falsifier" — singular event perhaps; but multiple events are in convention. I'll emit artifact + claim + review + status, all consistent.
+
+Then checkpoint: runtime/state/w12_checkpoint_1.json and append to artifacts/worker-012/checkpoints.jsonl; also note the checkpoint hash in status event? The checkpoint is created after events; I could re-emit status referencing it or write checkpoint with outbox event ids. Simpler: write checkpoint file containing event ids and hashes, then emit a final `status` event with checkpoint hash. That's 2 status events; fine.
+
+Then exit (stop). Since the supervisor will relaunch me (the loop relaunches every 20s regardless), my process exiting is expected. But careful: the supervisor at 00:16 relaunched all workers even though sessions existed? `launch` returns if tmux session exists. The instances at 00:16:56 for worker-010..025 are new slots (not previously launched). worker-001..009 were created 00:12:29. So worker-012 session created 00:16:56 — I'm that. When I exit, the supervisor will relaunch worker-012 after 20s. That's the design ("bounded execution worker ... then exit"; recycling). Fine.
+
+Before running the acceptance test, let me verify the commands and check the CLI's output format. Let me look at flat_wave.py's argparse and run_all briefly to understand flags, and check what `--all` prints. Also confirm python version/deps work.
+
+Let me run the lock-guard command first (fast), capture to artifacts/worker-012/n0/. Use `python3` from PATH. Note working dir must be the swarm root for relative paths.
+
+Let me set up the artifact dir and run. I'll use `timeout 600` for --all.
+
+Let me first peek at the CLI section of flat_wave.py.
+dsh: reasoning:
+Good. Note `lock_guard(root=...)` supports a root argument for fail-closed probes.
+
+Now let me run the acceptance independently. I'll create `artifacts/worker-012/n0/` and capture:
+- `lock_guard_stdout.json` + exit code
+- `all_stdout.txt` + exit code, `--json-out artifacts/worker-012/n0/all_report.json`
+- probe: corrupt map (need to construct a temp root with copy of numerics/... hmm the lock_guard imports numerics.gates from root; probe with a temp root containing a broken research_map.json and a symlink/copy of numerics? The flash-12 probes used a nonexistent root and malformed map and module import failure. For my independent probe, I can call lock_guard(root='/nonexistent-root-xyz-012') via a small python -c, and also with a temp dir containing a malformed research_map.json + copy of numerics package. Since gates.evaluate(root_path) reads root/research_map/research_map.json, I can create /tmp-based root with symlink numerics -> real numerics? But import of numerics.gates needs `numerics/__init__.py` importable — symlink the numerics dir into the temp root, plus a malformed research_map/research_map.json. Actually `flat_wave.lock_guard(root=...)` inserts root_path into sys.path and imports `numerics`. If I symlink the real numerics dir under temp root, import works and gates.evaluate(temp_root) reads the malformed map → exception → fail closed. That's a genuine probe. I can run it as `python3 -c "import sys; sys.path.insert(0,'numerics/tests'); import flat_wave; print(json.dumps(flat_wave.lock_guard(root='/tmp/...')))"`.
+
+Also the "no numerics/spherical_solver" check.
+
+Time budget: I should be efficient. Let me start the `--all` run in the background and meanwhile do the hash audit of flash-12's recheck artifact and evidence files. Use run_in_background for the long run.
+
+Actually, first capture the pre-hash of flat_wave.py, map hash, artifact_hashes hash. Then run.
+
+Let me create the directory and launch the run in the background.
+dsh: reasoning:
+Lock guard passes independently: exit 0, guard_correct_for_state true, N1_BLOCKED, production_allowed false.
+
+Note: research_map.json hash is now 4d8291c9... (changed from b83a6b05 in flash-12's artifact, because the map is being updated continuously by the controller). This is important: the flash-12 artifact pins an older map hash — point-in-time evidence. My verification will pin the new map hash.
+
+Now run `--all` in the background (could take a while). Capture stdout, stderr, exit, timing, and the JSON report.
+
+Also run the fail-closed probes in parallel? The probes are quick but importing flat_wave might be heavy? No, import is fine. Let me start --all in the background first.
+dsh: reasoning:
+While that runs, do the hash audit of flash-12's recheck artifact and its evidence files, plus map-state checks, plus the fail-closed probes (independent).
+
+Careful: running probes concurrently with --all should be fine (different processes, read-only).
+
+Let me write a small Python script `artifacts/worker-012/n0/verify_recheck_hashes.py` that:
+1. Loads artifacts/flash-12/n0/rev3/revision_acceptance_recheck.json
+2. For each evidence file, recompute sha256 and compare to claimed; record match/mismatch/exists.
+3. Verify input hashes: numerics/CONVERGENCE_PROTOCOL.md, numerics/gates.py, research_map/research_map.json (expected to differ now — point-in-time), runtime/state/artifact_hashes.json (differ now).
+4. Output JSON to artifacts/worker-012/n0/recheck_hash_audit.json.
+
+That's genuine independent verification of the upstream artifact. Also, importantly, the artifact's own sha256 (the recheck JSON) must match what was emitted in the outbox event: flash-12-n0-artifact-0010 claims sha? Let me check the event for artifact 0010 and the file hash. Let me grep outbox for artifact-0010 and revision_acceptance_recheck.
+
+Then fail-closed probes:
+- nonexistent root
+- malformed map in a temp root with symlinked numerics
+- module import failure (root with no numerics) — hmm importing flat_wave itself needs numerics? flat_wave is standalone? It imports numpy and maybe numerics.gates only inside lock_guard. For the probe "module_import_failure", call with root that lacks numerics → ImportError → fail closed. With sys.path having the real repo path? In my python -c I'd run from repo root so `numerics` would be importable from CWD. To make it fail, run `python3 -c` from a different cwd (e.g. /tmp) with sys.path only containing numerics/tests abs path, then lock_guard(root='/nonexistent...'). Since flat_wave.py inserts root_path (nonexistent) into sys.path and imports numerics — but sys.path[0] is '' when -c from cwd... If I run from /tmp, '' = /tmp, so numerics not importable → ModuleNotFoundError → fail closed. Good.
+
+Let me write the probe runner in Python for exact capture, as a script file (artifact) so it's reproducible: artifacts/worker-012/n0/probe_failclosed.py. It will:
+- import flat_wave from the canonical path
+- probe A: lock_guard(root='/nonexistent-root-w012-<stamp>')
+- probe B: create tempdir with malformed research_map/research_map.json and symlink to real numerics dir → lock_guard(root=tempdir)
+- probe C: lock_guard(root=tempdir_with_no_numerics) → import failure
+- each: record verdict, production_allowed, fail_closed, reason; assert blocked & not allowed.
+
+Actually for probe B, `gates.evaluate(root)` reads root/research_map/research_map.json. Symlink numerics dir into temp root. Import: lock_guard inserts temp root into sys.path, `from numerics import gates` — Python may already have `numerics` in sys.modules from a previous import in the same process; I'll run each probe in a separate subprocess to be clean. Simpler: the script spawns three subprocesses.
+
+But timing: probe B needs `numerics` import to resolve to temp_root/numerics symlink. In a fresh process with cwd=/tmp and sys.path = [flat_wave's dir?]. I'll invoke `python3 /path/to/probe_failclosed.py <case> <root>` from /tmp so cwd has no numerics. flat_wave.py is in numerics/tests; `sys.path.insert(0, str(root_path))` puts temp root first; `from numerics import gates` finds temp_root/numerics symlink → real package. gates.evaluate(temp_root) reads malformed map → json error → exception → fail closed.
+
+For probe C: root = tempdir without numerics → ModuleNotFoundError (as long as real repo numerics not on sys.path). Run from /tmp. But the probe script itself does `sys.path.insert(0, '/data3/.../numerics/tests')` to import flat_wave; that path is `numerics/tests`, not the repo root, so `import numerics` would fail unless cwd is repo root. Good — run from /tmp.
+
+Alternatively simpler and more verifiable: write a standalone script `probe_failclosed.py` that does the subprocess dance. Let me write it.
+
+Also write `verify_recheck_hashes.py` and run both.
+
+Let me also check the outbox event claim sha for revision_acceptance_recheck.json.
+dsh: reasoning:
+Interesting!!! The artifact `artifacts/flash-12/n0/rev3/revision_acceptance_recheck.json` on disk has sha256 **c506dc504e7256e51193d4324336e4e207d9db3eb9851e779422ca5e54e69c18** — exactly the hash the *previous worker-012 instance* was talking about in its stderr reasoning ("Evidence artifact written: sha256 c506dc50...")! So the previous worker-012 instance actually WROTE this artifact... wait, but the file path is artifacts/flash-12/n0/rev3/revision_acceptance_recheck.json, and its content says "Worker-12 hash-bound recheck..." and generated_at 00:15:51. The previous worker-012 (slot) run started 00:12:29 and its stderr shows it was building exactly this file with c506dc50 as its target hash. Hmm, but flash-12's outbox event references it?
+
+Wait — actually, the previous worker-012 instance's stderr trace was truncated in the tail I saw; it said "Evidence artifact written: sha256 c506dc504e..." and then "Then emit outbox events: 1. artifact event flash-12-n0-artifact-0011..." So the previous worker-012 instance DID write this artifact to artifacts/flash-12/n0/rev3/ (using agent path flash-12, since the assignment was addressed to deepseek-flash-12), got killed before/while emitting outbox events. Then the outbox tail I read earlier shows events up to flash-12-n0-status-0010 (created 00:13:23) — that's *before* 00:15:51. Hmm, but wait: was the recheck file written by the *prior worker-012 instance* at ~00:15:51? The content's "generated_at": "2026-09-12T00:15:51+08:00" matches. And the file mtime? Let me check. artifacts/flash-12/n0/rev3 directory was modified 00:12... the listing showed `artifacts/flash-12` dir 00:08, and n0/rev3 files. Let me check mtime of revision_acceptance_recheck.json.
+
+So the previous worker-012 run did the work and wrote the artifact, then was killed (the supervisor relaunched at 00:16:56) before emitting outbox events. Also note the stderr trace's last reasoning says "Then emit outbox events: ... 'artifact event flash-12-n0-artifact-0011'". Hmm wait — but the outbox tail I read has 0010 as the last event. So 0011 was never emitted. That means the artifact exists on disk but is NOT referenced in any outbox event → not ingested, not part of accepted traffic. My job as the new worker-012 instance: complete the bounded task properly — verify (fresh), emit the events, checkpoint, exit.
+
+Actually hold on. Is it possible that the previous worker-012 stderr.log is not from a killed run but is actually a *record of my own future reasoning*? No — timestamps: instance 001229 started 00:12:29, and the artifact generated_at 00:15:51, and the relaunch at 00:16:56. So yes: the 001229 worker did write the file, then was recycled.
+
+Hmm, but "artifacts/flash-12" is another agent's namespace. The prior worker-012 used the agent identity deepseek-flash-12 (probably because the assignment was addressed to deepseek-flash-12 and the worker slot 012 maps to flash-12). It wrote artifact path artifacts/flash-12/n0/rev3/ and planned events `flash-12-n0-artifact-0011` in comms/outbox/deepseek-flash-12.jsonl. That is consistent with worker slot 012 == deepseek-flash-12 identity. But wait, there's already comms/outbox/deepseek-flash-12.jsonl with events 0001-0010, written from 23:2x to 00:13:23. Those were likely written by an earlier run of the same slot (worker-012/flash-12) or by the supervise_swarm's deepseek-flash-12 session.
+
+Hmm, but the tmux list shows no `deepseek-flash-*` sessions at all! Only worker-001..025 and leads. So the supervise_swarm.sh sessions are dead/not present; the independent_supervisor is running the worker-NN slots. The earlier `deepseek-flash-12` outbox traffic likely came from worker-012 slot runs under a previous supervisor (or from deepseek-flash-12 sessions that have since exited). Since worker slot 012's work has been consistently going into the flash-12 namespace (artifacts/flash-12, and the previous instance planned `flash-12-...` event ids), the identity for slot 012 is effectively deepseek-flash-12.
+
+Hmm, tricky. What is the most correct identity? Let me check some worker-NN outbox files for slot↔name mapping:
+- outbox/worker-16.jsonl has actor "deepseek-flash-16" (slot 016 → flash-16).
+- outbox/worker-09.jsonl has actor "deepseek-flash-09" (slot 009 → flash-09).
+- outbox/worker-06.jsonl has actor "worker-06".
+- outbox/worker-03.jsonl has actor "worker-03".
+- outbox/worker-059.jsonl has actor "worker-059".
+
+So slots map to deepseek-flash-NN when they choose that identity. For slot 012, the assignment is addressed to deepseek-flash-12, the previous instance wrote into artifacts/flash-12 and planned flash-12 event ids. So I should continue as **deepseek-flash-12**, writing to `comms/outbox/deepseek-flash-12.jsonl` and `artifacts/flash-12/...`, to keep the assignment binding intact. Alternatively use worker-012 identity but reference the same assignment. The PROTOCOL's agent list includes deepseek-flash-01..20 but not worker-NN, suggesting deepseek-flash-NN is the canonical identity.
+
+Decision: **actor = deepseek-flash-12**, outbox = comms/outbox/deepseek-flash-12.jsonl, artifact namespace = artifacts/flash-12/. This aligns with the assignment and the prior instance. But I should still make my work distinct from the already-written recheck artifact: my contribution is an *independent verification* of that recheck artifact's evidence at a fresh map state, and I'll complete the missing emission (artifact event 0011) plus add my verification artifact.
+
+Wait, but careful: is `revision_acceptance_recheck.json` (c506dc50) from the prior worker-012 run, or from an even earlier flash-12 session? Content says "generated_at": "2026-09-12T00:15:51+08:00" and the flash-12 outbox event 0010 was at 00:13:23 — so the recheck file was written at 00:15:51, after event 0010. The prior worker-012 (started 00:12:29, killed ~00:16:5x) matches exactly. So this file is the prior instance's product, and it was never announced. My fresh verification of it + emission is the natural completion of the bounded task: on-disk artifact + hash + falsifier + checkpoint.
+
+But hold on — the background job bash-1 finished! Let me read its output: the `--all` run completed with exit code 0. Let me collect that.
+
+Also note: the prior worker-012's stderr mentioned "Evidence artifact written: sha256 c506dc50..." — actually wait, c506dc504e... is the hash of revision_acceptance_recheck.json. But the reasoning snippet said "Evidence artifact written: sha256 c506dc504e7256e51193d4324336e4e207d9db3eb9851e779422ca5e54e69c18." Hmm, but the reasoning in stderr also described building a JSON with fields "controls", "fail_closed_probes", "evidence_files", "falsifier", "claims_completion", "validation_status", "notes" — that fields list matches revision_acceptance_recheck.json exactly (it has controls? no... it has negative_controls, fail_closed_probes, evidence_files, falsifier, claims_completion, validation_status, notes — yes matches!). But the sentence "Evidence artifact written" appears *before* the description of the outbox events but the reasoning order in stderr shows: "Let me write the script and generate the artifact." then... hmm. Whatever, it's clear the file is the prior instance's product and it's consistent.
+
+Actually wait, there's an inconsistency: the prior stderr says the artifact planned is named with the worker-012 probes ("/nonexistent-root-xyz-012"). And revision_acceptance_recheck.json's fail_closed_probes contain reason "'/nonexistent-root-xyz-012/research_map/research_map.json'". Yes! That's from the prior worker-012 instance. Confirmed.
+
+So the artifact on disk was produced by the prior worker-012 run but is announced nowhere. It's a hash-bound artifact but not ingested. My bounded task:
+
+**Task (class-bound, N0 / AF-WCC-SCALAR-SPH / G-NUM, assignment lnum-rev-20260911T2333-N0-12)**: complete the acceptance recheck lifecycle — independently re-run the acceptance commands at the current map state, verify the unannounced artifact c506dc50 (existence + every cited evidence hash), emit the missing structured events (artifact + claim + review + status) with IDs/evidence/hash/falsifier, write a checkpoint, exit.
+
+Wait — but should I instead treat the unannounced artifact as *my own output* and simply emit events for it? The task says "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit." The cleanest interpretation: I (worker 012) complete the bounded task by emitting the structured JSON events for the verified artifact, with my own independent re-measurement backing it. I should be honest about provenance: the artifact was written by the prior worker-012 pass and was unannounced; I independently verified it and emitted the events. I can note that in the status summary and checkpoint.
+
+Hmm, but is it acceptable to emit an `artifact` event for a file I didn't write in this process? Yes — the event just declares path+sha256+validation_status; validation_status=unverified (I cannot self-pass). And my review event verifies it. I'll be transparent in notes.
+
+Alternatively, to be safest, I could write my *own* fresh verification artifact `artifacts/flash-12/n0/rev4/independent_acceptance_verification.json` that (a) re-runs the acceptance commands, (b) audits the prior artifact's evidence hashes, (c) pins the current map hash, and emit events for BOTH: the artifact event for c506dc50 (completing the missing announcement, with provenance note) and my own verification artifact.
+
+But "one class-bound task" and "emit valid JSON with IDs evidence hash falsifier" — I'll do one coherent task: **N0 revision acceptance, independent confirm**. Two artifacts (the recheck + my verification) may be too much; but they're tightly coupled: the missing announcement plus independent confirmation. I think it's fine and rigorous. Keep it bounded.
+
+Let me now:
+1. Collect the background --all results.
+2. Run the hash audit + fail-closed probes.
+3. Build my verification artifact.
+4. Emit events.
+5. Checkpoint.
+6. Exit.
+
+Let me collect job bash-1 output and inspect the all_report.
+dsh: reasoning:
+The `--all` suite passes in 1.01s, all 11 gates true, exit 0.
+
+Hmm, 1 second is fast — that's fine, the scheme is cheap (1D spherical flat-space leapfrog). But wait — 1.01s for 1024-grid runs? Plausible with numpy.
+
+Now the study dicts have different key structure than flash-12's artifact (`ns`, `order_l2_pairs` came out None). Let me print the study keys properly to extract measured orders. Let me inspect the report structure. Then run hash audit + fail-closed probes.
+
+Note: The report JSON written by --all also embeds timing/`evaluated_at`; each run differs slightly. Determinism gate (G5) checks internal determinism.
+
+Let me dump the study keys and the full report top-level keys.
+dsh: reasoning:
+Excellent. My fresh run's `order_l2` values are **byte-identical** to the flash-12 recheck artifact's `measured_orders.studies[].order_l2_pairs` (all three studies). That's strong independent reproduction (same frozen artifact, same deterministic computation).
+
+Now:
+1. Hash audit of the flash-12 recheck artifact + evidence files.
+2. Fail-closed probes.
+
+Let me write the two scripts and run them. I'll write them with the write tool (new files under artifacts/worker-012/n0/). Then run.
+
+Script 1: `verify_recheck.py`
+- input: the recheck artifact path
+- for each entry in evidence_files: compute sha256, exists, bytes, match
+- for each input in inputs: compute current sha, match_or_drift (expect drift for map/artifact_hashes; protocol and gates.py may be unchanged)
+- verify artifact's own sha vs the event claim? The event was never emitted, so just record file sha.
+- additionally compare measured_orders L2 lists to my fresh all_report.json exact equality.
+- output JSON to artifacts/worker-012/n0/recheck_hash_audit.json
+
+Script 2: `probe_failclosed.py`
+- cases: nonexistent_root, malformed_map (temp root with symlinked numerics + broken map), missing_module (temp root without numerics), and maybe empty root.
+- spawn subprocess per case from cwd=/tmp with a helper mode.
+- capture JSON output + exit code; assert production_allowed false.
+- output JSON to artifacts/worker-012/n0/failclosed_probe_results.json
+
+Let me write these carefully.
+
+For probe helper invocation: `python3 <abs path to probe_failclosed.py> --child <root>` run with cwd='/tmp'. In child: `sys.path.insert(0, '<repo>/numerics/tests')`? Wait, if I insert the tests dir into sys.path, then `import flat_wave` works, and flat_wave's lock_guard inserts root into sys.path. For missing_module case, root has no numerics → `from numerics import gates` fails unless `numerics` is importable elsewhere. cwd=/tmp → '' = /tmp → no numerics. But the script's own file path is in artifacts/worker-012/n0, not repo root; Python adds the script's directory to sys.path[0] — that's artifacts/worker-012/n0, which has no numerics. Good. But careful: if I set PYTHONPATH, it could leak the repo root. I'll clear PYTHONPATH and use an absolute sys.path insert of the tests dir inside the script (deterministic).
+
+For malformed_map case: temp root with symlink `<tmp>/numerics -> <repo>/numerics` and `<tmp>/research_map/research_map.json` containing broken JSON. Then `from numerics import gates` resolves via root insertion? Root is inserted at sys.path[0] by lock_guard. Yes. gates.evaluate(root) reads `<tmp>/research_map/research_map.json` → JSONDecodeError → fail closed.
+
+For nonexistent_root: root='/nonexistent-root-w012-2' → sys.path insert, import numerics fails (not importable) → ModuleNotFoundError → fail closed. To distinguish from a genuinely working guard, also include a positive control: root=repo root → verdict N1_BLOCKED with fail_closed=False, production_allowed=False. That proves the probe harness isn't just always erroring.
+
+Let me write the scripts.
+dsh: reasoning:
+Now run both. Note probe_failclosed uses HERE.parents[3]: HERE = artifacts/worker-012/n0/probe_failclosed.py → parents[0]=n0, [1]=worker-012, [2]=artifacts, [3]=repo. Good.
+
+verify_recheck REPO = parents[3] from artifacts/worker-012/n0 → repo. Good.
+
+Run them.
+dsh: reasoning:
+Both pass:
+- Fail-closed probes: all 3 fail closed, positive control valid.
+- Hash audit: audited artifact sha = c506dc50... (the unannounced prior artifact), all 9 evidence file hashes match, order ladders reproduce exactly, fresh all-gates pass.
+
+Let me inspect the probe results and audit JSON for the record, then build the verification artifact and events.
+
+Let me view the probe results summary and the pinned inputs (which drifted).
+dsh: reasoning:
+Note: The `missing_module` case reports ModuleNotFoundError — same as nonexistent_root. Fine, both fail closed. Actually for missing_module I expected gates import to fail; correct.
+
+Also note `runtime/state/artifact_hashes.json` changed again between the lock-guard run (420ef0de) and now (3f44face) — the controller checkpoints keep rewriting it. That's expected in a live swarm; my evidence pins point-in-time hashes.
+
+Note also: the audit's pinned inputs show `numerics/CONVERGENCE_PROTOCOL.md` and `numerics/gates.py` still match the recheck artifact's pins; `research_map.json` and `artifact_hashes.json` drifted (map is live).
+
+Now, the map changed since the flash-12 recheck (b83a6b05 → 4d8291c9). I should re-check at my current map hash that numerics_lock is still locked, gates G-FORM/G-AUDIT still pending, and no spherical_solver. Let me extract that from the current map and pin it.
+
+Also, I should double-check whether the recheck artifact's claim about the map state at its check time can be trusted: it says map b83a6b05 had lock locked, gates pending. My current map 4d8291c9 — verify the same. Let me grab that + also check artifact_hashes registry for flat_wave.py entry and absence of 6542db93 (not needed for my task).
+
+Then write the verification artifact.
+
+One more independent check worth doing: verify that the 9 evidence files referenced by the recheck artifact are all under the recheck's own run and match (done), and that the recheck artifact's `canonical_artifact.sha256_after_runs` equals the current on-disk hash (8b52014dac47) — my post-run hash matched, confirmed.
+
+Also verify `no numerics/spherical_solver` for real: `test ! -d numerics/spherical_solver` → done in lock guard (spherical_solver_present false). I'll add an explicit check with `ls`.
+
+Now compose the artifact `artifacts/flash-12/n0/rev4/independent_acceptance_verification.json`. Hmm — should it be under artifacts/flash-12 (agent namespace) or artifacts/worker-012? The prior pass used artifacts/flash-12. The assignment binds assignee deepseek-flash-12. I'll write to artifacts/flash-12/n0/rev4/ to keep the assignment's artifact lineage, and also keep my working scripts under artifacts/worker-012/n0/ (already there). Hmm, mixing might be confusing. Let me think about which is more correct.
+
+PROTOCOL: "Cite evidence as path#sha256-prefix". Canonical path policy: artifacts/formulation/** is authoring tree. Worker artifacts go to artifacts/<agent>/. The agent for slot 012 has been flash-12. So artifacts/flash-12/n0/rev4/independent_acceptance_verification.json is right. And the scripts in artifacts/worker-012/n0 are also fine as working evidence, but to keep the story clean I could have written them under artifacts/flash-12/n0/rev4/scripts/. They already exist and have hashes; I'll reference them and note that they are the worker-slot working tree. Actually simpler: reference them as-is; they're on disk and hashed. The artifact event for the verification artifact will be under artifacts/flash-12/n0/rev4/.
+
+Hmm wait. But do I risk confusing the controller's audit (which checks artifact paths against agent ids)? The runtime instances are worker-012; the outbox actor deepseek-flash-12. The existing convention (worker-16 → deepseek-flash-16, artifacts/worker-16 though!). Note: flash-16 wrote artifacts/worker-16/... while actor deepseek-flash-16. Hmm. And flash-12 wrote artifacts/flash-12/. Mixed conventions.
+
+I'll put my verification artifact in `artifacts/flash-12/n0/rev4/` because it is bound to the assignment issued to deepseek-flash-12 and continues the n0/rev*n lineage (the unannounced recheck is n0/rev3). And I'll emit events with actor deepseek-flash-12. That is the most coherent.
+
+Now, event plan (outbox/deepseek-flash-12.jsonl, append-only):
+
+1. `artifact` event `flash-12-n0-artifact-0011` — announces the previously unannounced recheck artifact at c506dc50 (provenance: written by the prior bounded pass of slot 012, verified now), and my verification artifact at its hash. Hmm, better two separate artifact events, each with path+sha256+validation_status=unverified:
+   - `flash-12-n0-artifact-0011`: revision_acceptance_recheck.json c506dc50.
+   - `flash-12-n0-artifact-0012`: independent_acceptance_verification.json <hash>.
+2. `review` event `flash-12-n0-review-0013`: target_id = revision_acceptance_recheck.json#c506dc504e72; reviewer deepseek-flash-12? A self-review is weak. Better: the review is by worker-012 independently re-running — but same identity effectively. I can set reviewer "worker-012" to make the independence explicit. Hmm, but actor deepseek-flash-12 and reviewer worker-012 is confusing yet truthful: the review was performed by the bounded slot-012 pass independently of the flash-12 authoring pass. Actually, both are the same slot run at different times. Honest framing: "worker-012 (recycled bounded pass) as independent re-runner; same slot, different process, no shared state beyond disk". I'll write reviewer: "worker-012" and note in findings that it's the same slot recycled, so it is process-level independence, not agent-level independence. That's an honest caveat and precisely the kind of thing the project values.
+   - verdict: "accept" with score 4? The review verdict for the recheck artifact: it's mechanically correct and reproducible. But per PROTOCOL, "review — target_id, reviewer, verdict (accept|revise|reject|inconclusive), score 0-5, hard_failures, findings". I'll say verdict "accept", score 4, hard_failures [], findings listing: all 9 evidence hashes match; 3 order ladders reproduced byte-identically; all 11 gates pass; lock guard blocked with fail_closed distinction; fail-closed probes all blocked; map/artifact_hashes pins are point-in-time and have drifted (not a defect, but scope caveat); reviewer independence is process-level only.
+   - Target: should target the artifact or its event? Use path#sha.
+3. `claim` event `flash-12-n0-claim-0014`: statement — measured facts. conclusion_type: "replication" or "numerical_evidence" (must be a sensible type; the schema doesn't constrain values). evidence_refs with hashes. class_id AF-WCC-SCALAR-SPH. falsifier specific. assumptions listed. does_not_claim list.
+4. `status` event `flash-12-n0-status-0015`: node N0, status active, hours, summary, next_falsifier, evidence_refs (incl. checkpoint hash).
+
+Wait: should `status` reference the checkpoint that I write after? I'll write the checkpoint first, hash it, then emit the status event including it. Order: write artifacts → hash → write checkpoint → emit events (artifact, review, claim, status) in one file append.
+
+Actually the checkpoint should summarize the outbox event ids. Chicken-and-egg. Solution: emit artifact/review/claim events first, then write checkpoint (with their ids and hashes), then emit final status event referencing checkpoint hash. That's clean and matches w14's pattern (checkpoint references outbox events).
+
+5. Checkpoint file: runtime/state/w12_checkpoint_1.json plus append to runtime/state/w12_checkpoints.jsonl? Let me follow w13's style: single JSON file per checkpoint, plus maybe artifacts/flash-12/CHECKPOINTS.md append. I'll write:
+   - runtime/state/w12_checkpoint_1.json (hash-bound)
+   - append a line to artifacts/flash-12/checkpoints_worker012.jsonl? Hmm, flash-12 already has CHECKPOINTS.md. Simpler: runtime/state/w12_checkpoint_1.json + runtime/state/w12_checkpoints.jsonl (one line).
+   Hash of the checkpoint file goes into the status event.
+
+Also, "hours": estimate. The bounded pass: ~0.2 agent-hours.
+
+Before writing, get the current map state + no-solver check + record all evidence hashes. Then write the artifact with a Python script (to embed accurate hashes). Let me get the map state snapshot into a small JSON evidence file first? I'll embed in the artifact + reference as evidence the map path#hash.
+
+Let me gather: map lock state, gates verdicts, spherical_solver existence, and stable hashes for:
+- artifacts/worker-012/n0/lock_guard_stdout.json
+- lock_guard_exit.txt
+- all_stdout.txt, all_stderr.txt, all_exit.txt, all_time.txt, all_report.json
+- failclosed_probe_results.json
+- recheck_hash_audit.json
+- probe_failclosed.py
+- verify_recheck.py
+- artifacts/flash-12/n0/rev3/revision_acceptance_recheck.json
+- numerics/tests/flat_wave.py
+- numerics/CONVERGENCE_PROTOCOL.md
+- numerics/gates.py
+
+Let me now write the builder script that composes the verification artifact deterministically. But note: writing the artifact's own hash can't be embedded in itself; that's fine.
+
+Also: the `all_report.json` embeds `evaluated_at` timestamps; its hash pinned in the artifact is point-in-time (fine).
+
+One important check: does `all_report.json` contain provenance.assignment == the real assignment id? The revision acceptance item R4. Let me check provenance in my fresh report.
+
+Let me collect all this and then write the final artifact.
+dsh: reasoning:
+All good. Provenance.assignment = "asg-2026-09-11-N0-deepseek-flash-12-21; revision lnum-rev-20260911T2333-N0-12" — matches R4.
+
+Now build the verification artifact. I'll write a builder script inline (heredoc) that computes hashes and writes the JSON. Actually, better to create the artifact directly with a Python script saved under artifacts/worker-012/n0/build_verification.py so it's reproducible. But then the builder itself is another file whose hash I might cite. Keep it simple: run an inline heredoc; the artifact is the evidence, and the two probe/audit scripts are on disk.
+
+Artifact fields for `artifacts/flash-12/n0/rev4/independent_acceptance_verification.json`:
+
+{
+  "artifact_kind": "independent_acceptance_verification",
+  "title": "...",
+  "worker_slot": "012",
+  "actor": "deepseek-flash-12",
+  "generated_at": ...,
+  "assignment_ids": ["asg-2026-09-11-N0-deepseek-flash-12-21","lnum-rev-20260911T2333-N0-12"],
+  "node_id": "N0",
+  "class_id": "AF-WCC-SCALAR-SPH",
+  "gate": "G-NUM",
+  "canonical_artifact": {path, sha256_before, sha256_after, unchanged: true},
+  "commands": [ {cmd, exit_code, stdout_path+sha, stderr+sha, time} ],
+  "acceptance_items": {
+     "R1_lock_guard_fail_closed": "confirmed by code read + 3 probes",
+     "R2_cli_lock_guard_exit0_iff_correct": {...},
+     "R3_G11_gate_present": true,
+     "R4_provenance_assignment": "..."
+  },
+  "fresh_run": {all_gates_pass, n_gates 11, gate_table, measured orders, controls, determinism, selftest},
+  "failclosed_probes": {...link + summary},
+  "upstream_artifact_audit": {audited path, sha, all 9 evidence hashes match, order ladders reproduced exactly},
+  "map_state_at_check": {map sha, lock, gates, spherical_solver_present:false},
+  "reported_drift": {"research_map.json": old->new, "artifact_hashes.json": old->new, note point-in-time}
+  "verdict": "ACCEPTANCE_ITEMS_INDEPENDENTLY_CONFIRMED_AT_FROZEN_SHA_8b52014dac47",
+  "validation_status": "unverified",
+  "claims_completion": false,
+  "sets_no_gate_verdict": true,
+  "assumptions": [...],
+  "does_not_claim": [...],
+  "evidence_files": [ {path, sha256, bytes} ... ],
+  "falsifier": "..."
+}
+
+Falsifier: "Any of: (a) python3 numerics/tests/flat_wave.py --all exits non-zero or any of the 11 gates is false at numerics/tests/flat_wave.py sha256 8b52014dac47f996...; (b) --lock-guard exits 0 while the map's numerics_lock.state == 'locked' and G-FORM/G-AUDIT are pending but the guard prints N1_ALLOWED or production_allowed=true; (c) any of the three fail-closed probe roots returns production_allowed=true or verdict N1_ALLOWED; (d) the lock_guard fail-closed path is unreachable because lock_guard always delegates (e.g. it silently allows when gates.evaluate raises); (e) any cited evidence file's sha256 no longer matches, or numerics/spherical_solver/ appears."
+
+Good and checkable.
+
+Then review event, claim event, checkpoint, status event.
+
+Let me write the builder now. Include evidence file hashes computed at build time. Keep artifact under artifacts/flash-12/n0/rev4/.
+
+Also note: `all_stdout.txt` printed the report JSON too (not just "wrote ..."?). Looking at all_stdout.txt: it has "wrote artifacts/worker-012/n0/all_report.json" and then the JSON. Interesting — run_all prints the report? Actually main probably prints json.dumps(report) after run_all. Fine.
+
+Let me write the builder and run it.
+dsh: reasoning:
+Artifact written: `artifacts/flash-12/n0/rev4/independent_acceptance_verification.json` sha256 418aed3c774be43f212a902491cb84ec90f9a7ba25e144b632a494d3ce861a38.
+
+Let me validate the artifact JSON parses and re-verify a couple of its embedded hashes (self-consistency spot check). Then emit the outbox events.
+
+Events (actor deepseek-flash-12, file comms/outbox/deepseek-flash-12.jsonl):
+1. artifact `flash-12-n0-artifact-0011` — path artifacts/flash-12/n0/rev3/revision_acceptance_recheck.json, sha c506dc504e..., validation_status unverified, node N0, artifact_type "revision_acceptance_recheck", provenance note.
+2. artifact `flash-12-n0-artifact-0012` — path artifacts/flash-12/n0/rev4/independent_acceptance_verification.json, sha 418aed..., validation_status unverified.
+3. review `flash-12-n0-review-0013` — target_id "artifacts/flash-12/n0/rev3/revision_acceptance_recheck.json#c506dc504e72", reviewer "worker-012 (recycled bounded pass)", verdict accept, score 4, hard_failures [], findings {...}. Hmm, reviewer field should probably be a plain agent id. Use "worker-012". Findings as list of strings or dict? PROTOCOL says findings; other reviews used dicts perhaps. Let me check an existing review event in events.jsonl to match style. Let me grep a review event quickly.
+4. claim `flash-12-n0-claim-0014` — class_id, statement, conclusion_type "independent_replication", assumptions, falsifier, evidence_refs, artifact_refs.
+5. (after checkpoint) status `flash-12-n0-status-0015` — with checkpoint hash.
+
+Let me check a review event style first.
+dsh: reasoning:
+Good. Review events: findings list of strings, hard_failures list, reviewer, score, target_id, verdict. I'll match.
+
+Now append the events. I'll write them with a Python script for exact JSON lines, ensuring no duplicate event ids already exist in the outbox file. Let me check existing event ids in outbox/deepseek-flash-12.jsonl to avoid collisions: the last was flash-12-n0-status-0010. I'll use 0011..0015.
+
+Event 1 artifact 0011: the unannounced recheck.
+Event 2 artifact 0012: my verification artifact.
+Event 3 review 0013.
+Event 4 claim 0014.
+Then checkpoint, then event 5 status 0015.
+
+Wait: does the checkpoint need to reference events 0011-0014 before status? Yes. Let me emit 0011-0014, then write checkpoint with those ids + hashes, then emit status 0015 referencing the checkpoint file hash.
+
+Let me get all the hashes needed:
+- recheck c506dc504e7256e51193d4324336e4e207d9db3eb9851e779422ca5e54e69c18
+- verification 418aed3c774be43f212a902491cb84ec90f9a7ba25e144b632a494d3ce861a38
+- lock_guard_stdout.json, all_report.json, failclosed_probe_results.json, recheck_hash_audit.json
+- flat_wave.py 8b52014dac47f996...
+- protocol 1e6cdf04d7a2431373092b657095bab4edeea9fb32f1d3c8981c50b2156a7274
+- map 4d8291c9a9ae44558a4dea49106b525ed7b5c8a2b25cc003a5a754ddb3507306
+
+For evidence_refs use path#16-hex-prefix convention.
+
+Claim statement: precise measured claim:
+"On 2026-09-12 ~00:18–00:22 CST, independent bounded slot-012 pass, at frozen numerics/tests/flat_wave.py sha256 8b52014dac47f996: (1) --lock-guard exits 0 with guard_correct_for_state=true, verdict N1_BLOCKED, production_allowed=false, map numerics_lock.state=locked; (2) --all exits 0 with 11/11 gates true including G11_n1_lock_guard, selftest and determinism pass; (3) the three order_l2 ladders reproduce the rev3 recheck artifact's values exactly (byte-identical float lists); (4) all 9 evidence files cited by that artifact match their claimed sha256, and the only input drift is in the two live controller files (research_map.json b83a6b05→4d8291c9, artifact_hashes.json 966f8f56→...); (5) 3/3 fail-closed probe roots return N1_BLOCKED/production_allowed=false with fail_closed=true while the positive control returns fail_closed=false. Therefore the acceptance items of lnum-rev-20260911T2333-N0-12 are confirmed at the frozen revision; no gate verdict, no node completion, no N1 work."
+
+conclusion_type: "independent_replication" (not "theorem"). assumptions as in the artifact. falsifier as in the artifact (shortened). evidence_refs + artifact_refs.
+
+Status event: node N0, status active, hours ~0.3, summary, evidence_refs, next_falsifier, gate G-NUM, class_id.
+
+Now the checkpoint file `runtime/state/w12_checkpoint_1.json`:
+{
+ "worker": "worker-012", "actor": "deepseek-flash-12", "slot": "012",
+ "checkpoint": 1, "at": ..., "hours_spent_estimate": 0.3,
+ "assignment": "lnum-rev-20260911T2333-N0-12 (asg-2026-09-11-N0-deepseek-flash-12-21)",
+ "node_id": "N0", "class_id": "AF-WCC-SCALAR-SPH", "gate": "G-NUM",
+ "delta": "...",
+ "pinned_hashes": {...},
+ "outbox_events": [...],
+ "verdict": "...", "validation_status": "unverified",
+ "claims_completion": false,
+ "numerics_lock": "respected: no N1 work, no numerics/spherical_solver/",
+ "open_blockers": {...} or items,
+ "next": [...],
+ "falsifier": "..."
+}
+plus append to runtime/state/w12_checkpoints.jsonl.
+
+Note the checkpoint references the events; the status event references the checkpoint hash. Good.
+
+Let me write the events now.
+dsh: reasoning:
+Now write the checkpoint file, then the final status event.
+
+Checkpoint runtime/state/w12_checkpoint_1.json. Also append to runtime/state/w12_checkpoints.jsonl.
+
+Then status event flash-12-n0-status-0015 with checkpoint ref.
+
+Let me also sanity check the emitted JSONL lines parse (they do since we wrote them via json.dumps) and validate against schema for claim/artifact/review types using research_map/validate_map.validate_events if possible. Let me check how validate_events works and run a validation of my 4 events (without ingesting). Actually validate_map.load + validate_events might validate the whole events file/map. Simpler: use jsonschema if installed against events.schema.json for the three typed events. But my artifact events include extra fields — schema has additionalProperties: true for base, so fine. Claim requires class_id, statement, conclusion_type, assumptions, falsifier, evidence_refs — present. Review requires target_id, reviewer, verdict, score, hard_failures, findings — present. Artifact requires node_id, artifact_type, path, sha256, validation_status — present.
+
+Let me run a quick jsonschema check if available, else manual. Then checkpoint + status.
+dsh: reasoning:
+All 4 events schema-valid. Now write the checkpoint and append to the checkpoint log, then emit the status event.
+
+Checkpoint content with outbox event ids/hashes, pinned hashes, verdict, blockers, next steps, falsifier. Then compute its sha256 and emit status event 0015.
+
+Let me write both in one script: write checkpoint JSON, append JSONL, then append status event referencing checkpoint path#hash. Note: if I later re-hash, the checkpoint file must stay unchanged after the status event references it. So write it, hash it, then never modify.
+dsh: reasoning:
+Now final verification of my own outputs:
+1. All 5 outbox events parse and are schema-valid.
+2. The status event's evidence_refs resolve (paths exist, hash prefixes match).
+3. The checkpoint file parses and its hash matches the status reference.
+4. The verification artifact parses and all its evidence_files hashes match current disk (note: research_map.json and artifact_hashes.json may have drifted again — the artifact's evidence list includes research_map.json, whose hash may drift! I included research_map.json in the artifact's evidence_files list; if the map changes after the artifact was written, that evidence entry hash will no longer match. That's inherent to live files, and I noted pins are point-in-time. But self-consistency check now may already show drift. Let me check and be transparent. Hmm — this is a real weakness: citing a live file's hash in an artifact means the artifact's evidence list can go stale immediately. But the artifact's `map_state_at_check` also pins it; it's declared point-in-time. Acceptable, and consistent with the project's convention (flash-12 did the same). For my final self-check, I'll report match status at check time.
+
+Actually, I should double check the verification artifact's evidence list: it includes "research_map/research_map.json" and all the worker-012 evidence + rev3 artifact + numerics files. The map changed from 4d8291c9 to maybe something else by now. Let me verify each and see.
+
+5. Ensure no numerics/spherical_solver/ exists.
+6. Confirm nothing self-claimed done/gate-passed: all events have claims_completion false / validation_status unverified / sets_gate_verdict false.
+
+Then I'm done — "checkpoint, then exit". I should not run the global controller checkpoint.py (it's Astra's tool). My own worker checkpoint is written per convention (w06/w13/w14 did the same).
+
+Let me run the final self-check.
+dsh: reasoning:
+The "HASH-MISMATCH" hits are all on live, continuously-updated files (research_map.json, artifact_hashes.json) and on the append-only outbox file itself (whose hash necessarily changes when appending), plus the pre-existing status-0010 which self-references the outbox line — that's an established pattern in this swarm (the outbox file hash can't be stable). None of my new events reference live-file hashes? Let me check: my events do reference `research_map/research_map.json#4d8291c9a9ae4455` in artifact-0012 and claim-0014 — that was the hash at generation time (~00:18) and the map has since moved to 60fd4360/a8a73f98 (controller keeps checkpointing). My artifact's `map_state_at_check.research_map_sha256` also pins 4d8291c9 and notes point-in-time. This is inherent, declared, and consistent with the project's convention (flash-12's own artifact had the same drift). I explicitly wrote "point-in-time" in assumptions and in the drift findings.
+
+However, to be maximally clean, the *evidence list* of my verification artifact includes research_map.json, which will always drift. I noted "point-in-time" in assumptions. It's fine. But would the controller's audit_evidence flag `declared_hash_matches_measured`? For worker artifacts, the controller audits artifact_refs of done nodes, not every evidence ref. My events don't claim done. The project already tolerates this (flash-12's recheck has the same). Fine.
+
+One remaining item: my self-check showed the earlier `flash-12-n0-status-0010` self-references `comms/outbox/deepseek-flash-12.jsonl#flash-12-n0-artifact-0010` — that's an event-id-only reference (no hash), fine; my checker mis-parsed it as a hash. Not an issue.
+
+Everything is consistent:
+- 5 new outbox events, schema-valid.
+- checkpoint w12_checkpoint_1.json sha 0146c80425c1a3d7, referenced by status-0015.
+- verification artifact 418aed3c774b...
+- invariants hold: no spherical_solver, lock locked, flat_wave unchanged.
+
+One more optional step: should I run `python3 research_map/comms.py ingest`? PROTOCOL says the controller runs ingest ("accepted stream ... writer: research_map/comms.py ingest only"). ASTRA_HANDOFF says outbox traffic awaits the controller's next lifecycle pass. Running ingest myself might be overstepping (it's the controller's command) and could race with the live controller process. The task says "emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit" — emission is the worker's job; ingestion is the controller's. I'll not run ingest. Actually, let me consider: the controller runs every ~5 min (astra_lifecycle). My events will be picked up. Good.
+
+Also should I write the checkpoint to `artifacts/flash-12/CHECKPOINTS.md`? Not necessary; checkpoint file + jsonl is the convention I followed (w13 did the same without md).
+
+Let me do one final sanity check that my verification artifact itself is valid JSON and its `falsifier` field is non-trivial, and print the short summary of what was emitted. Then exit (final answer). Since I'm a bounded worker, my final message is a concise report.
+
+Let me also double-check that I haven't left any background jobs running: job_list. bash-1 completed. No other jobs.
+
+One consideration: the instance prompt says "then exit". The harness is interactive; I'll conclude with a final summary. There's no explicit "exit" tool; concluding the turn is the exit.
+
+Let me get final hashes and produce the report.
+dsh: reasoning:
+Everything is complete. Bounded worker 012 lifecycle done:
+- Read handoff (HANDOFF.md, ASTRA_HANDOFF.md, PROTOCOL.md, map, comms).
+- Took one class-bound task: N0 / AF-WCC-SCALAR-SPH / G-NUM, assignment lnum-rev-20260911T2333-N0-12.
+- Emitted 5 valid JSON events with IDs, evidence refs (path#sha), hashes, falsifiers.
+- Checkpoint written.
+- No gate verdict, no completion claim, numerics lock respected.
+- Exit.
+
+Final answer: concise report as the bounded worker.

@@ -1,0 +1,656 @@
+dsh: reasoning:
+Let me start by understanding the task. I'm worker=003, a bounded execution worker. I need to read handoff/map and comms, take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit.
+
+Let me explore the workspace to find the handoff/map and comms.
+dsh: reasoning:
+No handoff directory at top-level glob. The task mentions "handoff/map and comms". Likely under workdir or tmp. Let me search. The recent activity: ai4math-swarm.tar.gz (Sep 11 23:11), launch_swarm.sh, supervise_swarm.sh, workdir. Let's look at workdir.
+dsh: reasoning:
+The swarm directory is workdir/ai4math-swarm. It has HANDOFF.md, research_map/, comms/. Let me read HANDOFF.md, README.md, and look at comms/ and research_map/.
+dsh: reasoning:
+Now read the comms PROTOCOL.md, inbox (for worker-003), and the research_map ASTRA_HANDOFF.md which likely describes the map. Also look at "handoff/map" — perhaps research_map is the map. Let me read comms PROTOCOL.md and check inbox contents.
+dsh: reasoning:
+I am worker=003. I need to find my assignment. The inbox has files for various agents, but no worker-003.jsonl. Hmm. Let me check `comms/outbox/assignments` directory. Also check the runtime dir. The assignments dir may have worker-003 assignment.
+
+Also "handoff/map" — probably ASTRA_HANDOFF.md in research_map. Let me read it, plus find assignment for worker-003.
+dsh: reasoning:
+So I'm worker-003. The instructions say "Read handoff/map and comms. Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit."
+
+I need to find a class-bound task. Perhaps there's a queue of class-bound tasks. Let me search for worker-003 references in the map / comms. Also "class-bound task" suggests tasks bound to a class (like AF-WCC-VAC-GEN etc.). Maybe there's a task list somewhere, e.g., in `proposals/` or `proposed/` or `runtime/state`. Let me grep for "worker-003" and look at recent inbox cards dispatched to workers.
+
+Note the current time appears to be Sep 12 01:22. The comms inbox has files for many agents but not worker-003. Maybe assignments come from the controller pass and I need to look at astra-lead-* inbox cards which assign work. But my instruction is worker=003 — perhaps the assignment instructions were in the runtime instances? Let me grep across the swarm repo for "worker-003".
+dsh: reasoning:
+I see. There's a repeated pattern: prior worker-003 instances (several) each took one bounded class-bound task, wrote artifacts, events to comms/outbox/worker-003.jsonl, and a checkpoint. My instance is worker-003-20260912T012233-968807 (the most recent one, started 01:22:33).
+
+I should follow the same pattern: read handoff/map/comms (done partially), find a bounded class-bound task that isn't duplicated, do deterministic evidence work, emit valid JSON events with IDs/evidence/hash/falsifier, checkpoint, and exit.
+
+Let me check the most recent worker-003 checkpoint and outbox to see what the last instance did (01:21 checkpoint), plus the current time. The last worker-003 checkpoint at 01:21:49 — probably from instance 011446. Let me read the outbox tail to understand what tasks the immediately prior worker-003 did at 01:02-01:21, so I don't duplicate.
+
+Also read the runtime/instances/worker-003-20260912T012233-968807/prompt.txt and meta.json for my exact prompt (may have additional task details).
+
+Also, importantly, the current time is ~01:22. The ASTRA handoff mentions pass-08 with recommendations REC-36..42 and assignments for worker-006 (stageb-r03), lead-formulation, etc. I need to pick one class-bound task that's genuinely open and not already taken by other workers. The map is research_map.json (7.7MB — too big to read fully; I'll query it with Python).
+
+Plan:
+1. Read my instance prompt/meta.
+2. Read the tail of comms/outbox/worker-003.jsonl to see the last tasks.
+3. Read relevant map state: gates, findings CF-31/CF-32, assignments in map.
+4. Pick a bounded class-bound task: e.g., independent verification of something specific that is open and not duplicated. Check recent outbox messages from other workers to avoid duplication.
+5. Build a deterministic probe artifact + report + README, hash them.
+6. Append events to comms/outbox/worker-003.jsonl (status open, artifact(s), claim with evidence_refs + falsifier, checkpoint status).
+7. Run checkpoint (research_map/checkpoint.py or a worker-specific checkpoint?), verify with validate_map.py, then exit.
+
+Let me look at the last worker-003 checkpoint file and instance prompt first.
+dsh: reasoning:
+My instance just started at 01:22:33. The prior worker-003 instance finished at 01:21:49 with REC-36 fold readiness census.
+
+Now I need to choose one class-bound task that's genuinely useful, bounded, and not duplicated. Let me look at the latest state:
+- Current map gates: G-FORM pending, G-LIT pending, G-NUM pending, G-AUDIT pending. G-F0 pass.
+- REC-36 authorizes one rev14/FROZEN rev30 by lead-formulation at 02:15. That's the lead's work; I shouldn't do it.
+- REC-41 assigns worker-006 a stage-B R03 binder fix.
+- CF-32: acceptance pipeline not reproducible; run_acceptance.py exits 3 at rev29 (corpus base 1bb78ce9b357 vs live C0 b2ab6acb2bbe). Worker-006 is doing a binder fix (astra-life08-stageb-r03).
+
+What class-bound verification/measurement task is open and valuable for a worker right now? Let me check the most recent outbox messages (last 30 minutes) from other workers to see what's taken. Also check the map's `controller_findings` and `assignments` for open worker tasks.
+
+Let me query the map with Python: gates, f0 binding, claims, assignments, findings CF-31/CF-32, and current hashes. Also list recent outbox files modified after 01:00 and grep for task_ids to see coverage.
+
+Let me be efficient. I'll write a small Python script to summarize the map. Note: research_map.json is 7.7MB — json load is fine.
+
+Also important: There may be a lock (map.lock) as controller pass is running. Checkpoint script may write. Careful.
+
+First, let me check the last ~40 lines of my outbox and recent worker tasks.
+dsh: reasoning:
+The map's `gates` is a list, not dict. Let me adapt. Also note there are ~100 active workers, all writing. I need to pick something non-duplicated.
+
+Let me list task_ids from all outbox files modified in the last ~45 min to see coverage, focusing on tasks related to G-FORM / acceptance / held-out / CF-32 / rev29 / rev30 / L0 / G-LIT / A0 / A1.
+
+Then decide. A good candidate: independent verification of the `run_acceptance.py` failure (CF-32) or a bounded reproduction of the R03 rejection; but worker-006 is assigned to fix it. Another: verify the C0 rev12/rev13 contract findings are still present at the live C0 `b2ab6acb2bbe` (worker-003's own prior finding at 9eceea7d464b was at rev12 55d0a1ea9bda; live C0 is now b2ab6acb2bbe per handoff). Actually the prior worker-003 checkpoint 01:21 lists pins: schemas/af_scc_c0_vacuum.yaml: b2ab6acb2bbe (this appears to be live C0 rev13/rev14?). The handoff says G-FORM F2a e9a27996dfd3 / F2b b2ab6acb2bbe. So live C0 = b2ab6acb2bbe. Prior finding 151 (stale containment denial) was adjudicated at 55d0a1ea9bda (rev12). Worker-035 stderr noted "the repair (rev13) did NOT fix 151 in C0... 151 remains at rev13". So an open question: are W003-CC-01/02/03 defects still present in the live C0 b2ab6acb2bbe, and what is the exact residual set at the current hash? That's a natural, bounded, class-bound re-measurement task ("falsifier at next C0 freeze: re-run against new sha256; findings should disappear if repair applied"). This is precisely the falsifier from the prior checkpoint: "At the next C0 freeze, re-run against the new sha256: the three findings should disappear if the implied repair set is applied; any surviving finding falsifies that repair."
+
+That's an excellent bounded task: re-run the probe at the new hash and check whether findings 245/234/151 persist in live C0 b2ab6acb2bbe. It's class-bound (AF-SCC-C0-VAC-GEN), it's the declared falsifier of my own prior work, and it's likely not duplicated (other workers have moved to rev29/rev30 verification). It also feeds REC-36's rev14/FROZEN rev30 fold (lead-formulation at 02:15) — telling the lead whether the implied repair set landed before they fold. High value.
+
+But careful about "self-review/own artifact" concerns: re-running my own probe is fine as evidence, but it's a follow-up measurement, not a review verdict.
+
+Let me first check whether some worker already did this re-check (grep recent outbox for "b2ab6acb2bbe" + "151"/"234"/"245" and task ids). Also check whether schemas/af_scc_c0_vacuum.yaml currently measures b2ab6acb2bbe and what its revision is; and check the C0 content for the three findings.
+
+Another candidate: CF-32 reproducibility — but assigned to worker-006.
+
+Let me grep recent outbox events for tasks mentioning "rev13"/"rev14"/"C0" re-measurement in last hour.
+dsh: reasoning:
+A huge list. Notably worker-097 already did "W097-CF32-ACCEPTANCE-REPRO-01". So CF-32 repro is taken. 
+
+My candidate: re-measure the three C0 contract findings (245/234/151) at the live C0 hash b2ab6acb2bbe. Let me check if anyone did that: W003-C0-REV12-CONTRACT-CONSISTENCY-01 was at rev12 (55d0a1ea9bda). W001-F2B-REV13-CONTAINMENT-CLOSURE-01, W001-F2B-REV13... and W037-REV13-BINDCHAIN-01, W062-GFORM-REV13-BINDCHAIN-RETEST-01, W094F-CF21-REV13-RECHECK-01. So many rev13 rechecks exist. The specific question of whether 245/234/151 survive at rev13/live C0 may have been covered by W001-F2B-REV13-CONTAINMENT-CLOSURE-01 (worker-001) or W003-F2B-REV14-CANDIDATE-INDEPENDENT-CLOSURE-01 (my own prior instance at ~01:02-01:13?). Actually my prior instance did W003-F2B-REV14-CANDIDATE-INDEPENDENT-CLOSURE-01 at some point. Let me look at what the immediately preceding worker-003 instance tasks were, in order, in the outbox tail. There were checkpoints: 010221, 011317, 011422 addendum, 012149. Let me read worker-003.jsonl tail to see the last ~5 task IDs and summaries, so I avoid duplicating my own slot's recent work.
+
+Actually there's an important constraint in the swarm: many workers duplicate; the instruction says "Take one class-bound task" — I should pick something that is (a) bounded, (b) class-bound, (c) not already being done in the last 40 min by others, (d) genuinely useful to gate decisions.
+
+Let me look at the current state of the biggest open item: G-FORM REC-36 rev14/rev30 fold is scheduled 02:15; the lead is going to fold: F2b D1/D2 repairs, F2a category pin, REC-37 token crosswalk, SET level label, f1-suite rebind, acceptance-corpus rebind. Many workers are verifying candidate repairs.
+
+What's a useful independent measurement right now that supports the 02:15 fold decision? Options:
+1. **REC-36 fold-readiness census** — just done by prior worker-003 instance (01:21). Don't repeat.
+2. **The live C0 defect status at b2ab6acb2bbe** — verify whether the three adjudicated C0 defects are still live at the current hash, and specifically whether the rev13 refresh (which was supposed to be hash-binding only) missed them. The prior checkpoint's next_falsifier explicitly asks for this. Let me check if someone did it: W001-F2B-REV13-CONTAINMENT-CLOSURE-01 (worker-001) — containment closure at rev13; W094F-CF21-REV13-RECHECK-01 — CF-21 recheck. Let me read those quickly to see coverage.
+
+3. **CF-31 F2b coverage divergence adjudication** (controller hash scan 4 full accepts vs lead census 0 accept / 7 revise). Worker-037 did W037-CF31-COVERAGE-DIVERGENCE-01. Taken.
+
+4. **The acceptance corpus rebind**: base 1bb78ce9b357 vs live C0 b2ab6acb2bbe — REC-36 includes "acceptance-corpus rebind". Given the live C0 changed, the corpus base needs rebinding. A bounded, useful task: measure the delta between the acceptance corpus pinned base and the live C0, i.e., enumerate exactly what changed between corpus base `1bb78ce9b357` (rev11?) and live C0 `b2ab6acb2bbe` (rev13), and identify which corpus fixtures/stages are invalidated. But worker-006's fix and worker-097's CF-32 repro already cover the pipeline failure. Hmm.
+
+5. **G-LIT**: L0 a1674f094979 needs adjudication of 2 accepts vs 5 revise + 1 inconclusive + 2 rubric-scope objections; `astra-life05-verify-l0-final` is lead-audit's job (02:30). Workers could independently review L0, but many already have (worker-075/079/074/019/023/037/063/077...). 
+
+6. **G-AUDIT A0 rubric d748a9e3574e has 6 revise verdicts** and the A0 scope artifact is unverified; CF-21 genericity residual. Workers 054/055/092 did A0 work.
+
+7. **CF-30 downward-channel injection**: quarantined cards; worker-093 did provenance. 
+
+8. **CF-29 detector freeze**: live class_separation.py a8c04fc31e4a (restored adjudicated bytes), active pin c266dbecaa87, void third revision e36b0d644ca preserved. Anything useful here? Every CLASSSEP measurement must cite the detector hash used. Prior worker-003 did classsep D0 coverage. Worker-031/049/059/073/098 did CLASSSEP tasks. The detector freeze means no writes; a read-only measurement could still be useful but likely duplicated.
+
+Let me think about what would be highest-value and non-duplicated: The **rev14/rev30 fold** happens at 02:15. As of 01:22, what's the single most load-bearing unverified claim in the fold set? From ASTRA_HANDOFF:
+- "F2b has confirmed internal content defects (D1 must_not_conflate containment denial; D2 'C2 strictly larger' inversion)".
+- "F2a carries HF-075-F2a-EXTCAT (extension category unpinned)".
+- REC-36 fold includes "the f1-suite rebind (worker-029 e95e0908a864) and the acceptance-corpus rebind".
+- "any byte move voids every current verdict, then astra-life05-verify-gform-r3 must publish a per-file binding table and re-run at the new pins."
+
+A genuinely useful bounded worker task: **pre-fold verification that the rev14 candidate as staged by lead-formulation actually closes D1, D2, and HF-075-F2a-EXTCAT without introducing new class-contract violations**, i.e., an independent, deterministic content check of the staged rev14 candidate files. But if the candidate is staged at `proposed/` or `proposals/`, I could inspect. However, worker-022 did W022-F2B-REV14-LANDING-PREFLIGHT-01 and W022-F2B-REV30-CORRECTED-FREEZE-REHEARSAL-01; worker-100 did W100-F2B-REV30-DIRECTION-CROSSVERIFY-01; worker-029 W029-F2B-REPAIR-CANDIDATE-VERIFY-01; worker-069 W069-F2B-REPAIR-READINESS-01; worker-083 repaire packet; worker-020 repair spec; worker-061 repairpack. Very crowded.
+
+Alternative: something in the audit domain that's a vacuum. Let me check the current gates and controller audit to see what's actually still unmet, then pick the least-covered unmet criterion. Let me print gates (list) and controller_gate_audit, plus recent reviews. Let me do that now.
+
+Also check the current map's `assignments` for anything explicitly open.
+
+Let me write a better script.
+dsh: reasoning:
+Interesting. New findings CF-33 and REC-43 appeared (post pass-08). So the live map is at pass-09/10. My handoff copy of ASTRA_HANDOFF.md may be stale (written at 01:17). The map is at 01:22:05.
+
+Current open unmet:
+- G-FORM: rev14 fold (lead-formulation 02:15) + CF-31 coverage divergence (lead-audit per-file binding table).
+- G-LIT: L0 adjudication (lead-audit 02:30); L1 locator disposition.
+- G-NUM: N0 verdict revise; stop rule items.
+- G-AUDIT: A0 scope; A1 no full accept; CF-31 blocks A1 coverage; CF-33 injected card not authority; CF-29 detector freeze.
+
+Given I'm a worker, the most valuable bounded evidence task should support one of the lead adjudications due soon (02:00-03:00). Since the lead-audit has a lot on its plate, an independent, deterministic, hash-pinned measurement that they can cite would help.
+
+Wait — but what does "class-bound" mean precisely? In this project, tasks are bound to class ids (AF-WCC-VAC-GEN, AF-SCC-C2-VAC-GEN, AF-SCC-C0-VAC-GEN). So my task must name a class.
+
+Candidate task: **CF-31 adjudication support** — the divergence between the controller's review scan (4 full accepts at b2ab6acb2bbe: worker-052/071/072/090) and the formulation lead's per-file census (0 accept / 7 revise). The gate unmet says the per-file binding table must be published first by lead-audit. As a worker, can I independently measure the coverage question deterministically? That's a great bounded evidence task: enumerate, for F2b at live hash b2ab6acb2bbe, every review verdict on disk and determine (a) which reviews are *bound* to that hash (per their own evidence_refs / target_id hashes), (b) their verdicts and scores, (c) whether each is an independent non-author review, and (d) the per-file distribution of accept/revise. That is precisely the "per-file binding table" that lead-audit must publish. But worker-037 did W037-CF31-COVERAGE-DIVERGENCE-01 at 00:52. Let me check what it produced and whether it's already the binding table. Also many others.
+
+Let me read W037-CF31-COVERAGE-DIVERGENCE-01 events to see its result. And check the map's `controller_findings` for CF-33 and current status, plus controller_repairs.
+
+Actually, let me step back and think about what's most defensible for a bounded worker with ~1 hour of budget:
+
+The deliverable format required: "emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit". Prior worker-003 instances each produced: a deterministic probe script, report.json, README.md, maybe blindspot_entry/controls, then outbox events (status open, artifact xN, claim, review/blocker, status complete, status checkpoint), and checkpoint files (worker checkpoint + running checkpoint.py).
+
+The strongest choice should be:
+1. **Directly tied to an open gate unmet / controller finding.**
+2. **Not duplicated in the last hour.**
+3. **Deterministically measurable from disk with hash-pinned inputs.**
+4. **Class-bound.**
+
+The CF-31 binding-table divergence is directly blocking G-FORM and G-AUDIT ("CF-31 blocks any A1 coverage claim"). It is a measurement question (which reviews bind to which file hash and what verdicts), fully deterministic from disk. The controller's own scan says 4 full accepts for F2b; the formulation lead's census says 0 accept / 7 revise. Both could be right for different definitions ("full accept" vs "per-file accept", independence rules, binding rules). An independent worker can produce a **reconciliation census**: enumerate every verdict file on disk relevant to F2b, extract target hash binding, independence/author relation, per-file scope, and then compute the counts under both counting conventions, plus identify exactly which assumption produces the divergence. That would materially help lead-audit's 02:45 binding-table task. worker-037 already did "W037-CF31-COVERAGE-DIVERGENCE-01" at 00:52 — let me check its result; maybe it only confirmed the divergence rather than reconciling the counting rules. If it already reconciled, I need another task.
+
+Let me examine W037-CF31 events and the reviews directory for F2b verdicts. Also let me check the current authoritative `reviews/` files related to F2b and their hashes.
+
+Let me pull the tail of worker-037 outbox filtered by that task.
+dsh: reasoning:
+Whoa — worker-037's CF-31 task events have created_at 01:23:08 — that's *now*, i.e., started after my instance (01:22:33). It's being done concurrently. So CF-31 is taken.
+
+So I need something else. Let me look at the very fresh picture: what started recently (01:15+) across the fleet? Many workers start every ~7 minutes. Duplication is rampant. I should pick something where I can add unique value with bounded effort, ideally an open falsifier that no one has executed.
+
+Options still open:
+- G-LIT L1 locator finding disposition: "71/97 search-query locators replicated" — the lead-audit must dispose. A worker could produce a deterministic locator-quality classification for all 97 locators: which are direct primary-source locators (page/URL/DOI) vs search queries, and verify 3+ binding re-fetch spot checks. But worker-075/079 worked the locator finding; worker-070 did "w070-l1-locator-live-02", worker-019 W019-L0-HF14-MATRIX, worker-023 L0 HF02, worker-037 L0 HF02 classbind evidence, worker-077 L0 HF02 scope, worker-099 HF02 staged adoption, worker-063 L0 scope adjudication, worker-100 GLIT universe repl. Crowded.
+
+- G-NUM N0 stop-rule: astra-life04-n0-stoprule (lead-numerics 02:30) and astra-life04-n0-verify (lead-audit 03:00). Workers: W042-N0-STOPRULE-INDEP-VERDICT-01, W020-N0-REGAUDIT-VERIFY-01, W067-N0-CNFEM-TRIAGE-VERIFY-01, W012/W014/W020/W046 N0 verifies. Crowded but the N0 verdict is still revise 3.5.
+
+- G-AUDIT A0 scope: A0 detector-scope blocker; workers 092 (A0 scope), 054 (A0 vocab), 055 (A0 HF01 firing), 089 (audit-r2-A0). The A0 rubric has 6 revise verdicts, no accept. A natural bounded task: **independent accept/revise review of evaluation_rubric.yaml at d748a9e3574e**? But rubric reviews are exactly what's stuck at 6 revise; an independent worker could produce one more review, but "no full accept" is an adjudication issue for lead-audit.
+
+- CF-33: injected card; containment scan assigned to worker-093 (astra-indep2-cf33-containment). Taken.
+
+- CF-29 detector freeze forensics: preserve evidence, no writes.
+
+- **F2b/rev29/rev30 fold verification**: extremely crowded.
+
+Let me think about what gap remains in the evidence pipeline. The handoff mentions G-FORM unmet: "F2b D1/D2 content defects and F2a extension-category pin are folded only by the authorized rev14 / FROZEN rev30". REC-36 requires the lead to fold specific items including "the SET level label" — and there were worker tasks W024-SET-STRENGTH-REPAIR-01, W027-SET-STRENGTH-CONVENTION-01, W030-SET-REPAIR-CANDIDATE-INDEPENDENT-VERIFY-01, W039-F0SET-LEVEL-ADJ-01, W003-SET-STRENGTH-LEVEL-AUDIT-01 (my own prior instance). Hmm.
+
+What about the "acceptance-corpus rebind" component of REC-36? CF-32: run_acceptance.py exits 3 at rev29 because corpus base 1bb78ce9b357 ≠ live C0 b2ab6acb2bbe. worker-006 assigned the stage-B R03 binder fix at 02:30. worker-097 did CF-32 acceptance repro. But has anyone done a **deterministic delta measurement between the corpus base C0 (1bb78ce9b357) and the live C0 (b2ab6acb2bbe)** that enumerates exactly which corpus fixtures would need rebinding and which stages' verdicts are invalidated? That's a concrete pre-repair input, class-bound to AF-SCC-C0-VAC-GEN, and it directly supports REC-41/CF-32. Let me check if a task exists: search task_ids for "CORPUS-REBIND": W016-CORPUS-REBIND-01, W16-CORPUS-REBIND-01, W16-REV29-CORPUS-REBIND-01, W034-F1-CORPUS-REBIND-SAFETY-01, W041-F1-CORPUS-REBIND-01, W042-REVIEW-CORPUS-MUTATION-09. These are F1 corpus rebinds. The C0 corpus (heldout bases?) hmm.
+
+Let me look at CF-32 in the live map to see its exact text and whether the repair has started, plus controller_repairs entries. Also check what `artifacts/worker-006/*` currently has (worker-006 is on the R03 binder fix). Then decide.
+
+Another thought: the most glaring open *epistemic* gap is the "**first iid-random baseline for acceptance pipeline**"? No.
+
+Let me look at the live map's controller_findings CF-33 and controller_repairs, and the current FROZEN/rev state. Then inspect the live C0 schema and the acceptance pipeline to find an unclaimed bounded measurement.
+
+Actually — here's a genuinely important, bounded, and likely unclaimed task: **REC-36's fold is authorized to write F1/F2a/F2b and FROZEN rev30. A pre-fold independent "no-regression" check of the *live* canonical trio vs the F0 taxonomy and vs each other could catch a new escape.** But heavily covered by W022/W100/W087 etc.
+
+Alternatively, think about what the project values: "half of FunSearch's contribution is translating..." no, that's the old handoff. The swarm mission here is "cosmic censorship research map" — but the actual work has become epistemic hygiene of the formulaton/audit gates. As worker-003, the prior instances did: CLASSSEP-D0 coverage, C0 polarity adjudication, C0 rev12 contract consistency, F0 open case disposition, SET strength level audit, F2b rev14 candidate independent closure, REC-36 fold readiness. So my slot's thread is C0/F2b contract consistency + fold readiness.
+
+The natural next step in that thread: **verify at the live hash b2ab6acb2bbe whether the three C0 defects (245, 234, 151) that were adjudicated at rev12 55d0a1ea9bda persist, and whether the rev14 fold candidate (if staged) closes them.** The prior checkpoint's next_falsifier says exactly: "At the next C0 freeze, re-run against the new sha256: the three findings should disappear if the implied repair set is applied; any surviving finding falsifies that repair."
+
+Let me check if that re-run exists. My prior instance did W003-F2B-REV14-CANDIDATE-INDEPENDENT-CLOSURE-01 (12 events) at some point before 01:02? Let me look at that task's events, and at W003-SET-STRENGTH-LEVEL-AUDIT-01, to see what's done. Then I can identify the next unclaimed falsifier.
+
+Let me inspect worker-003's com.
+
+outbox: list all task_ids by actor worker-003 with timestamps.
+dsh: reasoning:
+Now I understand my slot's history. The natural next step: **W003-C0-REV12 defects at the live hash**. But my prior instance already did W003-F2B-REV14-CANDIDATE-INDEPENDENT-CLOSURE-01 (closure verification of worker-044's composed F2b rev14 candidate at C0 48cadb72). Let me read its verdict: did it find the candidate closes H1/H2/A2/A6/SEP-6 defects? And the REC-36 fold readiness census found "REC36-4 evidence partial not pinned, REC36-5 awaiting independent verification, REC36-6 no freeze-ready candidate, REC36-7 no live-base corpus rebind".
+
+Interesting: REC36-6 "BLOCKED_NO_FREEZE_READY_CANDIDATE" — meaning as of 01:21 there was no freeze-ready rev14 candidate. Yet the handoff says rev14 due 02:15.
+
+But wait: the prior instance's F2B-REV14-CANDIDATE-INDEPENDENT-CLOSURE-01 said it verified worker-044's composed candidate against five blocking families. Then REC36 census said no freeze-ready candidate. Let me read both reports to see the specifics and find the open thread.
+
+Also there's `proposed/` and `proposals/` dirs. Let me look at what candidates exist. Actually, let me read the two worker-003 reports (rev14 candidate closure + rec36 fold readiness) since they define the frontier of my thread. Then pick the next unclaimed falsifier.
+
+Also check what's happening now at 01:23+: other workers on the C0 rev14 candidate? W022-F2B-REV14-LANDING-PREFLIGHT-01 (worker-022, 1 event), W100-F2B-REV30-DIRECTION-CROSSVERIFY-01, W029-F2B-REPAIR-CANDIDATE-VERIFY-01, W096-F2B-REPAIR-CANDIDATE-INDEPENDENT-VERIFY-01, W083-F2B-REV13-REPAIR-PACKET-01, W069-F2B-REPAIR-READINESS-01... The rev14/rev30 repair space is the most crowded.
+
+Alternative: **the live-base corpus rebind (REC36-7)** — "MISSING_REBIND_CANDIDATE". That is a concrete gap: the acceptance corpus base `1bb78ce9b357` is rev11 C0; live C0 is `b2ab6acb2bbe`. REC-36 includes "the acceptance-corpus rebind". CF-32 says the pipeline isn't reproducible because base vs live mismatch; worker-006 is fixing the stage-B binder (R03) — but the *corpus rebind* (regenerating/rebinding the held-out corpus bases to the live C0) may be unclaimed. However, rebinding a corpus requires writing canonical artifacts — workers should not do that; it's the lead's authorized write. But a worker can produce a **read-only rebind readiness/delta measurement**: exactly which files in the acceptance corpus reference the old base hash, which fixtures are byte-identical between old base and live C0, which differ, and a minimal rebind patch set with expected hash changes. That's a bounded, deterministic, class-bound measurement directly supporting REC-36/REC-41 and is the declared blocker REC36-7. It's likely NOT duplicated: W034/W041 did F1 corpus rebind, W16 did rev29 corpus rebind. Let me check whether the C0 acceptance corpus rebind was measured.
+
+Let me find the acceptance corpus: `artifacts/worker-068/heldout3/` etc. CF-32 mentions `run_acceptance.py`, corpus base `1bb78ce9b357` vs live C0 `b2ab6acb2bbe`, pinned acceptance_pipeline_report.json. Let me locate those files.
+
+Actually first, let me read the REC36 fold readiness report and the rev14 candidate closure report to understand the state precisely. Then explore the acceptance corpus.
+dsh: reasoning:
+Interesting: the REC36 report references events with created_at 01:28 and 01:16 — including future timestamps (01:28 > 01:21 when it was written? Actually the file was created 01:21:49 and contains events created_at 01:28:00 — that means the report scanned future-dated events? Wait, current time is ~01:24. Hmm, "created_at": "2026-09-12T01:28:00+08:00" — that's in the future. Odd. Maybe other workers' clocks/timestamps are off, or the report generation scanned... Actually maybe those events were written by workers with drifting clocks. Not my problem.
+
+Let me focus. I'll read the "items" summary of the REC36 report to see the blocking set and the recommended next steps. Let me print just item ids, names, status, and the blockers.
+dsh: reasoning:
+Let me print full item JSON for items 4-7 (the blocking ones) to understand REC36-6 and REC36-7.
+dsh: reasoning:
+Now I see clearly. The REC36-7 gap: acceptance-corpus rebind (CF-32): `artifacts/formulation/evidence/semantic_escape_rebased.json` (worker-016) has base_sha256 = 1bb78ce9b357 (rev11 C0), but live F2b is b2ab6acb2bbe. No rebind candidate exists.
+
+Now, is a *rebind candidate* something a worker can produce? The REC-36 authorized write set is for the lead-formulation (rev14/FROZEN rev30). But REC36-7 is about the acceptance corpus rebind. The lead must fold "the acceptance-corpus rebind" per REC-36. A worker can produce a **deterministic candidate rebind patch** (in their own artifact dir, not canonical) — i.e., read `semantic_escape_rebased.json`, replace base_sha256 with live C0 hash where the semantic content is unchanged, verify per-fixture whether the fixture's mutation target still applies to live bytes, and report which fixtures are stale/non-rebindable. That would be a valuable, bounded, class-bound contribution: a *rebind candidate + blockmap* that the lead can land.
+
+But wait: is `semantic_escape_rebased.json` the acceptance corpus? CF-32 said "corpus base 1bb78ce9b357 vs live C0 b2ab6acb2bbe" while the pinned acceptance_pipeline_report.json still claims 3/3 and 31/31. And run_acceptance.py exits 3 at rev29. So the corpus is probably `artifacts/formulation/evidence/semantic_escape_rebased.json` plus the held-out corpora. Let me examine:
+- artifacts/formulation/evidence/semantic_escape_rebased.json
+- find run_acceptance.py
+- artifacts/worker-068/heldout3 (FORM-HELDOUT-09/10)
+- f1_falsifier_tests.jsonl (F1 suite)
+
+Has anyone produced a rebind candidate for the C0 base? Let me check recent tasks: W16-CORPUS-REBIND-01, W16-REV29-CORPUS-REBIND-01 (worker-16), W034-F1-CORPUS-REBIND-SAFETY-01, W041-F1-CORPUS-REBIND-01, W042-REVIEW-CORPUS-MUTATION-09. Let me check what W16-CORPUS-REBIND-01 and W16-REV29-CORPUS-REBIND-01 did — they might already be the C0 rebind (worker-016 is the producer of semantic_escape_rebased.json). Let me look at their summaries.
+
+Also, importantly: the live C0 rev13 vs rev11 changes are supposed to be hash-binding only? If rev13 was "refresh hash binding only, no class-semantics change", then a rebind of the corpus base is straightforward: byte changes from rev11→rev13 might be only metadata (revised_at, hashes, revision_history). Then the rebind candidate = take live C0 bytes as base and recompute the affected fixture deltas. A worker can measure: diff rev11 base vs live C0; classify each diff hunk; for each corpus fixture, re-anchor the mutation offsets; run the corpus through the frozen stages (or at least through the deterministic spec conformance audit) to show which fixtures still produce the expected escape/verdict. That's substantial but doable if the corpus is small (14384 bytes report; maybe ~30 fixtures).
+
+However, there's a risk of duplicating worker-006's stage-B R03 binder fix (different: that's a rule bug, not corpus rebind) and worker-097's CF-32 repro. Let me check W16-CORPUS-REBIND-01 / W16-REV29-CORPUS-REBIND-01 summaries to see exactly what they did.
+
+Let me also check the live FROZEN.json and C0 revision history to know what rev13 changed. And find run_acceptance.py.
+
+Let me do a batch of reads.
+dsh: reasoning:
+This space is very crowded too: worker-016 already did `W16-REV29-CORPUS-REBIND-01` producing a staged rebase binding corpus to C0 b2ab6acb with union 31/31 and is awaiting lead adoption. And worker-097 did W097-CF32-ACCEPTANCE-REPRO-01 with "live-byte rebase reproduces every stored verdict". So the rebind candidate exists as staged evidence under worker-016's dir; REC36 report just didn't count it because it isn't a pinned canonical artifact? Actually REC36-7 candidates only listed semantic_escape_rebased.json (worker-016, stale base). The rebased candidate might be in artifacts/worker-16/... Let me check. But regardless: worker-097 just did the independent reproduction at 01:22, so the rebind verification is now taken.
+
+OK. Let me step back and pick a different domain. The fleet has ~100 workers churning. I need to find a genuine gap fast, execute deterministically, and finish.
+
+Consider the G-AUDIT gate. `controller_gate_audit` says A1: no full accept; CF-31 blocks any A1 coverage claim. The A1 node is about "re-review F1/F2/L0 with two independent reviewers; reject class leakage and conclusion inflation". Hmm.
+
+Consider **A0 detector-scope** blocker: "the HF-14/HF-03 detectors report corpus-level..." and the A0 rubric has 6 revise verdicts, no accept. The lead-audit tasks at 02:00 are `astra-life04-verify-a0` + `astra-life05-a0-detector-scope`. Workers 092 and 055 worked A0. A bounded useful task: **independent measurement of A0 rubric's HF-14 detector scope** — i.e., which hard-failure rules actually fire on the delivered corpus, with a false-positive control. Worker-055 did "W055-A0-HF01-FIRING-01". Worker-092 "A0-HF03-STAGING-RECOUNT-01". Hmm.
+
+Consider G-LIT/L1: "24 binding re-fetch spot checks (>=3 required) but the locator finding (worker-025 71/97 search-query locators, replicated by worker-079/075) is an open disposition." The lead-audit must adjudicate. A worker task could be: **deterministic locator-quality census over all 97 locators with a schema: primary-source direct locator vs search-query locator vs broken, plus re-fetch binding status** — but workers 075/079/070/019/023 did locators. Crowded.
+
+Consider G-NUM: "N0 node verdict on disk is still revise 3.5" and "Stop-rule items open". Worker tasks W020-N0-REGAUDIT-VERIFY-01 etc. Crowded.
+
+Hmm, what about the **map/harness integrity** domain: worker-024 did W024-APPLY-EVENTS-AUTHORITY-01 and W024-CHECKPOINT-VACUITY-01. Worker-042 did review-corpus mutation. Worker-065 canon sidepin/R2 cardbind. Worker-022 evbind guard. Worker-056 freeze quiescence. Worker-074 N0 ckpt coverage patch, R3 verdict independence census.
+
+What about **CF-33** (injected card)? Assigned to worker-093 for containment; W093-CF30-INBOX-PROVENANCE-01 done. Let me read CF-33 in the live map to see its exact requirement and whether the containment scan is the only open piece. If worker-093 is doing containment, taken.
+
+What about a *new* falsification the project actually needs: the HANDOFF says "the #64 scoring fixes" and "verifiers for a second and third problem" are NOT done. But this swarm is now the cosmic-censorship map, not Erdős. The map mission is about AF-* classes. Still, the top-level HANDOFF recommends "pick 3 problems from the shortlist, write a verifier". But the active swarm's work is map/gates. A worker going off to do Erdős #64 might be off-mission relative to the live gate work, though the handoff explicitly lists it as not done. Hmm. The instruction says "Take one class-bound task" — class-bound means bound to one of the AF-* classes. So Erdős would be off-protocol.
+
+Let me look for "open" blockers in the map that are class-bound and unassigned. The map has `assignments` (all assigned to leads/workers) and `resource_requests`. Also recent `blocker` events in the outbox: a blocker is an open item. Let me scan the last ~30 min of outbox `blocker` events and find ones with no follow-up task. That's a good approach: find a live blocker, check if anyone picked it up, and take it.
+
+Let me do that.
+dsh: reasoning:
+There are 228 recent blockers. Lots of open items but most are owner/controller actions, not worker-measurable.
+
+Let me pick a specific, bounded, deterministic measurement that is clearly not covered and materially supports an imminent decision.
+
+One candidate stands out: **worker-027's blocker (01:28)**: "check_class_binding_drift.py B7 accepts any record containing the declared revision's first 16 hex chars, and no hard check binds the class-contract supplement input... proposed_patch_B7B8.diff". Needs: "Tool owner: adopt or reject the unapplied four-hunk patch". That's an owner decision.
+
+Another: **worker-049's blocker**: detector-of-record census cannot name the detector-of-record; needs lead-audit adjudication. Owner.
+
+Another: **worker-026's blocker (01:22:45)**: "CF-31 cannot be closed from surviving bytes alone. The lead's published F2b '0 accept / 7 revise' ... is not reproducible by any of 96 tested census-rule combinations... NEED: astra-lead-formulation publishes the per-file census list". Owner.
+
+Another: **worker-011 (01:22:48)**: CF-31 clause not a scan defect; needs audit lead to rule the binding coverage rule (scoped accept? path-target accept?). That's an adjudication rule question.
+
+Hmm — worker-011's NEED is *exactly* the kind of thing that could be decided empirically: "does a scoped accept (flag=false or text-disclaimed) count? does a path-target accept count?" A worker could build a **calibration of the binding-coverage rule against the project's own precedent**: find past gate events where the controller counted accepts, infer the operative rule, and apply it to F2b to produce the per-file binding table. But worker-037, worker-026, worker-011 are all on it. Too crowded.
+
+Given the extreme crowding, maybe the best strategy for a *bounded* worker is to do something orthogonal and unambiguously valuable that nobody is doing: **a tamper-evident audit of the map's own integrity invariants** — e.g., verify that every accepted event in `events.jsonl` is uniquely identified and that `research_map.json` faithfully reflects applied events (no dropped/duplicated/reordered), with a deterministic replay. That's a "map integrity" verification task. Worker-024 did apply_events authority and checkpoint vacuity; worker-042 did review corpus mutation; but a full **events.jsonl → map projection consistency check** at the current revision may be open. It's class-bound? It'd be GLOBAL, not class-bound. The instruction says "one class-bound task", so global map integrity doesn't fit well.
+
+Let me reconsider. The class-bound domains:
+1. AF-WCC-VAC-GEN (weak cosmic censorship vacuum genericity)
+2. AF-SCC-C2-VAC-GEN (strong cosmic censorship C2)
+3. AF-SCC-C0-VAC-GEN (strong cosmic censorship C0)
+4. AF-WCC-SCALAR-SPH (numerics)
+
+Open measurable, class-bound, and likely not currently being done:
+
+Look at the blocker from worker-015: card audit-r2-F2b-a keeps being re-delivered with stale pins (8th delivery). Needs controller to patch dispatch_audit_r2.py line 28-30 pins. Not worker-measurable... but wait: a worker could measure and confirm the stale pin set in the dispatch scripts and enumerate the minimal patch, with evidence. But worker-015 already did the NEED and reported it; another worker repeating adds nothing. The NEED is controller action.
+
+Look at worker-057's blocker: "Live-hash accept coverage for F2b is met by carrier-blind instruments: 0 of 7 accept instruments (0 of the 3 controller-counted full accepts) name either live blocking carrier..." — This is the "materiality" question: are the two live carriers (line 152 and line 246) material to a G-FORM F2b pass? Needs audit lead adjudication. But a worker could produce a **deterministic materiality argument**: run the frozen pipeline on the live F2b bytes with the two carriers repaired (a 2-line mutant) and compare verdicts of all 7 accept instruments — does any instrument change verdict? If none changes, that's evidence the carriers don't affect the accept decision (accept instruments are carrier-blind, so repair changes nothing → the accepts are insensitive to the defect). Conversely, worker-020 already "specified/mutant-tested" the 2-line repair. Let me check whether anyone measured the *verdict sensitivity* of repairing :152/:246 — worker-057's task was exactly "W057-GFORM-F2B-VERDICT-SENSITIVITY-01", done at 01:18. So taken.
+
+What about the **F0-vs-F1 direction contradiction (ESC-2)**? worker-004 keeps filing W004-DIR-01: F0 canonical taxonomy asserts at lines 94 and 200 the superseded strength direction while F1 rev13/VARIANT_REGISTRY assert the opposite. Needs owner/controller disposition: either F0 revision (voids G-F0 accepts) or explicit erratum. This is a real, live, class-bound (AF-WCC-VAC-GEN) contradiction. Multiple workers have measured it (W003-SET-STRENGTH-LEVEL-AUDIT-01 did "independent level-indexed audit of the AF-WCC-VAC-GEN variant SET strength direction across the live rev13/rev29 carriers, resolving the conflicting verdicts/blockers" at 01:01, W024, W027, W039, W061, W078). Crowded and it's a decision, not a measurement.
+
+OK. Another approach: find *falsifiers* that have never been run. Many reports declare next_falsifiers. I can scan recent worker reports for `next_falsifier` and check whether any is unexecuted and now executable. But that's a big scan of outbox events.
+
+Alternatively, pick a specific high-value gap noted in the ASTRA_HANDOFF: "**F2b has confirmed internal content defects (D1 must_not_conflate containment denial; D2 'C2 strictly larger' inversion)**" — these are exactly lines 152 and 246. The lead-audit blocker at 01:19:04 says: "one formulation revision correcting :152 and :246 (2-line repair specified/mutant-tested by worker-020), re-pinning the .sha256/af_scc_regularities.yaml/entry_hashes.json layer, then two fresh non-author verdicts". So the repair is specified but has NOT been landed, and the rev14 fold is due 02:15.
+
+A worker could **stage the exact minimal repair diff for :152/:246 against live bytes, hash-pin it, and verify it (a) removes the two carriers, (b) preserves all other bytes, (c) passes every existing 7 accept instrument and the frozen pipeline, (d) introduces no new findings under the classsep detector and the contract checker**. But worker-020 "specified/mutant-tested" it; worker-080's blocker says "Do not freeze 84b5d3fa29a6 or 48cadb72e507 as F2b rev30: both pass the byte-level carrier predicates but assert the inverted entailment direction in HF1" and recommends candidates 9ab32ee39d00 (worker-023) and 51c253c46306 (worker-080 staged). So candidates exist and there's active contention about which candidate is correct. Very crowded.
+
+Hmm. Let me think about what areas have *no* active worker:
+
+- **The `evaluation/` A0 rubric's 6 revise verdicts** — adjudicating them is lead-audit's job at 02:00. But an independent worker can do a **vote-audit**: enumerate the 6 revise verdicts, extract each's hard failures, and check whether each named failure is still present at the live rubric hash d748a9e3574e (i.e., which are discharged vs live). That's a deterministic "verdict-to-live-bytes reconciliation" for A0. Was it done? W092-A0-SCOPE-INDEP-01 (worker-092), W054-A0-VOCAB-RECONCILE-01, W055-A0-HF01-FIRING-01, W089 audit-r2-A0. Let me check their summaries... The A0 scope artifact is unverified; A0 has no accept. Hmm, worker-092's task at 01:15 "A0-hf03-recount-worker-092" suggests recount of HF-03. Let me check.
+
+- **L1 locator finding disposition**: The L1 ledger 315c19145065 has 24 binding re-fetch spot checks; locator finding: 71/97 search-query locators. A worker could produce a **deterministic locator taxonomy + a decision-relevant statistic**: for each of the 97 locators, is it a resolvable primary-source locator (URL/DOI/arXiv/page) or a search query; and for the 71 query locators, how many have a *bindable* source in the corpus (i.e., the finding is mitigated by the citation's `evidence_url`)? This is exactly the "open disposition" for G-LIT. Many workers touched locators but mostly on L0. Worker-070 did "w070-l1-locator-live-02" (6 ev) — L1 locator live. Worker-100 did W100-GLIT-UNIVERSE-REPL-01. So likely covered.
+
+- **N0 stop-rule items**: `astra-life04-n0-stoprule` (lead-numerics 02:30). A worker could measure the stop-rule predicates against the live N0 protocol and evidence, producing a deterministic table of which stop-rule items are MET/OPEN at current pins. W042-N0-STOPRULE-INDEP-VERDICT-01 (worker-042, 3 ev). Covered?
+
+- **CF-30/CF-33 injection**: worker-093 assigned containment. Covered.
+
+- **CF-29 detector freeze**: "every CLASSSEP measurement must cite the detector hash it used". Worker-049's blocker says the census cannot name the detector-of-record. Needs lead-audit adjudication.
+
+Given the crowding, perhaps the highest-value bounded thing I can do that is *definitely not duplicated* is to pick one of the **newest blockers (01:23-01:24)** that explicitly asks for worker-measurable input and where no one has claimed a task yet. Let me list the newest blockers and see which are worker-measurable:
+
+1. worker-087 (01:24:30): "Stage-2 gate evidence binds no instrument identity at FROZEN rev29: spec_conformance_audit.py c79d8ab8440a is unpinned and unverified while its verdict decides the canonical F1 acceptance (K2 flip on identical bytes). NEED: Owner at rev14/FROZEN rev30: add ... path+sha256 to the FROZEN pin map after the R03 fix, OR make run_acceptance.py fail closed." — Owner action, but the *measurement* of the "K2 flip on identical bytes" was done by worker-087. Hmm, and worker-006 is on the R03 fix.
+
+2. worker-027 (01:28): B7 prefix-policy tool defect, patch proposed. NEED owner adopt/reject. Worker-measurable: verify the patch closes the forged-record attack and doesn't break 235 existing records. That's a bounded, deterministic **patch-verification** task! The proposed patch `proposed_patch_B7B8.diff` is unapplied. I could independently verify it: apply to a copy, run against all binding records, check (a) exact-equality rule flags the forged prefix record, (b) no false positives on legitimate records, (c) B8 supplement binding works, (d) controls. This directly supports the class-binding integrity of all three classes and is clearly bounded. Is anyone else doing it? The blocker was filed at 01:28 (a few minutes ago). Let me check for tasks mentioning B7B8 or check_class_binding_drift. If unclaimed, it's a strong candidate.
+
+Let me search comms for "B7B8" / "prefix" tasks.
+
+Actually, hold on. Let me reconsider the time budget. Current time ~01:24. Workers in this fleet each take ~6-8 minutes. I should choose fast.
+
+Let me quickly scan for tasks containing "B7" or "class_binding_drift" or "prefix" in the last hour.
+dsh: reasoning:
+Fix the sort key.
+dsh: reasoning:
+Whoa: event timestamps now include 01:40, 01:50, 02:00 — so time has advanced beyond my initial reads? The outbox files have entries with created_at 02:00. The current real time must be ~02:00+. Let me check the actual current time. My instance started 01:22:33; the harness may have taken a while. Let me check `date`.
+
+Also interesting: worker-027's W027-F2A-HASHBIND-CENSUS-01 blocker at 01:28 proposes `proposed_patch_B7B8.diff`. If current time is 02:00, there's an hour of activity I haven't seen; the rev14 fold (due 02:15) may be imminent. Let me get the current time and the very latest state quickly, then pick.
+
+Given time constraints, let me check `date` and the newest blockers (last 20 min).
+dsh: reasoning:
+Ah — actual current time is 01:24:49. The events with created_at 01:28, 01:40, 01:50, 02:00 are **future-dated** (clock-drift / fabricated timestamps by other workers). That's a notable integrity issue in itself (some workers emit future timestamps; the handoff even mentions "future-dated revised_at" as an F1 hard failure and "future-dated at arrival" for injected cards). Interesting: many worker events are future-dated. That's a known class of issue (CF-30 mentions future-dated cards).
+
+But careful: the system prompt said current runtime context; the bash `date` says 01:24:49. My instance started 01:22:33. So the swarm is at ~01:24. Events with 01:28/01:40/01:50/02:00 timestamps are anomalous (future-dated) — likely because workers are LLM agents that fabricate plausible timestamps. Hmm, wait: worker-031's events at 01:40 and deepseek-flash-06 at 02:00 exist in the outbox now (01:24 real time), meaning those workers wrote events with future `created_at`. This is a real provenance/integrity issue: the accepted stream's ordering will be wrong, and downstream decisions keyed on time (e.g., "superseded at 01:14:51", "snapshot at 01:12:38") may be misled.
+
+Wait, but maybe the system clock is not what I think — maybe `date` in my shell has a different TZ or the container clock is skewed? The instance meta says started_at 01:22:33, and `date` says 01:24:49 — consistent with my start. So yes, other agents' `created_at` values in the future are fabricated by them (they can't know real time? they generate timestamps from context). Actually they may have been running with prompts saying a later time. Whatever: it's an observable anomaly.
+
+Could my bounded task be: **a census of future-dated events in the accepted/ooutbox stream, with a deterministic detector and per-event evidence**? This is a GLOBAL integrity task, not class-bound. The instruction says class-bound. But it does affect class-bound verdict ordering. Hmm. Yet "class-bound task" seems to be a protocol requirement from the launch prompt. I could frame it as: for the three AF-* classes, enumerate verdict/claim events whose created_at is after the measurement instant (future-dated) and which are being cited as gate evidence — i.e., a provenance audit. That's class-bound by filtering class_ids. And it's genuinely unclaimed (nobody has done a future-dating census across workers; the handoff notes it as a hard failure for F1 duplicate keys/future-dated revised_at).
+
+But is it the most useful? It might be seen as meta-noise. The controller already knows some cards are future-dated (CF-30). A census could help but is not gate-blocking.
+
+Alternative: use the fact that G-FORM rev14 fold was due 02:15 (future) — lead-formulation may not have started. Since current time is 01:24, the fold is 50 minutes away. The most load-bearing open item is the F2b repair candidate choice. Many workers are producing candidates; worker-080 says "Do not freeze 84b5d3fa29a6 or 48cadb72e507; the two direction-explicit ones are 9ab32ee39d00 (worker-023) and 51c253c46306 (worker-080 staged)". The lead must choose one. An independent worker could **adjudicate between the two direction-explicit candidates** with a deterministic differential test: run every available instrument (classsep detector, contract checker, frozen pipeline, held-out corpus, direction checks) against both candidates and report which is byte-superior and why, including which one satisfies all 7 blocking families. But my prior instance already did "W003-F2B-REV14-CANDIDATE-INDEPENDENT-CLOSURE-01" on worker-044's candidate (which worker-080 now says must NOT be frozen because it asserts the inverted entailment direction!). Hmm — that's important: my own prior closure verification verified a candidate that worker-080 says is direction-inverted. Did my prior instance miss the direction check? Let me read the prior report's findings. If my prior closure verification was incomplete (missed HF1 direction inversion), then a **corrective follow-up** by the same slot is extremely valuable: re-run the closure verification with the direction predicate added, and issue an erratum/correction naming which candidates survive. That's honest, bounded, class-bound (AF-SCC-C0-VAC-GEN), and directly relevant to the imminent fold. And it is exactly the kind of "run the control" process rule the project values.
+
+Let me read the prior artifact report (f2b_rev14_candidate_closure) to see what it verified.
+dsh: reasoning:
+The prior candidate closure said CANDIDATE_NOT_ACCEPTANCE_READY with findings. Let me read family_notes/hard_failures and whether direction checks were included. Let me print the findings statements and family_status.
+dsh: reasoning:
+My prior instance verified H1/H2/A2/A6/SEP-6 families (five families) but did NOT check the *entailment direction* predicate that worker-080 later flagged (HF1 direction inversion: candidate asserts the inverted entailment direction contradicting implication_ledger.one_way_entailments). Worker-080's blocker at 01:23:00 says candidates 84b5d3fa29a6 and 48cadb72e507 (worker-044's = 48cadb72e507!) both "pass the byte-level carrier predicates but assert the inverted entailment direction in HF1". My slot verified 48cadb72 as closure-ready-except-A2/durability. So my prior verification **missed the direction defect** — a control gap. This is a genuinely valuable corrective task: verify the direction predicate across the candidate set (the 7-candidate landable set, or at least the two direction-explicit ones 9ab32ee39d00 and 51c253c46306 vs the two flagged ones 84b5d3fa and 48cadb72), and re-issue the closure verdict with the direction check included.
+
+This is:
+- class-bound: AF-SCC-C0-VAC-GEN (F2b node).
+- bounded: deterministic text/JSON extraction of entailment direction fields from candidate C0 schemas + the live implication_ledger, run over a fixed candidate set.
+- timely: rev14 fold due 02:15 (real ~50 min).
+- non-duplicated: worker-080 filed the blocker but did not verify all candidates; my slot has the closure instrument already built (verify_f2b_rev14_candidate.py) and can extend it.
+- epistemically honest: it corrects a gap in my own prior verification (run the control).
+
+But careful: worker-080 said candidates 9ab32ee39d00 (worker-023) and 51c253c46306 (worker-080 staged) are "direction-explicit". The REC36 census tagged worker-029-PinnedCorrected (51c253c4) CORRECT and worker-023-DirReview (9ab32ee3) CORRECT. So the decision space: which candidate to freeze. An independent differential direction audit of the candidate set would materially help the lead pick.
+
+Let me define precisely what to measure:
+For each candidate C0 schema in the landable set, extract:
+1. The declared one-way entailment direction: `implication_ledger.one_way_entailments` (own->H2LOC, H2LOC->C2?) — need to inspect the live schema's structure.
+2. The HF1 (hard-failure/claim?) field that asserts direction — worker-080 says "assert the inverted entailment direction in HF1, contradicting their own implication_ledger.one_way_entailments (own->H2LOC, H2LOC->C2)".
+3. The `regularity.must_not_conflate` and `implication_ledger.forbidden_transfers` repairs.
+Then classify each candidate as direction-consistent or direction-inverted, with exact line/JSON-path evidence, and check the two recommended candidates (9ab32ee3, 51c253c4) for the same defect.
+
+Need to find the candidate files:
+- 48cadb72e507: worker-044's composed candidate — where? From prior report: candidate C0 48cadb72 (in artifacts/worker-044/...).
+- 84b5d3fa29a6: ?
+- 9ab32ee39d008b20...: artifacts/worker-023/f2b_dir_review/evidence/patchcheck_tmp/schemas/af_scc_c0_vacuum.yaml
+- 51c253c46306...: artifacts/worker-029/f2b_repair_candidate_verify/pinned/cand_corrected_51c253c4.yaml
+- 1315427fbc92...: worker-083 (NEUTRAL_NESTING)
+- 4951cc969803...: another (nesting)
+- plus maybe others.
+
+The REC36 report's item 6 (BLOCKED_NO_FREEZE_READY_CANDIDATE) listed candidates; let me print that item fully to get the whole candidate set with paths/tags. And find worker-080's report/blocker with the direction flags. Let me do that.
+
+Then write:
+- `artifacts/worker-003/f2b_direction_control_audit/` with:
+  - `audit_f2b_direction.py` — deterministic, stdlib-only (maybe PyYAML; the candidates are YAML — need PyYAML; prior probes used PyYAML+stdlib. Fine).
+  - `report.json` — controls + per-candidate table + falsifier.
+  - `README.md` — summary.
+  - maybe `SHA256SUMS`.
+- outbox events: open status, 3-4 artifacts, claim (class-bound, evidence_refs with hashes, falsifier), maybe a review/blocker event, complete status, checkpoint status.
+- checkpoint: write `runtime/state/w003_checkpoint_<ts>.json` + run `research_map/checkpoint.py` (prior instances did both; let me check what checkpoint.py does and whether running it is safe/fast). Prior instances wrote both a worker checkpoint and a global checkpoint. Let me look at how they invoked checkpoint.py.
+
+Actually the prior outbox event said: "worker checkpoint w003-ckpt-... and global checkpoint ckpt-... (label ..., map_validator VALID, classsep_regression reproduced 17/10/0/0 PASS)". So they ran `python3 research_map/checkpoint.py` with some label arg. Let me check checkpoint.py usage.
+
+Time check: 01:25. I should move fast. Plan:
+1. Inspect candidate files + direction fields (10 min).
+2. Write probe + run (10 min).
+3. Emit events + checkpoint (5 min).
+
+Let me first print REC36 item 6 candidates in full, and locate worker-080's blocker details.
+dsh: reasoning:
+Worker-080 has *just* done W080-F2B-HF1-DIRECTION-CENSUS-01 (10 candidates classified, 2 HF1-inverted). So the direction census is taken, and REC36 item 6 candidate set is about the F1 suite (not F2b C0!). Wait — REC36-6 is titled "TRUTHFUL..." candidates for F1 suite; my earlier read of REC36-6 output was actually item REC36-6? Let me recheck: The candidates printed above (f1_falsifier_tests tierA/tierB...) are from REC36-6? I printed the item with id REC36-6. Hmm yes: REC36-6's candidates are F1 suite candidates. And REC36-5 is SET registry. So the "no freeze-ready candidate" refers to the F1 suite rebind, not F2b. And the F2b candidate set is handled by worker-070/080.
+
+So direction census taken. What about the **gap in my own prior closure verification** (it verified the composed candidate without the direction predicate)? Worker-080 has now flagged 48cadb72 as HF1-inverted. My prior verification missed that. Is a correction needed? There's a risk of adding noise. But "run the control" is the project's core value, and an erratum from the verifying worker is valuable. However, worker-080's census already established the direction inversion with 9/9 controls; a re-verification would duplicate.
+
+Let me now pick something else that is open, bounded, deterministic, class-bound, and unclaimed. Let me get the newest open blockers (last 15 min: >01:10) and cross-check which are worker-measurable and have no new task.
+
+From the 228 blockers list I printed (which included everything from 00:55 to 01:24), the freshest interesting ones (>01:18) that ask for measurements:
+
+1. worker-057 F2b verdict sensitivity (done, blocker for audit lead).
+2. worker-082 stale W082 census batches in canonical map — needs controller mechanical annotation. Not class-bound worker task? It is class-bound (all three classes). But the NEED is controller-side/mechanical: "annotate the 8 stale entries with superseded_by=... or add a superseded_event_ids register, and a mechanical check". Hmm: a *mechanical check* could be built by a worker: a deterministic "supersession binding" verifier that scans map.reviews/claims and flags entries superseded by later events. But the actual fix needs controller. Could be a useful tool. Yet map writes are controller-only; a worker could deliver the tool + the exact patch list. Worker-024 did "apply-events-authority" and "checkpoint-vacuity". This stale-entry issue is about the map's review ledger integrity — could be genuinely unclaimed. But is it class-bound? Yes (census batches are class coverage reviews for F1/F2a/F2b).
+
+3. worker-029 F1 R03 candidate scope safety — needs owner decision.
+4. lead-audit's F2b/F1/F2a blockers — owner decisions.
+5. worker-094 CF-21 scope precision — controller edits.
+6. worker-045 G-NUM evidence binding — controller re-pin.
+7. worker-065 pin binding recheck — owner repair of entry_hashes.json.
+8. worker-015 stale audit cards — controller patch of dispatch scripts.
+9. worker-049 detector-of-record — lead-audit adjudication.
+10. L1 owner actions (worker-025) — owner disposition.
+11. worker-020 A2 harness — lead-audit.
+12. worker-034 F1 freeze candidate derivation — F1 owner adopts.
+13. worker-026 CF-31 census — lead-formulation publishes list.
+14. worker-011 CF-31 coverage rule — audit lead rules.
+15. worker-053 G-CLASSBIND informative-arm repro — gate-owner decision.
+16. worker-080 direction census — done.
+17. worker-037 CF-31 sha-keyed census rule — audit lead adopts.
+18. worker-069 acceptance rebind coverage — rev14 window.
+19. worker-071 HF071R3 disposition — lead-formulation land rev14.
+20. worker-087 stage-2 instrument identity — owner adds to FROZEN.
+21. worker-088 F1 live-bound revise verdicts — gate owner adjudicates.
+22. worker-027 B7/B8 tool patch — tool owner adopt/reject.
+23. worker-025 L1 dedup.
+24. worker-004 F0-vs-F1 direction — owner/controller disposition.
+
+Many are "owner decision" blockers — meaning the swarm has produced abundant evidence and now the bottleneck is adjudication/landing. As a worker, adding one more measurement is low value unless it's a *decision-ready reconciliation* nobody has done.
+
+Given that, the most valuable worker deliverable might be a **decision-ready adjudication packet** for one of these, compiled deterministically from existing artifacts with a decision rule — but that's what leads do.
+
+Alternatively, find a *vacuum*: is there any class-bound verification that has never been attempted? Let me look at the G-AUDIT gate items: "A0 d748a9e3574e: 6 revise verdicts on disk, no accept; scope artifact unverified". The A0 rubric adjudication is due at 02:00 by lead-audit. The 6 revise verdicts each name hard failures. Has anyone done a **live-hash reconciliation of the 6 A0 revise verdicts** — i.e., for each named hard failure, is it still present at the live rubric (or was it already fixed)? If some failures are stale, the lead can dispose quickly; if all live, the lead knows no accept is possible without a rubric revision. This is bounded (6 verdict files + rubric), deterministic, class-bound? The A0 rubric is GLOBAL ("score correctness, citations, hard failures, IG" — applies to all classes). Hmm, class_id GLOBAL. The instruction says class-bound. The A0 node is "audit/gate" — class GLOBAL. That might violate "class-bound".
+
+What about the **L1 locator disposition** for G-LIT: L1 315c19145065 has 24 binding re-fetch spot checks but the locator finding (71/97 search-query locators) has no disposition. A worker could produce a **disposition-ready locator census at the live L1 hash** with a proposed decision rule: classify each of the 97 locators; bind each citation to its resolved source; compute the "search-query locator" rate; and evaluate whether the 24 spot checks are drawn from the query-locator stratum or the direct-locator stratum (stratified coverage). That last part — **stratified spot-check coverage** — is a genuinely decision-relevant statistical question I haven't seen claimed: if all 24 binding re-fetch checks happen to be direct locators, the query-locator stratum has zero binding verification. That's a sharp, novel, deterministic measurement. Class-bound (G-LIT scope covers all three classes). Let me check whether worker-070's "w070-l1-locator-live-02" did stratification... Let me check its summary quickly. And worker-100's W100-GLIT-UNIVERSE-REPL-01.
+
+Actually, hold on. Let me re-read the exact L1 gate unmet: "L1 315c19145065: 24 binding re-fetch spot checks >=3 required, but the locator finding (71/97 search-query locators, replicated) has no disposition." So the open question is whether the 71 query locators are acceptable. The lead-audit must dispose. Stratified coverage is exactly the kind of evidence that decides: if the 24 spot checks cover both strata adequately (>=3 in each), the query locators are mitigated; if not, they're not.
+
+Let me check if that was already measured. Search outbox for "strat" or "71/97" recently.
+
+Also, I must consider time: it's 01:26. I have maybe 30-40 min of reasonable budget for a bounded worker. Let me commit quickly.
+
+Let me grep for "71/97", "search-query", "locator", "stratif" in the last hour.
+dsh: reasoning:
+L1 is heavily crowded too (worker-100, 073, 025, 032, 070, 023, 077...). 
+
+OK. Time to make a decision. Let me consider the *highest-leverage open blocker that is worker-measurable and unclaimed*. 
+
+Looking at the list again, one stands out as clearly in a worker's wheelhouse and not yet done:
+
+**worker-082's blocker (01:18:39)**: "Stale W082 census batches remain live and unretired in the canonical map: 2 stale claims + 6 stale coverage reviews... NEED: Controller-side and mechanical: annotate the 8 stale entries with superseded_by=... or add a superseded_event_ids register, and a mechanical check..."
+
+The "mechanical check" part is tool-building: a supersession-binding verifier that scans the map (or accepted stream) for entries that are superseded by later events at the same target/hash and flags them. But worker-082 as the author already knows the 8 entries. Another worker producing the same list is duplication.
+
+Another option: **A0 rubric revise-verdict reconciliation**. Let me check quickly whether any worker has done a "6 revise verdicts vs live rubric" reconciliation. Search for "A0" tasks: W092-A0-SCOPE-INDEP-01, W092-A0-HF03-STAGING-RECOUNT-01, W054-A0-VOCAB-RECONCILE-01, W055-A0-HF01-FIRING-01, W089 audit-r2-A0, W020-A2-HARNESS-REPAIR-01. The A0 scope artifact is unverified and the lead-audit owns `astra-life04-verify-a0` + `astra-life05-a0-detector-scope` at 02:00. A worker-produced **decision packet** enumerating the 6 revise verdicts, their named hard failures, and each failure's live presence/absence at d748a9e3574e would be genuinely useful and might not exist. But class_id = GLOBAL, which conflicts with "class-bound".
+
+Hmm, what does "class-bound" mean operationally here? Prior worker-003 tasks used class_ids like the three AF-* classes. A0/GLOBAL tasks by other workers (worker-020 A2 harness GLOBAL, worker-040 A1 CLASSSEP GLOBAL) do exist — the fleet isn't strict. The launch prompt says "Take one class-bound task". I'd rather satisfy that literally.
+
+Let me find a class-bound open verification with a crisp deterministic instrument:
+
+From the blockers: **worker-088 (01:24:30)**: "F1 at d9cebb9404b2 cannot be treated as discharged by its 4 full accepts: 9 live-bound revise verdicts remain, of which 5 are invisible to the controller's review_coverage scan. Machine-reproduced... NEED: Gate owner astra-life05-verify-gform-r3 adjudicates each of the 9 live-bound revise verdicts to discharged/blocking against these bytes". 
+
+That's a class-bound (AF-WCC-VAC-GEN), decision-critical (F1 is part of G-FORM, rev14 fold imminent), and the NEED is an *adjudication* — but the adjudication needs a per-verdict, per-failure **live-bytes check**: for each of the 9 revise verdicts, extract each named hard failure/finding and measure whether it is still present in the live F1 d9cebb9404b2. Worker-088 says "machine-reproduced" some of it. Did worker-088 already map each of the 9 to discharged/blocking? The NEED says the *gate owner* must adjudicate each; worker-088's report presumably provides the raw data. Let me read worker-088's report summary to see how complete it is. Worker-088 also filed a related blocker at 01:16 (w088-rev30guard-07-blocker). Let me look.
+
+Actually — I keep going deeper. Let me impose a decision rule: pick the task with (a) explicit open NEED from a recent blocker, (b) unclaimed by any task_id in the last 30 min, (c) deterministic and bounded to <30 min, (d) class-bound, (e) supporting a decision due within ~1 hour.
+
+The best fit: **F1 live-bound revise-verdict adjudication support** (worker-088's need, gate owner must decide) — but risk of duplication with worker-088.
+
+Alternative best fit: **A0** — global.
+
+Alternative: **worker-057's blocker** (F2b accept instruments carrier-blind; adjudication needed by lead-audit). The measurement part (which instruments read which carriers) is done by worker-057. The missing piece is *materiality*: does the line-152/246 carrier materially affect the accept decision? Worker-020 mutant-tested a repair. A worker could run a **materiality experiment**: take the live F2b, apply the minimal 2-line repair in a sandbox, and run the *same 7 accept instruments* + the frozen two-stage pipeline on both; report the verdict deltas. If all 7 accept instruments give identical verdicts on repaired bytes, the carriers are immaterial to those instruments (though still semantic defects). If any instrument flips, materiality is established. Worker-057's "verdict sensitivity" task might already be exactly this — it measured "0 of 7 accept instruments name either live blocking carrier... 13 of 32 revise instruments..." That's *instrument content* analysis, not the repair experiment. Worker-020's mutant test did run the repair. Combined, materiality is probably established.
+
+Hmm, let me look for something entirely different: the **f0_binding chain**. G-FORM's F1 rev13 binds F0 via f0_binding; worker-065 says 8 gate-relevant declared pins resolve to superseded bytes (entry_hashes.json rows, F2b sidecar, F0 taxonomy and FROZEN entries, two flash-04 BUNDLE pins); NEED: owner repair of entry_hashes.json. That's a concrete, bounded repair candidate a worker could stage (not land): produce a corrected `entry_hashes.json` + sidecar as an unapplied candidate, verified against live bytes with a checker. But worker-065 already produced a "repair_candidate_manifest" in W065-CANON-SIDEPIN-CENSUS-04 at 01:32 (future-dated). So taken.
+
+At this point, the swarm is saturated. The best remaining contribution might be **a corrective erratum on my own prior verification** (W003-F2B14 closure missing the HF1 direction predicate), which is honest, unclaimed, and class-bound. It would:
+- Re-run my own instrument `verify_f2b_rev14_candidate.py` at the pinned candidate 48cadb72 with an added direction check derived from the live `implication_ledger.one_way_entailments`.
+- Confirm worker-080's finding independently (an independent replication of a direction inversion — valuable because it's a *second* instrument, and my instrument already had 16 checks).
+- Issue an erratum: my prior verdict "CANDIDATE_NOT_ACCEPTANCE_READY" stands (it was not ready for other reasons), but the H1/H2/A6/SEP-6 "pass" family statuses must be read with the direction caveat: H1/H2 content predicates passed but the candidate's HF1 statement asserts the inverted entailment, so "closed" is wrong.
+- Provide the gate owner with a per-candidate direction table for the decision set (at least 48cadb72, 84b5d3fa, 9ab32ee3, 51c253c4) measured by *my* independent extraction of the direction fields.
+
+Actually, wait. Before committing, let me check whether worker-080's direction census instrument already includes everything and whether a second replication adds value. The project's process rule: "two independent non-author verdicts" are required for gates; for worker measurements, replication is valued ("replicated by worker-079/075"). A direction inversion finding by a single worker (080) that contradicts two candidate "CORRECT" tags in the REC36 census is exactly the kind of claim that needs independent replication. And my slot has a natural reason: my prior closure verification passed the candidate's H1 family without checking direction — so an erratum + replication is the "run the control" discipline the project explicitly prizes.
+
+Also, importantly: which candidate will the lead freeze at 02:15? If the lead picks 9ab32ee3 or 51c253c4 based on worker-080's single census, an independent replication of the direction classification directly de-risks the fold. That's high value with ~30 min effort.
+
+Let me inspect the data to confirm feasibility:
+1. Live C0 `schemas/af_scc_c0_vacuum.yaml` (b2ab6acb2bbe): find `implication_ledger.one_way_entailments` and `HF1` fields, and the must_not_conflate[0]/forbidden_transfers[0] carriers.
+2. Candidate set paths: from worker-070's census frame (artifacts/worker-070/f2b_candidate_census/frame.json) — 10 candidates; I'll take the 4 relevant ones (48cadb72, 84b5d3fa, 9ab32ee3, 51c253c4) or all 10 if the frame gives paths. Better: use worker-070's frame for the candidate list (it's a pinned index) — but that makes my independence weaker. Still, I can enumerate candidates myself from disk (files named like candidate yaml under artifacts/worker-*/...). Simpler: use the REC36 census + worker-080's set. Let me read the live schema and one candidate to design the direction predicate.
+
+Let me look at the live C0 YAML around the ledger and HF1.
+dsh: reasoning:
+The live C0 has a clear `one_way_entailments` ledger at lines 240-250 with the direction C0 => H2loc => C2, and the forbidden reverse at line 247. Now what is "HF1"? Probably a field elsewhere (maybe `implication_ledger.forbidden_transfers` or `conclusion_statement`?). Worker-080 mentions "HF1/HF2 wording" — likely "HF1" is a named hard-failure/finding from a review, or a field in the candidate. Let me search worker-080's census report to learn the exact predicate and the candidates' paths; then design my own independent predicate.
+
+Let me read worker-080's report (pinned already?) at artifacts/worker-080/f2b_hf1_direction_census/report.json. If it exists, I can read its basis — but for independence, I should design my own check from the schemas. However, reading it helps me understand the field naming ("HF1"), which is necessary to locate the text. HF1 likely refers to hard-failure IDs from review verdicts (e.g., reviews name HF1, HF2 as hard failures). Actually worker-080 says "classifies each HF1/HF2 wording against the entailment order in that candidate's own implication_ledger.one_way_entailments". So HF1/HF2 are named slots in the candidate schema? Let me grep the live C0 for "HF" and look at the candidate files.
+
+Let me check the census report and one candidate's structure.
+dsh: reasoning:
+There's no "HF1" token in the schema. So "HF1/HF2" in worker-080's task likely refers to "hard failure 1/2" from *reviews* (e.g., the review's hard_failures list), or to specific carrier lines. Worker-080's census classified "each HF1/HF2 wording" of the 10 candidates — where HF1/HF2 are the two blocking carriers (must_not_conflate[0] = containment denial, forbidden_transfers[0].reason = inverted size premise). So HF1 = carrier 1 (:152 area), HF2 = carrier 2 (:246 area). The direction check: whether the replacement wording at those carriers asserts the correct entailment direction (C0 conclusion entails H2loc; never the reverse).
+
+The live line 152 says "No containment with C2 or C0 is asserted here" — the D1 defect. Candidate 9ab32ee3 line 152 has the repaired text: "E_C2 subset of E_{C^1,1} subset of E_H2loc subset of E_C0 ... so this class's conclusion ENTAILS H2_loc-inextendibility and C2-inextendibility, never the reverse [R3 major: the first replacement inverted the entailment direction for C0 -- H2_loc-inextendibility is weaker and entails the C2 sibling, not this class]".
+
+Wait — I need to get the math right. Which direction is correct? Let's define:
+- E_C0 = set of proper future C0 metric extensions. E_C0 ⊇ E_H2loc ⊇ E_C1,1 ⊇ E_C2 (nested, per line 239).
+- Class conclusion: "no proper future C0 metric extension" = E_C0 = ∅.
+- If E_C0 = ∅, then E_H2loc = ∅ and E_C2 = ∅ (since subsets). So C0-inextendibility ⇒ H2loc-inextendibility ⇒ C2-inextendibility. Ledger says from C0 to H2loc entails. Correct.
+- Conversely, H2loc-inextendibility (E_H2loc=∅) does NOT imply E_C0=∅ since E_C0 is bigger. So H2loc-inextendibility is weaker; it entails the C2 sibling, not this class. Correct.
+
+So the correct wording is: this class's conclusion entails H2loc-inextendibility and C2-inextendibility; never the reverse. Candidate 9ab32ee3 line 152 matches. A candidate that says "H2_loc-inextendibility entails C0-inextendibility" (i.e., H2LOC => own conclusion) would be inverted.
+
+So my independent direction audit:
+For each candidate file:
+1. Parse YAML.
+2. Extract `implication_ledger.one_way_entailments` rows → set of (from,to) pairs and the declared direction.
+3. Extract the text of the two blocking carrier slots (`regularity.must_not_conflate[0]`, `implication_ledger.forbidden_transfers[0].reason`) — plus, importantly, any *asserted* direction sentences in those slots.
+4. Classify each carrier's asserted direction:
+   - correct if it asserts own-conclusion ⇒ H2loc/C2 inextendibility and/or denies the converse.
+   - inverted if it asserts H2loc-inextendibility ⇒ own conclusion (or "C0-inextendibility is entailed by H2_loc-inextendibility"), or asserts C2 ⊆/stronger relations in the wrong sense.
+   - denial if it denies containment/entailment entirely.
+   - neutral_nesting if it states only E-nesting without an entailment direction claim.
+5. Cross-check the classification against the candidate's own ledger direction: a candidate whose text direction *contradicts* its own one_way_entailments rows is self-inconsistent → INVERTED. A candidate whose text direction matches its own ledger → CONSISTENT (but the ledger itself must be checked against the canonical direction, i.e., C0=>H2loc=>C2; if a candidate's ledger is itself inverted vs live, flag LEDGER_INVERTED).
+6. Controls: mutate a correct candidate's direction phrase → inverted detection fires; restore → correct; a candidate with removed carrier → MISSING; live rev13 → DENIAL (known D1) etc. Also control: lexical direction detector must be sensitive to word order (own=>H2loc vs H2loc=>own) and to "entails"/"entailed by" inversions.
+
+Additionally, independently verify the four or more candidates: 48cadb72e507 (worker-044), 84b5d3fa29a6 (?), 9ab32ee39d00 (worker-023), 51c253c46306 (worker-029/080), 1315427fbc92 (worker-083), 4951cc969803 (?), 3cdcaa44e6f1 (HF1-denial), etc.
+
+I need the candidate path list. Let me use worker-070's frame.json (a pinned census index) to get the 10 candidates' paths — that's a legitimate index of staged candidates (not a verdict), and I'll re-measure hashes myself. Let me read it. Also read worker-080's census report to know which path is which — but to keep independence, I'll take paths from worker-070's frame and derive classifications myself. Reading worker-080's report for comparison only *after* computing mine would be ideal, but practically I can just compute mine and then compare in the report.
+
+Time: 01:27. Let me move. First get the frame.
+dsh: reasoning:
+The frame has a `registry` list with candidate paths/hashes. Let me print the full registry.
+dsh: reasoning:
+The frame registry lacks paths (None). I need paths. Let me search the filesystem for files with these hashes. Use `find`/`sha256sum` on candidate yaml files. Better: grep worker-070's report.json which may have paths. Let me look at artifacts/worker-070/f2b_candidate_census/report.json for candidate entries with paths.
+
+Also I can find files by name pattern: `*cand*.yaml`, `*candidate*.yaml` under artifacts/worker-*.yaml. Let me search for the sha256 in worker-070's report and worker-080's report.
+dsh: reasoning:
+I now have all 10 candidate paths + hashes (from worker-070's registry_resolution). Worker-080's census is done. A blind replication by me (worker-003) with an independently written instrument would be valuable: two independent instruments agreeing on the direction classification of the 10 candidates. And it directly addresses the biggest fold risk (freezing an inverted candidate).
+
+But is this the best use of my slot? It's bounded, deterministic, class-bound AF-SCC-C0-VAC-GEN, directly decision-relevant (rev14/rev30 fold due 02:15), and my prior closure verification is on record as missing the direction predicate — so this is also self-correction. I'll do it.
+
+Design of my independent instrument (`audit_f2b_direction.py`):
+
+Inputs (pins): the 10 candidate files (path + expected sha256 from worker-070's registry_resolution — but I'll hardcode the paths with my own measured hashes and fail-closed on drift), live C0 b2ab6acb2bbe, live C2 e9a27996dfd3, FROZEN 815e08079aef, F0 taxonomy 0abb9ed8a961, VARIANT_REGISTRY 6bac9adea19e, VOCAB_ALIASES 46cd9f1eb534.
+
+Method (independent of worker-080's):
+1. Strict YAML load (PyYAML safe_load).
+2. Canonical direction model derived from the class math:
+   - Let E0=E_C0, EH=E_H2loc, E2=E_C2 with E2 ⊆ EH ⊆ E0 (from live F2b line 239 and C2 schema).
+   - Class conclusion K0 = "no proper future C0 extension" (E0=∅); KH = "no proper future H2loc extension"; K2 = "no proper future C2 extension".
+   - K0 ⇒ KH ⇒ K2. Converse forbidden.
+3. For each candidate:
+   a. Read its own `implication_ledger.one_way_entailments` rows → direction pairs; classify the ledger as CANONICAL if it contains (K0→KH) and (KH→K2) and does NOT contain (KH→K0) or (K2→KH) as `entails`; else LEDGER_DEVIANT.
+   b. Extract HF1 site text: `regularity.must_not_conflate` list items (find the H2loc item, i.e., the item containing "H2_loc" and "CURVATURE") and HF2 site: `implication_ledger.forbidden_transfers` item whose reason mentions size/extension class.
+   c. Direction classifier on the HF1 text: parse sentences for direction claims. Independent implementation:
+      - Normalize text (lowercase, unicode arrows, "=>").
+      - Find pairs of anchors: OWN (own conclusion / this class / C0-inextendibility), H (H2_loc-inextendibility / H2loc), C2.
+      - For each sentence, detect explicit direction patterns:
+        * "X entails Y" / "X => Y" / "if X then Y" / "X implies Y" → direction X→Y.
+        * "Y is entailed by X" / "entailed by X" → X→Y.
+        * "never the reverse" / "not conversely" → forbids Y→X.
+        * "weaker" / "stronger" with anchors.
+      - Aggregate the direction claims in the HF1 slot, restricted to (OWN,H) pairs; classify:
+        * EXPLICIT_CORRECT: contains OWN→H and no H→OWN.
+        * INVERTED: contains H→OWN (e.g., "H2_loc-inextendibility ... entails ... C0"), or asserts "H2_loc is stronger".
+        * DENIAL: contains the denial pattern ("no containment ... asserted here") or asserts E_H2loc ⊄ E_C0 / incomparable.
+        * NEUTRAL_NESTING: states E-nesting only without an entailment direction claim (no direction verb).
+        * MISSING: the H2loc item absent.
+      - Also detect self-contradiction: HF1 class != direction implied by the candidate's own ledger (e.g., text says H→OWN while ledger says OWN→H) → SELF_CONTRADICTION flag.
+   d. HF2 classification: the size/converse sentence in forbidden_transfers[0].reason:
+      * CORRECT if it says the converse containment is false / E_C2 strictly smaller than E_C0, or (weaker statement...).
+      * INVERTED if it says "E_C0 strictly larger..." as a *reason for forbidden transfer* in the wrong sense — the live defect D2 is "implication_ledger.forbidden_transfers[0].reason states the size premise inverted". Let me read the live line 247 area to see the exact defect text: line 247: `- {from: "no proper future C2 extension", to: "no proper future H2_loc extension", reason: "the converse containment is false"}` — that looks CORRECT in the live file. Hmm, the live line 247 already says "the converse containment is false". Wait, the D2 defect at :246 per lead-audit: "implication_ledger.forbidden_transfers[0].reason (:246) states the size premise inverted". Let me look at live lines 245-249 to see the defect. Earlier grep showed 247 with correct text. Maybe the defect is in a different reason/row. Let me read the live C0 YAML lines 230-250.
+
+Actually, since candidate files include the repair, the audit needs the *live* defective text as a negative control (must classify INVERTED/DENIAL).
+
+4. Controls (K1..K8):
+   - K1: live C0 must classify HF1=DENIAL and HF2=INVERTED (known defects) — detector alive at the defective bytes.
+   - K2: synthetic text mutation: take a CORRECT candidate, swap "entails" direction ("H2_loc-inextendibility entails this class's conclusion") → INVERTED.
+   - K3: remove the containment sentence → DENIAL or MISSING.
+   - K4: nesting-only text (from cand_nesting_4951cc96) → NEUTRAL_NESTING.
+   - K5: hash drift detection: mutated byte → fail-closed exit 3.
+   - K6: "entailed by" inversion control.
+   - K7: negation control ("never the reverse" alone must not be misread as a direction claim).
+   - K8: duplicate-key/path detector? maybe not needed.
+5. Output: report.json with per-candidate rows (hash, hf1_class, hf2_class, ledger_class, self_contradiction, evidence strings with line numbers), aggregate counts, controls, pins_before/after, falsifier, plus README.md.
+
+Then compare with worker-080's classification (agreement matrix) — but do the comparison *after* my own classification is computed, recorded as a cross-check section (this is a replication, so agreement is the point). To keep it honest: my instrument runs independently; then the report includes a comparison table.
+
+Deliverables:
+- artifacts/worker-003/f2b_direction_control_audit/audit_f2b_direction.py
+- .../report.json
+- .../README.md
+- .../SHA256SUMS
+- runtime/state/w003_checkpoint_<ts>.json
+Then outbox events + checkpoint.
+
+Note on not duplicating: worker-080's task was a "direction census" with its own instrument; mine is an *independent second instrument + replication + self-erratum*. I'll state that explicitly, and I'll also note in the erratum that my prior closure instrument's H1 family status should be read with the direction caveat.
+
+Let me first read the live C0 relevant lines and one candidate to design exact patterns. Let me view lines 140-260 of live C0.
+dsh: reasoning:
+Important: the **live C0 at b2ab6acb2bbe is ALREADY REPAIRED** at line 153! The live file says:
+
+"H2_loc ... The extension sets are nonetheless nested: E_C2 subset of E_{C^1,1} subset of E_H2loc subset of E_C0 ..., so this class's conclusion ENTAILS H2_loc-inextendibility and C2-inextendibility, never the reverse; ... [R2 major: the earlier 'no containment...' was wrong. R3 major: the first replacement inverted the entailment direction for C0 ...]"
+
+Wait — but the handoff and blockers said D1 must_not_conflate containment denial and D2 at :246 are live at rev29 b2ab6acb2bbe. Yet what I just read at line 152-153 shows the repaired text at live b2ab6acb2bbe? Hmm, the hash measured is b2ab6acb2bbe and the file is 35602 bytes (modified 00:53). The handoff said F2b canonical = b2ab6acb2bbe. And the lead-audit blocker at 01:19 says "At FROZEN rev29 b2ab6acb2bbe the F2b schema still carries two blocking carriers: regularity.must_not_conflate[0] (:152) denies a containment the same file asserts, and implication_ledger.forbidden_transfers[0].reason (:246) states the size premise inverted".
+
+But line 152-153 in the file I just read says the containment IS asserted and the earlier denial was wrong — that's the *fixed* wording. And line 247 says "C2 is a strictly stronger regularity requirement (E_C2 subset of E_C0), so C2-inextendibility is strictly weaker" — hmm, this is the D2 candidate? Wait, "C2 is a strictly stronger regularity requirement ... so C2-inextendibility is strictly weaker" — is this inverted? Let's analyze:
+
+Row: from "no proper future C2 extension" to "this class", reason: "C2 is a strictly stronger regularity requirement (E_C2 subset of E_C0), so C2-inextendibility is strictly weaker".
+
+Math: C2 is a *stronger regularity requirement* on the metric, so E_C2 ⊆ E_C0 (C2 extensions are a subset). If E_C2 = ∅ (C2-inextendible), does E_C0 = ∅? No, because E_C0 ⊇ E_C2. So C2-inextendibility does NOT entail C0-inextendibility; C2-inextendibility is strictly weaker. The reason text says exactly that... but hold on: "C2 is a strictly stronger regularity requirement (E_C2 subset of E_C0), so C2-inextendibility is strictly weaker" — that seems CORRECT. Unless the defect is "strictly larger extension class" anywhere. Let me grep the live file for "strictly larger" and "no containment".
+
+Earlier grep of live file for HF1 pattern: I grepped "HF1|one_way..." and line 152 was the denial text — but that grep output was from the *previous* command run at 01:26 and showed line 152 as denial: `- "H2_loc ... No containment with C2 or C0 is asserted here; ..."`. Now the read shows line 153 with repaired text. Wait, the earlier grep output (command "grep -n \"HF1|one_way_entailments|H2LOC|H2_loc|own_conclusion|entail\"" ) showed:
+
+```
+152:    - "H2_loc (locally square-integrable curvature) is a distinct regularity-axis value phrased in terms of CURVATURE, not metric differentiability. No containment with C2 or C0 is asserted here; the informal phrase 'strictly between' is not used and must not be cited (worker-16 F2b-16-02 accepted)."
+```
+
+But the read tool now shows:
+
+```
+152:   must_not_conflate:
+153:     - "H2_loc ... The extension sets are nonetheless nested: ... ENTAILS ... [R2 major... R3 major...]"
+```
+
+These are inconsistent with each other! Unless... the file changed between the two commands! The file mtime was 00:53 earlier (ls showed schemas/af_scc_c0_vacuum.yaml Sep 12 00:53). Hmm, but wait: the earlier grep was run at ~01:26 and the read at ~01:28. Did someone write the file in between? CF-29/CF-30 warn about unauthorized writes. Let me re-measure the hash now and compare with the earlier sha256sum: earlier `sha256sum` gave b2ab6acb2bbe... and the grep showed line 152 denial. Then the read shows repaired text at 153. That's contradictory — same hash can't have two contents.
+
+Wait, look carefully at the earlier grep output lines: it printed line 152 as the denial text and line 225, 232, 239, 240... The read (offset 140, limit 115) shows line 152 = must_not_conflate:, 153 = repaired text. So the file has 35602 bytes now and 336 lines.
+
+Possibility: the earlier `grep` command ran in a shell whose cwd was the repo, and `schemas/af_scc_c0_vacuum.yaml` there. Both commands used the same path. Something's off. Unless another agent wrote the file between 01:26 and 01:28, changing line numbers and content — but then the hash would differ from b2ab6acb2bbe. My later read didn't re-measure the hash. Let me re-measure now and also check mtime.
+
+This is exactly the "live moving target" phenomenon my prior instance noted (N6). The lead-formulation may have landed the rev14/rev30 fold *early* (it was due 02:15). If the live C0 has been repaired at a new hash, that's a major state change, and my direction audit's premise changes: the live file may now be the repaired candidate.
+
+Let me immediately re-measure hashes and check what's live, plus FROZEN.json. This is critical context. Also check for `.sha256` sidecar / mirrors.
+dsh: reasoning:
+**The rev14 fold has landed!** At 01:25:42 the live C0 was written with rev14 (`revised_at: 2026-09-12T01:35:00+08:00` — future-dated by ~10 min, another timestamp anomaly). New hash: `c4d17fe6ac59b5a3...`. C2 also changed: `c1013e48698806a6...` (was e9a27996dfd3). F1 is still d9cebb9404b2 (unchanged? It measured d9cebb9404b2 — presumably rev13 unchanged or rev14 same bytes?). FROZEN.json is still 815e08079aef (rev29) — not yet re-frozen (or the fold is mid-flight). f1_falsifier_tests.jsonl is now db1da7a5c0cc (was 56bcb4b3234b) — so the suite WAS rebound.
+
+So the lead-formulation is executing the authorized rev14 fold right now (started 01:25:42). This changes everything: the highest-value bounded worker task now is to **independently verify the just-landed rev14 bytes** — but many workers will jump on that. However, my slot's thread (F2b rev14 candidate closure + direction audit + fold readiness) makes me well-positioned: I have the closure instrument and the REC36 census. The natural, high-value, bounded task: **post-fold independent verification of the landed rev14 C0/C2 bytes** — specifically:
+1. Confirm the two carriers are closed at the new hash (direction-correct wording, no denial, no inversion).
+2. Confirm no unauthorized/unintended semantic changes vs the recorded candidate (which candidate was landed? does c4d17fe6 equal one of the 10 staged candidates? Check which).
+3. Confirm the FROZEN/manifest consistency: live C0 c4d17fe6 vs FROZEN 815e08079aef still pins b2ab6acb2bbe (pre-fold) → the declared-hash mismatch is expected mid-fold, but the checker must flag it; also entry_hashes.json, .sha256 sidecars, mirrors need re-pinning (the "any byte move voids current verdicts" consequence).
+4. Confirm the classsep detector + contract checker give zero findings on the new bytes.
+5. Report the direction classification of the landed bytes with my independent instrument, and the post-fold verdict-void census (which accept/revise verdicts are now unbound).
+
+But careful: within minutes, several workers will do "rev14 post-landing verification". Actually the lead-audit has `astra-life05-verify-gform-r3` scheduled at 02:45 to do exactly the per-file binding table + re-run at new pins. Workers will swarm.
+
+Hmm. But there's a specific, bounded, *narrow* thing that only my slot has: **the direction predicate my prior closure verification lacked**, now applied to the *landed* rev14 bytes plus the *landed-vs-candidate delta*. Even if others verify the fold, the direction check of the landed bytes is the one that prevents freezing an inverted candidate — and my prior record needs the correction. Also: the landed C0 rev14 note says it replaced the denial "by the direction-correct nested-extension-set wording ... this class's C0-inextendibility ENTAILS the H2_loc and C2 conclusions, never the reverse". The live bytes I read match. So my independent instrument would confirm.
+
+Additional unique value: **check whether the landed bytes match one of the staged candidates already direction-classified** (c4d17fe6 is a new hash — none of the 10 candidate hashes). So the landed rev14 is a *new composition* that no prior census classified. That's a genuine gap: worker-080's direction census covered 10 candidates, none of which is the landed c4d17fe6. So a direction audit of the *landed* bytes is exactly the missing control. And the landed C2 (c1013e48) also changed — need to check its mandatory-void list.
+
+Also check: did the fold change F1? measured d9cebb9404b2 = same as before, so F1 unchanged (rev13). FROZEN still rev29 → the fold may be incomplete (lead may be mid-write). The REC-36 fold requires FROZEN rev30. If FROZEN lands after I finish, my measurement records the state at my measurement time (hash-pinned), which is fine and useful: it will show which parts landed at 01:26 and which were still pending.
+
+Given the rush, let me define the task tightly:
+
+**Task W003-F2B-REV14-LANDED-DIRECTION-CONTROL-01**: independent, read-only, hash-pinned verification of the just-landed rev14 C0 (c4d17fe6ac59, 36763 B) and the co-landed C2 (c1013e486988) at measurement instant, with:
+- an independently written entailment-direction classifier (control K1..K8),
+- a comparison against the 10 staged candidates' direction classes (worker-080 replication matrix),
+- pre-fold vs post-fold carrier state (b2ab6acb D1/D2 defective → c4d17fe6 direction-correct),
+- a post-fold binding-drift census: which pinned artifacts (FROZEN 815e08079aef, entry_hashes.json, .sha256 sidecars, mirrors, acceptance corpus) still name the superseded b2ab6acb/e9a27996 pins,
+- an explicit erratum on my own W003-F2B-REV14-CANDIDATE-INDEPENDENT-CLOSURE-01 (the H1/H2 family "pass" statuses lack the direction predicate; the 48cadb72 candidate is now independently classified),
+with falsifier: land bytes move → re-run; any pinned byte drift voids.
+
+Wait — but the "post-fold binding-drift census" is what worker-065 does (sidepin census at 01:32 future-dated — actually that was real: worker-065's W065-CANON-SIDEPIN-CENSUS-04 status printed earlier with created_at 01:32, which is *future* relative to now 01:26... hmm, so worker-065 has already written a sidepin census with a future timestamp. Its report exists. It probably measured pre-fold bytes though (b2ab6acb). Let me not overlap too much: focus on direction + landed-vs-candidate, and include a compact "fold completeness" table (which files moved at my measurement instant) as scope context rather than a full binding audit.
+
+Let me now execute fast:
+
+Step 1: Snapshot the landed state: hashes of C0, C2, F1, FROZEN, f1 suite, taxonomy, VARIANT_REGISTRY, VOCAB_ALIASES, rule_spec, entry_hashes, sidecars, mirrors; mtimes. Also check which staged candidate (hash) equals the landed bytes (none likely) and measure the diff between rev13 b2ab6acb (do I have those bytes? Maybe a copy exists in artifacts/... yes many controls/snapshots contain b2ab6acb copies; e.g., artifacts/worker-070/... snapshots, or FROZEN pinned. I can find a copy of b2ab6acb by scanning artifacts for the hash). For the pre/post diff I can use the .sha256 sidecar or git? The repo is a git repo (`.git` exists). `git diff`/`git show` might have rev13 bytes. Let me check git status/log for schemas. Actually simplest: find any file on disk with sha256 b2ab6acb2bbe (there are many candidate copies, but rev13 exact = live pre-fold; e.g., artifacts/worker-0XX/...). Let me search with a targeted find on likely dirs (too many files: artifacts/ has 126 worker dirs). Use `grep -rl` no; use a python script walking artifacts for small yaml files and hashing until found. Could be slow but artifacts count maybe tens of thousands. Limit to `*af_scc_c0_vacuum*.yaml` names.
+
+Step 2: Write the instrument + run.
+
+Step 3: Report + README + SHA256SUMS + events + checkpoint.
+
+Let me first do step 1 quickly. Also verify the C2 landed changes (what rev). And grab the exact carrier texts post-fold, plus line numbers.
+dsh: RATE_LIMIT: Too many requests. Your current concurrency is 21, which exceeds your concurrency limit of 20 based on your remaining balance. Please top up your balance to restore your concurrency.

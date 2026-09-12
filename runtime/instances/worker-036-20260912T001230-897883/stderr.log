@@ -1,0 +1,371 @@
+dsh: reasoning:
+Let me start by understanding the environment. I need to read handoff/map and comms. Let me look at the workspace.
+dsh: reasoning:
+No handoff directory in the workspace root? Let me look for it. The task says "Read handoff/map and comms." Perhaps it's under workdir, or the launch_swarm.sh defines it. Let me check launch_swarm.sh and workdir.
+dsh: reasoning:
+The swarm root is /data3/guoshaoyang/workdir/ai4math-swarm. Let's read the handoff and map, plus comms. Worker=036 is a specific worker ID. Let me check the state directory and comms.
+dsh: reasoning:
+Let me read HANDOFF.md, README.md, the research map, and check comms inbox/outbox for worker 036.
+dsh: reasoning:
+I'm worker=036. There's a runtime/instances/worker-036-20260912T001230-897883 directory. Let me look at it. It probably contains an assignment prompt. Let me read the ASTRA_HANDOFF.md, README.md, and this instance directory.
+dsh: reasoning:
+I'm worker-036. There's no comms/inbox/worker-036.jsonl. Let me check the assignments directory in comms/outbox/assignments, and check if there's an assignment for worker-036. Also check the map for assignments. Let me check the worker slots — the runtime has worker-001..041 instances created at 00:12:30. Likely these were spawned by a parallel runner with a generic prompt. No specific assignment for worker-036 exists yet.
+
+The task: "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit."
+
+So as worker-036, I need to:
+1. Read handoff/map and comms — done partly.
+2. Take one class-bound task (from the immediate queue / assignments, or propose one).
+3. Emit valid JSON with IDs, evidence, hash, falsifier.
+4. Checkpoint.
+5. Exit.
+
+Let me look at comms/PROTOCOL.md, and check the map's assignments and any open work for worker slots. Also check artifacts produced by other workers (flash-XX) to understand the format and avoid duplication. Let me check deepseek-flash-07 outbox dir (a directory?) and the recent worker outputs.
+
+First, let me read PROTOCOL.md and check if there's an inbox file for worker-036 or an assignment.
+dsh: reasoning:
+No inbox assignment for worker-036. The prompt says "Take one class-bound task" — if no assignment exists, per launch_swarm prompt for deepseek-flash workers: "Work only on a class-bound task assigned by a group lead; if no assignment exists, inspect the immediate queue and propose one artifact-backed task without claiming completion."
+
+But my specific prompt as worker=036 in the bounded-execution harness: "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit."
+
+So I should pick one class-bound task from the immediate queue/assignments that fits a bounded worker. Let me read the PROTOCOL.md, the assignments in the map (open ones), and see what recent workers have done to avoid duplication and to see the expected schema.
+
+Let me look at the map's assignments (open) and the schemas/events.schema.json for valid JSON event format.
+dsh: reasoning:
+Important: assignments are keyed by node_id, and most early assignments had assignee deepseek-flash-XX. Notice that workers here are named worker-036, not deepseek-flash-XX. But the ledger has worker-06, worker-16, worker-01, worker-03, worker-05, worker-07, worker-08, worker-09, worker-14, worker-17, worker-18, worker-20 in artifacts. So worker-NN is another naming scheme from the bounded worker harness.
+
+Key question: what class-bound task should worker-036 take? Per the harness prompt: "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit."
+
+Given no assignment exists for worker-036, I should pick an immediate-queue task that is unclaimed and bounded, produce an artifact with hash, emit JSON event(s) to comms/outbox/worker-036.jsonl, checkpoint, exit.
+
+But first, I should check what recent workers (worker-01...worker-20) did, to avoid duplication and to find a gap. There's a supervisor log and a current_checkpoint.json that might list open worker tasks. Let me look at the checkpoint, counts.tsv, supervisor.log tail, and the deepseek-flash-07 outbox directory (odd). Also check artifacts/worker-* to see outputs.
+
+Let me first look at what's in runtime/state/current_checkpoint.json (22KB) and counts.tsv.
+dsh: reasoning:
+There are 100 workers launched (worker-001 ... worker-100), but the runtime/instances only listed up to ~041 in my earlier listing (truncated at head -60). All started at 00:12:30 with the same generic prompt. So many workers are racing for the same task. I need to pick something distinct and bounded quickly, produce a genuine artifact with a hash, emit valid JSON, checkpoint, and exit.
+
+Given the swarm state:
+- F0/F1/F2a/F2b schemas exist with canonical hashes.
+- L0/L1 ledger exists.
+- N0 numerics flat_wave.py exists; replication provisional.
+- A0 rubric exists, A1 reviews exist, A2 ablation design exists.
+
+The immediate queue is basically all assigned. But there might be gaps. A bounded worker task that is class-bound and doesn't duplicate: many worker-NN assignments exist in the map for worker-06, worker-16, etc. But worker-036 has none.
+
+The instruction says "Take one class-bound task". So I should take a class-bound task from the map (one of the four classes: AF-WCC-VAC-GEN, AF-SCC-C2-VAC-GEN, AF-SCC-C0-VAC-GEN, AF-WCC-SCALAR-SPH), do bounded work that produces a real artifact + hash + falsifier, emit the JSON event(s), checkpoint, exit.
+
+To avoid duplication with the 99 other workers, I should pick something specific and check for existing artifacts. Ideas for a bounded, genuinely useful, verifiable task:
+
+1. A cross-schema disjointness/leak test: write a fixture-based checker that tests whether F1/F2a/F2b schemas are mutually distinguishable on concrete test cases. There is already schemas/semantic_contract_tests and classsep_regression. Let me inspect those.
+
+2. A canonical-hash consistency check: verify that the hashes in runtime/state/artifact_hashes.json match the bytes on disk right now, and that FROZEN.json matches; produce a machine-checkable report. This is a bounded audit task, class-bound via node IDs F0/F1/F2a/F2b (classes AF-WCC-VAC-GEN etc.). Falsifier: any canonical file whose bytes differ from frozen manifest hash. This is directly an assignment falsifier for astra-life01-publish-frozen. That's high value and verifiable.
+
+3. Verify the map's declared_hash_matches_measured claims against actual files.
+
+The task must be "class-bound". Task #2 binds to node F0/F1/F2a/F2b and classes. Good.
+
+But wait — there could already be an existing artifact doing exactly this. Let me check artifacts/ for the latest worker outputs and see what's been produced. Let me list artifacts by mtime, and check schemas/, reviews/, runtime/state/artifact_hashes.json freshness.
+
+Also let me check what the supervisor does with worker outputs — maybe there's a specific expected output path/format (e.g. runtime/instances/worker-036-.../result.json). Let me read supervise_swarm.sh and supervise_loop.sh and independent_supervisor_100.sh.
+dsh: reasoning:
+OK. So worker-036 was launched from independent_supervisor_100.sh with the bounded prompt. 100 workers race. I need to do one class-bound task, emit valid JSON with IDs/evidence/hash/falsifier, checkpoint, exit.
+
+To avoid collisions with 99 other identical workers, I should pick a task quickly and write artifacts under a unique path (e.g., artifacts/worker-036/...). The most valuable and safely bounded task for me: canonical-vs-frozen hash verification of the four canonical schema files + taxonomy, bound to classes F1/F2a/F2b (AF-WCC-VAC-GEN, AF-SCC-C2-VAC-GEN, AF-SCC-C0-VAC-GEN). Produce:
+
+1. A verification script (deterministic, re-runnable) at artifacts/worker-036/verify_canonical_hashes.py or schemas/semantic_contract_tests/? Better to keep in artifacts/worker-036 to avoid clobbering canonical tree.
+2. A JSON report artifact with measured sha256 values of canonical files, compared against runtime/state/artifact_hashes.json and any FROZEN manifest.
+3. Emit artifact/status events to comms/outbox/worker-036.jsonl with event_id, event_type, created_at, actor, node_id, class_id, evidence_refs, sha256, falsifier, next_falsifier.
+4. Checkpoint: write a checkpoint JSON under runtime/state/ (e.g., w36_checkpoint_1.json) and maybe append to runtime/state/checkpoint_log.jsonl? Careful: checkpoint_log.jsonl is a shared file written by the controller. Appending is likely fine — other workers use their own files (e.g., w06_checkpoints.jsonl). I'll write w36_checkpoint_1.json and a w36_checkpoints.jsonl in runtime/state.
+
+Before finalizing task choice, check for existing similar artifacts to avoid duplication. Let me look at recent artifacts and the schemas dir, plus check if the canonical hashes actually match. Let me quickly do a hash check now — it's cheap and directly informative.
+
+Also check the map's controller_gate_audit and frozen_artifacts, plus "declared_hash_matches_measured" per node.
+dsh: reasoning:
+Now I see the state. The map's frozen_artifacts has stale entries, and G-F0 notes "Publication pair F0 is divergent". The canonical schema hashes: F1 b65fcc0f0118..., F2a 8dae50da1ab5..., F2b a8d899d2941f... and taxonomy 565a6e505188....
+
+There are already workers doing class separation (worker08), f1_falsifier_tests.jsonl (125KB, just modified at 00:13 — likely worker-03 or similar), semantic_contract_tests (00:14).
+
+What's a good unique bounded task? Let me think about gaps:
+
+1. **Canonical-vs-declared hash audit** — verify all files referenced in map (frozen_artifacts, artifact_sha256_measured) match disk bytes, and produce a report. This is directly useful for the controller's next lifecycle: it catches "FROZEN.json lists a hash not on disk". Very bounded and objectively verifiable. Class-bound: nodes F0/F1/F2a/F2b with class ids.
+
+2. **Cross-check `declared_hash_matches_measured`** in map against actual hashes for all nodes.
+
+3. **A concrete fixture test** testing disjointness via the existing classsep regression runner on the current canonical hashes: run `runtime/bin/classsep_regression.py` and record output. But worker-06/16 are doing the union escape rate; duplication risk.
+
+4. **N0**: verify the numerics lock guard passes and that numerics/spherical_solver is absent, and that the replication verdict is hash-pinned. flash-13/14/15 already did this.
+
+Given the risk of duplication and the need for a unique artifact, option 1/2 is the best: a hash-binding audit of the map's current claims against disk. Nobody appears to have done exactly that as a standalone artifact; the controller's lifecycle does it internally, but an independent worker verification is valuable as "independent evidence" for gates. And it's class-bound: F0/F1/F2a/F2b/L0/L1/N0/A0 nodes each have classes.
+
+Let me check: does the artifact_hashes.json currently match? Let me compute hashes of canonical files and compare with map's declared artifact_sha256_measured and runtime/state/artifact_hashes.json. This will produce real findings — either "all match" or specific mismatches (e.g., af_scc_c0_vacuum.yaml changed at 00:10 after measurement at 00:11?).
+
+Let me look at the map's nodes for artifact_sha256_measured. The keys in the map. Let me check the structure of "run", "gates", "claims", and where artifact_sha256_measured lives (per node in run.nodes presumably).
+dsh: reasoning:
+The "artifact_sha256_measured" is probably a top-level key or under a different structure. Let me grep the map for artifact_sha256_measured.
+dsh: reasoning:
+Now I can do a **hash-binding audit**: for every node in the map's groups, take artifact path + artifact_sha256_measured, recompute sha256 of the file on disk, and compare. Also compare with `runtime/state/artifact_hashes.json` when present. This is a genuine, deterministic, machine-checkable task that produces a finding (possibly mismatches). It binds to node IDs and class IDs, has an artifact + hash + falsifier.
+
+Additionally, I could check that the review verdicts referencing hashes bind to the measured canonical hashes — but reviews/ has 33 files; maybe too big. Keep bounded: node-level declared-vs-measured hash audit plus frozen_artifacts manifest check. That's achievable in maybe 10 minutes.
+
+Let me first do a quick dry check to see if there are mismatches (so my claim is real, not fabricated).
+
+Node paths:
+- groups[0] formulation: nodes F0/F1/F2a/F2b, artifact paths presumably schemas/... Let me print the full node records for artifact paths and class ids.
+dsh: reasoning:
+Excellent. This is a rich seam: `declared_hash_matches_measured: false` on F0, F1, F2a, F2b, A1. That's a real finding! Let me verify by recomputing disk hashes and see whether the map's `artifact_sha256_measured` matches disk now.
+
+Let me write a small standalone validator script and run it. First a quick ad-hoc check.
+dsh: reasoning:
+Very interesting and concrete:
+
+- The map's `declared_hash_matches_measured` is **false for F0/F1/F2a/F2b** even though the map's `artifact_sha256_measured` **does** match disk bytes. That means the flag refers to some *declared* hash somewhere else (perhaps in `artifacts/formulation/FROZEN.json` or the `.sha256` files or `artifact_hashes.json`), and the declared hashes there diverge from the measured. Need to find what "declared" means: likely the hash declared in the artifact's own FROZEN.json / sha256 sidecar / artifact_hashes.json.
+
+- A1 directory hash mismatch: the reviews/ directory changed after the map's measurement (new reviews added continuously). So the A1 node artifact hash is stale. Note my directory-hash algorithm may differ from the controller's, so A1 mismatch could be an artifact of ordering/algorithm — need to verify with the controller's own hashing function. Let me look at checkpoint.py / accounting.py to see how directory hashes are computed. If the controller uses a different algorithm, my "mismatch" for A1 would be a false claim. Must check.
+
+So the real, defensible finding: for F0/F1/F2a/F2b the map records `declared_hash_matches_measured=false` while the map's measured hash equals current disk bytes — i.e., the divergence is between a *declared* hash (somewhere: FROZEN.json or schema-side sha256) and both. Let's find the declared hashes.
+
+Let me inspect:
+- artifacts/formulation/FROZEN.json
+- schemas/af_scc_c0_vacuum.yaml.sha256
+- artifact_hashes.json entries for these paths
+- the controller's hash function (checkpoint.py, accounting.py)
+
+This will let me produce a precise, reproducible audit: "hash-binding audit of canonical artifacts", with exact evidence paths, sha256 prefixes, and per-node verdicts. Falsifier: any file whose recomputed sha256 equals its declared hash but differs from the map's measured value (i.e., my audit method is wrong) — or better: "If recomputation with the controller's own hash routine (research_map/accounting.py) yields different values than this report, the report is invalid."
+
+Let me look at the hash functions and declared sources.
+dsh: reasoning:
+Interesting. artifact_hashes.json did not show entries for af_wcc/af_scc/formulation_taxonomy/FROZEN? Wait, earlier the current_checkpoint.json showed artifact_hashes with schemas/af_wcc_vacuum.yaml etc. But that was current_checkpoint.json, not artifact_hashes.json? Let me check runtime/state/artifact_hashes.json keys. My grep condition may have failed because keys differ. Let me print some keys.
+
+Also interesting: FROZEN.json says artifact/formulation/formulation_taxonomy.yaml sha 01e7f841... and frozen_at 00:24 (in the future? current time ~00:15). Hmm, frozen_at 2026-09-12T00:24:00+08:00 — that's odd, could be a future timestamp (the swarm runs with fake dates?). Actually current time is Sep 12 00:15 or so. FROZEN.json at 00:24 is in the future — maybe the lead set it ahead. That's a potential finding (backdated/forward-dated freeze timestamp). But careful: maybe the host date differs. Let me check `date`.
+
+Also the artifact/formulation tree is the authoring tree which is divergent from canonical - that's already known (G-FORM reason). My audit should focus on what's genuinely new and checkable.
+
+Wait — FROZEN.json claims "frozen_at 00:24" and revision 22 while file mtime may be earlier. Let me check mtime of FROZEN.json and current date. If frozen_at is in the future relative to now, that's a forward-dated manifest — a real integrity finding.
+
+Let me check:
+1. `date` now.
+2. mtime of artifacts/formulation/FROZEN.json.
+3. artifact_hashes.json keys.
+4. the map fields for A1 and where "declared" hash comes from. Let me grep the map for "declared" to find the source. Maybe apply_events.py computes `declared_hash_matches_measured` by comparing the event's declared sha256 to measured. Let me grep in research_map/*.py for declared_hash_matches_measured.
+dsh: reasoning:
+Let me read astra_lifecycle.py around lines 70-110 to understand the declared hash source. This is the key to interpreting `declared_hash_matches_measured=false`.
+
+Also check artifact_hashes.json structure: {'hashes':..., 'registry':...}.
+
+And time is 00:14:48; FROZEN.json frozen_at 00:24:00 is 9 minutes in the future — forward-dating. But mtime is 00:14:46, just written. So the manifest declares a freeze time after it was actually written... which may just be sloppy authoring (they wrote 00:24 instead of 00:14). It's a small but real integrity finding: "frozen_at timestamp is in the future relative to the manifest's own file mtime and wall clock at audit time". Good evidence-based finding, but low impact. Still, this matches assignment F0 falsifier about FROZEN.json listing hash not on disk.
+
+Focus: read astra_lifecycle.py lines 60-110.
+dsh: reasoning:
+Now the picture is clear:
+
+`declared_hash_matches_measured` compares node's `artifact_sha256` (declared, presumably set from an event) vs controller-measured digest. It is false for F0/F1/F2a/F2b and A1 because the declared hashes are stale (the artifacts were revised after the declared hash events). That's a legitimate, real drift signal — but interpretation requires knowing the declared values. Let me extract each node's `artifact_sha256` (declared) and compare.
+
+Then my audit artifact can say precisely:
+- node, class_id, path, declared sha256 (from map node field `artifact_sha256`), measured sha256 (recomputed now), map's recorded measured value, whether map-recorded measured == disk-recomputed, and match status.
+- Plus: frozen_artifacts entries active:true and whether they match disk.
+- Plus: publication_status mirror pairs canonical vs authoring (FROZEN.json alignments).
+- Plus: FROZEN.json manifest self-check: recompute all listed file hashes and report mismatches; check frozen_at vs wall clock/mtime.
+
+That's a coherent "hash-binding audit" artifact. It directly supports G-F0/G-FORM/G-AUDIT evidence and is class-bound.
+
+Important caveats to avoid over-claiming:
+- A1 directory hash mismatch: use the controller's digest() algorithm from astra_lifecycle.py for directories (relpath\0sha\n). Let me re-run with that exact algorithm. If it still mismatches, the map's recorded A1 hash is stale (reviews/ changed since measurement, which is expected because it's a live directory). Report as expected-drift, not fraud.
+- For F0/F1/F2a/F2b, map measured hash == disk now (verified with file sha256, exact same algorithm).
+- A1's declared hash vs measured: expected because directory changes.
+
+The deliverable should be a script + JSON report + a short markdown summary, plus outbox events and a checkpoint. Let me also verify FROZEN.json manifest hashes (all files listed) — this could yield real findings: several authoring files may have changed after the manifest was written. FROZEN.json was written at 00:14:46, and mtime of authoring files may be older/newer. Let me compute.
+
+Let me now check node's declared `artifact_sha256` values in the map and compute FROZEN.json manifest consistency.
+
+Plan:
+1. Write `artifacts/worker-036/hash_binding_audit.py` — deterministic auditor that:
+   - loads research_map.json, runtime/state/artifact_hashes.json, artifacts/formulation/FROZEN.json
+   - computes file sha256 and controller-style directory digest
+   - emits JSON report to stdout (and optionally to a path)
+   - includes a `--json` output.
+2. Run it, write `artifacts/worker-036/hash_binding_audit_report.json` + `SUMMARY.md`.
+3. Validate JSON parses; hash both files.
+4. Emit outbox events (artifact + status/claim) in `comms/outbox/worker-036.jsonl` with all required fields.
+5. Checkpoint: `runtime/state/w36_checkpoint_1.json` (+ `w36_checkpoints.jsonl`).
+6. Exit with summary.
+
+Let me first gather the declared hashes and FROZEN manifest check ad hoc to know what findings will be.
+dsh: reasoning:
+Very interesting. Findings so far:
+
+1. **Map-recorded measured hashes are stale for A1** (map says c1e51c6b18a33024, disk now 745ec796131252fb with controller digest algorithm). Reviews directory is live, so the recorded hash drifts continuously. This means: any gate requiring "verdicts binding to current canonical hashes" for A1 is unstable; the A1 artifact hash in the map cannot be used as a stable binding target. That's a real, precise finding.
+
+2. **Declared-hash drift for F0/F1/F2a/F2b**: map nodes carry `artifact_sha256` (declared) that is stale relative to measured — this is the reason `declared_hash_matches_measured=false`. The current measured hashes match disk. So the "declared" field is a stale event hash. This matters for gate evidence: any verdict or evidence_ref that cites the declared hash (66bf917b for F0, 7a3e1f93 for F1, 23fec0e9 for F2a, e6b1af2b for F2b) does not bind to current content. Whether verdicts cite those hashes is the key question — the G-FORM reason said latest verdicts cite revise at "these hashes" b65fcc0f etc. Let me check reviews for citations of the stale hashes vs current.
+
+3. **FROZEN.json frozen_at is forward-dated**: revision 23 at 00:26:00 while now is ~00:15, and the file mtime is 00:14:46. It changed from rev 22 to rev 23 between my two reads (rev 22 at first read, rev 23 now). The lead-formulation is actively editing. So forward-dating is a consistent authoring pattern (they set freeze time in the future, likely intentionally to mark a deadline). This is a weak finding; but "frozen_at 00:26 > wall clock 00:15" is objectively a forward-dated freeze claim. I can report it as an observation with severity "annotation", not fraud. Actually careful: FROZEN.json rev bumped from 22 to 23 within a minute — the authoring tree is a moving target. My audit must record the hash of FROZEN.json at audit time and note it may change (falsifier covers re-run drift).
+
+The most valuable bounded deliverable, given the assignment falsifiers:
+- **Hash-binding audit (independent worker-036)**: a reproducible script that reports, for every node: declared hash (map field), map-recorded measured hash, fresh measured hash, and classification: `binding_ok`, `declared_stale`, `measured_stale`, `unbound`.
+- Finding: F0/F1/F2a/F2b have stale declared hashes; A1's recorded measured hash is already stale (live dir); all other nodes bind.
+- Plus a manifest check of artifacts/formulation/FROZEN.json against disk: currently 0 mismatches, 0 missing — good; but frozen_at forward-dated and revision moves.
+
+Now, importantly, this must be a *class-bound* task. I'll bind it to F0/F1/F2a/F2b classes (AF-WCC-VAC-GEN, AF-SCC-C2-VAC-GEN, AF-SCC-C0-VAC-GEN) and the A1/GLOBAL audit node.
+
+Before writing, let me check the reviews for cited hashes to add the second layer: "which current reviews cite stale declared hashes" — this is directly actionable for G-FORM/G-AUDIT. Let me check reviews/ directory listing and grep for the stale hash prefixes.
+
+Actually, keep it bounded. But it's cheap to grep for the four stale prefixes across reviews/, comms/outbox/, and research_map/. Let me do that; if found, it's a stronger finding: verdicts cite non-current hashes (already known for F1 etc.). If not found, report "no current review cites the stale declared hash".
+
+Let me grep.
+dsh: reasoning:
+There are reviews citing stale hashes. There's already an `A1-rebind-coverage.json/md` (from lead-audit presumably) that covers rebinding. So the "which reviews cite stale hashes" angle may duplicate the audit lead's work. Let me check A1-rebind-coverage.json quickly to see what it covers, so my artifact adds something distinct rather than duplicating.
+
+Also note: `reviews/` is a live directory that keeps changing; the map's A1 measured hash is stale. The distinctive contribution I can make: a **fresh, reproducible measurement audit** that binds at a specific timestamp and states exactly which map fields are stale, with a script that anyone can re-run. The A1-rebind-coverage may be about review verdicts, not hash registry integrity.
+
+Let me quickly peek at A1-rebind-coverage.json (top-level) and check which workers are doing similar hash audit work (worker-03? worker-01?). Let me check artifacts dirs for recent files to avoid duplication.
+dsh: reasoning:
+There's `artifacts/worker-03/publish_binding_check` and `review_hash_binding` — worker-03 is likely doing exactly the hash-binding check I was considering. Let me look at what worker-03 produced (00:14) to avoid duplication.
+
+Also `artifacts/worker-01/artifact_integrity_recon.json`. Let me check both quickly.
+dsh: reasoning:
+worker-03 has covered publish-binding and verdict-binding extensively. So a pure "hash binding audit" duplicates worker-03's W03-PUBLISH-CHECK-01. I need something distinct.
+
+Note worker-03's report already covers:
+- canonical/authoring tree pairs
+- FROZEN manifest entry drift
+- verdict→hash binding
+- frozen_at ~570s ahead of wall clock (they noted it too)
+
+What is NOT covered by worker-03:
+- The map's own node-level `artifact_sha256` (declared) vs `artifact_sha256_measured` vs fresh disk hash — specifically the fields that the controller's lifecycle sets. worker-03 measured FROZEN and reviews, but my quick check found the map has `declared_hash_matches_measured=false` for F0/F1/F2a/F2b/A1 and stale `artifact_sha256_measured` for A1. That's about **map-internal consistency** (map registry vs disk), which is the controller's own state quality. worker-03's scanner reads the map but focuses on FROZEN/tree/verdict binding.
+
+- The `frozen_artifacts` registry in the map (5 entries; 2 active) vs disk.
+
+- `runtime/state/artifact_hashes.json` (checkpoint hash registry) vs disk.
+
+So the distinct, bounded task: **"Map hash-registry drift audit"** — for every node, compare (a) map `artifact_sha256` declared, (b) map `artifact_sha256_measured`, (c) fresh recomputation with the controller's own `digest()` algorithm, (d) `runtime/state/artifact_hashes.json` entry, (e) map `frozen_artifacts` entries. Output a JSON report + script. Class-bound: F0/F1/F2a/F2b (+L0/L1/N0/A0/A1/A2).
+
+Is there existing work on this? Let me check if other newly-started workers (the 100) are doing this. The artifacts dirs are only from the earlier 20 workers (worker-01..20 launched at 00:03?). The new workers 021-100 are just starting. I can't enumerate all their in-flight intents, but a specific audit with a unique task ID is fine; duplicates are tolerated in this swarm as independent measurements.
+
+Actually, one more high-value angle that is clearly missing and class-bound: **an executable invariant test that the map's hash-registry fields are internally consistent and fresh**, i.e., a checker that would have caught A1's stale measured hash. This is "map integrity check" — machine-checkable, deterministic, with a falsifier. It adds a *standing* tool rather than just a report. Given the swarm's culture ("verifier design", "deterministic, machine-checkable"), a standing checker is valuable.
+
+But careful: modifying canonical tooling (research_map/) could conflict with leads. I'll put the checker under `artifacts/worker-036/` and emit it as a proposal artifact, not touching canonical tools.
+
+Let me define the task concretely:
+
+**Task W036-MAPREG-01**: "Map hash-registry drift audit"
+- node_ids: F0,F1,F2a,F2b,L0,L1,N0,A0,A1,A2
+- class_ids: AF-WCC-VAC-GEN, AF-SCC-C2-VAC-GEN, AF-SCC-C0-VAC-GEN, AF-WCC-SCALAR-SPH, GLOBAL
+- gate: G-AUDIT (hash-binding is audit's remit) — but it also informs G-F0/G-FORM.
+- deliverable: `artifacts/worker-036/map_hash_registry_audit.py` + `report.json` + `README.md`
+- claim (conclusion_type: observation, not theorem): the map's `artifact_sha256_measured` equals fresh disk digest for all file artifacts except A1 (directory, live); declared `artifact_sha256` is stale for F0/F1/F2a/F2b/A1 → `declared_hash_matches_measured=false` is expected and correctly computed, not an error; and the map's staleness metric should be recomputed at gate time.
+- falsifier: re-run the script; if any artifact classified `measured_stale` hashes to the map-recorded value, or any `declared_stale` node's declared hash equals fresh digest, the report is falsified.
+
+Hmm. But is this genuinely useful? Yes: it disambiguates the alarming `declared_hash_matches_measured=false` flags on the four canonical formulation artifacts (which a reader could misread as "the artifact on disk doesn't match the map") — the truth is map-measured == disk, and only the older declared event hash is stale. That's a real information-gain contribution: prevents a false G-FORM failure reading. And it flags the one real problem: A1's recorded measured hash is stale (directory drift), so A1's hash cannot be used as a binding target.
+
+Also worth including `runtime/state/artifact_hashes.json` consistency (the checkpoint registry) — it matched for canonical files at 00:14:39; but then I should compare with fresh digest and report.
+
+Also include `frozen_artifacts` in map: 5 entries: 2 active (class_separation.py, runtime/bin/classsep_regression.py) and 3 superseded. Check active ones against disk. Note: this check is somewhat worker-03-adjacent but different scope (map registry, not FROZEN.json).
+
+Let me now write the script. Design:
+
+```
+artifacts/worker-036/map_hash_registry_audit.py
+  --root (default repo root)
+  --out (default stdout)
+  deterministic, stdlib only
+  - digest(path) using controller algorithm (file sha256; dir: relpath\0sha\n)
+  - load map, artifact_hashes.json
+  - for each node with artifact:
+      rec = {node, class_id, artifact, kind, exists,
+             map_declared_sha256, map_measured_sha256, fresh_sha256,
+             declared_matches_fresh, map_measured_matches_fresh, flag_in_map,
+             registry_sha256, registry_matches_fresh, verdict}
+      verdict classification:
+        absent -> "artifact_absent"
+        declared == fresh and recorded == fresh -> "bound"
+        recorded == fresh but declared != fresh -> "declared_event_stale"   (F0,F1,F2a,F2b)
+        recorded != fresh -> "registry_stale"   (A1)
+  - report.checks with counts
+  - exit code 0 if no registry_stale among non-live artifacts, 1 otherwise? For A1 directory, live directories are expected to drift; classify as "registry_stale_live_dir" separately.
+```
+
+Also map frozen_artifacts check: for each entry with active true, fresh digest vs declared.
+
+Then README.md with the finding, and the JSON report.
+
+Then emit events:
+1. `artifact` event: node_id F0..., artifact_type, path, sha256, validation_status unverified. Per protocol, `artifact` needs node_id, artifact_type, path, sha256, validation_status. The ingest may require event_id, event_type, created_at, actor. Let me look at comms.py ingest to know the exact schema/required fields to ensure it's accepted (valid JSON events). Also check events.schema.json.
+
+2. `status` event: node_id, status (active), hours, summary, evidence_refs, next_falsifier.
+
+3. `claim` event with conclusion_type: observation (not theorem) — avoids auto-reject.
+
+Let me read events.schema.json and comms.py to get exact field requirements.
+dsh: reasoning:
+Good. The event schema is permissive (additionalProperties true). Required for artifact: event_id, event_type=artifact, created_at, actor, node_id, artifact_type, path, sha256, validation_status. For claim: class_id, statement, conclusion_type, assumptions, falsifier, evidence_refs. There's no strict "status" schema in the oneOf, but status events are normalized; let me check normalize_event to see accepted event_type aliases and required fields for status. Let me read more of comms.py (lines 120-260).
+dsh: reasoning:
+I have the exact event schema. Note conclusion_type valid set: theorem, conditional_theorem, stability_result, counterexample, numerical_evidence, formal_model, open_problem. My claim is an observation about map integrity — use `open_problem`? Hmm. Better: don't emit a "claim" that could be misread; emit `artifact` + `status` + maybe `blocker` if stale registry. Actually a claim with conclusion_type "formal_model" is wrong. The audit finding is best conveyed as `artifact` + `status` (with summary and next_falsifier). I can also emit a `claim` with conclusion_type "open_problem"? That seems semantically off.
+
+Let me look at what other workers emit for audits. worker-03's outbox might have events. But outbox/worker-03.jsonl exists (6797 bytes). Let me check its structure quickly for a model. Actually let me not over-engineer: emit:
+1. artifact event (report JSON): node_id "A1", artifact_type "analysis", path, sha256, validation_status "unverified".
+2. artifact event for the checker script.
+3. status event: node_id "F1,F2a,F2b,F0", status "active", hours 0.4, summary of finding, evidence_refs, next_falsifier.
+
+That satisfies "emit valid JSON with IDs evidence hash falsifier".
+
+But wait: "Take one class-bound task" — maybe better to bind to a single class? The instructions say class-bound, i.e., the task must name class IDs. The audit spans F0/F1/F2a/F2b — class ids for the four. That's fine; assignments in the map also span multiple class ids.
+
+Now, before writing, double-check no other fresh worker is producing the same "map registry drift" artifact. The artifacts/worker-* dirs from the new 100 workers will appear as they work. I saw artifacts/worker-01, 03, 05, 07, 09, 20 already (from previous batches?). Actually those were created at 00:08-00:15, so they're from the new 100 launch (00:12:30) plus earlier leads? worker-03's files are 00:08/00:14 — before 00:12:30? The instance dirs for worker-001..100 were created 00:12:30 but artifact/worker-03 dated 00:09 — likely from the earlier 20-worker batch (deepseek-flash style). Hmm, worker-NN naming appears in map assignments for worker-06, worker-16 etc. from earlier phases. Anyway.
+
+Let me now create the artifact. Unique path: `artifacts/worker-036/`.
+
+Script name: `map_hash_registry_audit.py`, task id `W036-MAPREG-01`.
+
+Implementation details:
+- Use controller's digest algorithm exactly (from astra_lifecycle.py) for both files and dirs.
+- Snapshot map and artifact_hashes.json hashes at run time for reproducibility.
+- Report includes:
+  - `task_id`, `actor`, `created_at`, `root`, `map_sha256`, `artifact_hashes_sha256`, `frozen_json_sha256` (if exists), `git_head` maybe.
+  - `nodes`: for each node with artifact:
+    - node_id, class_id, artifact, kind, exists, bytes
+    - `map_declared_sha256` (n.get('artifact_sha256'))
+    - `map_measured_sha256` (n.get('artifact_sha256_measured'))
+    - `fresh_sha256`
+    - flags: `declared_matches_fresh`, `map_measured_matches_fresh`, `map_flag_declared_hash_matches_measured`
+    - classification: 
+      - "absent"
+      - "bound" if declared==fresh==measured
+      - "declared_stale" if measured==fresh and declared!=fresh
+      - "registry_stale" if measured!=fresh (and kind==file) → real drift
+      - "registry_stale_live_dir" if kind==directory and measured!=fresh → expected for live growing dirs, but still a stale binding target
+      - "unbound_no_declared" if declared is None
+  - `frozen_artifacts`: active entries with fresh vs declared
+  - `checkpoint_registry`: entries in artifact_hashes.json['hashes'] with fresh comparison
+  - `summary` counts, `findings` list of specific findings with severity.
+- Exits 0 always? For a measurement tool, exit code should signal: 0 if no `registry_stale` on files and no active frozen mismatch; 1 otherwise. But at the moment A1 dir is stale; if I classify dir staleness as expected, exit 0. Let me set exit code: 1 if any finding severity == "hard"; 0 otherwise. A1 stale measured is "soft" (live dir). Good.
+
+Then run it, capture stdout to `report.json` via --out, and write README.md with findings.
+
+Findings expected:
+- F0/F1/F2a/F2b: `declared_stale` — map node field `artifact_sha256` is an older event hash; map's measured == fresh disk. Soft/annotation: the flag `declared_hash_matches_measured=false` is *accurate* but reflects event staleness, not content drift. Action: controller should refresh `artifact_sha256` from the latest artifact event or mark declared as superseded.
+- A1: `registry_stale_live_dir` — map recorded directory hash c1e51c6b... vs fresh 745ec796... Action: A1 must not be used as a hash-pinned binding target without a re-measure at review time (reviews dir changes continuously).
+- Others: bound.
+- frozen_artifacts active entries: class_separation.py and runtime/bin/classsep_regression.py — check.
+- artifact_hashes.json: at 00:14:39 canonical files matched; verify.
+
+One nuance: the map is a moving target — the controller rewrites research_map.json every cycle. My report records map_sha256; the falsifier notes re-run on a changed map will differ by design; findings are pinned to the recorded map hash.
+
+Let me write the script now. Keep it stdlib-only, deterministic, ~200 lines. I'll write it with the write tool.
+
+Then compute hashes of the artifact files and write README.md.
+
+Also add a self-test: `--selftest` that creates a temp dir with known content and verifies digest matches the controller's function? Nice for verifier design but optional. I'll include a small `--selftest` comparing my digest() against a direct inline recomputation on two files. Good for "falsifier" credibility.
+
+Let me write the files.
+dsh: reasoning:
+Wait — there's an issue with the digest() replication for directories: `Path.rglob("*")` ordering relative to `sorted()` — I sort by Path objects; the controller does `sorted(x for x in p.rglob("*") ...)` where x is a Path; sorting Paths sorts by string parts, same as sorting strings for relative paths? In the controller, `files = sorted(...)` of Path objects, then `x.relative_to(p)`. My version is identical. Good.
+
+But my selftest compares only 2 entries sorted: "a.txt" and "sub/b.txt" — Path sorting: PosixPath('a.txt') < PosixPath('sub/b.txt') → yes.
+
+Now run selftest and the audit.
+dsh: reasoning:
+Python 3.10 (or older) doesn't allow backslash in f-string expression. Fix the selftest lines: compute hashes first.
+
+Also the main script uses f"{x.relative_to(path)}\0{sha256_file(x)}\n".encode() — that's not inside an f-string expression with backslash? It is an f-string containing `\0` and `\n` in the literal part, which is fine (backslash in literal text is allowed). The error is specifically the nested `hashlib.sha256(b'alpha\n')` inside the f-string replacement field. Fix selftest.
+
+Let me edit.

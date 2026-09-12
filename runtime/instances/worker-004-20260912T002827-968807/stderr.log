@@ -1,0 +1,1413 @@
+dsh: reasoning:
+Let me start by understanding the environment. The user says: "You are a bounded execution worker. Read handoff/map and comms. Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit. worker=004"
+
+I need to explore the workspace to find handoff/map and comms.
+
+Let me look around.
+dsh: reasoning:
+No handoff dir at top level. Let's search for "handoff" and "comms" directories in the workspace. There's a `workdir` directory modified recently, and `launch_swarm.sh`, `supervise_swarm.sh` — probably related to the swarm. Let me look at workdir.
+dsh: reasoning:
+Now let me read the handoff and the map, plus comms. Let me look at the swarm directory structure.
+dsh: reasoning:
+This is a "cosmic censorship" swarm though the HANDOFF.md I read is about ai4math swarm. Wait — the swarm root is /data3/guoshaoyang/workdir/ai4math-swarm, but launch_swarm.sh talks about cosmic-censorship research swarm with research_map/ASTRA_HANDOFF.md. Let me read ASTRA_HANDOFF.md, research_map.json, PROTOCOL.md, and the instructions about worker=004.
+
+The user says: worker=004. Note there is `deepseek-flash-04` and `worker-01`, etc. But maybe there's a specific worker-004 assignment. Let me check runtime/instances and the supervisor scripts to understand the current harness. Also check `independent_supervisor_100.sh` etc. in home dir — those are more recent (Sep 12 00:11).
+
+Let me read the key files:
+1. research_map/ASTRA_HANDOFF.md
+2. research_map/research_map.json (probably large)
+3. comms/PROTOCOL.md
+4. runtime/state/supervisor.log tail
+5. Any worker-004 inbox/messages.
+
+Let me check the runtime/instances for worker 004.
+dsh: reasoning:
+Now I understand the setup. worker=004 — I am presumably deepseek-flash-04 or worker-004. There's both `deepseek-flash-04` (agent id in the protocol) and `worker-004` instances. The runtime/instances/worker-004-20260912T002827-968807 is the most recent. Let me look at that meta.json and trajectory.log, plus supervisor.log for context. Also there's `independent_supervisor_100.sh` in home — a newer supervisor for 100 workers?
+
+Let me read:
+- runtime/instances/worker-004-20260912T002827-968807/meta.json
+- runtime/state/supervisor.log tail
+- research_map/ASTRA_HANDOFF.md
+- comms/inbox/deepseek-flash-04.jsonl (downward assignments)
+- comms/outbox/deepseek-flash-04.jsonl
+
+Also, HOME-level scripts: independent_supervisor_100.sh, supervise_swarm.sh etc. These may define the worker prompts for the current run with worker=004 numbering. Let me check.
+dsh: reasoning:
+Now, I am worker-004, launched at 00:28:27. Note that there are multiple instances. The prompt in the swarm launch script says "You are execution worker $n ... Read the handoff and map. Work only on a class-bound task assigned by a group lead; if no assignment exists, inspect the immediate queue and propose one artifact-backed task without claiming completion."
+
+But the current runtime context says worker=004 with a specific instruction: "You are a bounded execution worker. Read handoff/map and comms. Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit. worker=004"
+
+Let me check the supervisor script that launched worker-004 to see the exact prompt (independent_supervisor_100.sh or supervise_swarm.sh). Also check my inbox: comms/inbox/worker-004.jsonl may not exist (inbox only had deepseek-flash-* and workers 01, 06, 16). Let me check the inbox and outbox for worker-004 assignment. Also, check what my instance's trajectory.log shows (maybe it's the prompt or previous output).
+
+Also importantly, since this is a fresh session in the harness, my "worker=004" identity needs to map to a comms agent id. The recent supervisor likely uses worker-NNN ids, and there may be downward messages in comms/inbox/worker-004.jsonl. Let me check.
+
+Let me read the supervisor scripts and look at my instance files.
+dsh: reasoning:
+So I am the worker-004 launched by independent_supervisor_100.sh with prompt "You are a bounded execution worker. Read handoff/map and comms. Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit. worker=004".
+
+The supervisor uses worker-NNN slots but the comms protocol uses deepseek-flash-01..20 agent ids. There's no worker-004 inbox. Upward messages go to comms/outbox/<agent>.jsonl. The controller (astra) consumes outbox via `python3 research_map/comms.py ingest`.
+
+So I need to:
+1. Read handoff/map/comms (done partially; need research_map.json and inbox/outbox).
+2. Take ONE class-bound task. Since no assignment for worker-004 exists in inbox, per the launch_swarm prompt: "if no assignment exists, inspect the immediate queue and propose one artifact-backed task without claiming completion."
+3. Emit valid JSON with IDs, evidence, hash, falsifier.
+4. Checkpoint.
+5. Exit.
+
+Given the "bounded execution worker" instruction and the fact that there is an active controller/leads lifecycle, the best behavior: find a class-bound task from the map's assignments/queue that is unclaimed and within worker authority, produce a real artifact (evidence-backed), compute its sha256, write an upward event to comms/outbox/worker-004.jsonl (valid JSON per schema), a checkpoint file in runtime/state/, and then exit. Worker events cannot set status=done or validation_status=passed — per ASTRA_HANDOFF "Authority: worker events cannot set status=done, validation_status=passed, or a gate verdict."
+
+Let me now:
+- Read the map's assignments, queue, gates.
+- Read the events schema (research_map/schemas.py, events.schema.json) to emit valid JSON.
+- Look at how other workers (worker-06, worker-16) emitted events and checkpoints, and what the ingest expects (comms.py ingest) — importantly, the ingest maps actor names; does it accept "worker-004"? Let me check comms.py.
+
+Let me also check comms.py's ingest to see valid actor ids and required fields, and rejected.jsonl to see common rejects (avoid those).
+
+Let me read key files.
+dsh: reasoning:
+Now I understand the schema. I need to pick one class-bound task. Since there is no assignment in an inbox for worker-004, I should inspect the immediate queue and propose one artifact-backed task without claiming completion.
+
+But wait — the worker prompt in launch_swarm said "Work only on a class-bound task assigned by a group lead; if no assignment exists, inspect the immediate queue and propose one artifact-backed task without claiming completion." The bounded-worker prompt from independent_supervisor_100 says "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit."
+
+So the most useful thing I can do within worker authority: produce an artifact that serves the critical path and is verifiable/cheap, and emit upward events (status / artifact / claim with non-theorem conclusion type). Workers cannot set status=done or validation_status=passed.
+
+What class-bound, artifact-backed task can I actually complete with high quality in bounded time? Options:
+
+1. F1/F2 schemas are owned by lead-formulation, frozen revision 25. Don't duplicate (CF-12: one canonical path, one owner).
+2. L0/L1 ledger owned by lead-literature. Could add a verification row? Risk duplication.
+3. Audit tasks: the audit lead has assignments. There's `astra-life03-verify-gform` etc assigned to lead-audit.
+4. A genuinely useful worker task that is class-bound and not duplicating: independent mechanical checks of artifacts — e.g., a lint/verification script that checks class leakage across the frozen artifacts, or re-measuring hashes and verifying declared vs measured. There are controller findings like CF-14 (future-dated events clock skew), CF-16, F0 divergence.
+
+Look for what's needed: The ASTRA_HANDOFF says F0 canonical vs authoring divergent, F0 has 0 accepts. Lead-formulation owns `astra-life03-close-findings`.
+
+A worker-safe, class-bound, evidence-backed artifact with a real falsifier: build a semantic contract test / lint that verifies the schemas' class bindings (e.g., check that `schemas/af_wcc_vacuum.yaml`, `af_scc_c2_vacuum.yaml`, `af_scc_c0_vacuum.yaml` do not leak classes: WCC schema doesn't mention SCC conclusion, C0 file doesn't use "C0 or C2", quantifier domains are disjoint, class_contract_pointer resolves, duplicate YAML keys absent, revised_at not future-dated). There is already `schemas/semantic_contract_tests/` with manifest.json and observed_verdicts.json, created at 00:14-00:27 by someone (probably worker activity). Let me check that directory: it may be a previous worker's artifact. If an earlier worker built it, I should not duplicate; I could run the tests independently and report results.
+
+Let me inspect schemas/semantic_contract_tests/README.md and manifest, and runtime/state directory for existing checkpoints from workers to model my output and avoid duplication.
+
+Also check `runtime/state/controller_verification/` and current_checkpoint.json to see what's most in need.
+
+Also, importantly: how do I emit events? `comms.py ingest` reads comms/outbox/*.jsonl and validates. Actor IDs: PROTOCOL says agent ids `deepseek-flash-01..20`, but the newer supervisor uses worker-NNN. Let me check comms.py to see whether actor is unrestricted. Let me read comms.py.
+
+Let me do a batch of reads.
+dsh: reasoning:
+Important lesson: many workers get rejected for `conclusion_type` not in the allowed set: {"theorem","conditional_theorem","stability_result","counterexample","numerical_evidence","formal_model","open_problem"}. So my claim events must use one of those — and if not a theorem, artifact_refs optional but recommended. Workers emit claims with conclusion_type like "counterexample"/"numerical_evidence"/"formal_model"/"open_problem". Since worker cannot set status=done or validation_status=passed, I should use validation_status: "unverified" for artifact events, status "active" for my status event.
+
+Now, what class-bound task to take? Let me look at what's most valuable and not duplicated. Options:
+
+Look at open findings and immediate queue. Since F1/F2 schemas are frozen, F0 taxonomy exists. The biggest open blocker per ASTRA_HANDOFF: F0 publication divergence; hard findings to close; G-FORM/G-F0 blocked.
+
+But as worker-004, I should take a bounded, class-bound task. Options that produce a real artifact and are cheap:
+
+A) Independent verification of a specific claim in the map — e.g., re-measure a declared hash and check `declared_hash_matches_measured` for a class-bound artifact. There are already many such workers (worker-048 c0_hash_binding_audit, worker-039 c0 citation). Duplication risk noted by audit ("duplication and information-gain metrics").
+
+B) Semantic contract tests: the open adjudication item ADJ-CONTROL-STALENESS is owned by lead-formulation. A worker could do the mechanical part: rebase the three stale controls to the current canonical layout so the suite's validity gate can pass — but README says the controls must stay frozen? Actually it says "Adjudication item ADJ-CONTROL-STALENESS asks the lead to either rebase the control layouts to the current canonical (mutants stay frozen — that changes only controls) or pin the gate revision used for calibration." That's a lead decision; a worker could produce the rebased controls artifact as a proposal with hashes, clearly marked as unverified/not adopted. But that risks stepping on an in-flight lead task.
+
+C) Check specific findings: CF-14 clock skew, CF-16.
+
+D) Something clearly in the worker lane: independently reproduce a measured result for a class-bound artifact. E.g., run `research_map/class_separation.py` or `schemas/semantic_contract_tests/run_contract_tests.py` and report measurement with hashes.
+
+Let me check what's happened recently in the outbox from workers to see which tasks have been taken, so I avoid duplication and can find a gap. Let me list recent outbox event summaries (last ~60 events by event_id/actor/type/node). Also check map's claims/reviews to see open needs.
+
+Let me also check whether there are worker-004 outbox entries already (from the earlier instance worker-004-20260912T001229 and T002201). Those instances are "worker-004" too. Check comms/outbox/worker-004.jsonl existence.
+
+Let me look at files in artifacts/worker-* recently modified to see what work is in flight.
+
+Plan: gather recent outbox traffic (last 100 lines across worker files), check for worker-004 outbox, check controllers' latest findings and open assignments. Then choose.
+dsh: reasoning:
+Note the created_at timestamps in outbox include future-dated ones (CF-14: 92 future-dated events, max 02:00). The current real time — let me check. The supervisor log last line was 00:28:47. So real time is ~00:31+? Let me check `date`.
+
+Important: I'm one of the newest 00:28:27 worker-004 instances. There's no inbox assignment for worker-004. Note also that `deepseek-flash-04.jsonl` (the older naming) exists and got recent events at 00:27. Let me check whether deepseek-flash-04 is a different agent (the original 20-worker swarm) that is still running. My instance prompt says worker=004, so my outbox file should be comms/outbox/worker-004.jsonl per the launch script and instance naming (worker-004). The controller ingest accepts any actor (defaults to path stem). Good.
+
+Now, what's a good class-bound task? Let me look at what other workers did to model the deliverable, and find a gap. Given 100 workers just launched, most will do shallow duplicate work. I want to do something rigorous and genuinely additive within bounded time.
+
+Let me check:
+1. `date` (real current time).
+2. The map's open findings/assignments and what work remains. 
+3. Look at worker-06's outbox (the semantic contract tests author) and worker-025 (F1 independent).
+4. Check `artifacts/` tree for class-bound artifact directories, especially recent.
+
+A highly valuable, bounded, worker-appropriate task that fits "one class-bound task ... evidence hash falsifier": 
+
+**Independent verification of the F2b semantic contract-test escape claim** or **independent re-run of the semantic contract suite with a re-derived control check** — but worker-06 already did a lot.
+
+Alternative: The ASTRA_HANDOFF says F0 has 0 accepts (3 revise + 2 inconclusive) and F0 publication divergence; G-F0 blocked. The lead-formulation is working on `astra-life03-close-findings`.
+
+Another angle: The controller findings CF-14 (clock skew), CF-15?, CF-16. Let me read `controller_findings` in the map to find something concrete and class-bound that a worker can verify/measure.
+
+Also there's `evaluation_rubric.yaml` (13KB) and the evaluation directory — maybe there's an evaluation of worker outputs that identifies gaps. Let me check `evaluation/`.
+
+Let me read the controller findings and current gates from the map, plus check `evaluation/`.
+
+Actually, I should be careful about time. The task says bounded worker: read, take one task, emit JSON, checkpoint, exit. I shouldn't over-engineer. A clean approach:
+
+Task: **Independent re-measurement of the frozen F1 revision-25 schema against the binding structural gate, plus a re-derivation of one specific hard finding** — but I need one that isn't already done (worker-025 did F1 independent check at 00:28:50; worker-06 did F2b).
+
+Let me look for a genuine gap: the semantic contract tests' open blocker ADJ-CONTROL-STALENESS. A worker can produce the *rebase proposal*: recompute the three control layouts against current canonical schema so the suite's validity can be restored, without touching mutants. That's concrete, machine-checkable, bounded, class-bound (AF-SCC-C0/C2/WCC), with hashes and a falsifier. But it is lead-owned adjudication... The worker can produce the evidence/artifact for the lead to adopt ("without claiming completion"). That fits the launch_swarm worker instruction: "if no assignment exists, inspect the immediate queue and propose one artifact-backed task without claiming completion."
+
+Note however: the README explicitly says the controls are stale because the canonical C0 changed. To rebase a control, we'd need to know what the control was *meant* to test (a layout conforming to R28's truth table on the current canonical). We can construct a new control derived from the current canonical schema, verify it's accepted by all three stages, and verify R28 rejects the stale control. That's a well-defined artifact.
+
+But wait, there's a subtlety: controls are supposed to be "conforming base" that all stages accept; the stale control is rejected by the structural stage on R28 only, because it places `finite_codimension_complement → residual_comeager` in `transfer_failures` while the current canonical places it in `transfer_holds`. Rebuilding the control = take the current canonical C0 schema, mutate it in the ways the control family intends (comment-only composite, quoted forbidden phrase) while keeping the transfer row consistent with the current canonical. Hmm, `control_conforming_base.yaml` is a frozen copy of an old base layout. Let me examine the fixtures/controls to understand exactly.
+
+Alternatively, a cleaner worker task with clear information gain: **independently verify the claim that the structural gate catches 32/32 mutants and that no mutant escapes both adopted stages** by re-running the suite at current hashes. That's replication (the map values independent replication). But worker-06 already ran it multiple times, and the README states the measurement. An independent re-run by a different agent with a fresh harness — that's an independent replication which is valuable (the map values independent replication for N0; audit values replication).
+
+Hmm. Let me look at what the evaluation rubric expects and what the audit lead considers the biggest gap. Let me read `evaluation/` dir and the controller findings.
+
+Let me also check artifact directories to see the worker outputs and the naming convention (artifacts/worker-004/?). The instruction says "emit valid JSON with IDs evidence hash falsifier, checkpoint". Checkpoints are in runtime/state/wNNN_checkpoint*.json (e.g., w006_checkpoint_1.json). Let me read one to model (w011 or w025) and also check the checkpoint.py format.
+
+Let me do these reads now.
+dsh: reasoning:
+Now I have a good model of what a bounded worker deliverable looks like. Current time: 2026-09-12T00:29:22+08:00. Wait, that seems early relative to the supervisor log ending at 00:28:47 — fine.
+
+Note: the w011 checkpoint says "self-selected, no inbox card". So self-selection is the norm for these workers.
+
+Now choose my one task. Candidate gaps, ranked by information gain and non-duplication:
+
+1. **F0 canonical divergence (CF-13/CF-7)** — F0 canonical `276009f4f63d` vs authoring `c8e979a1eb48`. The lead is assigned to close findings. A worker could independently diff the two trees byte-wise and characterize the divergence precisely (which lines/fields differ, whether the divergence is semantic or formatting), producing an artifact with hashes. That's valuable and different from just "divergence exists". But the lead may already be doing this. Risk of duplication moderate.
+
+2. **ADJ-CONTROL-STALENESS rebase proposal** — concrete gap with a named open adjudication item, worker can prepare the rebased control as evidence. This is class-bound (AF-SCC-C0-VAC-GEN). High value: unblocks the semantic suite validity gate for A1/G-AUDIT calibration. The README explicitly asks for "rebase the controls to the current canonical layout". A worker can do the mechanical rebase and verify: new controls accepted by all three stages; stale control still rejected on R28; mutants unchanged (hashes). Deliverable: `artifacts/worker-004/control_rebase/...` with proposal JSON + hashes + falsifier, and an upward `claim` with conclusion_type `formal_model` (since a rebased control is a formal artifact/model, not a theorem) or `open_problem`? Hmm. The claim would be something like: "A rebased control set consistent with the current canonical C0 schema passes the structural gate as a control, while the stale control fails R28; therefore the stale-control rejection is attributable to control staleness, not to rule inconsistency." That's a `formal_model`? The allowed conclusion types: theorem, conditional_theorem, stability_result, counterexample, numerical_evidence, formal_model, open_problem. A "counterexample" would be if I falsified something. Maybe better: emit claim with conclusion_type `formal_model` (a machine-checkable artifact claim) — or `open_problem` (conservative)? The schema requires for claim: class_id, statement, conclusion_type, assumptions, falsifier, evidence_refs. artifact_refs optional unless theorem. Since workers can't promote, `numerical_evidence` fits computational measurement; `formal_model` fits a machine-checkable artifact. I'd pick `formal_model` for the control rebase (it's a machine-checkable formal object) — hmm, but "formal_model" in this project likely means formalized model. Actually for measurement claims, `numerical_evidence` might be apt if I report the measured pass/fail counts. Let me look at what conclusion types other worker claims used successfully (in events.jsonl accepted) to pick something defensible.
+
+3. **Independent re-verification of the semantic contract suite measurement** at current hashes with a fresh runner. Duplicates worker-06's own runs but as an independent replication. Moderate value; less novel.
+
+4. **CF-16 / class_separation false-positive calibration** — already adjudicated.
+
+5. **Contract-checker blind spot probe**: e.g., YAML comment invisibility documented. Or independent check of the `--hardened` H01–H17 proposals: verify the claim that no mutant is caught only by the hardened set and no mutant escapes both adopted stages, by re-running at current hashes. This is a replication measurement of A1 calibration evidence. Could be a strong independent verification.
+
+6. **F1/F2a/F2b/F0 declared-vs-measured hash re-measure** — many workers do this; low gain.
+
+7. Check the evaluation rubric / A1 ablation: "A2: run four-arm equal-budget ablation" hasn't run. That needs LLM calls — heavy, out of scope for a bounded worker.
+
+I think option 2 (control rebase proposal for ADJ-CONTROL-STALENESS) is the best combination of concrete, bounded, class-bound, evidence-hash-falsifier, genuinely useful, and non-duplicative. Let me verify nobody has already done it: grep outbox/artifacts for "CONTROL-STALENESS" or "rebase".
+
+Let me also check the fixtures/controls and run_contract_tests.py to understand the mechanics, and the structural checker `artifacts/formulation/tools/check_class_schema.py`.
+
+Let me search first.
+dsh: reasoning:
+Interesting: `artifacts/worker-004` directory already exists — let me check what previous worker-004 instances did (the 00:12 and 00:22 ones). Also worker-064/worker-090/worker-026 have touched CONTROL-STALENESS per grep. Let me check what exactly they did, so I don't duplicate.
+
+Let me grep the specific lines mentioning CONTROL-STALENESS in those outbox files, and list artifacts/worker-004 contents.
+dsh: reasoning:
+Worker-064 just did the rebind audit at 00:29:13 (rebinding the 3 conforming-canonical pins, reproducing numbers). Worker-004's prior artifact was `f1_recheck`. The ADJ-CONTROL-STALENESS rebase itself (rebasing the 3 frozen controls to the current canonical) has NOT been done — only the pin rebind for conforming canonical controls. Worker-006/064 flagged that the frozen controls are stale. The actual rebase proposal (constructing current-revision control variants) appears open. Let me confirm no artifact implements `rebase_controls` — there's `artifacts/formulation/tools/rebase_heldout.py` (different, heldout). Let me check worker-064's artifacts to see its exact scope, and confirm no one has produced rebased controls.
+
+Actually — careful. The lead-formulation may be actively working this. But producing the *proposal artifact* is exactly worker-lane work: "if no assignment exists, inspect the immediate queue and propose one artifact-backed task". The lead adjudicates. If the lead has already done it, my artifact is redundant but harmless (information gain = low). Let me quickly grep artifacts for "rebase" + controls.
+
+Also consider another candidate: **verify that the `observed_verdicts.json` currently on disk is stale/invalid** — worker-064 already did it.
+
+Given 100 workers launched concurrently, many tasks are being duplicated already. The most valuable thing I can add: the actual **control rebase**, which is the concrete blocker for `valid_for_calibration=true` and is explicitly requested by the README ("Adjudication item ADJ-CONTROL-STALENESS asks the lead to either rebase the control layouts to the current canonical ... or pin the gate revision"). Nobody has done the rebase yet (worker-064 only rebound pins). Let me verify.
+
+Let me check the three controls and the manifest, and understand what "rebase to current canonical layout" means. Look at:
+- manifest.json controls entries (sha, fixture, rules_tested, expected)
+- fixtures/controls/*.yaml
+- schemas/af_scc_c0_vacuum.yaml transfer_holds/transfer_failures
+- check_class_schema.py R28 rule
+
+Then design the rebase: create new control files under artifacts/worker-004/control_rebase/ (or propose canonical path? Better: keep them in my artifact dir as a proposal; the lead decides whether to replace the canonical controls). Then run the three stages on them and measure.
+
+Wait — the controls are byte-frozen in manifest.json with sha256; replacing canonical controls changes manifest hashes and would need the lead to update manifest. As a worker I produce: rebased control candidates + verification run + a patch proposal. That's clean and bounded.
+
+Let me look at the details. First the controls and manifest entries; then what R28 checks and why the stale control fails; then make minimal rebased controls preserving the control's intent.
+
+Let me read:
+1. manifest.json controls + conforming_canonical_controls sections (large file, extract with python).
+2. fixtures/controls/*.yaml (3 files).
+3. check_class_schema.py R28 rule and layout requirements around transfer_holds/transfer_failures.
+
+Let me do this.
+dsh: reasoning:
+The output was huge. Key info gathered:
+- control_conforming_base.yaml is the full conforming schema with `transfer_failures` containing the pair (finite_codimension_complement, residual_comeager) [as "transfers" direction? Let me look]. Actually in the shown control_conforming_base.yaml:
+  - `transfer_failures` includes: pair [finite_codimension_complement, residual_comeager], direction: transfers, witness: countable union ... status elementary. Wait, that's in `transfer_failures` list but with `direction: transfers`. Hmm, in the canonical, the row apparently sits in `transfer_holds`. So the stale control has the row inside `transfer_failures` while its direction says "transfers" — an internal inconsistency that R28 catches: a row in transfer_failures must have direction no_transfer presumably. So the rebase = move that pair entry from `transfer_failures` to `transfer_holds` (it's a duplicate of an existing correct entry in transfer_holds).
+
+Wait, let me re-read: In control_conforming_base.yaml as printed:
+```
+  transfer_failures:
+  - pair: [residual_comeager, full_measure] direction: no_transfer
+  - pair: [full_measure, residual_comeager] direction: no_transfer
+  - pair: [finite_codimension_complement, residual_comeager] direction: transfers    <-- misplaced
+  - pair: [residual_comeager, finite_codimension_complement] direction: no_transfer
+  - pair: [residual_comeager, open_dense_escape] direction: no_transfer
+  transfer_holds:
+  - pair: [open_dense_escape, residual_comeager] direction: transfers
+  - pair: [finite_codimension_complement, residual_comeager] direction: transfers    <-- duplicate/correct
+```
+Hmm, actually the first control file output (truncated start) was control_comment_only_composite.yaml which had the same. So the stale layout has the (finite_codimension_complement, residual_comeager) row in BOTH transfer_failures (as a weird misplacement with direction: transfers) and transfer_holds. R28's truth table rejects the misplacement in transfer_failures.
+
+So rebasing = remove that misplaced entry from `transfer_failures`, keeping the transfer_holds entry. That's a minimal, semantics-preserving edit. Then the control should pass structural R28, semantic baseline and hardened.
+
+Let me verify by examining check_class_schema.py's R28 and diffing the control vs canonical C0. I need to know exactly which lines differ.
+
+Also note the output truncation. I should use targeted commands with small output.
+
+Plan for the task (bounded, ~30-45 min of work):
+
+**Task W004-SEMCT-REBASE-01** (class-bound: AF-SCC-C0-VAC-GEN; secondary C2/WCC for the conforming canonical controls):
+- Inputs pinned by sha256: the three frozen controls, canonical C0/C2/WCC schemas, check_class_schema.py, spec_conformance_audit.py, run_contract_tests.py, manifest.json.
+- Produce rebased candidate controls in `artifacts/worker-004/semct_control_rebase/rebased_controls/`:
+  - control_conforming_base.rebased.yaml = stale control with the R28-violating misplaced row removed (minimal diff; everything else byte-identical).
+  - control_comment_only_composite.rebased.yaml = same base + comment (preserve blind-spot control).
+  - control_quoted_forbidden_phrase.rebased.yaml = base + extensions.quoted_forbidden_phrases.
+  
+  Actually, better: take current canonical `schemas/af_scc_c0_vacuum.yaml` as the conforming base and re-express the three control intents as minimal deltas on the canonical bytes? The README says "rebase the control layouts to the current canonical". Two interpretations:
+  (a) minimal patch of the stale control layout so R28 passes (remove misplaced row);
+  (b) re-derive each control from the current canonical C0 (which is "unmutated conforming C0 schema" for C02), so that the control is truly current-revision.
+  
+  C02's note says "unmutated conforming C0 schema; a gate that rejects it is over-strict". So the correct rebase for C02 = current canonical C0 bytes. But then C02 == canonical C0 (SCT-K01), redundant but that's what the note says. Hmm, but then it wouldn't be a "control" distinct from the conforming canonical list. The original C02 was a *copy* of the corpus base layout (frozen_base_sha 92406957234f) which was a valid conforming schema at the time. Rebasing means making it a valid conforming schema at current revision: the minimal repair (remove misplaced row) yields a schema that differs from canonical C0 only in incidental fields (revision, timestamps, provenance?) — it was harvested from an earlier C0 rev.
+
+  I'll do (a) minimal repair, because that preserves the control's role as a *frozen* layout (mutants stay frozen; only controls change), and keeps the three controls mutually consistent (same base layout + one targeted feature each). And I'll additionally measure both options: (i) minimal repaired base, (ii) canonical C0 as base. Actually keep scope tight: option (a), plus a diff report showing exactly the one hunk removed and that the result is byte-identical to the stale control elsewhere.
+  
+- Verify all three rebased controls against all three stages: structural should pass (exit 0), semantic baseline + hardened accept. Also negative control: unmodified stale controls still fail R28 (so the change is causally responsible).
+- Also re-run the full suite with a patched copy? That's worker-064's job; maybe I can complement: worker-064 found the manifest's conforming_canonical pins are stale causing exit 2. If I fix the controls AND re-pin the 3 conforming canonical hashes, then a full run would yield valid_for_calibration=true. That would be an end-to-end demonstration that the rebase resolves the blocker. But modifying `schemas/semantic_contract_tests/manifest.json` is canonical file territory — one owner rule (CF-12). As a worker, I should NOT write to canonical paths that the lead owns. Instead, produce a *patched copy* suite under my artifact dir (copy the suite dir, apply rebased controls + re-pinned hashes) and run it there to demonstrate exit 0 / validity true. Then propose the patch for the lead to apply to the canonical suite. That's the ideal: evidence + proposal, no canonical write, no gate verdict, no completion claim.
+
+  Wait: the suite runner computes paths relative to its own location; copying `run_contract_tests.py` + manifest.json + fixtures into artifacts/worker-004/... would work if STRUCT/SEM paths are `REPO/artifacts/...` computed as HERE.parent.parent. If I copy the suite to `artifacts/worker-004/semct_control_rebase/suite/`, then HERE=.../suite, HERE.parent.parent = artifacts/worker-004 → paths break. I'd need to adapt the runner (a patched copy with REPO pointing to repo root) — fine, it's my own runner copy in my artifact dir; declare it as a derived harness and hash it. Alternatively write my own small harness that calls the three stage tools directly on the rebased files and on the frozen controls — simpler and cleaner. I already see how: structural = `python3 artifacts/formulation/tools/check_class_schema.py --json <f>`, semantic = `python3 artifacts/worker-06/spec_conformance_audit.py <f> --json <out>` (+ `--hardened` inserted oddly: `cmd.insert(-2, "--hardened")` puts it before `--json`? cmd=[py, SEM, target, "--json", out]; insert(-2) → [py, SEM, target, "--hardened", "--json", out] — so `--hardened` goes before `--json`. Fine.)
+
+  My harness: run the 3 stage tools on (a) 3 stale frozen controls (expect R28 fails), (b) 3 rebased controls (expect all accept), (c) 3 canonical schemas (expect all accept), (d) 1 negative/positive integrity checks. Output JSON with hashes. Then also run full 32-mutant corpus through structural + baseline with the rebased control basis? Not needed; mutant numbers are unaffected by controls (they're separate fixtures). But a full-suite demonstration needs the manifest patch. I can do a *suite-level* demonstration with a patched manifest copy in my dir and a runner copy adjusted for path resolution: actually simpler — copy `run_contract_tests.py` into `<my dir>/suite_run/run_contract_tests.py` and monkeypatch REPO? The script computes REPO = HERE.parent.parent. If I place my copy at `artifacts/worker-004/semct_control_rebase/suite/` → HERE.parent.parent = `artifacts/worker-004`, wrong. I can create the harness by reading the canonical runner source and replacing `REPO = HERE.parent.parent` with an absolute/relative-to-my-dir path... that's a derived copy. Then it needs MANIFEST/OBSERVED in its own dir; and STRUCT/SEM paths point to repo root via the patched REPO. The manifest entries' fixture paths: `fixtures/...` resolved as HERE/f; canonical schemas resolved as REPO/f. So copying fixtures dir + manifest with rebased control entries and updated sha pins works. That gives a genuine end-to-end run producing exit 0 and valid_for_calibration=true on a *suite copy*, which is the demonstration that the rebase resolves ADJ-CONTROL-STALENESS. 
+
+  Caveat: the manifest also has `run_record` etc. And "conforming_canonical_controls" pins must be updated to current canonical hashes (worker-064's finding). And the three controls' manifest entries need new sha256 + source/note. This is a "patch proposal" for the lead: I should emit the patch as a JSON diff/proposal (e.g., `manifest_patch_proposal.json` listing old→new sha for each entry, plus recommended fixture path). The lead applies it.
+
+  There's a risk of over-engineering/time. But this is exactly the kind of "artifact + gate evidence + falsifier" the swarm wants, and it's genuinely additive: nobody has produced rebased controls yet (only diagnosed staleness and rebound hashes).
+
+Let me first confirm:
+1. R28 details (what exactly it checks) — read the relevant part of check_class_schema.py.
+2. Diff stale control vs canonical C0 to confirm the single misplaced row is the only R28-relevant difference.
+3. Run the stages on the stale controls to reproduce R28 failure (with pinned hashes).
+4. Implement the rebase, run all stages, and build the patched suite copy end-to-end.
+
+Also note: the frozen controls' current on-disk sha256 must match the manifest (integrity). The manifest control sha values: a6ad..., 7b91..., 687f... — let me verify on-disk hashes. The README says fixture copies are hash-verified on every run. If on-disk hashes differ from manifest, that's another integrity issue (worker-064 said fixture integrity is fine; the failure was the conforming canonical pins). Let me check.
+
+Let me also check whether there's an existing `artifacts/worker-004/f1_recheck` from prior worker-004 instances; I'll create a new subdir `artifacts/worker-004/semct_control_rebase/` to avoid collision.
+
+Time to be efficient. Let me look at R28 in check_class_schema.py and check the diff between the stale control and canonical C0.
+dsh: reasoning:
+All fixture hashes match the manifest (a6ad, 7b91, 687f). Stage hashes: structural `000e09e46b2f`, semantic `c79d8ab8440a` — match the README's current measurement.
+
+R28 (lines 457-477): truth table; a "transfers" row in transfer_failures fails. In the stale control, `transfer_failures` contains pair (finite_codimension_complement, residual_comeager) with direction "transfers" → R28 fails. The canonical C0 presumably has that row only in transfer_holds.
+
+So rebase = remove the misplaced "transfers" row from transfer_failures in the stale control base (it's a duplicate of the transfer_holds entry). Minimal, semantics-preserving.
+
+Let me verify: diff the stale control against canonical C0 to see all differences and confirm that the only R28-relevant one is that row. Use python with yaml to compare the `genericity.transfer_failures`/`transfer_holds` structures, and also diff at the structural level.
+
+Also, importantly, check what R28's full truth table is (read lines 450-490) to ensure the rebased control passes everything.
+
+Then implement:
+1. Create `artifacts/worker-004/semct_control_rebase/`.
+2. Write `rebase_controls.py` that:
+   - verifies input hashes (fail closed),
+   - reads the 3 stale controls as text,
+   - removes the misplaced row block from `transfer_failures` (line-targeted, preserving comments/bytes elsewhere),
+   - writes rebased controls,
+   - runs the 3 stages on stale (expect R28 fail / semantic accept) and rebased (expect all accept),
+   - runs the 3 canonical schemas as conforming baseline,
+   - writes `rebase_report.json` with per-file sha256, stage verdicts, failed rules, and a falsifier field.
+3. Build patched suite copy `suite_patched/` with rebased controls + re-pinned canonical hashes + patched manifest; run end-to-end → expect exit 0, valid_for_calibration=true, mutant counts 32/11/32.
+4. Write README.md + `manifest_patch_proposal.json` (old sha → new sha entries for the 3 controls and 3 conforming canonical pins) and a diff of the control file (`control_conforming_base.rebased.diff`).
+5. Emit events to `comms/outbox/worker-004.jsonl`: artifact events (each with path+sha256+validation_status=unverified), one claim with conclusion_type... need to choose. The measured statement: "removing the misplaced transfers row from the frozen controls' genericity.transfer_failures makes all three accepted by the structural gate and both semantic stages while the unmodified controls remain R28-rejected; therefore ADJ-CONTROL-STALENESS is repairable by a minimal control rebase." This is a machine-checkable artifact/measurement. `conclusion_type: numerical_evidence`? It's not numerical. `formal_model`? It's a formal artifact edit + machine-checkable verdict. I think `formal_model` is the least-wrong: the rebased control is a formal (machine-checkable) model/artifact. But maybe `open_problem` is conservative. Let me look at what conclusion types accepted claims from workers use. Let me grep events.jsonl for accepted claims by actor worker-* and their conclusion_type distribution. That will tell me what the ingest accepts (all allowed types are accepted; rejects were invalid tokens like "audit_finding", "empirical"). I'll pick `formal_model` if used, else `numerical_evidence`, else `open_problem`.
+
+6. Write checkpoint `runtime/state/w004_checkpoint_*.json` (worker-local; not touching controller-owned files), consistent with w006/w011 convention.
+
+Falsifier: a run at current stage hashes in which any rebased control is rejected by structural/baseline, or in which an unmodified frozen control is accepted by structural, or in which the only difference between stale and rebased control is not the R28 row, or the patched suite does not reach valid_for_calibration=true / exit 0, or the mutant counts change from 32/11/32.
+
+Before building, let me verify the exact diff between the stale control and current canonical C0, and read R28 truth table fully. Also check whether the `--hardened` auditor and baseline accept the rebased control. Let me first reproduce the stale failure quickly with a dry measurement (this also validates my harness approach).
+
+Let me read check_class_schema.py lines 440-500 and diff.
+dsh: reasoning:
+Confirmed: the stale control has an extra row in `transfer_failures`: `pair: [finite_codimension_complement, residual_comeager], direction: transfers` which R28 rejects (a 'transfers' row sits in transfer_failures). The canonical C0 does not have it.
+
+So the minimal rebase: delete that 8-or-so-line block from the three control YAML files. Everything else stays byte-identical. This is exactly "rebase the control layouts to the current canonical layout".
+
+Now, will the rebased control pass all other structural rules (R01..R30+) and the semantic stages? The stale control differed from the current canonical also by missing newer keys (class_identity_variants, f0_binding, known_status, l1_ledger_refs) — but structural rules may or may not require those. The stale control currently fails ONLY R28 (per manifest observed). So removing the row should make it pass (assuming no rule requires the newer keys; the observed failed_rules was exactly ["R28"]). 
+
+Now let me implement. Steps:
+
+1. mkdir artifacts/worker-004/semct_control_rebase/{rebased_controls,suite_patched,logs}
+2. Write `rebase_controls.py` — a deterministic script:
+   - pins input sha256s (stale controls, canonical schemas, stage tools, suite runner, manifest)
+   - fails closed if mismatch
+   - performs a line-based removal of the misplaced row block from each stale control, asserting exactly one removal and that the removed block text is exactly the expected one
+   - writes rebased control files
+   - runs stages on stale + rebased + canonical, collects JSON verdicts
+   - writes rebase_report.json
+3. Build the patched suite copy:
+   - copy `fixtures/` (all 32 mutants + 3 rebased controls + no need for stale controls? The patched suite should contain rebased controls in place of stale ones; mutants stay byte-identical)
+   - manifest_patched.json: same as canonical but controls' sha256 updated to rebased hashes, `fixture` paths pointed to `fixtures/controls/<name>.rebased.yaml`? Better: keep the same filenames, since we're replacing control files in the copy — fixture paths unchanged, sha256 updated, note updated; conforming canonical pins updated to current canonical sha256; add an `adjudication_items` entry marking ADJ-CONTROL-STALENESS resolved-by-rebase? Careful: I shouldn't claim resolution (lead decision). I'll record the proposal in a separate `manifest_patch_proposal.json` and have the patched suite manifest keep the item but with status "proposed_rebase_verified_pending_lead" — the runner doesn't care. Actually to demonstrate `valid_for_calibration=true`, the runner only checks control acceptance; the adjudication items list is copied through. Fine.
+   - run the patched runner (my copy with REPO overridden). Rather than copying and patching the runner source, I could set up the copy at a path where `HERE.parent.parent` resolves to the repo root — impossible since HERE must be `schemas/semantic_contract_tests`. I'll copy the runner and patch just the REPO line, recording both the original hash and the patch diff. That's honest and hash-bound.
+   
+   Alternative: create a temporary directory `tmp/...` inside repo root? No, CANONICAL write restrictions are about canonical paths; writing into `runtime/tmp/` maybe. Actually a suite copy at `artifacts/worker-004/semct_control_rebase/suite_patched/` with patched REPO line is cleanest.
+
+   Wait — simpler: the runner's REPO is only used for STRUCT, SEM and REPO-relative fixtures. I can create the patched copy under `artifacts/worker-004/semct_control_rebase/suite_patched/` and patch `REPO = Path("/data3/.../ai4math-swarm")`? Better use a relative resolution: `REPO = HERE.parents[3]`? HERE = artifacts/worker-004/semct_control_rebase/suite_patched; HERE.parents: [0]=semct_control_rebase, [1]=worker-004, [2]=artifacts, [3]=repo root. So `REPO = HERE.parents[3]`. I'll patch exactly that one line and record the one-line diff.
+
+4. `suite_patched/manifest.json` — copy canonical manifest with:
+   - controls[*].fixture stays `fixtures/controls/*.yaml` (rebased copies)
+   - controls[*].sha256 = rebased hash
+   - controls[*].source_sha256 = original stale hash; note = "rebased from <stale> by removing the R28-violating transfers row; original bytes preserved for hashes"
+   - conforming_canonical_controls[*].sha256 = current canonical hashes
+   - keep everything else identical (mutant hashes must match copies).
+5. Run patched suite: expect exit 0, 32/11/32, controls 3/3, conforming 3/3, valid_for_calibration true. Capture stdout + observed_verdicts.json (which the patched runner writes in its own dir).
+6. Also run the *canonical* suite? No — don't touch canonical (it's owned; and running it writes observed_verdicts.json into canonical dir — avoid; worker-064 already ran it via its own copy). Don't run canonical runner.
+7. Write README.md documenting method, inputs (hashes), outputs, evidence, falsifier, limits, and the patch proposal.
+8. Write `manifest_patch_proposal.json` with exact field-level replacements the lead can apply (path → old sha → new sha for the 3 controls + 3 conforming canonical; note that replacing control files also changes bytes at canonical paths → new hashes).
+   Important subtlety: if the lead replaces `fixtures/controls/*.yaml` with my rebased files, then the manifest sha must change to the rebased hashes. My proposal gives both the new bytes (copies in my artifact dir + their sha) and the manifest patch.
+9. Emit events to comms/outbox/worker-004.jsonl: multiple `artifact` events + 1 `claim` + 1 `status` + maybe 1 `blocker`? The task says "emit valid JSON with IDs evidence hash falsifier". A blocker isn't needed (nothing blocks me). I'll emit: 3-4 artifact events, 1 claim (conclusion_type formal_model or numerical_evidence), 1 status (node F2b? A1?), and a review? No — review of a lead-owned artifact isn't mine to give. Keep it: artifacts + claim + status.
+10. Checkpoint: `runtime/state/w004_semct_control_rebase_checkpoint.json` and append to `runtime/state/w004_checkpoints.jsonl` (worker-local files; note previous w004_checkpoints.jsonl exists — check its content format. Actually that was from an older worker-004; I can append a new line with a distinct worker_instance_id. Careful not to corrupt. Appending is fine.)
+11. Validate my outbox events with `python3 research_map/comms.py ingest --dry-run`? That would validate all new outbox traffic globally — safe (dry run, no writes) but could be slow with 100 workers writing. It reads all outbox files including huge ones. Better: validate my own events by directly loading schemas.validate_event in a small script. But the checkpoint says ingest is controller-only. A local validation using `validate_event` import is fine and proves schema compliance. I'll do that: parse my outbox lines and call normalize_event+validate_event exactly as the ingest would? normalize_event needs source path; I can call it. Let me write a tiny `validate_own_events.py` that mimics ingest for just my file, exits nonzero on reject. This is strong evidence: "all N events validate under schemas.validate_event".
+
+Also, per protocol rule 5: "Reject your own output before sending: does the artifact exist? does the falsifier actually falsify? does the class id match the file?" I'll include a self-check in the script.
+
+One more check: is there any risk that deleting the row changes semantic meaning? The row's direction says "transfers" but it sits in transfer_failures. The same pair appears correctly in transfer_holds. So the entry in transfer_failures is a duplicate misplacement; removing it is semantics-preserving (the pair remains asserted as transfers in transfer_holds). Also check: does `transfer_failures` need a non-empty list (R07 requires non-empty)? Yes R07 requires non-empty; after removal it still has 4 rows. Good.
+
+Also must check R22 key manifest requirement: the control_quoted_forbidden_phrase has the `extensions.quoted_forbidden_phrases`; removing a listed row won't affect.
+
+Additionally: does the stale control's `transfer_failures` removal affect the semantic auditor? It accepted before; after removal should still accept (it likely checks the R28 layout too? It accepted stale). We'll measure.
+
+Edge case: The three controls may not have identical surrounding text for the block; control_comment_only_composite has a trailing comment; quoted has extensions. Let me check the exact block text in each file (indentation) with grep -n.
+
+Let me first reproduce the stale/rebased stage runs quickly to make sure my removal text-matching works, then write the full script. Let me write the script directly with a careful regex and assertions.
+
+Implementation of removal: In YAML text, the row block is:
+```
+  - pair:
+    - finite_codimension_complement
+    - residual_comeager
+    direction: transfers
+    witness: a countable union of proper closed finite-codimension submanifolds is
+      meager
+    status: elementary
+    citation_status: n/a
+```
+Let me get the exact text via sed. Then remove exactly that contiguous block (once per file). I'll implement by finding the anchor line `    - finite_codimension_complement` that follows `- pair:` within transfer_failures, and remove from the matching `  - pair:` line through the next `  - pair:` or `  transfer_holds:` line. More robust: parse the text with a small line state machine? Simplest: use the known marker sequence and regex:
+
+block_re = re.compile(r"  - pair:\n    - finite_codimension_complement\n    - residual_comeager\n    direction: transfers\n    witness: a countable union of proper closed finite-codimension submanifolds is\n      meager\n    status: elementary\n    citation_status: n/a\n", re.M)
+
+Count matches == 1 per file, then sub with "". Then verify YAML parses and the pair only appears in transfer_holds.
+
+Let me check the exact block text for each file first.
+dsh: reasoning:
+The misplaced block is identical in all three files at lines 264-271. Removal is well-defined.
+
+Now let me set up my working dir and write the rebase script. I'll be careful about:
+- Idempotency: if rebased files already exist, overwrite deterministically.
+- Failing closed on input hash mismatch.
+- Not writing to canonical paths.
+
+Let me create the directory and write `rebase_controls.py`. I'll make it produce:
+- `rebased_controls/*.yaml` (3 files)
+- `rebase_report.json` with all measurements
+- `stale_report.json`? Include in one report.
+- Run stages via subprocess in a temp dir for semantic outputs (inside my artifact dir).
+
+Then a second script `build_patched_suite.py` (or do it within the same script) that creates `suite_patched/`:
+- `suite_patched/run_contract_tests.py` (patched REPO line)
+- `suite_patched/manifest.json` (updated pins)
+- `suite_patched/fixtures/` (32 mutants copied byte-identical + 3 rebased controls in controls/)
+- Run it; capture stdout + observed_verdicts.json; record exit code.
+
+Note: the patched runner's `STRUCT`/`SEM` use REPO/artifacts/... good. `MANIFEST`/`OBSERVED` are in HERE = suite_patched. Fixture resolution: `f.startswith("fixtures/")` → HERE/f, good. `schemas/...` → REPO/f, good.
+
+Also the runner's process for semantic writes temp files `.tmp_audit_*.json` in HERE — fine.
+
+One more consideration: my rebased controls' `revised_at`/timestamps in the control content are from the corpus base (23:42 etc.) — that's fine, it's a frozen control layout. But wait: CF-4/CF-16 mention future-dated timestamps; the control has `revised_at: '2026-09-11T23:42:45+08:00'` which is in the past now (00:29). Fine.
+
+Also: does the structural gate require `class_contract_pointer` to resolve? There was a hard finding "authoring-tree class_contract_pointer". The control's pointer is `artifacts/formulation/formulation_taxonomy.yaml#class_contracts.AF-SCC-C0-VAC-GEN` — resolves (authoring tree exists). It passed structural before except R28, so fine.
+
+Now — the suite's mutant fixtures are in the canonical `schemas/semantic_contract_tests/fixtures/`. I'll copy them into suite_patched/fixtures/ preserving relative paths and verify sha256 against the manifest. The controls after rebase replace the stale ones at the same relative paths.
+
+Manifest patch:
+- For each of 3 controls: sha256 → rebased hash; add `rebased_from_sha256`: stale hash; update `note` maybe append "; rebased 2026-09-12 by worker-004 ...". I'll keep original fields and add provenance fields; the runner ignores extra fields.
+- For 3 conforming_canonical_controls: sha256 → current canonical hash (measured above: c0 1bb78ce9b357..., c2 b6123750b37d..., wcc 9a8bd4c96800...). Wait, the manifest pins: K01 c0 = a8d899d2..., K02 c2 = 8dae50da..., K03 wcc = b65fcc0f... (pre-00:19:14 bytes). Current: c0 1bb78ce9b357, c2 b6123750b37d, wcc 9a8bd4c96800. Good.
+- Add a `rebase_provenance` block at manifest top level describing the proposal, and leave `adjudication_items` untouched but append an item `ADJ-CONTROL-STALENESS-REBASE-PROPOSAL` with status `verified_by_worker_pending_lead`. Hmm, adding to adjudication_items will flow into `adjudication_required` output but validity only depends on controls_ok/conforming_ok. Fine, but to keep the demonstration clean, I'll add it (status pending), since the runner copies adjudication items unconditionally. Actually the runner appends only for escaped mutants. The `adjudication_required` field = manifest adjudication_items + escapes. Having a pending item with status pending doesn't affect exit code. OK.
+
+Then run the patched suite. Expect:
+- integrity ok (all fixture hashes match patched manifest)
+- mutant results: structural 32/32, baseline 11/32, hardened 32/32 (should be identical to README since mutant bytes and tools unchanged)
+- controls: 3/3 accepted by all stages
+- conforming: 3/3 accepted
+- exit 0, valid_for_calibration=true
+
+Then a *falsification check*: run the patched suite with the stale controls (i.e., a second copy or a flag) to show exit 3 / valid=false. Rather than a second suite, I can simply point to the existing canonical run measurement (README + manifest observed) and the fresh stale-run measurement from my `rebase_report.json` at current tool hashes. I'll include a fresh stale-control run in my report at the current stage hashes: structural R28 fail, baseline accept, hardened accept — reproducing 0/3 controls accepted by adopted stages.
+
+That's a clean falsifier: "if the rebased controls pass only because the gate changed (tool hash drift), then rerunning the stale controls at the same tool hashes would accept them; measured: stale 0/3 accepted, rebased 3/3 accepted at identical tool hashes."
+
+Let me now write the script. I'll do it in one file with clear sections, and run it. Estimated runtime: 38 fixtures × 3 stages ≈ 114 subprocess calls; each is fast (python startup ~0.1–0.3s) → maybe 30–60s. Fine.
+
+Let me write the script now.
+
+Key script detail: `run_semantic` insert `--hardened` before `--json`. I'll mirror canonical runner exactly.
+
+For cleanup, semantic audit writes `.tmp_audit_*.json` — in my runner I'll write to a temp dir under my artifact dir.
+
+Let me write `artifacts/worker-004/semct_control_rebase/rebase_controls.py`.
+
+Also I want the script to emit the report including the falsifier and to be reproducible: it should record the exact command lines.
+
+Additionally, I should verify that my rebased controls are byte-identical to the stale except the removed block — report that as `diff_hunks = 1`, `removed_block_lines = 8`, `other_diff_lines = 0`.
+
+Let me build it.
+dsh: reasoning:
+Oops, I left a weird line in the script: `report["measurements"]["stale_controls"] = stale_meas["SCT-C01"] | {} if False else stale_meas` — that's a leftover. Let me fix it to `stale_meas` cleanly. Also `REPO = HERE.parents[2]`: HERE = .../artifacts/worker-004/semct_control_rebase. parents[0] = worker-004, parents[1] = artifacts, parents[2] = repo root. Correct.
+
+Let me fix that line.
+dsh: reasoning:
+The diff shape has 8 removed lines but no added lines. Hmm — the issue: `ROW` includes the trailing newline; when replaced with "", the line count removed is 8. The unified diff shows 8 '-' lines. My condition was `hunks != 1 or plus or len(minus) != 8` → hunks is 1, plus is empty, len(minus) == 8. Wait, why did it fail? `minus = [x for x in d if x.startswith("-") and not x.startswith("---")]`. The `---` line is `--- frozen/...`, starts with "---" so excluded. The minus lines: 8 content lines. Hmm, but `d` also contains `@@ -264,8 +264,0 @@` which starts with "@". So len(minus) should be 8.
+
+Unless one of the removed lines is not prefixed with "-" because... Actually difflib.unified_diff with lines ending in newline: each line gets a prefix. Let me debug: maybe the last line "    citation_status: n/a\n" plus the replacement leaves an empty line? No. Let me print the actual minus list.
+
+Wait — maybe `plus` is not empty because the `+++` line: `+++ rebased/...` starts with "+" and not "+++"? It does start with "+++", so `not x.startswith("+++")` excludes it. Hmm.
+
+Let me just debug quickly.
+dsh: reasoning:
+The diff shape is exactly as expected: 1 hunk, 8 minus lines, 0 plus lines. So why did my check fail? Ah — `plus = [x for x in d if x.startswith("+") and not x.startswith("+++")]`. Hmm that's empty. `minus` = 8. `hunks` = 1. Condition `hunks != 1 or plus or len(minus) != 8` → `False or [] or False` → falsy → should NOT raise. But it raised "unexpected diff shape {'hunks': 1, 'added_lines': 0, 'removed_lines': 8}".
+
+Wait... the dict printed exactly {'hunks': 1, 'added_lines': 0, 'removed_lines': 8}. So the raise came from... the condition printed the dict; if condition were false it wouldn't raise. Unless `len(minus)` is not 8? It printed removed_lines 8. Hmm, `hunks != 1` → 1 != 1 False. `plus` → [] falsy. `len(minus) != 8` → False. So no raise. But it raised!
+
+Oh wait — I see. In the script, `minus = [x for x in d if x.startswith("-") and not x.startswith("---")]`. The `--- f` line is excluded. But what about the line `'-    witness: a countable union of proper closed finite-codimension submanifolds is\n'` — counted. That's 8 lines total. printed removed_lines: 8. 
+
+Hmm, `plus = [x for x in d if x.startswith("+") and not x.startswith("+++")]`. The `+++ t` line starts with "+++" → excluded. Is there a `+` line? No.
+
+So the raise is inexplicable... unless the f-string evaluated `plus` (a list) as truthy? An empty list is falsy. 
+
+Wait, let me re-read the script code:
+
+```python
+if hunks != 1 or plus or len(minus) != 8:
+    raise SystemExit(f"{tid}: unexpected diff shape {diffs[tid]} (fails closed)")
+```
+
+Hmm, that looks right. Unless... `hunks` counts lines starting with "@@" — `'@@ -261,14 +261,6 @@\n'` → 1. 
+
+Let me look at the actual file content to be sure the edit tool didn't mangle something. Maybe the condition in the file is different from what I think. Let me read that part.
+dsh: reasoning:
+The code looks right. Let me see the next lines — maybe the condition got written differently.
+
+Actually! I bet the bug is that `minus` includes the `---` line? No, excluded. Hmm, wait: `x.startswith("-") and not x.startswith("---")` — the header line is `'--- frozen/control_...yaml\n'` → startswith("---") True → excluded. Fine.
+
+Let me print the next lines.
+dsh: reasoning:
+The condition looks correct, yet it raised. The only explanation: `plus` is non-empty! Why would there be a `+` line? The `+++` header excluded... unless `plus` contains the `+++ rebased/...` line because in the actual run `fromfile`/`tofile` produce `+++ rebased/control_comment_only_composite.yaml` which starts with "+++" → excluded.
+
+Hold on — maybe `ROW` count found 1, and replace removed it, but the diff has an added line? The printed dict said added_lines: 0. So plus == [] at dict creation time! But then the condition can't be true...
+
+Unless... mutation: `plus` is a list; `if hunks != 1 or plus or ...` — an empty list is falsy. Yes.
+
+Wait, is it possible `hunks != 1`? hunks is a list of 1 element; `hunks != 1` compares list to int → True! That's the bug: `hunks` is a list, and I meant `len(hunks) != 1`. The dict uses `len(hunks)` but the condition compares the list to 1 → always True.
+
+Fix: `if len(hunks) != 1 or plus or len(minus) != 8:`.
+dsh: reasoning:
+Interesting: the whole measurement only took 2.4s — suspiciously fast for 27 stage runs. Hmm, wait: python startup ~0.03s? The structural checker is pure python; semantic too. Maybe 2.4s is plausible for ~27 subprocess calls of small scripts... Actually the earlier debug python run took 0.03s, so ~0.09s per call → 27 calls ≈ 2.4s. Plausible.
+
+Bug: `accepted_by` always uses `rebased_meas`. Fix to take the measurement dict as a parameter.
+
+Also I need to see the actual measurements — the failure happened before writing the report, but the runs did happen. Let me fix and rerun.
+dsh: reasoning:
+Excellent! The measurement works:
+- stale controls: 0/3 accepted by structural, all fail R28
+- rebased controls: 3/3 accepted by all three stages
+- canonical schemas: 3/3 accepted by all three stages
+
+Now step 2: build the patched suite copy and run it end-to-end to demonstrate `valid_for_calibration=true`, exit 0. This requires:
+1. Copy the suite's fixtures (32 mutants + controls subdir) into `suite_patched/fixtures/`, replacing the 3 controls with rebased ones.
+2. Copy `run_contract_tests.py` → `suite_patched/run_contract_tests.py`, patching `REPO = HERE.parent.parent` → `REPO = HERE.parents[3]`.
+3. Build `suite_patched/manifest.json` from canonical manifest with updated pins:
+   - controls: sha256 → rebased hashes; keep `source_sha256` = original; add `rebased_sha256`/`rebased_from` fields and note.
+   - conforming_canonical_controls: sha256 → current canonical hashes (measured: c0 1bb78ce9b357..., c2 b6123750b37d..., wcc 9a8bd4c96800...). Add `repinned_from`.
+   - add provenance block.
+4. Run it, capture stdout to logs, record exit code; read observed_verdicts.json summary.
+5. Verify mutant counts 32/11/32, escapes 0, controls 3/3, conforming 3/3, valid true, exit 0.
+6. Also, to make the demonstration stronger and self-falsifying, run the same patched suite in a second configuration where the controls are the stale ones (patched-manifest copy with stale control hashes and stale files) — showing exit 3 / valid false at the same tool hashes. Actually my rebase_report already shows stale 0/3 accepted. The suite-level stale run would additionally show the runner's exit 3. I can do it cheaply: build `suite_patched_stale/` or just modify manifest in a temp copy. Hmm, keep it simpler: run the patched suite twice — once with rebased controls (expect 0), once with a "stale" manifest variant in a sibling dir `suite_stale_run/` (expect 3). That's a clean negative control at suite level. But is it necessary? It adds evidence for the causal claim. Medium value, low cost (~3s). Let's do it in a compact way: build two suite dirs via the same builder function with a flag.
+
+Actually, simpler: build one `suite_patched/` with rebased controls; then for the negative control, create `suite_stale/` = copy of suite_patched but with the stale control files restored and manifest control pins set back to stale hashes. Then run both. The mutants are identical, so we see the only difference is the controls.
+
+Also worth adding: a check that mutants are byte-identical to canonical (sha verification is already done by the runner's integrity check against the manifest; and the manifest mutant hashes are unchanged, so if the copies differ at all, the runner exits 2). Good — the patched runner's integrity check itself proves the mutants are unchanged.
+
+Also, must be careful: the patched runner writes `observed_verdicts.json` in its dir and may write temp `.tmp_audit_*` files. Fine.
+
+Let me write `build_patched_suite.py`. It will:
+- pin inputs (canonical manifest, runner source, canonical schemas, rebased controls)
+- verify rebased control hashes equal those in rebase_report
+- create `suite_patched/` fresh (delete existing)
+- copy fixtures tree
+- overwrite controls with rebased
+- write patched runner (record source sha + patch diff)
+- write patched manifest (record field-level patch operations)
+- write `suite_stale/` similarly with stale controls and stale pins
+- run both, record exit codes + summary JSON from each observed_verdicts.json + stdout
+- write `suite_run_report.json` and `manifest_patch_proposal.json`
+- print a concise summary
+
+The patch proposal should list the exact changes for the lead:
+```json
+{
+  "target": "schemas/semantic_contract_tests/manifest.json",
+  "proposed_control_file_replacements": [
+    {"path": "schemas/semantic_contract_tests/fixtures/controls/control_conforming_base.yaml", "old_sha256": "...", "new_sha256": "...", "new_bytes_source": "artifacts/worker-004/semct_control_rebase/rebased_controls/control_conforming_base.yaml"},
+    ...
+  ],
+  "proposed_manifest_field_updates": [
+    {"test_id": "SCT-C01", "field": "sha256", "old": "...", "new": "..."},
+    ...
+    {"test_id": "SCT-K01", "field": "sha256", "old": "a8d899d2941f...", "new": "1bb78ce9b357..."},
+    ...
+  ],
+  "note": "applying this changes canonical bytes; lead owns the decision and the resulting manifest sha; mutants are not touched"
+}
+```
+
+Let me get the code snippet for patched runner generation. `REPO = HERE.parent.parent  # ...` in the source; patch to `REPO = HERE.parents[3]  # patched by worker-004: artifact-local suite copy`. Record the diff.
+
+One question: should the patched runner's `MANIFEST` and `OBSERVED` be its own dir (they are, HERE-based). Yes.
+
+Let me write the builder.
+dsh: reasoning:
+There's a leftover weird loop at the start of main():
+
+```python
+    for tid, name in CONTROL_FILE.items():
+        got = sha(REBASED / name)
+        if tid == "SCT-C01" and got != "2babcc7d3430":
+            pass  # hash compared against report below
+```
+
+It's a no-op; remove it for clarity. Let me fix before running.
+dsh: reasoning:
+For the stale copy, the check `if new != CANON_SHA[tid] or e["sha256"] != STALE_K_SHA[tid]` — `new` is the *current canonical* file hash (CANON_SHA) which should match. The manifest's `e["sha256"]` for K01 is a8d899d2... = STALE_K_SHA, so that should pass too. Wait, the issue: for the stale copy (`rebased=False`), the conforming_canonical_controls still point at the *repo* canonical files, and I only verify. Which condition failed? Let me check: `new = sha(REPO / CANON_FILE[tid])` → 1bb78ce9... should equal CANON_SHA["SCT-K01"] = 1bb78ce9b357... The first 12 chars match; full string? Let me verify the full hashes. Earlier I measured `1bb78ce9b3572cdac229ad7623ce96908bf4f08dc62c3c6264d97b17c0355508`. In the script CANON_SHA K01 = "1bb78ce9b3572cdac229ad7623ce96908bf4f08dc62c3c6264d97b17c0355508" — same.
+
+Hmm wait — for the stale copy, the canonical file might have been... no, unchanged.
+
+Oh! I see: `e["sha256"] != STALE_K_SHA[tid]`. In the manifest K01 sha = "a8d899d2941fa5b61a536b05dd513378150121805e3684409d505b508fecec1f"; my STALE_K_SHA K01 = "a8d899d2941fa5b61a536b05dd513378150121805e3684409d505b508fecec1f" — same.
+
+Let me debug by printing the three values. Actually — maybe the problem is that `build_copy` for `suite_patched` (rebased=True) already mutated... no, it writes its own manifest copy.
+
+Wait, order: build patched first (rebased=True) → in that call, for conforming canonical: `patch_ops.append(...); e[...]=new`. Fine, no global mutation (man is a fresh load).
+
+Then stale copy: `new = sha(REPO / CANON_FILE[tid])`, compare to CANON_SHA and e["sha256"] to STALE_K_SHA. Let me just print.
+dsh: reasoning:
+The canonical schema files changed since my earlier hash measurement at 00:29! The lead-formulation is actively writing to `schemas/*.yaml` (they're iterating revisions). Earlier sha256sum gave c0 1bb78ce9..., now c0 disk = b71ec02c60... So the live canonical tree is a moving target.
+
+This is important:
+1. My report pinned the canonical schemas at `1bb78ce9b357...` which is now stale.
+2. The rebase measurement for canonical controls (`canon_ok 3/3`) was at that pinned revision — still true for those bytes, but the current canonical bytes differ.
+3. For the patched suite copy: as long as I pin to whatever the canonical bytes are at build time, and record them, the run is valid at that moment. But there's a race: the lead keeps editing.
+
+Careful re-think. The rebase's core claim concerns the *controls* relative to a *fixed* gate tool (structural R28). The conforming-canonical pins are a separate problem (worker-064's). For my patched suite demonstration, I should pin the canonical schemas to the bytes present at run time and record their hashes; drift afterwards voids the numbers (documented falsifier). But if the lead changes the schemas mid-run, the run could fail integrity. To avoid the race, I should not depend on live canonical schema bytes at all for the *demonstration*: instead copy the current bytes into my suite copy under my artifact dir and have the manifest point at those frozen copies. Hmm — but manifest fixture paths are either `fixtures/...` (HERE-relative) or `REPO/...`. I can place canonical-schema copies under `suite_patched/fixtures/canonical/` and set the `fixture` field to that path (starts with "fixtures/" → resolved HERE-relative). That makes the copy self-contained and race-free, with the bytes' provenance recorded (canonical path + hash at snapshot time).
+
+That's cleaner: my patched suite copy is a fully pinned, self-contained snapshot. The manifest patch proposal for the lead would then re-pin to *whatever canonical bytes are current when the lead applies it* — I should record the snapshot hash and note that the lead must re-pin to the live bytes at apply time (or that if the canonical bytes are the same as my snapshot, use these values).
+
+But which canonical bytes to snapshot? The current ones (b71ec02c..., a7ccae4d..., b474fbc4...). Wait — but are these "current canonical" for the *right* revision? The map's latest measured values at pass 03 were 1bb78ce9/b6123750/9a8bd4c9. The live files are being rewritten right now by the lead as part of `astra-life03-close-findings`. The F1/F2 schemas were said to be FROZEN revision 25 `af24e9c39606` for F1... but the file names `af_scc_c0_vacuum.yaml` etc are the canonical F2a/F2b/WCC artifacts. Since they're actively changing, my snapshot is a point-in-time measurement.
+
+Hmm, actually, wait. Let me re-check: maybe my earlier `sha256sum` was on different files? Earlier output:
+```
+1bb78ce9b3572cdac229ad7623ce96908bf4f08dc62c3c6264d97b17c0355508  schemas/af_scc_c0_vacuum.yaml
+b6123750b37d8bee1e92eeb025979a6afdf3b29a33331a9d8499e21398d13fb2  schemas/af_scc_c2_vacuum.yaml
+9a8bd4c9680042a40894f6085f183661500966f2d787a6bf28a7098a271ed503  schemas/af_wcc_vacuum.yaml
+```
+And the ASTRA_HANDOFF (00:25) says F1/F2a/F2b canonical `9a8bd4c96800` / `b6123750b37d` / `1bb78ce9b357`. Note the mapping: af_wcc = 9a8bd4c9, af_scc_c2 = b6123750, af_scc_c0 = 1bb78ce9. Yes.
+
+Now disk = b71ec02c (c0), a7ccae4d (c2), b474fbc4 (wcc). So the lead rewrote all three in the last ~1 minute (00:30-00:31). They're iterating.
+
+Also important: my rebase_report's `PINS` required the 00:29 canonical hashes; it ran successfully at ~00:30:0x, so the files were still those bytes then. Now they've changed. The rebase_report is a valid measurement bound to those pinned hashes (already written). Good — the report itself is internally consistent and hash-bound. But for the suite demonstration I need a self-contained snapshot.
+
+Decision: build the suite copies with snapshotted canonical bytes stored inside the copy (`fixtures/canonical_snapshot/*.yaml`), recording:
+- source canonical path
+- sha256 at snapshot time
+- snapshot sha256 (identical bytes)
+This makes the run independent of concurrent writes. The manifest patch proposal then says: "re-pin manifest conforming_canonical_controls to the live canonical hashes at apply time; the values below are the snapshot used for the demonstration."
+
+Also the rebase_report's `sufficient_to_clear_ADJ_CONTROL_STALENESS` field logic uses canonical_ok at the snapshot hashes — fine, but I should record that canonical files have since moved (honesty). I can update the report? The report is a measurement at pinned hashes; I shouldn't rewrite it to hide drift. Instead, the suite_run_report will record the drift: "canonical schema hashes at snapshot time differ from rebase_report pin; the rebase_report measurement remains valid for its pinned bytes; live canonical has moved to X".
+
+Hmm, but there's a subtlety: does the *rebase claim* depend on the canonical schema bytes at all? No: the claim is that (a) stale controls fail R28, (b) rebased controls pass all stages, (c) mutants unchanged. The canonical controls are only a sanity check that a conforming schema is accepted. The moving canonical only affects the "conforming canonical 3/3" measurement, which I can re-measure at snapshot bytes.
+
+Practical plan:
+1. Modify `build_patched_suite.py`:
+   - snapshot canonical bytes into the copy's fixtures/canonical_snapshot/ at build time;
+   - manifest conforming_canonical_controls: `fixture` → `fixtures/canonical_snapshot/<name>` and `sha256` → snapshot hash; keep `canonical_path` and `snapshot_source_sha256` provenance fields. For the stale copy, same snapshot (the negative control only differs in controls).
+   - drop the STALE_K_SHA/CANON_SHA precondition on live files; instead record measured live hashes at snapshot time.
+2. Re-run.
+3. In the proposal, list the manifest field updates for the controls (must-do) and note that the conforming-canonical pins must be re-pinned to live bytes at apply time (with the snapshot values as the example).
+
+Also: my `rebase_report.json` PINS list includes the 00:29 canonical hashes and `check_pins` would now fail if re-run — that's correct fail-closed behavior for a hash-bound report; documenting it is fine. But I should note the drift in the suite report and README, and in my claim.
+
+Wait, one more consideration: should the rebased controls themselves be re-verified against the *new* canonical? The rebased controls are self-contained schemas, not references to canonical. The structural gate R28 truth table is in the tool, unchanged. So the rebase verification holds as long as the tool hash is unchanged. Good.
+
+Let me also double check the tool hashes haven't changed (structural 000e09e4, semantic c79d8ab8). I'll re-verify inside build_patched_suite: pin STRUCT/SEM hashes and fail closed if changed. And record.
+
+Let me now patch build_patched_suite.py accordingly. Key changes:
+- Remove STALE_K_SHA/CANON_SHA-as-precondition usage; instead:
+  - `canon_snapshot = {}` measured at build time.
+  - In build_copy: for each conforming canonical entry, copy `REPO/CANON_FILE[tid]` into `dest/fixtures/canonical_snapshot/<basename>`; set e["fixture"]=f"fixtures/canonical_snapshot/{basename}", e["sha256"]=hash, e["canonical_path"]=CANON_FILE[tid], e["pinned_at"]=now().
+  - Since fixture path now starts with "fixtures/", the runner resolves HERE-relative. 
+- `sha()` for snapshot.
+- patch_ops for conforming canonical: record {"test_id","field":"fixture","old":old_fixture,"new":new_fixture} and {"field":"sha256",...} and any repin.
+- The negative control (stale) copy: same canonical snapshot, stale controls.
+
+Also: `run_suite` reads observed_verdicts.json from dest; good.
+
+Also `build_copy` currently verifies `new != STALE_SHA[tid]` for stale; keep.
+
+Let me rewrite the relevant portions of the script.
+
+Additionally, I want to add a drift note in the report:
+```
+"canonical_schema_hashes": {"at_rebase_report_pin": {...}, "at_suite_snapshot": {...}, "drift": True}
+```
+from rebase_report inputs_pinned and live measure.
+
+Let me implement.
+dsh: reasoning:
+Wait, the `man["copy_provenance"]` replacement: I inserted a stage-pin check *before* `man["copy_provenance"] = {` in the `build_copy` function, but the original code had `man["copy_provenance"] = {` inside build_copy with indentation 4 spaces... Let me check the replacement ordering, because my first replacement targeted a string starting with `    "canonical_manifest_sha256": sha(MANIFEST),` which is inside the dict literal, and inserted `"canonical_schema_snapshot": ...` and `"stage_pins": STAGE_PINS,`. Then the second replacement added the stage-pin verification loop before `man["copy_provenance"] = {`. But the dict literal in the original has entries like `"built_by"`, `"built_at"`, `"kind"`, `"canonical_manifest_sha256"`, `"canonical_runner_sha256"`, `"runner_patch"`, `"fixtures"`. Wait — `"stage_pins": STAGE_PINS,` inserted into the dict is fine.
+
+Hmm, but the dict references `STAGE_PINS` — defined at module level, fine.
+
+Also `pinned_canon` computation: `rep["inputs_pinned"]` values are dicts with "measured". For schemas keys `schemas/af_scc_c0_vacuum.yaml` etc. Fine.
+
+Also I need to make sure the `canonical_schema_snapshot` in copy_provenance computes sha at copy time. Fine.
+
+Let me view the relevant parts to verify correctness, then run.
+dsh: reasoning:
+The stage-pin verification loop I intended to insert before `man["copy_provenance"]` didn't appear. My replacement targeted `        man["copy_provenance"] = {` (8 spaces) but the actual line has 4 spaces (`    man["copy_provenance"] = {`). So that replacement silently did nothing (python str.replace with no match → no change; no error). I need to add the stage-pin check explicitly. Also, the `canonical_schema_snapshot` was inserted.
+
+Let me add the stage-pin check inside main() instead — before building copies. Cleaner.
+
+Also note `pinned_canon` uses `rep["inputs_pinned"]` — those values were measured at 00:29. Drift expected.
+
+Let me add to main(), after precondition checks:
+
+```python
+    for kind, want in STAGE_PINS.items():
+        tool = REPO / ("artifacts/formulation/tools/check_class_schema.py" if kind == "structural"
+                       else "artifacts/worker-06/spec_conformance_audit.py")
+        if sha(tool) != want:
+            raise SystemExit(f"stage tool {kind} drifted (fails closed)")
+```
+
+Then run.
+dsh: reasoning:
+The patched suite still exits 3 → some control not accepted. Let me look at the patched run's observed_verdicts.json to see which control failed which stage. The rebase_report said rebased 3/3 accepted at the 00:29 canonical hashes... but the snapshot canonical schemas are the NEW live bytes (b71ec02c etc.), which are the "conforming canonical" fixtures. Maybe the new live canonical schemas fail the structural gate or semantic stage! If so, that's a significant finding: the lead's in-flight revision of the canonical schemas is rejected by the binding gate (or the semantic auditor).
+
+Let me check the patched observed_verdicts.json.
+dsh: reasoning:
+Very interesting and important:
+
+1. **The rebased frozen controls pass all three stages (3/3)** — the rebase repair works exactly as intended. `controls_accepted_both_stages: true`.
+2. **The live canonical schemas fail**:
+   - `af_scc_c0_vacuum.yaml` snapshot sha 55d0a1ea9bda (note: earlier live measure was b71ec02c; it changed AGAIN between my `live_canon` measure and the copy — race!) → structural R22 fail.
+   - `af_scc_c2_vacuum.yaml` snapshot 5476a3f2c6bc → structural R22 fail.
+   - `af_wcc_vacuum.yaml` snapshot cce9c60146d6 → structural R22 fail + semantic R03 reject.
+
+Wait, the snapshot hashes differ from `live_canon` measured at the start of main? `live_canon` was measured before build_copy; then build_copy copied the files. The lead is writing concurrently; files changed between measure and copy. And within build_copy, patched copy was built first then stale copy — the shas in the report are per-copy.
+
+So the live canonical tree is mid-edit and currently fails R22 (probably a key-manifest rule). This is a *separate, live finding*: at 00:33, the canonical F2a/F2b/WCC schemas are rejected by the binding structural gate R22 and WCC also by semantic R03. But this could just be an in-flight partial write (the lead is actively saving revisions). I should be careful about claiming a defect: the files may have been captured mid-write (e.g., during a save). However, R22 failure is about key manifest — likely a real content issue at the snapshot.
+
+My task is the control rebase; the canonical pins are a separate matter (worker-064 already found the stale-pin problem). For my end-to-end demonstration of `valid_for_calibration=true`, I need conforming-canonical fixtures that actually pass. Options:
+
+(a) Use the *rebase_report pinned* canonical bytes (1bb78ce9/b6123750/9a8bd4c9) as the conforming-canonical snapshot. Those bytes are no longer on disk in canonical paths, but I have measured them as accepted 3/3 in part 1. Can I recover those bytes? I don't have copies... Wait — do I? The rebase_report has only hashes, not bytes. But maybe `artifacts/worker-*/...` snapshots of those revisions exist (e.g., worker-061 pinned F1 check_class_schema; worker-043 snapshot; `frozen_artifacts`?). Also `schemas/*.sha256`? The F1 schema has a `.sha256` file. Let me look for snapshot copies of `af_scc_c0_vacuum.yaml` with sha 1bb78ce9... under artifacts/ (many workers snapshot canonical schemas for review). A quick find + sha256sum could locate them. That would let me use the pinned-accepted revision as the conforming-canonical basis, making the demonstration self-contained and race-free.
+
+(b) Accept that the live canonical is a moving target and frame the demonstration as: "controls rebased → 3/3 accepted; conforming-canonical basis currently fails at the live bytes due to a separate, in-flight finding (R22/R03 on the new revision)". Then the `valid_for_calibration=true` claim cannot be demonstrated until canonical pins are re-pinned to gate-accepted bytes. But my core claim (rebase clears the control-staleness component) is already demonstrated: `controls_accepted_both_stages: true` in the patched run, with 0/3 for stale controls.
+
+I think the strongest, cleanest deliverable is (a) + (b) combined: use the pinned revision that part 1 measured as accepted (if bytes recoverable), and separately report the live-canonical R22/R03 finding as a blocker observation for the lead (not my task's claim).
+
+Let me search for copies of the canonical schemas with the pinned hashes.
+
+Also note: R22 is likely the "key manifest" rule (`make_key_manifest.py`). The current live canonical failing R22 at snapshot might be because the lead is mid-edit. I must timestamp and hash it; if it persists, it's a real finding. Let me re-measure the live canonical files now and run the structural gate on live bytes to see whether the failure persists (a fresh, direct measurement on the live path — reading, not writing). If it still fails R22 now, that's a live state observation with a hash and timestamp. But careful: my role is bounded; I can note it as evidence, emit a blocker? The worker prompt says emit valid JSON with IDs evidence hash falsifier; a blocker event would be legitimate if I find the current canonical revision is gate-rejected. But it might be transient mid-write. I'll re-measure once; if it fails, I'll record it as an observation in my report + a `blocker` event (node F2a/F2b/F1, evidence hash, needed_to_unblock = lead publishes a gate-accepted revision), clearly labelled "measured at <ts>, may be in-flight".
+
+Hmm, wait. Let me be careful about the value of my own deliverable. The `valid_for_calibration=true` end-to-end demonstration was my extra; the core is the rebase. If live canonical can't pass the gate right now, the suite cannot be valid regardless of controls — that's precisely a finding worth reporting. Let me first check whether the R22 failure is real and what R22 says.
+
+Let me:
+1. Re-measure live canonical hashes + run structural on the live files now.
+2. Search for snapshot copies of the 1bb78ce9 revision.
+dsh: reasoning:
+Excellent. Two things:
+
+1. **Live canonical at 00:33:38: all three schemas fail structural R22** (hashes 55d0a1ea, 5476a3f2, cce9c601). This is a real, live, measured state — not just mid-copy (I re-measured; same hashes as the snapshot copy). It's likely the lead's in-flight revision. This is worth reporting as a blocker observation with hashes and timestamp. But: my worker authority says emit status/claim/artifact/blocker with evidence; a blocker on F2a/F2b/F1 with "current canonical bytes rejected by binding structural gate R22" is legitimate and valuable. I must be careful: the lead may be mid-edit; a file that changes every minute isn't necessarily a defect. Timestamp + hash + "re-measure before acting" is the honest framing. Also note R22 is checked in the *binding* gate `check_class_schema.py` which is frozen at 000e09e46b2f.
+
+2. **Snapshots of the pinned (previously accepted) canonical revision exist** in artifacts, notably `artifacts/worker-061/f1_independent_verdict/pinned/` (which also has `check_class_schema.py` pinned) and `artifacts/worker-060/...`, `artifacts/worker-043/...`. I can use `artifacts/worker-060/xclass_dataclass_adjudication/snapshots/F2b__af_scc_c0_vacuum.yaml` etc. for the conforming-canonical basis (sha-verified against the pinned hashes). This lets my patched-suite demonstration reach valid=true *at the pinned revision that part 1 measured as accepted*, and I document that the live canonical has since moved (and currently fails R22).
+
+Wait — should the demonstration use the pinned revision or the live revision? The whole point of the "conforming_canonical_controls" list is "current canonical schema at build time". If current canonical fails the gate, then the suite legitimately cannot be valid — that's a real blocker, not something to paper over. Hmm.
+
+But my task is the control rebase. The cleanest framing:
+- **Primary claim**: the control-staleness component is repairable exactly as specified (rebased controls 3/3 accepted; stale controls 0/3; mutants unchanged 32/11/32). Demonstrated with a suite copy where the conforming-canonical slots use the last gate-accepted canonical revision (pinned snapshots from worker-060/061, sha-verified) → exit 0, valid=true. This proves the rebase is sufficient *given* a gate-accepted canonical basis.
+- **Secondary blocker observation**: the live canonical bytes at 00:33 fail R22 (all three) and WCC also fails semantic R03, so the *current* canonical basis is not usable for calibration at this instant; the lead must publish a gate-accepted revision (or confirm in-flight). This is a new, hash-bound finding with a timestamp.
+
+That's rigorous and doesn't overstate. It also gives the lead exactly what they need: patch proposal + two blockers distinguished.
+
+Hmm, but is it appropriate to use worker-060/061 snapshots as canonical basis? They are byte copies of the canonical files at pinned sha; I verify hash equality. Provenance recorded. Fine. Note however these snapshots may have been *the* accepted revision: part 1 measured 1bb78ce9/b6123750/9a8bd4c9 accepted 3/3 by all stages. Good.
+
+Now: the R22 failure. Let me look at what R22 checks, to describe it precisely (key manifest requirement). Let me grep R22 in check_class_schema.py. Also check R03 semantic rule. That will let me write an accurate blocker.
+
+Also — CF-4 policy: "checkers flag, never author". I'm not authoring canonical content; I'm reporting a check result. Good.
+
+One risk: the live canonical may be restored to an accepted revision a minute later, making my blocker stale. I'll frame it as "measured at 00:33:38; re-measure before acting" and include the exact hashes. The falsifier: "re-running the binding gate on the same bytes accepts them, or the canonical bytes change to a gate-accepted revision". That's honest and self-falsifying. Also, since the lead is actively working the F0/F1/F2 close-findings assignment, this may be a transient. I'll label it as an observation requiring re-measurement rather than a hard defect.
+
+Let me check R22/R03 definitions quickly, then update the builder to use pinned snapshots and record both measurements.
+
+Actually — better idea for the demonstration: build the patched suite with **two conforming-canonical variants**:
+- `suite_patched/` uses the pinned previous accepted revision (worker-060 snapshot) → expect exit 0, valid=true. This demonstrates the rebase clears ADJ-CONTROL-STALENESS.
+- Keep `suite_stale/` with stale controls (same pinned canonical) → expect exit 3 (control staleness only). 
+- Additionally record the live-canonical measurement (structural R22 on live bytes; plus the patched-suite run with live snapshot showing conforming=false). Hmm, my current `suite_patched` already used the live snapshot and showed controls pass but conforming false. I could keep that as a third copy `suite_patched_livecanon/`... That's more artifacts to maintain. 
+
+Simplest: 
+- `suite_patched/`: rebased controls + pinned accepted canonical snapshots → exit 0 target.
+- `suite_stale/`: stale controls + same pinned accepted snapshots → exit 3 target.
+- Separate direct measurement of live canonical bytes (three structural runs + WCC semantic) recorded in `live_canonical_gate_measurement.json`, timestamped, with hashes.
+
+That's clean. Let me modify the builder:
+- Add `PINNED_CANON_SNAPSHOT` mapping tid → path in artifacts (worker-060 xclass snapshots, or worker-061 pinned). Use one consistent source (worker-060/xclass_dataclass_adjudication/snapshots/F2b__af_scc_c0_vacuum.yaml, F2a__..., F1__...). Verify sha equals the part-1 pinned hashes.
+- `build_copy`: copy from the pinned snapshot source (record `snapshot_source_path`), not live canonical.
+- Record live canonical hashes + gate results separately in the report.
+- The manifest patch proposal should distinguish: (i) control replacements (my deliverable), (ii) conforming-canonical re-pin — required regardless, but the *values* depend on which revision the lead freezes as canonical; currently the live bytes are R22-rejected so re-pinning to them would still leave valid=false. Recommend: re-pin only to a gate-accepted canonical revision, e.g., the last accepted 1bb78ce9/b6123750/9a8bd4c9; my proposal includes those values.
+
+Let me check R22 definition first.
+dsh: reasoning:
+R22: unknown keys not in KEY_MANIFEST and not under `extensions:`. So the live canonical revision introduced top-level (or nested) keys not in the frozen key manifest → binding gate rejects. This is exactly the kind of thing the lead's revision could trip (they added e.g. new fields). Let me capture the *specific* unknown keys for the blocker evidence — the checker's message includes `sorted(unknown)[:6]`. Let me run the structural checker and capture the full message for each live file.
+
+Then update the builder to use pinned snapshots and re-run. Let me get the R22 messages first.
+dsh: reasoning:
+`failures` is empty but `failed_rules` = ['R22']? Strange. Let me dump the whole JSON for one file. Maybe the failure detail is under a different key or the fail() appends to `failed_rules` only for some paths... Let me look at the checker's `fail` method and output structure around line 400-435. And print the raw full JSON.
+dsh: reasoning:
+Now the checker reports `verdict: pass` for c0! The live file changed again between my measurement and now. The lead is actively rewriting. So the R22 failure was transient (a mid-edit state, likely a partially written file or a revision that was then fixed).
+
+This confirms: **do not report the live-canonical R22 failure as a finding** — it's a moving target mid-edit. I should note only that the live canonical was in flux during the run and that the suite copy must use pinned bytes. That's the honest treatment: record measurements with hashes/timestamps and note the observed drift, without asserting a defect (the falsifier "the same bytes pass on re-run" would already be satisfied).
+
+Good. Now update the builder to use the **pinned accepted revision** snapshots found in worker-060/061 artifacts (sha-verified), and add a "live canonical flux" observation to the report (hashes measured at snapshot time; note that a live re-check at 00:34 passes for c0 after failing R22 at 00:33:38 — evidence of an active writer, not a stable finding).
+
+Hmm wait — c0 now passes, but what about c2 and wcc at this moment? Let me re-measure all three live quickly to record the current state. Actually for the report I'll do one structured live measurement pass at the end: hashes + structural verdicts + (for wcc) semantic verdict. Record as "live canonical state during run (moving target)".
+
+Let me now update build_patched_suite.py:
+
+1. Add `PINNED_SNAP = {...}` mapping tid → artifact snapshot path (verify sha == part-1 pinned hash).
+2. In build_copy, copy from PINNED_SNAP (record source path) instead of live canonical.
+3. In main, record:
+   - `pinned_canonical_snapshot`: paths + hashes
+   - `live_canonical_state_during_run`: measured hashes + structural verdicts (+ semantic for wcc) at a timestamp
+4. Expect suite_patched exit 0 / valid true; suite_stale exit 3 / valid false.
+5. Proposal: conforming-canonical re-pin values = pinned accepted revision (1bb78ce9/b6123750/9a8bd4c9) with note that the live tree is being rewritten and the lead must re-pin to a gate-accepted revision at apply time.
+
+Which snapshot source to choose? `artifacts/worker-060/xclass_dataclass_adjudication/snapshots/` has all three (F2b__af_scc_c0_vacuum.yaml, F2a__af_scc_c2_vacuum.yaml, F1__af_wcc_vacuum.yaml). Let me verify hashes match the pins. Alternatively worker-061's pinned dir has all three plus pinned check_class_schema.py — nicer provenance (pin made with the gate revision). Let me check hashes of both and choose worker-061's pinned set if it matches. Actually worker-061/f1_independent_verdict/pinned/ contains af_scc_c0, af_scc_c2, af_wcc, check_class_schema.py, FROZEN.json — likely exactly the pinned revision. Let me verify.
+
+Then patch the script.
+dsh: reasoning:
+Interesting! The live canonical files are byte-identical (same sha) to what failed R22 at 00:33:38, and now they PASS at 00:35ish. Same bytes, different verdict → the checker's behavior depends on something *outside* the target file: `KEY_MANIFEST`. R22 reads `KEY_MANIFEST` (a file) — it must be `artifacts/formulation/tools/key_manifest.json` or similar, which the lead just updated (make_key_manifest.py exists in tools). So the R22 failure was due to the key manifest being updated *after* the schemas: a transient inconsistent state between the new schema revision and the key allowlist. Now the manifest has been regenerated and the same bytes pass.
+
+This is a real, informative observation but transient: "at 00:33:38, live canonical bytes 55d0a1ea/5476a3f2/cce9c601 failed R22 because the key manifest did not yet allow their keys; by 00:34:5x the same bytes pass — the key manifest was regenerated". It's evidence of an ordering hazard: schema publish before key-manifest regeneration temporarily invalidates the binding gate. Worth recording as a process observation (not a claim of defect). I could emit it as an informational blocker/status. CF-4 policy says checkers flag, never author; the process hazard is worth one line in the report. But keep the primary deliverable focused.
+
+Given the live bytes now pass the gate, I *could* use the live canonical (55d0a1ea/5476a3f2/cce9c601) as the conforming-canonical basis and get valid=true with current pins. But wcc also failed semantic R03 earlier at the same bytes — let me re-check the semantic auditor on live wcc now; if it still rejects R03, then the live basis is still not fully conforming (semantic stage is part of "both stages" acceptance in the runner: it requires accepted_by any stage; actually `controls_ok = all(c["observed"]["accepted_by"] and not c["observed"]["rejected_by"] ...)`, i.e., a fixture with rejected_by non-empty fails the control check even if accepted by another stage). Earlier: K03 wcc snapshot cce9c601 rejected by structural R22 + semantic R03. If semantic R03 still rejects live wcc, valid stays false.
+
+Let me check semantic on live wcc now.
+
+Decision on which canonical basis to use for the demonstration: prefer the **live canonical bytes if they are accepted by all three stages now** (then the patched suite demonstrates valid=true on the *current* canonical revision, which is most relevant). Otherwise use the pinned previous accepted revision and record the live state.
+
+Let me test live all three through all three stages quickly.
+dsh: reasoning:
+The live WCC schema is rejected by the semantic auditor R03 both baseline and hardened. So the live canonical basis is NOT fully conforming: c0/c2 pass all stages, wcc fails semantic R03.
+
+This is a genuine, stable finding: `schemas/af_wcc_vacuum.yaml` sha 9a8bd... no wait, live wcc = cce9c60146d6 fails semantic R03. That's the F1 WCC schema — the one that was frozen at revision 25 in the map. This is worth reporting as a blocker (with hash + timestamp + falsifier), because it directly prevents the semantic contract suite from having a conforming-canonical basis and it's a live artifact that a reviewer should see.
+
+But hold on: is the semantic auditor R03 the *adopted* stage? The README says stage B semantic baseline is a worker semantic auditor "as first written" — adopted? The suite's control check requires all three stages to accept (accepted_by non-empty and rejected_by empty). The baseline counts as adopted in the escape logic ("adopted stages" = structural + semantic_baseline). So WCC failing baseline R03 is material.
+
+Let me check what R03 says for wcc specifically to describe it precisely. Let me get the failures from the semantic report. Also check whether this failure is new (i.e., the *previous* pinned wcc 9a8bd4c9 was accepted by all three — yes, part 1 measured canonical 3/3 accepted at 9a8bd4c9). So the lead's newest WCC revision (cce9c601) regressed on semantic R03 while the structural gate now passes (after key-manifest regen). That's exactly the kind of finding the audit loop needs: a revision that fixes R22 but trips R03.
+
+Wait, but the wcc at 00:29 (9a8bd4c9) was accepted 3/3, then it was rewritten to cce9c601 (with new keys requiring key manifest update) and now fails semantic R03. Hmm, but maybe the semantic R03 failure existed before for a different reason? No: part 1 measured canonical accepted 3/3 at the pinned hashes (that included wcc 9a8bd4c9).
+
+So: **finding W004-F1: the current canonical af_wcc_vacuum.yaml (sha cce9c601, measured 00:34) is rejected by the adopted semantic baseline stage on R03, while it passes the structural gate (after the key manifest regen). The prior revision 9a8bd4c9 passed all three stages.** This is a concrete, hash-bound, falsifiable observation directly relevant to G-FORM/G-LIT? It's the F1 node.
+
+Hold on — I should double check the semantic R03 failure message and confirm it's not a false positive of the baseline auditor. Let me get the details: the report has `failed_rules` and maybe `notes`/`failures`. Let me dump the semantic report for wcc.
+
+Also, is it possible that the semantic auditor's R03 reads a *key manifest* too? No, R03 there is quantifiers (line 175-221): "quantifiers.ordered missing or <2 entries", "quantifiers.ordered[i] missing {k}", domain resolution... Let me get the actual failure message.
+
+I need to be careful about scope though. My primary task is the control rebase. This WCC finding is adjacent but valuable and cheap to record properly (one measurement + hash + falsifier). I can include it as a secondary measurement in my report and emit a `blocker` event for F1 with evidence. That strengthens the deliverable, provided I'm accurate and don't overclaim (the lead may already know; the artifact hash makes it checkable).
+
+But wait — is the live wcc file still being edited? It changed from 9a8bd4c9 → cce9c601 within minutes. Let me re-measure hash + semantic verdict once more to confirm stability, then record. If it changes again, I'll record the measured hash/verdict pair as a snapshot observation with a falsifier "any wcc byte change voids; re-measure".
+
+Plan adjustments for `build_patched_suite.py`:
+- Use **pinned accepted revision** (worker-061 pinned snapshots, sha-verified: c0 1bb78ce9, c2 b6123750, wcc 9a8bd4c9) as the conforming-canonical basis for suite_patched and suite_stale. This isolates the control-rebase effect and yields exit 0/valid true.
+- Record live canonical state at run time: hashes + per-stage verdicts → shows the live tree has moved and wcc fails semantic R03.
+- suite_stale with the pinned canonical basis → exit 3 (only because of controls), so the difference between patched and stale is exactly the controls.
+
+Then the proposal distinguishes:
+  (A) control replacements — the rebase (my deliverable).
+  (B) conforming-canonical re-pin — mechanical; values must be the revision the lead freezes as canonical. Current live revision is not fully conforming (wcc fails R03), so until that's resolved, re-pin to the last gate-accepted revision or fix wcc.
+
+Let me get the R03 detail for wcc and re-confirm its hash stability. Then patch and re-run.
+dsh: reasoning:
+The semantic report doesn't give the failure detail in this summary; maybe there's a `details` field I excluded... I filtered out 'checks','rules' — let me print full keys. Actually the dict printed has keys: tool, spec, spec_version, hardened, audited_at, source, doc_sha256, verdict, failed_rules, undecided_rules. No detail. Let me look at the auditor's R03 code around line 175-221 to understand what it checks for WCC, and compute the specific failure myself.
+
+From earlier grep on spec_conformance_audit.py:
+```
+175:        # R03 quantifiers
+179:            self.fail("R03", "quantifiers.ordered missing or <2 entries")
+...
+219:                self.fail("R03", "; ".join(bad))
+221:            self.ok("R03", f"{len(ordered)} ordered quantifiers, all domains resolved")
+```
+Let me read lines 170-225 of the auditor. Then I can describe the failure precisely (e.g., ordered quantifier missing a key).
+
+Actually, to keep the scope bounded: for the blocker, I can cite the tool verdict + hash and let the lead/auditors localize it. But being precise adds value cheaply. Let me read the code.
+dsh: reasoning:
+The auditor's `fail()` collects reasons; the JSON output only exposes `failed_rules`, not the messages (unlike the structural tool which had `failures`... which was empty even when failed — odd; maybe `failures` is only populated by some path).
+
+I can reproduce the R03 condition myself with a small snippet to localize the failing binder. Let me run the specific checks on the live wcc YAML to find which `bad` entries exist. This is a legitimate diagnostic for the blocker evidence. Quick inline python.
+
+Actually, hold on. Let me reconsider scope. I have a bounded task. The WCC semantic rejection is a valuable adjacent finding, but localizing it is the lead/audit's job, and worker-025/026 etc. are doing F1 verification right now. I'll include the measured verdict + hash + tool hash as a blocker event, and note "localization not attempted (worker scope)". Actually a one-line localization is cheap and makes the blocker actionable. Let me spend 1 minute.
+
+Let me compute the R03 `bad` list for live wcc.
+dsh: reasoning:
+The live WCC revision added a 6th ordered quantifier with binder `(q,t0)` (domain D5, likely the visibility/I+ completion witness), but the `quantifiers.formal` sentence does not literally contain the string `(q,t0)` — the auditor requires every binder to appear in the formal sentence. So R03 fails on a *lexical* consistency requirement: binder `(q,t0)` absent from `quantifiers.formal`.
+
+That's a precise, actionable finding: either the formal sentence needs the binder (real gap in the formal statement) or the binder string needs to match what the formal sentence uses. This is a live F1 revision (cce9c601) that passes the structural gate but fails the adopted semantic baseline. It's exactly the "class binding / quantifier" issue at the heart of G-FORM.
+
+But again: the lead is actively editing. I measured at 00:34:37 (audited_at) on hash cce9c601. I should present it as a timestamped snapshot finding with falsifier "any byte change in schemas/af_wcc_vacuum.yaml voids this; re-run the auditor".
+
+Now, my primary deliverable. Let me finalize the plan:
+
+**Deliverable A (primary): control rebase**
+- rebased controls (3) + part-1 measurement (stale 0/3, rebased 3/3, canonical-at-pin 3/3).
+- patched suite copy using pinned gate-accepted canonical snapshots → exit 0, valid=true, mutants 32/11/32.
+- stale-controls suite copy → exit 3, valid=false (negative control).
+- manifest patch proposal for lead.
+
+**Deliverable B (secondary, timestamped observation): live canonical drift**
+- live canonical hashes at 00:34: c0 55d0a1ea (pass all), c2 5476a3f2 (pass all), wcc cce9c601 (structural pass after key-manifest regen; semantic baseline+hardened reject R03: binder '(q,t0)' absent from quantifiers.formal).
+- recorded in suite_run_report.json + a `blocker` event for F1.
+
+Now patch build_patched_suite.py to use the pinned snapshots. Changes:
+1. Add `PINNED_SNAP` dict with repo-relative paths from worker-061 pinned dir.
+2. `build_copy` copies from PINNED_SNAP, verifies sha == expected pinned hash; records `snapshot_source_path`.
+3. The manifest "canonical_path" field = original canonical path; `snapshot_source_path` = artifact snapshot path.
+4. In main: measure live canonical state (hashes + stage verdicts) and include in report; no longer use `live_canon` for the copies.
+5. The proposal's conforming-canonical section: note the re-pin values should be the frozen canonical revision; provide pinned values + live values + the wcc R03 blocker.
+
+Let me rewrite the script cleanly (full rewrite is safer than patching). I'll write a new version.
+
+Also note: the earlier `manifest_patch_proposal.json` and `suite_run_report.json` will be overwritten by the rerun; fine.
+
+One more detail: for the suite copies, the fixture paths for canonical snapshots will be `fixtures/canonical_snapshot/<name>` (HERE-relative). Manifest `conforming_canonical_controls[*].fixture` changes → patch_ops record that. Good.
+
+Let me also make the report include:
+- `pinned_canonical_basis`: {tid: {source_path, sha256, accepted_by_all_three}}
+- `live_canonical_state`: {path, sha256, structural, semantic_baseline, semantic_hardened, measured_at}
+- runs patched/stale.
+- conclusion: all_checks_pass (patched exit 0 valid true; stale exit 3 valid false; mutants unchanged).
+
+Let me write the new script as a full replacement.
+dsh: reasoning:
+Now the patched suite exits 3 with `control_rebase_clears_control_staleness_component: false`. Something failed. Let me inspect the patched observed_verdicts to see which fixture(s) failed. The pinned canonical snapshots should be accepted... unless worker-061's pinned `af_wcc_vacuum.yaml` (9a8bd4c9) is rejected by the *current* semantic auditor? But part 1 measured canonical 3/3 accepted at those hashes using the same tools (c79d8ab8). Hmm — but wait: part 1's `run_semantic` used `cmd.insert(-2, "--hardened")` on `[py, SEM, target, "--json", out]` → `[py, SEM, target, "--hardened", "--json", out]`. Same here.
+
+Let me look at the patched results.
+dsh: reasoning:
+Now EVERYTHING fails structural R22 — including the previously accepted pinned revision and my rebased controls. This confirms the R22 failure is caused by the external `KEY_MANIFEST` file, which is currently in a state that doesn't allow keys used by these schemas. The lead is regenerating it (make_key_manifest.py) as part of the in-flight revision. So right now (00:37ish) the structural gate rejects all schemas.
+
+This is a race with the live key-manifest regeneration. KEY_MANIFEST path: let me check `KEY_MANIFEST` in check_class_schema.py. If it's `artifacts/formulation/tools/key_manifest.json`, the lead just regenerated it to match the NEW live schemas, which now makes the OLD schemas' keys unknown → R22 on old revisions. That explains everything:
+- At 00:29: old manifest allowed old schema keys; new live schemas failed R22.
+- At 00:35: manifest regenerated for new schemas; new live schemas pass; old pinned schemas now fail R22!
+- My rebased controls (based on the old corpus base) now also fail R22 — because the key manifest no longer includes keys the old controls use (or it changed the allowed set).
+
+Wait but my rebased controls at part 1 passed structural; the manifest has since changed. So the *binding gate's key allowlist is a moving target* tied to the live canonical revision. This is a significant process observation: **the structural gate is not revision-stable across the corpus because its key manifest is regenerated from the live canonical schemas**. The control corpus and any pinned revision become invalid whenever the key manifest is regenerated.
+
+Let me verify the KEY_MANIFEST path + hash and inspect what keys are now unknown for the rebased control. Let me run the structural checker with a debug to print unknown keys for the rebased control. The checker doesn't print failures... wait, earlier for live c0 the `failures` list was empty even when failed_rules=['R22']. Weird — maybe `fail()` populates `self.failures` but the JSON output key is `failures` — and it showed empty... Let me look at the `fail`/to_json code to understand; maybe the failures were reset. Actually when I ran live c0 at 00:33:38 it printed `verdict fail failed ['R22']` and `failures []`. That suggests `fail()` records `failed_rules` but the messages live elsewhere (e.g. `self.notes`?). Let me look at the class definition.
+
+Regardless — for my report I can compute the unknown keys directly with the same logic (read KEY_MANIFEST allowed_keys, walk the doc). Let me do that for a rebased control to name the specific keys.
+
+This is now a *real, important finding for the swarm*: the binding structural gate's key allowlist (`KEY_MANIFEST`) is derived from the live canonical revision and is not frozen; it was regenerated at ~00:35, which retroactively invalidates (a) the frozen control corpus, (b) the frozen schema revisions (FROZEN rev25), and (c) the semantic contract suite's entire calibration basis. This is exactly the kind of "gate instability" the audit should know about.
+
+Let me confirm:
+- KEY_MANIFEST path and current hash + mtime.
+- Which keys in the rebased control are now unknown.
+- Whether the key manifest changed between part 1 (00:30) and now (00:37): compare mtime; the part-1 run passed R28 with no R22, so at 00:30 the manifest allowed the control's keys.
+
+Then decide how to complete my task properly:
+
+My **primary claim** — "the control rebase removes the R28 blocker" — remains valid *conditional on a fixed key manifest*. I have part-1 evidence measured at the manifest state at 00:30 (implicitly pinned by time, not by hash — I didn't pin KEY_MANIFEST! That's a lesson). I can re-run part 1 now to see the current state; but the key manifest is moving.
+
+Better approach for a durable deliverable: **pin the KEY_MANIFEST** too. If I can find a snapshot of the key manifest from 00:30 (or reconstruct it?)... Hmm. Actually, I can make the demonstration robust by pinning the key manifest inside my suite copy: the structural checker reads KEY_MANIFEST from a fixed path. If I want a self-contained demonstration, I'd need to patch the checker (no — CF-4 policy: checkers flag, never author; and modifying the checker changes the binding gate).
+
+Options:
+
+**Option 1**: Wait for the manifest to settle, then re-run and report the state at that hash. Risky: it may keep changing; and my worker should exit bounded.
+
+**Option 2**: Report the finding: "the rebase eliminates the R28 control defect (part-1 measurement at 00:30, all three rebased controls accepted 3/3, stale 0/3), but the end-to-end validity demonstration is currently blocked by a *gate-stability* defect: `KEY_MANIFEST` was regenerated between 00:30 and 00:37, and after regeneration the binding structural gate rejects R22 the previously accepted canonical revision, the frozen controls (stale and rebased alike), and — at the time of the 00:33 measurement — the new live schemas too until the manifest caught up. Therefore valid_for_calibration cannot be used as calibration evidence until the key manifest is frozen with the schema revision (or removed from the binding gate)."
+
+That's honest and high-value. My claim about the rebase would be: conclusion_type `open_problem`? No — I have a measurement claim. Hmm, allowed types: `formal_model`? The rebase result is a machine-checkable artifact property. Since part-1 measurement is bounded by an unpinned external (KEY_MANIFEST), I should be careful. I could pin KEY_MANIFEST now by hash for the *current* state and re-run part 1 under the current manifest: then I can state precisely "under KEY_MANIFEST sha X, stale controls 0/3 (R22/R28?), rebased controls ?/3". But now the rebased controls fail R22 under the new manifest, so that measurement would say rebased fails too — masking the R28 fix. I need to test under the manifest state where keys are allowed.
+
+Wait — actually, is the R22 failure of the rebased control caused by keys that were in the *old canonical* but removed in the new one? Let me check which keys are unknown. Then I can decide: maybe the rebased control's unknown keys are "generic" legacy keys (e.g., `revised_at_unused`, `harness`...). Let me compute.
+
+Also let me find the KEY_MANIFEST file and see if there are backup versions (make_key_manifest.py may write `key_manifest.json` and possibly a `.bak`). If the old manifest is recoverable, I can pin it as an input in my rebase report and re-run the structural stage with a *copy* of the checker? No — patching the checker path is modifying the binding gate... but I could run the checker with an environment variable if it supports one. Let me look at how KEY_MANIFEST is defined.
+
+Let me investigate quickly. This is worth 2 minutes because it determines whether my deliverable can be completed cleanly.
+dsh: reasoning:
+KEY_MANIFEST = `artifacts/formulation/KEY_MANIFEST.json` (parents[1] of tools/ → artifacts/formulation). Let me check it.
+dsh: reasoning:
+Now it's crystal clear:
+
+- `artifacts/formulation/KEY_MANIFEST.json` was regenerated at 00:34 (mtime). The new allowlist (271 keys) **no longer contains `revised_at_unused`** — a key present in the frozen controls (and the previously pinned canonical schemas, and my rebased control, which preserve the old bytes except for the removed R28 row).
+- Under the current KEY_MANIFEST (sha 014e2d30...), the structural gate R22 rejects: the stale controls, the rebased controls, and the previously accepted pinned canonical revisions — all solely because of `revised_at_unused`.
+- At 00:30 (part-1 run), the then-current KEY_MANIFEST still allowed `revised_at_unused`, so the rebased controls passed 3/3.
+- The new live schemas evidently dropped `revised_at_unused`, so regenerating the allowlist from them removed it.
+
+So the key-manifest regeneration introduced a **retroactive invalidation of the frozen corpus and the frozen revisions**. That's the real blocker for the suite calibration now — and it is independent of my rebase.
+
+How to deliver this cleanly and honestly:
+
+**Deliverable A (control rebase, R28 fix)**: measurement at the 00:30 manifest state: stale 0/3 (R28), rebased 3/3, canonical 3/3. The rebase itself is a correct, minimal, semantics-preserving removal of the R28-violating duplicate row. Under the *current* manifest, both stale and rebased controls additionally fail R22 on `revised_at_unused` — a separate defect of the key-manifest regeneration, not of the rebase.
+
+**Deliverable B (gate stability finding)**: `artifacts/formulation/KEY_MANIFEST.json` regenerated at 00:34 with sha 014e2d30 removes `revised_at_unused`; as a result the binding structural gate now rejects the frozen corpus (controls), the pinned canonical revisions (worker-061's), and — importantly — **any frozen revision** carrying that key. Since the gate's allowlist is derived from the live canonical schemas, every canonical edit retroactively changes the gate's verdict on frozen artifacts, invalidating calibration/verification evidence (FROZEN rev25, semantic contract suite, worker verdicts bound to pinned hashes).
+
+Can I still complete the end-to-end patched-suite demonstration? To do so I'd need a KEY_MANIFEST state that allows the rebased controls. Options:
+- Recover the pre-00:34 KEY_MANIFEST from a snapshot/backup and use it to demonstrate the R28 fix end-to-end. Does a copy exist? Let me search artifacts for copies of KEY_MANIFEST.json. If worker-06/64/61 pinned the checker, maybe manifests too. Also `_scratch` copies. Quick search by filename.
+- Alternatively, make the rebased control R22-clean under the *new* manifest by removing `revised_at_unused` too? But that would be authoring a control beyond the minimal R28 fix, and the old canonical revisions pin `revised_at_unused` too — the whole corpus is affected. Not my call (control content = lead decision).
+- Or patch my suite copy's *checker copy* to use a pinned key manifest — that changes the binding gate (CF-4), no.
+
+The cleanest end-to-end demonstration: find a KEY_MANIFEST snapshot from before 00:34 and pin it. The checker reads `artifacts/formulation/KEY_MANIFEST.json` from a fixed path — I cannot redirect it without modifying the checker. But I *can* run the suite copy in a sandboxed copy of the whole `artifacts/formulation/tools` + KEY_MANIFEST tree? The patched runner's STRUCT path is `REPO/artifacts/formulation/tools/check_class_schema.py` → I could set my patched runner's REPO to a *shadow repo root* containing symlinks/copies: `shadow/artifacts/formulation/...` (with old KEY_MANIFEST) and symlinks to the real repo's other paths. That's heavier.
+
+Alternative: demonstrate end-to-end **excluding the manifest race** by using a temporarily-fixed KEY_MANIFEST: but writing to canonical `artifacts/formulation/KEY_MANIFEST.json` is forbidden (owned, live).
+
+Hmm. Let me think about what is actually needed for the deliverable to be valuable and sound:
+
+1. The rebase repair is proven at the byte level (R28 row removal, 1 hunk, -8/+0) and measured at the 00:30 manifest state (rebased 3/3, stale 0/3).
+2. The end-to-end suite validity demonstration is *currently impossible for any frozen corpus* because of the key-manifest regression — and that is itself a first-class finding. I can demonstrate this precisely:
+   - Under current KEY_MANIFEST 014e2d30, the previously gate-accepted pinned revision (worker-061) fails R22 + the controls fail R22 → suite invalid regardless of controls.
+   - The specific offending key is `revised_at_unused` in all of them.
+   - Falsifier: regenerate KEY_MANIFEST allowing `revised_at_unused` (or drop that key from the corpus/revisions), then re-run.
+3. The manifest patch proposal stands (controls replacement) and additionally recommends the lead resolve the key-manifest scoping question.
+
+I can also run the *patched vs stale* comparison under the current manifest: both fail R22 identically on the same key → still shows single-variable control over the suite (the difference remains only controls; both exit 3). But that doesn't demonstrate the R28 fix now. The part-1 measurement does, at a timestamped (but unhypinned) manifest state. I can *strengthen* part 1's binding by finding a copy of the pre-regeneration KEY_MANIFEST. Let me search for backups.
+
+Search: find any file named KEY_MANIFEST.json under the repo, and check hashes/mtimes. Also `make_key_manifest.py` might write to `KEY_MANIFEST.json` only. Let me look.
+
+If no old copy exists, could I reconstruct the old allowlist? The old manifest allowed `revised_at_unused`. I could reconstruct "old_allowed = current_allowed ∪ {revised_at_unused}" — is that a faithful reconstruction? Not necessarily; the regeneration might have added/removed other keys. But I don't need the full old manifest: I need to show the R28 fix under a manifest state equal to the current one plus `revised_at_unused`. I can do this *without modifying the checker or the canonical manifest* by running the checker against a **shadow formulation tree**:
+
+- Create `artifacts/worker-004/semct_control_rebase/shadow/artifacts/formulation/tools/check_class_schema.py` — a byte copy of the frozen checker (sha recorded).
+- Create `shadow/artifacts/formulation/KEY_MANIFEST.json` = current manifest ∪ {revised_at_unused} (recorded, with provenance and the exact one-key delta).
+- Create `shadow/artifacts/worker-06/spec_conformance_audit.py` byte copy.
+- Run the shadow checker on stale/rebased/canonical fixtures (absolute paths, so no repo-root dependency for the target; but the checker's KEY_MANIFEST resolves relative to the shadow tool → shadow manifest). 
+- Then a shadow-suite copy whose patched runner's REPO points at the shadow root... but the shadow root needs `schemas/...` for canonical fixtures. I can lay out the shadow root with the needed files: `shadow/schemas/af_*.yaml` (copies), `shadow/artifacts/formulation/tools/check_class_schema.py`, `shadow/artifacts/formulation/KEY_MANIFEST.json`, `shadow/artifacts/worker-06/spec_conformance_audit.py`, plus the suite copy under `artifacts/worker-004/.../suite_patched/` (fixtures HERE-relative). The runner's REPO = HERE.parents[3] — if the suite copy stays where it is, REPO = real repo. I'd need to place the suite copy at `shadow/artifacts/worker-004/x/suite/` so HERE.parents[3] = shadow root. That's doable but getting complex.
+
+Simpler: my own harness (already written in part 1) runs the three tools directly with subprocess. For the end-to-end *suite* run, the shadow approach is needed only because the runner hardcodes REPO. I can instead patch the runner's REPO line to an **absolute shadow path** — still one line, artifact-local copy, recorded. Actually even simpler: place a full shadow tree under `artifacts/worker-004/semct_control_rebase/shadow_repo/` with:
+  - `artifacts/formulation/tools/check_class_schema.py` (copy)
+  - `artifacts/formulation/KEY_MANIFEST.json` (copy + one key added)
+  - `artifacts/worker-06/spec_conformance_audit.py` (copy)
+  - `schemas/af_scc_c0_vacuum.yaml`, `af_scc_c2_vacuum.yaml`, `af_wcc_vacuum.yaml` (pinned copies)
+  then place the two suite copies at `shadow_repo/artifacts/worker-004/suite_patched/` etc. so `REPO=HERE.parents[3]` = shadow_repo. The runner copy's patch stays the same one-liner (`HERE.parents[3]`).
+
+That is a fully self-contained, race-free reproduction whose only deltas from the live binding setup are (i) the three rebased controls in suite_patched, (ii) `+revised_at_unused` in the shadow KEY_MANIFEST, and (iii) pinned canonical revisions. All recorded with hashes and diffs. This demonstrates:
+- Under the pre-regeneration allowlist (reconstructed as current + the single removed key), suite_patched → exit 0, valid=true; suite_stale → exit 3, valid=false. Single variable = controls.
+- Under the current live manifest, the same suite_patched → exit 3 with R22 on `revised_at_unused` for all frozen fixtures → demonstrating the key-manifest regression.
+
+That's a rigorous, bounded, falsifiable deliverable. It also avoids the current race (uses my own shadow copies).
+
+Effort: moderate. I already have most infrastructure. Let me restructure `build_patched_suite.py` into a shadow-repo builder:
+
+```
+shadow_repo/
+  artifacts/formulation/tools/check_class_schema.py   (copy of live, sha pinned)
+  artifacts/formulation/KEY_MANIFEST.json             (current + revised_at_unused; record base sha + delta)
+  artifacts/worker-06/spec_conformance_audit.py       (copy of live, sha pinned)
+  schemas/af_scc_c0_vacuum.yaml                        (pinned snapshot copies)
+  schemas/af_scc_c2_vacuum.yaml
+  schemas/af_wcc_vacuum.yaml
+  artifacts/worker-004/suite_patched/                  (fixtures + manifest + runner copy)
+  artifacts/worker-004/suite_stale/
+```
+The suite copies' `run_contract_tests.py` has `REPO = HERE.parents[3]`:
+- HERE = shadow_repo/artifacts/worker-004/suite_patched → parents[0]=worker-004, [1]=artifacts, [2]=shadow_repo... wait: parents[0] = shadow_repo/artifacts/worker-004, parents[1] = shadow_repo/artifacts, parents[2] = shadow_repo. That's 3 levels: HERE.parents[2], not [3]! Because HERE is one level deeper than before (previously HERE = repo/artifacts/worker-004/semct_control_rebase/suite_patched → parents[3]=repo). In the shadow layout, HERE = shadow/artifacts/worker-004/suite_patched → parents[2]=shadow. So the patch line should be `REPO = HERE.parents[2]  # patched by worker-004 shadow copy`.
+
+Manifest fixture paths: for the conforming canonical controls, use `fixtures/canonical_snapshot/*.yaml` (HERE-relative) so they don't depend on shadow/schemas (but I can also point at `schemas/...` since shadow has them — either works; keep the snapshot approach for self-containment).
+
+Alternatively simpler: keep one shadow repo and two suite dirs under `shadow/artifacts/worker-004/` with patched runner `parents[2]`.
+
+Also: I want to verify, within the shadow run, both manifest variants:
+- `suite_patched` with shadow manifest (current + revised_at_unused) → exit 0.
+- `suite_stale` with same → exit 3 (control staleness).
+- Optional third: `suite_patched_livemanifest` — run the runner with the *live* manifest. Since the shadow has only one manifest file, I can create a second shadow root `shadow_repo_livemanifest/` or just swap the manifest between runs (record hashes). Easier: build two shadow roots: `shadow_repo_fixedmanifest` and `shadow_repo_livemanifest`, each with the respective KEY_MANIFEST, sharing copies. Runtime cost ~20s each. Fine.
+
+Hmm, is this over-engineering? It's ~40 lines more in the builder. The value: end-to-end valid=true demonstration + separation of the two blockers. I think it's worth it — this is the difference between "I think the rebase fixes it" and "here is a run where it does, and here is the current blocker".
+
+Also: should the shadow KEY_MANIFEST be `current ∪ {revised_at_unused}`? Let me justify: the pre-00:34 manifest is not available (verify by searching first), and the only R22 failure on the 00:30-passing corpus under the current manifest is precisely `revised_at_unused`. So the reconstructed allowlist is exactly "current + the one key that the regeneration dropped", which is the minimal repair that restores the 00:30 gate behavior on these fixtures. I'll document the reconstruction and its falsifier ("an available pre-00:34 KEY_MANIFEST whose diff from current is not exactly +revised_at_unused").
+
+Let me first search for any surviving pre-00:34 KEY_MANIFEST copy. Then implement.
+dsh: reasoning:
+Excellent! Key discoveries:
+
+1. `worker-048/f2a_rev27_repin_audit/snapshot/KEY_MANIFEST.014e2d301978.json` — a snapshot of the CURRENT manifest (014e2d30...). So workers are already tracking this.
+
+2. `artifacts/worker-061/f1_rev12_gate/pinned/KEY_MANIFEST.json` etc. — pinned manifests from earlier revisions. Let me check which one contains `revised_at_unused` and what its sha is. Also worker-064's semct_rebase work.
+
+3. `make_key_manifest.py` generates from `artifacts/formulation/schemas/af_*.yaml` (the authoring tree!), and the manifest is flat/not path-sensitive. The regeneration at 00:34 was from the live authoring schemas.
+
+Let me look for a pinned manifest that matches the pre-00:34 state and contains `revised_at_unused`. Check:
+- `artifacts/worker-061/f1_rev12_gate/pinned/KEY_MANIFEST.json`
+- `artifacts/worker-061/f2a_independent_verdict/pinned/KEY_MANIFEST.json`
+- `artifacts/worker-043/f2a_rev10_independent_verdict/snapshot/KEY_MANIFEST.json`
+- `artifacts/worker-066/rev25_independent_verdict/pinned/KEY_MANIFEST.json`
+- worker-16/rev27...
+
+Check hashes, mtimes, whether `revised_at_unused` ∈ allowed_keys, and key-set diff vs current. The ideal: a snapshot whose allowed set is the pre-regeneration one (superset of current by `revised_at_unused`, possibly with other differences). If several exist, choose one that (a) contains revised_at_unused and (b) accepts all fixtures in the corpus (i.e., its allowed set ⊇ keys used by controls/mutants/canonical). I can test by running the structural gate with the shadow manifest.
+
+Let me inspect all these manifests: sha, #keys, presence of revised_at_unused, mtime.
+dsh: reasoning:
+The pre-regeneration manifest is **preserved**: `fce91948ba3a` (264 keys, contains `revised_at_unused`, extra=1 vs current, missing=8) — pinned at 00:16:53 by worker-061/043/066. The current manifest `014e2d30` (271 keys) is the rev28 regeneration; it dropped 8 keys and added 7 relative to rev27 (`revised_at_unused` + 7 others differ: extra=1 means fce91948 has exactly 1 key current lacks; missing=8 means current has 8 keys fce91948 lacks).
+
+So I now have an authentic, hash-pinned pre-regeneration manifest (fce91948ba3a, rev27) — exactly the state under which part 1 measured the rebased controls 3/3 accepted (part 1 ran at ~00:30 with the then-live manifest, which was fce91948 by all evidence: worker-061 pinned it at 00:16 and 00:35 as hist; the live one changed at 00:34).
+
+Wait, was the live manifest at 00:30 fce91948? The manifest mtime now is 00:34 (014e2d30). worker-061/hist has fce91948 with mtime 00:35:43 (copied then, content from rev27). worker-061/f1_rev12_gate/pinned/KEY_MANIFEST.json has mtime 00:33:53, same content fce91948. So yes: rev27 manifest = fce91948 was live until ~00:34:42 (when rev28 014e2d30 appeared). My part-1 run at ~00:30 used fce91948. 
+
+Now I can build the shadow repo with the **pinned rev27 manifest fce91948** (authentic, from worker-061's pinned copy) and demonstrate end-to-end:
+- shadow + rev27 manifest + rebased controls → exit 0, valid=true, mutants 32/11/32.
+- shadow + rev27 manifest + stale controls → exit 3, valid=false (R28).
+- shadow + rev28 (current) manifest + rebased controls → exit 3, R22 on `revised_at_unused` → demonstrates the retroactive invalidation finding.
+
+This is rigorous and race-free. Also record:
+- rev27 manifest sha fce91948, source path, and the key-set delta vs rev28.
+- The finding: the key allowlist regeneration from the new canonical revision retroactively rejects all frozen revisions/controls carrying `revised_at_unused` (R22), including every pinned verdict's fixture basis. This is a *gate stability* defect independent of my rebase.
+
+Now update `build_patched_suite.py` to the shadow-repo design. Let me rewrite it fully (cleaner). Layout:
+
+```
+HERE/
+  shadow_repo/                        # rev27 (pre-regeneration) manifest shadow
+    artifacts/formulation/tools/check_class_schema.py   (copy, sha 000e09e4)
+    artifacts/formulation/KEY_MANIFEST.json             (copy of fce91948 pinned)
+    artifacts/worker-06/spec_conformance_audit.py       (copy, sha c79d8ab8)
+    artifacts/worker-004/suite_patched/                 (rebased controls)
+    artifacts/worker-004/suite_stale/                   (stale controls)
+  shadow_repo_rev28/                  # current manifest shadow (same tools, pinned canonical)
+    ... KEY_MANIFEST.json = 014e2d30
+    artifacts/worker-004/suite_patched/                 (rebased controls)
+```
+Runner patch line: `REPO = HERE.parents[2]  # patched by worker-004 shadow copy` (HERE=shadow/artifacts/worker-004/suite_patched).
+
+Canonical fixture paths in manifest: `fixtures/canonical_snapshot/*.yaml` (HERE-relative) — no shadow/schemas needed. The suite's 32 mutants are HERE-relative too. So the shadow root only needs the two tools + KEY_MANIFEST. 
+
+Build function:
+```python
+def make_shadow(root, manifest_src, rebased_controls: bool, suite_name):
+    # copy tools+manifest
+    # copy fixtures
+    # write patched runner
+    # write manifest with control pins and canonical snapshot pins
+```
+
+Runs:
+1. rev27 + patched → expect exit 0/valid true
+2. rev27 + stale → expect exit 3/valid false
+3. rev28 + patched → expect exit 3, R22 failure, to document the regression
+
+Report + proposal with:
+- `control_rebase_verified_e2e`: true
+- `key_manifest_regression`: {rev27: fce91948, rev28: 014e2d30, dropped_keys: sorted(rev27 - rev28), added_keys: sorted(rev28 - rev27), effect: "frozen controls and the pinned gate-accepted canonical revision now fail R22 on revised_at_unused" }
+
+Let me also capture which fixtures fail R22 in run 3 and the offending key(s) (compute per fixture using the rev28 allowed set; the checker only reports first 6 unknown keys). I can compute directly in the report: for each fixture file, `unknown = keys(doc) - allowed(rev28)`.
+
+Then events + checkpoint + README.
+
+Let me write the new build script now. Also note the earlier `suite_patched/` and `suite_stale/` dirs at HERE level will be superseded by the shadow layout; I'll delete them to avoid confusion (they're my artifacts).
+
+One more consideration on the claim: my primary claim should be stated carefully:
+"Under the pre-regeneration (rev27) key manifest fce91948ba3a and the frozen stage tools, the three rebased controls are accepted by all three stages; with the original frozen controls and all else equal, the suite exits 3 with validity false; the rebased-control suite exits 0 with validity true and mutant counts unchanged 32/11/32. Under the rev28 key manifest 014e2d301978 (live since 00:34), both control sets additionally fail R22 on the key revised_at_unused, as does the previously gate-accepted canonical revision — so no frozen corpus is currently usable and the blocker is the manifest regeneration, not the controls."
+
+conclusion_type: `formal_model`? Hmm. The claim is about machine-checkable artifact behavior. Allowed: theorem, conditional_theorem, stability_result, counterexample, numerical_evidence, formal_model, open_problem. The rebase is a *repair* of a formal artifact and the measurement is of gate behavior. I'd say `formal_model` fits best ("a machine-checkable formal object/contract"). Alternatively `numerical_evidence` — no. I'll use `formal_model` and keep the statement scoped.
+
+Actually, let me check how the map's `apply_events.py` handles claims — does it require artifact_refs for certain types? Only `theorem` requires artifact_refs. I'll include artifact_refs anyway.
+
+Let me now rewrite build_patched_suite.py.
+dsh: reasoning:
+One problem: I put a placeholder (fake) sha for rev27 in `KM_SNAP`: `"fce91948ba3a5c3e4d0f5b8a2df5e0f2e0e1c9d0b8d8a6a1e0c0f5e5a5b5c5d5"` — I only saw the first 12 chars `fce91948ba3a`. I must get the full sha256 of `artifacts/worker-061/f1_rev12_gate/pinned/hist/KEY_MANIFEST.rev27.json` and update. Let me measure it, then fix the script.
+dsh: reasoning:
+All runs exit 2 (integrity failure) in the shadow repos. Likely because the runner's `REPO` patch `HERE.parents[2]` is wrong, or the manifest fixture paths resolve incorrectly. Let me look at the stdout logs for the integrity errors.
+
+Wait: In `build_shadow`, suite path = root/artifacts/worker-004/suite_name. HERE for the runner = that dir. HERE.parents[0]=worker-004, [1]=artifacts, [2]=root. So REPO=root. Correct.
+
+Integrity failure could be: `fixtures/canonical_snapshot/...` paths — resolved as HERE-relative since they start with "fixtures/" → okay. Mutant fixtures `fixtures/...` → okay. Controls → okay.
+
+Let me check the stderr/stdout logs.
+dsh: reasoning:
+"stage produced no verdict" for all fixtures — meaning `run_structural` returned `no_verdict`, which happens when the tool fails to execute or produces non-JSON output. Likely cause: the shadow structural tool `shadow_repo/artifacts/formulation/tools/check_class_schema.py` computes its own paths relative to its location, e.g., `KEY_MANIFEST = Path(__file__).resolve().parents[1] / "KEY_MANIFEST.json"` → shadow_repo/artifacts/formulation/KEY_MANIFEST.json (exists — I copied it). But maybe it also references other files (e.g., `FORM_RULE_SPEC`, class contract pointer resolution, taxonomy) that don't exist in the shadow. Let me run the shadow tool manually on one fixture and see stderr.
+
+Also the semantic auditor may reference repo files. Let me check by running directly.
+dsh: reasoning:
+The tools need `artifacts/formulation/rule_spec.json` (and possibly more files). Let me find what other files the two tools reference relative to their location/repo root, and copy them into the shadow. Let me grep for `Path(__file__)` and `parents[` in both tools.
+dsh: reasoning:
+The semantic auditor uses `ROOT = HERE.parent.parent` — in the shadow, HERE = shadow/artifacts/worker-06, so ROOT = shadow. It loads `Path(a.spec).read_text()` — a.spec is an argument; the runner passes `--json out` and target; where does `--spec` default come from? Line 639: `spec = json.loads(Path(a.spec).read_text())`. Let me check the default of `--spec`. It's likely `ROOT/artifacts/formulation/rule_spec.json`. So I need to copy:
+- `artifacts/formulation/rule_spec.json` (SPEC for structural; spec default for semantic)
+- possibly `VOCAB_ALIASES.json`, `VARIANT_REGISTRY.json`, `FROZEN.json` if loaded by either tool.
+
+Let me grep both tools for those filenames, and check the semantic auditor's argparse defaults.
+dsh: reasoning:
+Needed in shadow:
+- `shadow/artifacts/formulation/rule_spec.json` (both tools)
+- `KEY_MANIFEST.json` (already)
+- Semantic auditor's DEFAULT_SPEC = ROOT/artifacts/formulation/rule_spec.json → shadow path works.
+
+Anything else? The structural tool might load more (walk the file for `Path(` or open). Let me grep for `.json` and `read_text` in both tools. But simplest: copy `rule_spec.json`, then run and iterate if another missing file appears.
+
+Note: rule_spec.json mtime 23:32 — older, probably stable. Let me pin its sha too in the report.
+
+Update `build_shadow` to copy rule_spec.json, and add its sha to provenance. Let me patch and rerun.
+dsh: reasoning:
+`all_checks_pass: true`. Let me view the full conclusion and the run details to confirm:
+- rev27_patched exit 0, valid true, mutants 32/11/32, controls 3/3, canonical 3/3
+- rev27_stale exit 3, valid false
+- rev28_patched exit 3 (regression)
+
+Let me read the suite_run_report.json conclusion + a compact summary. Also confirm the observed verdicts for rev27_patched.
+
+Then:
+1. Write README.md for the artifact dir.
+2. Validate the control rebase claim once more under rev27 shadow (already).
+3. Emit events to comms/outbox/worker-004.jsonl (artifact events, claim, status, blocker for the key-manifest regression).
+4. Validate events against schemas.
+5. Write checkpoint to runtime/state/w004_semct_control_rebase_checkpoint.json (+ append to w004_checkpoints.jsonl).
+6. Final hash manifest + verify all files exist.
+7. Exit.
+
+Let me view the report.
+dsh: reasoning:
+The demonstration is complete and clean:
+
+- **rev27 + rebased controls**: exit 0, valid=true, controls 3/3, canonical 3/3, mutants 32/11/32, escapes 0.
+- **rev27 + original controls**: exit 3, valid=false, controls 0/3, canonical 3/3, mutants identical → single variable = controls.
+- **rev28 + rebased controls**: exit 3, controls 0/3, canonical 0/3 → key-manifest regression: rev28 dropped `revised_at_unused` (and added 7 keys); R22 now rejects frozen corpus and the pinned canonical revision.
+
+Now let me write the README and then emit events.
+
+Artifacts inventory (files with hashes) — I need a final hash manifest. Files:
+- artifacts/worker-004/semct_control_rebase/rebased_controls/*.yaml (3)
+- rebase_report.json
+- suite_run_report.json
+- manifest_patch_proposal.json
+- rebase_controls.py
+- build_patched_suite.py
+- shadow trees (many files) — I should hash the key ones (suite manifests, observed_verdicts) rather than everything.
+- logs/*.log
+
+README should document: task, class binding, method, results table, falsifiers, limits, how to apply the patch, and "no gate verdict/no completion claim".
+
+Then events. Let me design the event set (each valid per schemas.validate_event):
+
+1. `artifact` — node A1, artifact_type `control_rebase_report`, path `artifacts/worker-004/semct_control_rebase/rebase_report.json`, sha256, validation_status `unverified`. evidence_refs? artifact events don't require but can include. Let me include `class_id` too? Not required; adding `class_id` is harmless (normalize takes it). I'll include class_id for class binding.
+
+2. `artifact` — path `artifacts/worker-004/semct_control_rebase/suite_run_report.json`, sha256, node A1, artifact_type `reproducible_suite_run`, validation_status `unverified`.
+
+3. `artifact` — path `artifacts/worker-004/semct_control_rebase/manifest_patch_proposal.json`, sha256, node A1, artifact_type `manifest_patch_proposal`, validation_status `unverified`.
+
+4. `artifact` — maybe the three rebased control files as a single artifact event each? Keep to one more for the rebased controls: path of the directory isn't a file. I'll add 3 artifact events? That's a lot. Better: one artifact event per key file is fine, but let me limit to 4: rebase_report, suite_run_report, manifest_patch_proposal, and `rebased_controls/control_conforming_base.yaml`? Hmm, the three controls are the actual patched bytes. I'll emit one artifact event for the directory isn't allowed (path must exist; comms.py hashes path if file; a directory would get sha "unverified"). I'll emit a single artifact event pointing to `manifest_patch_proposal.json` which lists all three with their sha256. That's sufficient. Actually, for completeness and to let the lead verify each control's bytes directly, I'll include 3 more artifact events — total 6. That's acceptable (workers emit multiple). But noise matters; audit tracks duplication/information gain. I'll do 4 artifact events: rebase_report, suite_run_report, manifest_patch_proposal, rev27_patched observed_verdicts.
+
+5. `claim` — conclusion_type `formal_model`; class_id `AF-SCC-C0-VAC-GEN`; statement: "The three stale controls' R28 rejection is caused solely by the misplaced duplicate row `[finite_codimension_complement, residual_comeager], direction: transfers` inside genericity.transfer_failures; deleting that one 8-line block makes all three accepted by the structural gate and both semantic stages, and the patched suite reaches exit 0 / valid_for_calibration=true with mutants unchanged 32/11/32 under KEY_MANIFEST fce91948, while the original controls keep the suite at exit 3." assumptions: pinned hashes, stage tools frozen, key manifest rev27, etc. falsifier: "an unmodified control accepted by structural at the same tools/manifest, a rebased control rejected, a byte difference outside the removed block, or a run of the patched shadow not reaching exit 0/valid=true; any byte change to the pinned inputs voids it." evidence_refs: paths#sha256. artifact_refs: same.
+
+6. `claim` — conclusion_type `counterexample`? For the key-manifest regression: "KEY_MANIFEST rev28 (014e2d30, live since 00:34) retroactively rejects the frozen corpus and the previously gate-accepted pinned canonical revision on R22 because it dropped `revised_at_unused`." Is that a `counterexample`? It's a counterexample to the assumption that the binding gate is revision-stable, or an empirical/formal finding. Hmm. `counterexample` implies a mathematical counterexample to a conjecture — this is a counterexample to a process property. Risky to misuse. Maybe use `formal_model` for the measurement? Or `stability_result`? "stability_result" in this project seems to relate to numerical stability. I think `formal_model` is the best available for "machine-checkable artifact-level finding". Alternatively fold the regression into the same claim? No — separate claim keeps scope clear. Let me use `conclusion_type: formal_model` for both, or `open_problem`? A `blocker` event is the natural channel for the regression; I'll emit it as a `blocker` (requires node_id, description, needed_to_unblock, evidence_refs) with node A1 (and mention F1/F2a/F2b). That avoids misusing conclusion types. And a status event.
+
+7. `status` — node A1, status `active` (worker cannot set done), hours ~0.5, summary, evidence_refs, next_falsifier.
+
+Also: should I emit a blocker for the live WCC semantic R03 failure (binder `(q,t0)` absent from formal)? That's a separate live finding on F1. It's relevant and hash-bound. But it may be transient (lead editing). Let me re-measure the live wcc right now to see if it still fails. If it still fails at the same hash, emit a blocker for F1 with the precise localization. If it changed, record only in README/report as a timestamped observation. Actually my suite_run_report no longer includes live canonical measurement (I removed it in the shadow rewrite). I have the earlier measurement: at 00:34:37, wcc cce9c601 failed semantic baseline+hardened R03 (binder `(q,t0)` absent from formal). Let me re-check now and decide.
+
+Also note: the R22/R03 interplay: at 00:34 wcc failed both R22 (manifest not yet updated) and R03; after manifest regen, R22 cleared; R03 remains if same bytes.
+
+Let me re-measure now: hash + structural + semantic baseline for live wcc. If unchanged and still R03, emit a blocker with precise detail (binder absent), plus include it in the README. This is genuinely valuable: G-FORM depends on F1 schema stability, and the current live F1 fails the adopted semantic auditor.
+
+Let me do that now, then write README, then events.
+dsh: reasoning:
+The live WCC at `cce9c60146d6` (stable since 00:34) still fails semantic baseline + hardened on R03, with the precise cause: ordered quantifier binder `(q,t0)` is absent from `quantifiers.formal`. And the structural gate now passes (after the manifest regen). This is a stable, hash-bound observation at 00:38:37.
+
+I'll include this as a blocker event on F1 with evidence: 
+- path `schemas/af_wcc_vacuum.yaml`, sha cce9c601..., measured at 00:38:37
+- tool `artifacts/worker-06/spec_conformance_audit.py` sha c79d8ab8...
+- localization: ordered[5] = {kind: not_exists, binder: '(q,t0)', domain_id: D5}; `(q,t0)` not present in `quantifiers.formal`; auditor R03 requires every ordered binder to appear in the formal sentence.
+- needed_to_unblock: lead-formulation either adds `(q,t0)` to the formal sentence or renames the binder to the token used there; then re-run the auditor and record the new hash. Note that this is the F1 artifact, owned by lead-formulation.
+- falsifier: a re-run of the semantic auditor on the same hash cce9c601 accepting it, or a byte change to the file (new hash) voiding the observation.
+
+Wait — careful about the authority: workers can emit blockers. Yes.
+
+Now, is this within my bounded task? It's a byproduct measurement, directly relevant. I'll include it in the README as a secondary observation and emit one blocker event. That's reasonable and not scope creep (it's evidence, not a fix attempt).
+
+Now write the README.md. Then the events. Then checkpoint.
+
+Let me create a final hash manifest too (`artifact_manifest.json`) listing every file under my task dir with sha256 + bytes, so the checkpoint and events can reference a single file. Actually the events will reference individual files with hashes. A manifest is useful for provenance; I'll generate `artifact_manifest.json` and include it in the events.
+
+Let me write README.md first.
+
+Content:
+- Title: W004 — SEMCT frozen-control rebase (ADJ-CONTROL-STALENESS), class AF-SCC-C0-VAC-GEN, node A1.
+- Context: no inbox card for worker-004; self-selected from the open adjudication item; authority limits (no gate verdict, no done, no canonical writes).
+- What was wrong (with hashes): R28 duplicate row.
+- Repair: 8-line deletion, 1 hunk, -8/+0; semantics preserved (pair remains in transfer_holds).
+- Measurement table: stale 0/3 structural (R28); rebased 3/3 all stages; canonical (pinned) 3/3.
+- End-to-end shadow runs: rev27 patched exit 0 valid true; rev27 stale exit 3 valid false; rev28 patched exit 3 (R22).
+- Second finding: KEY_MANIFEST rev28 dropped `revised_at_unused` → retroactive rejection of frozen corpus + pinned canonical; unblock needed.
+- Third finding (live, timestamped): live F1 WCC cce9c601 fails semantic R03 — binder `(q,t0)` absent from formal.
+- Exact apply instructions (patch proposal).
+- Falsifiers.
+- Limits: structural/semantic contract tests decide shape not truth; the rebase does not touch mathematical content; controls are synthetic corpus calibrators.
+- Reproduce: commands.
+- File inventory.
+
+Let me write it.
+dsh: reasoning:
+Now generate the final artifact manifest (hashes of all files in the task dir), then emit events and checkpoint.
+
+Let me write a small `emit_events.py` script that:
+1. Builds `artifact_manifest.json` (walk the task dir, hash every file, relative paths, bytes; exclude tmp/).
+2. Self-checks: artifact existence, class_id consistency, falsifier presence.
+3. Writes events to a *staging* file `events_staging.jsonl` first, validates each with `research_map.schemas.validate_event` (and `normalize_event`), then appends to `comms/outbox/worker-004.jsonl`.
+4. Prints the validation result.
+
+But careful: appending to comms/outbox/worker-004.jsonl — is that path used by another live worker-004 instance? There were earlier instances (00:12, 00:22) but they're presumably done; the current 00:28 instance is me. The file `comms/outbox/worker-004.jsonl` does not exist yet (ls showed no worker-004.jsonl). Older instances may have used different names? Let me check. Earlier ls of comms/outbox showed no worker-004.jsonl (only worker-001, 002, 005, ...). And `artifacts/worker-004/f1_recheck` exists from an earlier instance. Let me check which outbox file the earlier worker-004 used: maybe `worker-04.jsonl`? ls showed `worker-03.jsonl` but no worker-04. There's `deepseek-flash-04.jsonl`. Hmm. The current supervisor launches worker-004; its outbox should be `worker-004.jsonl`; no file yet since this is the first 00:28 worker to write? But the instance started at 00:28:27 and it is now 00:39. My instance is that one. Fine — I'll create `comms/outbox/worker-004.jsonl`.
+
+Wait — is there a risk that other concurrent worker-004 shards (from another supervisor loop, e.g. `independent_supervisor.sh` or `supervise_swarm.sh` running in parallel) will also write `worker-004.jsonl`? The tmux session names are keyed by `worker-004`, so the supervisor won't launch a duplicate session while mine exists. There might be other supervisors with different key schemes (e.g., `worker-04` from supervise_swarm.sh). Let me check supervise_swarm.sh quickly to see naming. Not critical: appending JSONL lines is safe even with concurrent appends (O_APPEND small writes).
+
+Also, maybe I should write my events under BOTH `worker-004.jsonl` and... no, one canonical path (CF-12).
+
+Event IDs: use a stable scheme `w004-semct-<ts>-<type>`. The ingest dedupes on event_id.
+
+Let me define the events concretely:
+
+E1 artifact (rebased control set report):
+```json
+{
+ "event_id": "w004-semct-01-artifact-rebase-report",
+ "event_type": "artifact",
+ "created_at": "2026-09-12T00:40:00+08:00",
+ "actor": "worker-004",
+ "node_id": "A1",
+ "class_id": "AF-SCC-C0-VAC-GEN",
+ "artifact_type": "control_rebase_measurement",
+ "path": "artifacts/worker-004/semct_control_rebase/rebase_report.json",
+ "sha256": "<measured>",
+ "validation_status": "unverified",
+ "evidence_refs": ["schemas/semantic_contract_tests/fixtures/controls/control_conforming_base.yaml#7b910cf34e64", "artifacts/formulation/tools/check_class_schema.py#000e09e46b2f"],
+ "note": "stale 0/3 R28; rebased 3/3 all stages; pinned canonical 3/3"
+}
+```
+Note: artifact schema requires node_id, artifact_type, path, sha256, validation_status — extra fields fine.
+
+E2 artifact: rebased controls (3 files in one event? one path only). I'll add three separate artifact events for the three rebased files — they're the actual deliverable bytes and each has a sha. Actually, to keep the outbox lean, I'll emit one artifact event for `rebased_controls/control_conforming_base.yaml` plus one for the patch proposal listing all three? Hmm. The audit's duplication metric may penalize noise. I'll do 3 artifact events total for the primary artifacts:
+- rebase_report.json
+- suite_run_report.json
+- manifest_patch_proposal.json
+and one more for `rebased_controls/` — path must be a file. I'll point to `rebased_controls/control_conforming_base.yaml` and mention the other two hashes in evidence_refs. Hmm, actually a cleaner approach: `artifact` event with path `artifacts/worker-004/semct_control_rebase/artifact_manifest.json` (which lists all files+hashes). That's one event covering all bytes. But the manifest is a derived index; the primary artifacts deserve their own events. I'll emit 4 artifact events: rebase_report, suite_run_report, manifest_patch_proposal, and the three rebased controls?? 
+
+Decision: emit 5 artifact events total (rebased control C02 as representative + report + suite report + proposal + artifact_manifest). Hmm, arbitrary. Let me instead emit one artifact event per rebased control file (3), plus reports (3) = 6. The ingest is cheap; events are the protocol. But audit tracks duplication... The three controls are distinct artifacts with distinct hashes, and the claim binds to them. I'll do 6 artifact events; it's honest and each is a distinct hash-bound object. Actually, 6 artifact events from one worker for one task is reasonable (worker-06 emitted 3-4).
+
+Final event list:
+1. artifact: rebased_controls/control_comment_only_composite.yaml (sha 2babcc7d...)
+2. artifact: rebased_controls/control_conforming_base.yaml (7ab74811...)
+3. artifact: rebased_controls/control_quoted_forbidden_phrase.yaml (47dd3f9e...)
+4. artifact: rebase_report.json
+5. artifact: suite_run_report.json
+6. artifact: manifest_patch_proposal.json
+7. claim: the rebase repair (formal_model)
+8. blocker: key-manifest regression (node A1; affects G-AUDIT/G-FORM calibration reuse)
+9. blocker: live F1 WCC semantic R03 (node F1)
+10. status: A1 active, hours ~0.5, summary, evidence, next_falsifier
+
+Should the WCC blocker be `node_id: F1`? Yes, the artifact is `schemas/af_wcc_vacuum.yaml` = F1 (WCC schema). The claim's class_id is AF-WCC-VAC-GEN.
+
+For the claim, `evidence_refs` and `artifact_refs` (optional for non-theorem) — include both.
+
+Check `validate_event` requirements:
+- claim: class_id, statement, conclusion_type, assumptions, falsifier, evidence_refs. conclusion_type ∈ allowed. For theorem, artifact_refs required — I'll use `formal_model` and still include artifact_refs.
+- blocker: node_id, description, needed_to_unblock, evidence_refs.
+- status: node_id, status ∈ STATUSES (use "active"), hours, summary, evidence_refs, next_falsifier.
+- artifact: as above.
+
+I'll validate with the real `normalize_event` + `validate_event` functions (import from research_map). Note normalize_event takes (doc, source). I'll simulate source="comms/outbox/worker-004.jsonl".
+
+Then append to the outbox.
+
+One more protocol check: "Reject your own output before sending: does the artifact exist? does the falsifier actually falsify? does the class id match the file?" — my emit script will check artifact paths exist and that sha256 matches on disk.
+
+Checkpoint: write `runtime/state/w004_semct_control_rebase_checkpoint.json` and append a compact line to `runtime/state/w004_checkpoints.jsonl`. Note that w004_checkpoints.jsonl already exists from an older instance (w04_checkpoints.jsonl also exists). I'll append to `w004_checkpoints.jsonl` (worker-004 naming) with an `instance_id` field. Also there's `runtime/state/w04_checkpoints.jsonl` — the older worker-004 (00:12) used w04. I'll use w004 to match the supervisor's slot naming and include instance id.
+
+Checkpoint content: model after w011 but adapted:
+```json
+{
+ "checkpoint": 1,
+ "at": ...,
+ "worker": "worker-004",
+ "slot": "004",
+ "instance_id": "worker-004-20260912T002827-968807",
+ "hours_spent_estimate": 0.5,
+ "assignment": "W004-SEMCT-CONTROL-REBASE-01 (self-selected, no inbox card) — minimal rebase of the three frozen semantic controls for ADJ-CONTROL-STALENESS",
+ "node_id": "A1",
+ "gate": "G-AUDIT (calibration evidence routing only)",
+ "class_ids": ["AF-SCC-C0-VAC-GEN"],
+ "status": {"delivered": true, "validation_status": "unverified", "measurements": {...}, "no_completion_claim": "..."},
+ "artifacts": {path: sha},
+ "events_emitted": [...],
+ "falsifier": "...",
+ "next_falsifier": "...",
+ "checkpoint_note": "worker-local checkpoint; controller-owned runtime/state/current_checkpoint.json and checkpoint_log.jsonl not touched"
+}
+```
+
+Let me write the emit script now. Also generate `artifact_manifest.json` as part of it (hash all files under task dir except tmp/ and the shadows? include shadows too — but that's ~50 files; fine).
+
+Let me write `emit_events.py`.
+dsh: reasoning:
+Wait — there's a bug in the claim's `falsifier` field construction:
+
+```python
+"falsifier": (s1["stale_accepted_by_structural"] and
+              "see suite_run_report.json falsifier list: ..."),
+```
+
+`s1["stale_accepted_by_structural"]` is "0/3" (a non-empty string → truthy), so `and` returns the second operand. It works but is weird. Let me clean it to just the string.
+
+Also `rebase_report.json` was written in part 1 and `artifact_manifest.json` is built before refs — the manifest's own hash is computed after writing, fine (refs computed after build_manifest). Good.
+
+One concern: `build_manifest()` walks HERE including `shadow_repo*/` (many files) and `tmp/` (excluded via "/tmp/"). The manifest will have ~60 files. Fine.
+
+Another: `sha(HERE/'shadow_repo/.../observed_verdicts.json')` — exists after part 2. Good.
+
+Also: I use `rebase["measurements"]["summary"]["stale_accepted_by_structural"]` — exists.
+
+Let me fix the falsifier and also double-check the `claim` event's `falsifier` is a string (schema doesn't constrain type; fine).
+
+Let me also double check `validate_event` for `status` with extra key "artifacts" and `hours`: fine.
+
+One more: `normalize_event` might override `evidence_refs` if not None — fine.
+
+Potential issue: `normalize_event` for `artifact` sets `sha256` if None; ours is set. For `claim`, it takes `statement`, `conclusion_type`, etc. Fine.
+
+Let me fix the falsifier line and run.
+dsh: reasoning:
+Events emitted and validated. Now let me do a final independent verification pass:
+
+1. Confirm the outbox file content parses and events are valid (re-validate with a fresh process — and maybe run `comms.py ingest --dry-run` limited? It would scan all outbox files; the ingest dry-run is read-only and safe, and would validate my events as the controller would. But it processes ALL outbox files — including possibly huge ones and duplicates — and could take time. There's a risk: `ingest(dry_run=True)` loads `seen` and iterates all 200+ outbox files. Should be fine (a few seconds). It doesn't write in dry-run mode (the `if not dry_run` guard covers EVENTS and REJECTS writes; `_save_seen` is inside that block too). Let me run it and grep the output for worker-004 events to confirm they'd be accepted (not rejected). This is the strongest validation: the controller's own ingest path.
+
+Actually careful: `ingest` prints all accepted events, which could be many (workers wrote a lot since last ingest). The output might be large but I can grep. Let me run with output piped to grep for "worker-004" + a summary line. Also the accepted count. It's read-only, so it won't interfere with the controller.
+
+2. Confirm checkpoint file.
+
+3. Verify no canonical/shared files were modified by me: check git status / mtimes of the canonical suite and schemas. I wrote only under artifacts/worker-004/, comms/outbox/worker-004.jsonl, runtime/state/w004_*. Let me verify with `git status --porcelain` filtered to my paths, and confirm the canonical suite files' hashes unchanged from when I started (controls still a6ad/7b91/687f; manifest b2e8bd17; runner 3be197c3).
+
+4. Also confirm `artifacts/worker-004/semct_control_rebase/artifact_manifest.json` does not include itself with a stale hash (it's built then written; the manifest excludes itself? It walks HERE and includes `artifact_manifest.json` — if a previous manifest existed, it would hash the old one before overwrite. On the first run there was none; on a re-run it would include the previous version's hash. Not a correctness issue for this run, but the hash of artifact_manifest.json inside itself would be stale by design. Minor. Not worth another iteration... Actually, `refs` includes the manifest's own hash computed after build_manifest (so the emitted event's hash matches the on-disk file). Good. The self-referential entry inside the manifest is inherently stale — acceptable; I'll note nothing.
+
+Let me run the dry-run ingest check now.
+dsh: reasoning:
+Hmm: dry-run accepted 46 events but the per-event listing lines (the `  + type node event_id` lines) don't show worker-004? Let me look at the output — maybe the listing is after the summary and truncated by `head -5`. Let me grep the file for my event ids (e.g., "w004-semct"). The grep for "worker-004" found nothing — but the printed lines show event_type, node, event_id, not actor. My event ids start with "w004-semct". Let me grep those.
+
+Also: accepted=46 in dry-run means 46 events *not yet seen* across all outboxes (including mine, which is 10). Let me verify my 10 are among accepted by grepping "w004-semct".
+dsh: reasoning:
+All 10 events are accepted by the controller's own ingest dry-run, 0 rejects. (The exit code 1 is from the final `grep -c "REJECT"` returning 0 matches → exit 1; that's fine.)
+
+Final verification:
+1. Canonical/shared files unmodified by me: check hashes of the canonical suite and schemas vs. the beginning (controls a6ad/7b91/687f, manifest b2e8bd17, runner 3be197c3, tools 000e09e4/c79d8ab8). The schemas are being changed by the lead, so I can't assert their hashes — but I can confirm my process never wrote there (git status shows which paths are modified... the repo has lots of untracked). Let me check `git status --porcelain` for my paths and for canonical suite paths. Also stat mtimes: my writes are under artifacts/worker-004 + comms/outbox/worker-004.jsonl + runtime/state/w004_*.
+
+2. Read the checkpoint file to confirm content.
+
+3. Check `wc -l comms/outbox/worker-004.jsonl` = 10.
+
+4. Verify the checkpoint log line appended.
+
+Also note there's a stray `$DSH` session detail: The task is essentially complete. Let me do the final checks and then give the summary answer (the "exit").
+
+One more thing: the README §5 mentions the F1 finding measured at 00:38:37; the blocker event also has it. Good.
+
+Also, should I clean up `/tmp` files I created? They're in /tmp; not needed.
+
+Let me run the final verification.
+dsh: reasoning:
+Everything checks out:
+- 10 events in outbox, all accepted by the controller's ingest dry-run, 0 rejects.
+- Checkpoint written.
+- Canonical suite + stage tools byte-unchanged (hashes match the pinned values).
+- All my writes confined to artifacts/worker-004/, comms/outbox/worker-004.jsonl, runtime/state/w004_*.
+
+The task is complete: read handoff/map/comms → took one class-bound task → emitted valid JSON with IDs, evidence, hashes, falsifiers → checkpointed → exit.
+
+Let me give a concise final summary as the worker, per the bounded-execution-worker instruction. Since the prompt says "then exit", I should not continue doing more work. Final answer: short report with key IDs, artifacts, results, blockers, falsifier, and confirmation of checkpoint.

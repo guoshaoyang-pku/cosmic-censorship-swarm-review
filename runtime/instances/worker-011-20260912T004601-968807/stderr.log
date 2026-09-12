@@ -1,0 +1,1160 @@
+dsh: reasoning:
+Let me start by understanding the environment. The task mentions "handoff/map and comms", worker=011, taking one class-bound task, emitting valid JSON with IDs, evidence hash, falsifier, checkpoint, then exiting.
+
+Let me look at the workspace.
+dsh: reasoning:
+No handoff dir at root. Let's look for "handoff" directories and "comms". Maybe under workdir or ai4math-swarm. Let me check the tarball and launch_swarm.sh, supervise_swarm.sh.
+dsh: reasoning:
+Found /data3/guoshaoyang/workdir/ai4math-swarm. Let me read HANDOFF.md and the comms dir.
+dsh: reasoning:
+Now, the task: "You are a bounded execution worker. Read handoff/map and comms. Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit. worker=011"
+
+So there's a swarm system with a research_map, comms protocol, events, ledger, etc. Let me read the comms PROTOCOL.md, the research_map ASTRA_HANDOFF.md, and the runtime structure to understand what "class-bound task" means, and where workers emit JSON.
+
+Let me read those files.
+dsh: reasoning:
+Now I need to figure out: I am "worker=011" — presumably agent id `deepseek-flash-11` (or worker-011). I should read my inbox: `comms/inbox/deepseek-flash-11.jsonl` and check outbox. Let me look at inbox/outbox contents.
+
+Also need to understand the "class-bound task" concept: node/class assignment. Let's inspect.
+dsh: reasoning:
+I'm worker=011. There's `w011_checkpoint_1.json`, `w011_checkpoint_2.json`, `w011_checkpoint_3.json`, `w011_checkpoints.jsonl`. And inbox `deepseek-flash-11.jsonl` and `flash-11.jsonl`. Let me read those to understand the assignment pattern and my own prior state.
+
+Also the task says: "Read handoff/map and comms. Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit. worker=011"
+
+So this is likely a repeat worker run: I need to find the latest assignment for worker-011 in inbox, look at the research map, pick one class-bound task (probably from some queue of class-bound tasks), produce JSON output with IDs/evidence/hash/falsifier, write a checkpoint, and exit.
+
+Let me read the w011 checkpoints and inbox files first.
+dsh: reasoning:
+So worker-011 is a prior worker identity in this swarm. There's already checkpoints 1-3 from an earlier run. Now I'm the new bounded execution worker with worker=011. Task: read handoff/map and comms, take ONE class-bound task, emit valid JSON with IDs, evidence, hash, falsifier, checkpoint, then exit.
+
+The most recent checkpoint is checkpoint 3, at 00:45:11. Now the current time is ~00:47+. So the newest assignment/task should be determined from the map/comms. Let me check:
+
+1. Current research_map.json state (gates, assignments, claims).
+2. inbox for worker-011 — the latest card is the FORM-DIFF-02 assignment (23:31) which appears already done? Let me check outbox deepseek-flash-11.jsonl and see what's been emitted.
+3. Check the runtime/state/supervisor.log for what task worker-011 is currently assigned, maybe the supervisor assigns tasks dynamically.
+
+Actually, the prompt says "emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit" — this suggests there's a known task format for "bounded execution workers" (perhaps a newer pattern in the supervisor). Let me check the supervisor log and launch scripts to see how workers are spawned, and what the expected output JSON schema is.
+
+Let me look at the tail of supervisor.log, overnight_watch.sh, supervise_swarm.sh, and the outbox for deepseek-flash-11.
+dsh: reasoning:
+I am worker=011 launched at 00:46:01 by independent_supervisor.sh (the new loop) with the prompt: "You are a bounded execution worker. Read handoff/map and comms. Take one class-bound task, emit valid JSON event with IDs evidence hash falsifier, checkpoint, then exit."
+
+So my job: take ONE class-bound task from the current state. I need to determine what tasks are available now. Let me check:
+
+1. `research_map.json` current state: assignments with assignee worker-011 or deepseek-flash-11? Actually, in this new supervisor scheme, workers are `worker-001`..`worker-020`, distinct from `deepseek-flash-*` identities. Let me check what the prior worker runs (worker-011's checkpoints 1-3) looked like — they self-selected tasks. So my precedent: read map + comms, pick one class-bound task (not yet done), do bounded verification/work, write artifacts under artifacts/worker-011/, emit an event to comms/outbox/worker-011.jsonl, write checkpoint runtime/state/w011_checkpoint_4.json (+ append to w011_checkpoints.jsonl), then exit.
+
+Let me examine what other recent workers did (e.g. worker-012, worker-015, worker-084 in inbox; outbox worker-*.jsonl). Also check current map for open assignments and their owners.
+
+Important: I must be careful about authority: worker events cannot set done/passed/gate verdict. I must emit JSON events with event_id, event_type, created_at, actor, node_id, evidence_refs with path#sha256-prefix, artifacts path+sha256, falsifier.
+
+Let me first look at the newest inbox files for other workers to see the current assignment cards format from the new controller (astra-lifecycle-04 or 05). Since ASTRA_HANDOFF mentions pass-04. There's `astra_lifecycle_05_events.py` at 00:45, so a pass-05 might be in flight. Let me check runtime/state/controller_verification for latest and map's assignments.
+
+Let me read the map's assignments keys and gates quickly with python (map is 3MB). Also check `research_map/events.jsonl` tail to see recent events and what tasks are hot.
+dsh: reasoning:
+Interesting: recent "worker-053" events look like a bounded worker pattern: `w053-covval-...-artifact-runlog`, `-artifact-hashes`, `-artifact-checkpoint`, `-claim-census`, `-complete`. That's a good model of what a "bounded execution worker" emits. Let me look at those events in detail to understand the expected JSON shape for the new worker pattern (worker-053 = one of the newest, at 00:47).
+
+Let me extract full events from events.jsonl for worker-053 and a few other new workers (worker-012, worker-015, worker-035...).
+
+Also, importantly, map.assignments has 102 entries. Let me list current open assignments (status queued/active), especially unassigned ones, and the class-bound tasks. Let me dump assignments compactly.
+dsh: reasoning:
+I now have a very clear pattern from worker-053 and worker-091: a bounded worker takes ONE new bounded class-bound task, produces an artifact bundle under `artifacts/worker-011/<task_slug>/`, writes events into `comms/outbox/worker-011.jsonl`, writes a worker-local checkpoint in `artifacts/worker-011/.../checkpoint.json` and possibly `runtime/state/w011_checkpoint_4.json` (+ append to w011_checkpoints.jsonl), then exits.
+
+My prior checkpoints show worker-011 already did:
+1. W011-L0-INDEP-VERDICT-01 — L0 independent full-schema verdict at L0 ce42d205 (now void: L0 rewritten to a1674f094979, then 3e3d3553? Actually CF-19: ledger rewritten at 00:35:19 to a1674f094979).
+2. W011-F1-VIS-STRICT-01 — F1 visibility strictness adjudication at F1 cce9c60146d6.
+
+Both targets are old-ish. Current state (pass 04): F1 frozen rev12 cce9c60146d6 — actually still the same hash! F1 cce9c60146d6 is current per ASTRA_HANDOFF (rev12, FROZEN revision 27). Hmm, but CF-19: L0 is a1674f094979 now.
+
+Let me determine a genuinely NEW bounded task that isn't duplicating what other workers are doing. The swarm has ~100 workers running, so duplication is a real risk. I should pick something novel, class-bound, machine-checkable, with a falsifier, and produce artifacts + evidence + hash + checkpoint.
+
+Let me look at the latest state: what are the most current hot issues? From ASTRA_HANDOFF pass-04 and the newest events:
+
+- CF-19: L0 freeze breach. L0 ledger rewritten at 00:35:19 to a1674f094979 with no artifact event after owner's announced exit 3e3d3553; worker-073 failed closed against the archive. Assignment `astra-life04-l0-freeze-reconcile` belongs to lead-literature.
+- G-NUM: C8 MET (rev3 protocol accept 4.5), only open item is N0 node verdict (revise 3.5).
+- G-F0: verdicts pending; A1 review coverage zero-to-low; F0 companion pair.
+- G-AUDIT: A0 0 accepts, A1 coverage 0.
+
+A worker can take a bounded verification task. Good candidates for a *new* bounded class-bound task that's independent and useful:
+
+1. **L0 freeze-chain forensics**: verify whether a1674f094979 still contains the same theorem rows, i.e., independently measure the delta between 3e3d3553 and a1674f094979 by re-fetching? The artifact 3e3d3553 may not exist on disk anymore (overwritten). But maybe there's a copy in artifacts/literature/ or checkpoints. The L0 freeze breach (CF-19) is a hot controller finding. An independent worker could produce an evidence artifact: recover prior bytes from checkpoints/backups and quantify the diff, proving whether the rewrite was cosmetic (metadata/format) or content-changing (rows removed/added). That's genuinely useful and bounded, class-bound (GLOBAL / L0, AF-WCC-VAC-GEN etc.), with falsifiers, and machine-checkable.
+
+Let me check whether the old L0 bytes (3e3d3553 / ce42d205) exist anywhere: runtime/state/checkpoints/ dir has snapshots; artifact_hashes.json; maybe artifacts/literature/ has revisions.
+
+2. **F1/F2 verifier-independent check** — but worker-091/053 and many others are doing these.
+
+3. **N0 independent check** — numerics allowed only N0; many workers.
+
+4. **A1 coverage validity** — just taken by worker-053.
+
+5. **Freeze-chain integrity across all frozen artifacts vs FROZEN.json** — maybe taken by worker-091 (F2b) and worker-016 (F0 mirror).
+
+Let me check what's currently being done: the freshest events (00:47) and inbox cards for workers. But there are ~100 workers and each picks something. To avoid duplication, I should search the outbox/events for candidate task ids already claimed, e.g. grep for "L0" tasks claimed by workers recently.
+
+A strong candidate: **CF-19 L0 freeze-breach forensics**: recover the pre-rewrite L0 bytes and produce a row-level diff between the owner-announced digest 3e3d35531421 and the live a1674f094979, classifying each delta, thereby giving the lead-literature reconciliation card an independently measured evidence artifact. That's exactly the sort of bounded task that helps and is unlikely to be duplicated (CF-19 is fresh as of 00:38, and assigned to lead-literature for reconciliation, not to a worker).
+
+Let me check existence of prior L0 revisions on disk:
+- `runtime/state/checkpoints/` — snapshot files at checkpoint times may include ledger hash only, not contents.
+- `artifacts/literature/` — registry/backups.
+- `runtime/state/artifact_hashes.json` — hashes.
+- git history! The repo is a git repo (`._.git`, `.git`). If the ledger was committed before the rewrite, `git show` can recover prior bytes. Let me check git log for ledger/theorems.jsonl.
+
+Let me explore.
+dsh: reasoning:
+We have `artifacts/worker-036/classsep_disj_rule/snapshots/theorems.3e3d35531421.jsonl` — the exact pre-rewrite rev3 bytes! And live `ledger/theorems.jsonl` = a1674f094979. Also `artifacts/literature/archive/theorems.pre-rev3-20260912T003026.jsonl` and `theorems.rev3-handpatch-...jsonl`.
+
+So a compelling bounded task: **L0 rev3→live freeze-breach delta forensics** — independently reconstruct the 3e3d35531421 bytes (verify sha256 of the snapshot in worker-036 / literature archive) and produce a row-level semantic diff between the owner-announced rev3 exit and the live a1674f094979 ledger; classify each delta as metadata-only vs content-changing; determine whether the live ledger's rows are a superset/subset, whether row content changed, whether class_ids tokens remain frozen-four, etc. That directly supports CF-19 reconciliation (assigned to lead-literature, due 01:30) and is class-bound (GLOBAL/L0, with per-class scope).
+
+But wait — worker-085 has `artifacts/worker-085/candidate_diff/snapshot/live_artifacts/ledger/theorems.jsonl`, suggesting another worker may already be doing a candidate diff. Let me check what worker-085 and worker-036/097 did. There might already be a diff task in flight. Let me grep the events for CF-19-related worker events and check outbox files latest.
+
+Also check `artifacts/worker-097/l0_rev4_review` — L0 rev4 review! That suggests the ledger is now at rev4 (a1674f094979) and worker-097 is reviewing it. Let me look at recent worker outboxes for L0 tasks.
+
+Let me grep events.jsonl for events from the last ~10 minutes mentioning L0/reconcile/freeze/3e3d3553/a1674f09.
+dsh: reasoning:
+Important: worker-037 already took `W037-L0-REVDIFF-01` at 00:44:14 — an L0 revision diff. So L0 revdiff is already taken. Worker-085 did candidate_diff. Worker-097 did l0_rev3_review and l0_rev4_review. So L0 forensic space is crowded. I should pick something else.
+
+Let me review the fresh, genuinely unclaimed high-value gaps. The controller handoff says:
+
+- G-F0: 0 accepts at rev5 0abb9ed8a961; F0 companion adjudication REC-3; `astra-life04-verify-gf0-r2` open for lead-audit.
+- G-FORM: 0 accepts at rev27 closure for F1/F2a/F2b; `astra-life04-verify-gform-r2` open (lead-audit, due 02:15).
+- G-AUDIT: A0 0 accepts (3 revises), A1 coverage 0/0/0/0/0, need ≥2 each. `astra-life04-verify-a0` open (lead-audit 02:00).
+- G-LIT: L1 has 22 spot checks; L0 0 accepts.
+- Evidence audit: 10 hard CLASSSEP findings, all CF-16 metalinguistic-mention pattern (claims 36,94,96,97,101,112,127,144).
+
+Workers are individually reviewing artifacts (F1/F2a/F2b/F0). What's NOT covered well?
+
+Options for one bounded, class-bound task with high information gain:
+
+**Option A: G-FORM coverage census / independence audit.** The gates need *two independent full-schema verdicts* per class at the current hashes. Many worker verdicts exist but their "independence" is questionable (same reviewer identity, superseded pins, etc.). Worker-053 just did A1 coverage validity for the astra_lifecycle instrument. Hmm, that's exactly the coverage question: "worker-053 A1 coverage validity" is in flight and it found CV-01 (superseded F1 accept counted) and CV-02 (path-form targets invisible). So that's taken.
+
+**Option B: CF-16 metalinguistic-mention hard findings** — the evidence audit finds 10 hard CLASSSEP findings across claims. A worker could independently reproduce and adjudicate the CF-16 pattern: verify each of the 10 claims is a genuine class-leakage violation vs. a false positive (metalinguistic mention — e.g. text that *mentions* a class name to deny it). This is class-bound (AF-WCC-VAC-GEN etc.), machine-checkable via the canonical class_separation.py checker, and highly useful: it determines whether G-AUDIT/G-FORM coverage is blocked by real findings or checker false positives. Is someone already on it? Let me check recent events for CF-16 / metalinguistic / claim42 etc. worker-007 did "citebind census", worker-036 did classsep_disj_rule, worker-009 CBC rev12, worker-074 A1 rev12 indep. Let me grep for CF-16.
+
+**Option C: F1 visibility adjudication continuation** — I already did that at checkpoint 3, and it's not resolved.
+
+**Option D: The F0 companion-pair (REC-3) consistency check** — the canonical F0 0abb9ed8a961 vs the supplement d7419b4e8963 must be consistency-checked (class contract fields must agree). Worker-016 did R03 adjudication, worker-091 did F0 rev5 reverify, worker-015 did F2b-F0bind. Might be covered.
+
+**Option E: Cross-artifact consistency: every frozen artifact's `class_contract_pointer` / `f0_binding` must resolve to the declared F0 hash.** Worker-091 checked F2b's; worker-015 F2b-F0bind; worker-036 disj rule. Might be covered broadly.
+
+**Option F: G-AUDIT A0 rubric review** — needs 1 independent verdict; worker-052 just emitted bl8 (A0). Crowded.
+
+**Option G: Numerics N0** — C8 MET, N0 node verdict pending; allowed N0-only. Many workers.
+
+Let me look at what tasks recent workers have claimed to avoid duplication, specifically searching the last 15 minutes of outbox files for task_ids. Let me collect all task_ids from events in the last ~20 min and inspect the union to find gaps.
+
+Then pick a distinct one. Let me do that systematically: parse events.jsonl for created_at >= 00:30, collect (actor, task_id, node_id) and print unique task ids.
+dsh: reasoning:
+Very crowded. I need a task that's genuinely distinct and useful. Let me think about what gaps remain in the current critical path.
+
+Gates all pending. Key blockers per the handoff:
+- G-F0: no accept at current hash 0abb9ed8a961; verdicts revise x4, inconclusive x1.
+- G-FORM: rev27 closure voided rev11 verdicts; needs two independent full-schema verdicts per class at cce9c60146d6/5476a3f2c6bc/55d0a1ea9bda.
+- G-LIT: L1 has 22 spot checks; L0 0 accepts at a1674f094979 (and freeze breach).
+- G-NUM: C8 MET; only N0 node verdict open.
+- G-AUDIT: A0 0 accepts; A1 coverage 0/0/0/0/0 need ≥2 each.
+
+The "coverage" question: A1 requires 2 reviewers per target F0, F1, F2a, F2b, L0 who (a) did not author, (b) cite measured canonical sha256, (c) full-schema verdict. Worker-053 validated the coverage instrument (astra_lifecycle.review_coverage) and found CV-01/CV-02 (superseded F1 accept counted; path-form targets dropped). Many workers are producing individual verdicts.
+
+What would be genuinely additive and not duplicated?
+
+Idea: **A durable, independent "reviewer-independence and validity ledger" for G-FORM/G-F0/G-AUDIT accept counting** — but worker-053/074/042/027/032 are in that space.
+
+Alternative idea: Look at **CF-16 metalinguistic-mention pattern** — worker-093 did W093-CF16-CALIBRATION-01, worker-035 did classsep hardfail adjudication, worker-003 D0 coverage, worker-049 prosefix. Crowded.
+
+Alternative: **G-LIT L1 spot checks**: 22 independent spot checks exist, "≥3 met" for the criterion. L1 is basically satisfied but the gate waits on L0. L0 is crowded.
+
+Alternative: **A cross-gate contradiction audit**: check whether the map's own `controller_gate_audit` reasons are still true at the current measured hashes — e.g., each gate's `unmet` list cites hashes; measure them now. That's what worker-024/042/053/074 do.
+
+Hmm. Let me consider a different axis: the handoff mentions **CF-14: 58 future-dated events remain (max 02:00, skew ≈4961 s)**. Actually, future-dated `created_at` events are a data-integrity issue that affects ordering everywhere; the controller says "treat future created_at as advisory for ordering". A bounded worker task: **measure the clock-skew population precisely, produce a normalized ordering key (received_at vs created_at) and test whether any binding decision actually flips under a defensible re-ordering** (e.g. latest-bound-verdict-wins under created_at vs received_at). That's novel, class-bound (GLOBAL/A1), machine-checkable, with a falsifier, and highly relevant: verdict supersession/ordering is the substance of many current disputes (e.g., worker-091's supersede event, worker-053's CV-01). This "ordering inversion" theme was touched by worker-042 (W042-ORDER-INVERSION-03) — hmm, "order inversion" already taken. Let me check what W042-ORDER-INVERSION-03 did; if it's about map ordering, my idea may duplicate.
+
+Alternative fresh idea: **Check the FROZEN.json manifest against disk for all frozen revisions, including that FROZEN revision 28's `frozen_at` is not future-dated and that each frozen file's declared hash matches measured** — worker-091 did for F2b, worker-016 for F1/F2a/F2b (W16-REV28-VERIFY-01), worker-083 closure evidence fixpoint. Crowded.
+
+Let me step back. The instruction is minimal: "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit." It doesn't require solving the whole gate. As a bounded worker with a small budget, the right move is to pick a task where I can deliver a complete, verifiable artifact quickly and which is not obviously duplicated. Given ~100 workers, perfect novelty is impossible; the key is an independent, hash-pinned artifact.
+
+Let me look for a specific unresolved technical defect that has been found but not yet *repaired or verified*, and which I can verify/falsify:
+
+Candidates visible:
+- worker-091 hard findings: F2b A9 declared consistency evidence unresolvable (declared 675a99d0 vs measured 9e335e9b; FROZEN rev28 pins 9e335e9b?) and A10 stale sidecar .sha256 (1bb78ce9b357 vs 55d0a1ea9bda). Those are concrete, machine-checkable defects. But is someone fixing them? The F2b owner (lead-formulation) may fix; a worker could independently verify the defect and provide minimal repro. Worker-091 already did exactly that.
+- worker-003: C0 polarity adjudication, F2b contract consistency.
+- worker-097: F1 falsifier exec.
+- worker-083: closure evidence fixpoint across F0/F1/F2a/F2b.
+
+What about the **F0 companion pair consistency (REC-3)**: The canonical F0 0abb9ed8a961 (declared taxonomy) vs companion supplement d7419b4e8963 (class-contract supplement F0-R). Astra says "must be consistency-checked, not byte-identical". A worker could build the **consistency contract check**: for each of the 4 classes, extract the class contract from both the canonical F0 and the supplement, and check field-by-field agreement (hypotheses, exclusions, conclusion_type, genericity slots, pointers). This is a "companion-pair consistency matrix" task, class-bound (4 classes), machine-checkable, and it's the explicit REC-3 requirement. Worker-053 did W053-F0-MIRROR-VERIFY-01 and W041-F0-MIRROR-INDEP-01 (mirror), worker-072 C/D (F0), worker-076 taxcases, worker-087 F0 closure/full review, worker-052/054 A0. Is anyone doing companion *consistency* (as opposed to byte mirror)? worker-016 checkpoint "r03_adjudication" suggests R03 adjudication; worker-091 checked F2b's supplement pointer resolution. Hmm.
+
+Let me grep events for "companion" / "d7419b4e8963" to see coverage.
+
+Another candidate: **class-contract pointer resolution census**: every frozen schema's `class_contract_pointer` (and `f0_binding`) must resolve into the *pinned* F0 bytes; worker-091 found F2b's resolves but the declared consistency evidence path is wrong. A census across all artifacts + claims that cite F0 pointers would be useful, but worker-096 does binding receipts for F1/F2a, worker-042 canon-bind.
+
+Another: **Evidence-ref resolvability census for accepted claims** — audit_evidence.py exists (worker-024 audited its vacuity). The controller reports "10 hard CLASSSEP findings" from the evidence audit. A worker could run the canonical audit_evidence.py and independently re-derive the 10 hard findings, then test each against the *claim text* to classify real vs metalinguistic. worker-093 CF-16 calibration covers this.
+
+Hmm, let me look at what NO worker has touched recently: **A2** (ablation harness/design) and **the A0 rubric** less so; A2 events: only worker-022 (W022-A2-VERDICT-02). A2 = run four-arm equal-budget ablation: one strong model, self-consistency, independent cheap agents, cheap agents + coordinator. The handoff says A2 is an immediate queue item: "run four-arm equal-budget ablation". But running an actual LLM ablation needs provider keys (SWARM_PROVIDERS) — probably not available offline. However, the *harness* exists (evaluation/ablation_harness.py from deepseek-flash-20). A bounded task could be: **independent verification of the A2 ablation harness's budget-matching invariant** — does it actually enforce matched token and wall-clock budgets? A falsifier: an arm can exceed budget while the harness reports matched. This is machine-checkable, class-bound GLOBAL/A2, and mostly untouched (only worker-022). That's a genuinely different task and valuable: A2 is on the critical path for G-AUDIT.
+
+Let me check what W022-A2-VERDICT-02 did and whether the harness has been independently verified. Let me read the A2 artifacts. Also check evaluation/ dir.
+
+Alternatively A0 rubric: the gate needs an accept verdict; workers 052/054/089 are reviewing. A0 is well covered.
+
+Let me evaluate the A2 idea concretely:
+- Artifact: evaluation/ablation_harness.py (sha?), evaluation/ablation_design.yaml.
+- Task: build an independent checker that runs the harness on synthetic data and measures whether budget matching holds (token equalization, wall-clock, per-arm accounting, failure modes). Falsifier: harness admits an arm that exceeds its declared budget while reporting success/matched; or the harness's metric accounting double-counts.
+- Deliverable: artifacts/worker-011/a2_budget_matching_audit/{check_budget_matching.py, report.json, README.md, ...} + review event + checkpoint.
+- Class: GLOBAL (or AF-WCC-* not applicable). "class-bound" — the worker prompt says "Take one class-bound task". A2 is GLOBAL class_id in the map's assignment. The prompt's "class-bound" might mean tasks tied to a class; but many tasks are GLOBAL. Better to pick something with an actual class_id to be safe? The assignment cards for A2 have class_id GLOBAL. Prior worker-091 took F2b (class-bound). Hmm.
+
+I could make it class-bound by scoping to AF-WCC-SCALAR-SPH? No, that's forced.
+
+Let me think about **A2 verification** vs **another class-bound F1/F2 task**. The whole swarm is flooded with F1/F2/F0 reviews. The *distinct* contribution of worker-011 could be in A2, where almost nobody works. Let me verify A2's state.
+
+Let me look at evaluation/ directory and the A2 assignment + worker-022's verdict.
+dsh: reasoning:
+A2 has the author's self-verification + one independent verdict from worker-022 + worker-033's validity-lens. Not a great gap either, but the *harness's budget-matching invariant* may not have been adversarially tested. Still, A2 is "GLOBAL" class, and I'd like a class-bound task.
+
+Let me reconsider. What is a genuinely class-bound, machine-checkable task that no one has done?
+
+Look at the class axis: the four classes are AF-WCC-VAC-GEN, AF-SCC-C2-VAC-GEN, AF-SCC-C0-VAC-GEN, AF-WCC-SCALAR-SPH. The gate G-FORM needs two independent full-schema verdicts per class at current hashes. I did F1 visibility strictness (revise 3.5) earlier.
+
+Something more orthogonal: **cross-class dependency/consistency**: F0 taxonomy classes declare `depends_on`/`excludes`/relations; FROZEN schemas declare class_contract_pointer. A "class relation matrix" consistency check: for each class, gather all machine-readable statements about relations between classes across F0 canonical, F0 supplement, F1/F2a/F2b schemas, and flag contradictions (e.g. one says C0 excludes C2 inheritance, another says C2 reduces to C0). worker-029 did CROSSCLASS-DATACLASS, worker-003 C0 polarity, worker-066 containment. Crowded.
+
+Alternative approach: rather than picking a subject matter task, pick an **instrument-validity** task on a tool that gates everything but has not been independently validated. Candidates:
+- `research_map/comms.py ingest` — the single writer of events.jsonl; accepted stream integrity. If ingest is buggy (e.g., dedup, idempotency, schema enforcement, path traversal from outbox), the whole accepted stream is unsound. Has anyone audited comms.py? Let me search for tasks on comms.py / ingest.
+- `research_map/apply_events.py` — applies events to map; CF-14 partially repaired (colon-bearing resource-request ids), 58 future-dated events. worker-027 (W027-APPLYEV-RESBIND-01) audited apply_events bindings. Some coverage.
+- `research_map/checkpoint.py` — checkpoint snapshots; worker-local vs controller checkpoints.
+- `research_map/validate_map.py` — worker-024 did W024-VALIDATE-MAP-VACUITY-01.
+- `research_map/class_separation.py` — worker-024/036/035/003/085.
+- `research_map/audit_evidence.py` — worker-024.
+- `research_map/comms.py ingest` — **I haven't seen a task auditing ingest**. Let me check.
+
+The ingest path is the *only* route from outbox to the accepted global state. The PROTOCOL says ingest is controller-enforced. If ingest accepts malformed events, drops valid ones, or mis-dedups, the map's evidence base is corrupted. A bounded, independent, read-only audit of `comms.py ingest` (schema enforcement, idempotency, dedup key collisions, JSONL/markdown-fence handling, reject routing, atomicity/partial-write behavior, ordering) with a fixture corpus and planted-defect controls is:
+- class-bound? It's GLOBAL. Hmm.
+- novel? likely.
+- machine-checkable with hard falsifiers.
+- directly relevant: controller relies on it every pass; worker-073 "failed closed against the archive", CF-14 about apply_events.
+
+But the prompt insists "one class-bound task". Prior worker-011 checkpoints are node-bound (L0, F1) with class_ids. Other workers with GLOBAL tasks (e.g. worker-053 A1 coverage) used class_ids of the targets. An ingest audit would have class_id GLOBAL and class_ids of the four classes (since it touches the pipeline for all). That's acceptable: "class-bound" in the sense that the map's TASK schema requires class_id(s) and the work binds to a node (A1, G-AUDIT).
+
+Still, I worry that a tooling audit is "process work" rather than a class task; but the swarm explicitly values instrument validity (worker-024 "vacuity" audits, worker-053 "coverage validity", worker-032 "mapreg repl"). Instrument audits are a recognized worker genre. And G-AUDIT explicitly covers "checker calibration".
+
+Let me check whether anyone has audited comms.py ingest. Search task ids/events for "ingest".
+dsh: reasoning:
+There are 119 hits for ingest|comms.py etc.; but many hits are incidental (the word "ingest" appears in summaries). Let me search specifically for task_ids/artifacts about comms.py ingest. But it seems there's no dedicated audit artifact `artifacts/worker-*/comms_ingest*`. Let me check artifacts dirs for ingest-related.
+
+Actually, let me broaden: maybe a stronger, more "physics/class" bounded task exists that is untouched: **the four classes' "conclusion_type" and hypothesis/exclusion machine contract as a single consolidated cross-class contract matrix** — worker-047 did GFORM-D0-XCLASS, worker-029 crossclass, worker-066 containment. Crowded.
+
+I think the ingest-audit is a solid, novel, bounded choice. But is it "class-bound"? I can bind it to the four classes by auditing whether the ingest pipeline preserves class-binding fields (class_id/class_ids) exactly as written, and whether any accepted event has class tokens outside the frozen four. That makes it class-bound in a real sense: the ingest schema enforcement is what guarantees class tokens survive; a class-binding audit of the *accepted stream* (events.jsonl) is directly tied to G-CLASSBIND/G-AUDIT.
+
+Hmm. But there are already things like `W085-CANDIDATE-CLASSSEP-DIFF-03`, `W003-CLASSSEP-D0-COVERAGE-01`, `W024-CLASSSEP-RUNNER-VACUITY-01`, `W036-CLASSSEP-DISJ-01`, `W093-CF16-CALIBRATION-01`... class-sep tooling audits are covered.
+
+Let me instead consider: **the "rejected.jsonl" stream** — 108KB of rejects. Nobody has audited whether any of those rejects are *wrongly rejected valid events* (false rejects), which would silently drop evidence. That's an ingest-side instrument question I haven't seen covered. An audit of rejected.jsonl: classify rejection reasons, and re-run the validator on the raw rejected payloads to check the reason is sound; find any event that is actually valid but rejected due to parser/schema bug; find any event rejected twice vs accepted; check that rejects aren't counted as traffic. Combined with checking `ingested_ids.json` for accepted event_ids that violate schema (or duplicated content with differing event_id).
+
+That's a nice bounded task: "False-reject census of comms/rejected.jsonl" — machine-checkable, deterministic, read-only, with a clear falsifier ("if a rejected event re-validates as VALID under the current schemas.validate_event, reject is a false negative; if any such event is binding evidence, the map lost traffic"). It's genuinely distinct and G-AUDIT relevant (the accepted stream is the map's evidence base).
+
+Let me look at rejected.jsonl shape and schemas.py validate_event to see feasibility. Also check whether any prior artifact covers "rejected". Let me grep artifacts for "rejected".
+
+Actually wait. Before settling, let me check the highest-value gap given the gate state: G-AUDIT requires A1 coverage ≥2 per target; the whole cluster of workers is producing individual verdicts. G-FORM needs 2 accepts per class. G-F0 needs accept. The controller wants coverage, not more tools. A worker verdict on a class schema is directly valuable *if* it's a full-schema verdict that the coverage scan counts. But dozens of workers are already doing that; more marginal value is low, and I risk "another revise verdict" noise. A novel instrument audit has unique value.
+
+Also consider: as worker-011 I already produced two independent verdicts (L0 accept, F1 revise). The F1 visibility finding (HF-011-01) is my own prior finding; workers 037/040/076 continue the visibility thread. Fine.
+
+Let me look at what the controller's own gate audit says about what's blocking, and then decide. Specifically the `controller_gate_audit` latest — perhaps there's an open "instrument" gap explicitly requested. Let me read it.
+dsh: reasoning:
+Current coverage (at 00:43:08): F0 4 accepts, F1 1, F2a 0, F2b 1, L0 0. So the biggest *directly actionable* gaps are F2a (needs 2 accepts), F1 (needs 1 more), F2b (needs 1 more), L0 (needs 2 accepts at a1674f094979).
+
+Given the swarm is flooding F1/F2a/F2b reviews, my marginal value there is low-ish but the gate is the critical path. An *independent full-schema verdict* on F2a at 5476a3f2c6bc (0 accepts!) would be directly useful. But dozens of workers are on it... yet none accepted so far. Why 0 accepts? Because reviewers keep finding issues (revise verdicts) or their verdicts bind superseded hashes. The current rev12 hashes are cce9c60146d6 (F1), 5476a3f2c6bc (F2a), 55d0a1ea9bda (F2b). Wait — earlier I saw "F1 rev11 operative accepts ['worker-026']" from worker-033 — so the coverage scan engine has subtleties (rev11 vs rev12).
+
+Since I have limited budget (bounded worker, 3h card but realistically one bounded task) plus I must not duplicate, I'll make a decision:
+
+**Task: W011-F2A-REV12-INDEP-VERDICT-02 — independent full-schema verdict on F2a (AF-SCC-C2-VAC-GEN) at 5476a3f2c6bc...**, using my own re-runnable checker with class-leakage vs F2b, conclusion inflation vs WCC, quantifier/topology completeness, and decidable falsifier. F2a currently has 0 distinct accepts, so any accept is high value; and if I find a real hard failure, that's also valuable.
+
+But hold on: earlier my W011-F1-VIS-STRICT-01 found HF-011-01 (visibility strictness) on F1. A structurally identical check on F2a (visibility/inextendibility and class leakage) is a natural continuation and I can do it well. However, "yet another F2a review" is the most crowded space (W034, W043C, W048, W061, W065, W069, W074, W089 all doing F2a). The chance my verdict adds unique information is moderate but the chance I duplicate is high.
+
+Let me weigh the ingest false-reject audit differently: it's a pipeline soundness question that affects the *entire* accepted stream, including the very coverage counts the gates depend on. But it's less "class-bound".
+
+Actually — here's a thought. Let me look at the A1 coverage scan more carefully. The controller gate audit lists coverage counts. Those counts are computed by `astra_lifecycle.review_coverage`. Worker-053 validated that instrument and found CV-01/CV-02. Meanwhile the numbers change every pass. A worker could do something nobody has: **check whether the accepted events stream (events.jsonl) actually contains every verdict that's on disk** — i.e., a disk→events coverage reconciliation: for every `reviews/*.json` on disk, is there an ingested event referencing it (or its hash)? And conversely, do accepted review events cite hashes that no longer match disk? This is the "outbox hygiene" / swallowed-traffic problem (worker-032 did "outbox-hygiene", worker-095 "event-shadow" blocker). Hmm, touched.
+
+OK. Let me just check the rejected.jsonl quickly for whether a false-reject census is feasible and whether it finds anything. If during reconnaissance I find clear false rejects, that's a strong deliverable. Let me inspect the rejects file structure and re-validate a sample using schemas.validate_event.
+
+Actually — wait. Important: rejects include every event rejected as duplicate? Let me read a few lines.
+dsh: reasoning:
+The rejects are mostly *legitimately* malformed (missing required fields). A false-reject census would likely find few false negatives but might find:
+- Events rejected under the *current* validator but which the map now requires to carry class binding; some may be re-filable.
+- Duplicate rejects: the same event rejected repeatedly (143 rejects; how many unique event_ids?).
+- Events in rejected.jsonl whose event_id later got accepted (i.e., re-filed and accepted) — fine.
+- Events rejected as "unknown event_type task" (2) — event_type "task" isn't in the protocol; these were dropped. Were they needed? Possibly assignments from a lead using a non-protocol type! That's exactly "swallowed traffic": a lead sent an assignment/message with event_type "task" and the validator refused it, so the map never saw it. Let me check those 2 "unknown event_type task" entries — they might be important traffic (e.g., worker-091-style task-claim messages that never landed). Similarly `claim: invalid conclusion_type` (23) — some may be legitimate conclusion types used by leads that the schema doesn't know; those messages were dropped, meaning claims never reached the map.
+
+That could be a real finding: the schema's allowed conclusion_type set vs. the types actually in use. If the protocol/schema rejects a conclusion_type that the map's own assignments or taxonomy uses (or that the PROTOCOL.md doesn't enumerate), the validator silently drops evidence traffic. Let me examine schemas.py's allowed values and the rejected invalids.
+
+This is looking like a genuinely valuable, bounded, machine-checkable audit:
+
+**W011-REJECT-TRIAGE-01: False-reject / silent-drop census of comms/rejected.jsonl** — for each of the 143 rejected records, re-parse the raw payload, re-run the *current* `schemas.validate_event`, and classify: (a) still invalid under current rules → correctly rejected; (b) now valid → false negative at time of ingest (schema drift); (c) invalid only because of an over-strict/undocumented rule → rule-defect finding; (d) duplicate rejects of the same event_id; (e) union with events.jsonl to find event_ids that were rejected AND later accepted (repair path), and rejected-only ids that are not superseded (lost traffic). Then report the impact: lost class-binding traffic per class, and propose minimal schema fixes with fixtures. Controls: planted payloads that must be rejected/accepted.
+
+Class-bound: I can bind the census to class_id preservation — in particular, the 23 `claim: invalid conclusion_type` rejects are class-bearing (claims carry class_id). Show which classes lost claims.
+
+Let me check schemas.py: allowed conclusion_type values and validate_event logic. And inspect the rejected claims. If there is a genuine mismatch (e.g. conclusion_type "theorem" vs allowed set), that's the deliverable.
+
+Let me read schemas.py.
+dsh: reasoning:
+The schema is clear. Now let's inspect the rejected claims: what conclusion_type values were used? 23 rejects for invalid conclusion_type. If the authors used e.g. "observation", "proposal", "no_claim", "verified", etc., those were dropped. Are they recoverable/valuable? Let me analyze.
+
+Also the 74 "status: missing node_id" — probably re-filed later. The 2 "unknown event_type task" — check.
+
+Let me run a quick analysis now (reconnaissance) to see if the deliverable is substantive. I'll write a probe script in /tmp? The workspace policy allows writes under /data3/guoshaoyang. I can use a scratch dir. Let me analyze inline with python heredoc (no file writes).
+
+Plan for the analysis:
+1. Load rejected.jsonl (143).
+2. For each: parse `raw` as JSON (it's a JSON string of the original event). Re-run validate_event. Classify: valid_now / still_invalid(reason) / raw_unparseable.
+3. Extract conclusion_type distribution for reject reason "claim: invalid conclusion_type".
+4. Check duplicate event_ids among rejects; check event_ids present in events.jsonl (accepted) and ingested_ids.json.
+5. Impact: count unique rejected-only event_ids with class_id in the frozen four or class_ids.
+
+Let me do it.
+dsh: reasoning:
+Interesting: `raw` is a truncated string (first 200 chars?) for many entries — 66 raw_unparseable. The 77 parsed ones are all status events still invalid. So the earlier tail of rejected.jsonl has different shapes? Let me check: the first 3 lines had raw strings truncated? Let me check raw lengths. Actually the ones I printed showed `raw` ending mid-string — maybe they're truncated at 200 chars when written. That's itself a defect: rejected.jsonl doesn't preserve the full raw payload, so a reject cannot be re-adjudicated (evidence loss). But also, if the raw is truncated for storage, then the reject record is not replayable.
+
+But wait, only 143 rejects while there are hundreds of thousands of outbox events... and `rejected.jsonl` was 108KB at 00:46. The rejected stream seems stale (rejected_at 23:19 for early ones). Let me check the distribution of rejected_at and whether recent rejects exist. Also, `ingested_ids.json` is 147KB, events 5.5MB.
+
+Actually hold on: the rejects file is appended by ingest; if recent ingests happen every ~15 min, and 100 workers produce events, there should be more rejects. Only 143 suggests the validator mostly accepts now. The rejects are from early (23:19). Let me check the max rejected_at.
+
+Given the raw truncation, a "false-reject recovery" audit has limited value: you can't re-validate truncated payloads. But you CAN audit the truncation itself: **rejected.jsonl stores `raw` truncated, so rejected traffic is not reconstructible; count how many rejects are truncated and whether the source files still exist in outbox to recover the full payloads.** That's a small but real finding. Hmm, but is it high value? Moderate.
+
+Let me step back and reconsider the F2a verdict option, since that's where the gate actually is (F2a: 0 accepts). The controller needs accepts (or well-founded revises). A truly independent full-schema verdict on F2a at 5476a3f2c6bc, with my own checker (different implementation from the canonical class_separation.py), would be directly on the critical path. Dozens of workers are trying, but 0 accepts at the current hash so far — meaning either the artifact has real problems or the reviewers' verdicts keep binding superseded hashes. If F2a is sound, an accept moves coverage to 1; if it's revise, findings help the owner converge.
+
+Given the bounded worker instruction, I think delivering a high-quality F2a independent verdict is the most useful thing. But wait — my earlier F1 task found HF-011-01 on visibility strictness; F2a shares fields. Let me check what F2a currently says and what the latest F2a reviews found (worker-065, 069, 089, 061, 034, 043C, 048, 074...). If many reviewers found hard failures, F2a is known-broken and another review adds little. Let me check the latest F2a verdicts and the gate coverage: 0 accepts, so probably reviewers found issues. Let me grep recent F2a review events for verdicts and findings.
+
+Actually, let me first read the F2a schema (5476a3f2c6bc) and the reviews on disk for F2a at that hash.
+dsh: reasoning:
+Let me look at the newest F2a reviews: F2a-review-088-rev12.json (00:44), F2a-review-043.json (00:40), F2a-review-034-repin.json (00:37), F2a-review-lead-audit-r2.json (00:25), F2a-review-22.json (00:23), F2a-review-21.json (00:23).
+
+Note: the coverage audit at 00:43:08 said F2a 0 accepts at the measured hash. worker-088's rev12 review was written 00:44 — after the audit. Let me check its verdict. If it's an accept, coverage may now be 1. Let me inspect.
+dsh: reasoning:
+F2a rev12 has an active, well-documented blocking hard failure: `f0_binding.consistency_evidence_sha256 = 675a99d0...` but the file measures 9e335e9b... (FROZEN rev28 pins 9e335e9b). Multiple independent reviewers found it (worker-088 HF-088-F2a-CE, worker-043 HF-043-1, worker-034 HF-034-F2A-3). So F2a will not accept until the owner fixes the binding. Another F2a verdict adds nothing.
+
+Coverage: F0 4, F1 1, F2a 0, F2b 1, L0 0. But G-FORM: F2a has multiple revise verdicts; even 2 accepts wouldn't pass the gate while a blocking HF stands — actually the criterion is "two independent full-schema verdicts" but blockers may hold the gate.
+
+So where can I add unique value?
+
+Given the F2a/F2b/F1 F0-binding consistency evidence defect is now a shared root cause across schemas: the declared `consistency_evidence_sha256` (675a99d0) doesn't resolve to the actual file (9e335e9b), and FROZEN rev28 pins 9e335e9b. Multiple workers reported it individually per schema. Nobody has yet produced a **cross-schema resolution census** of *every* declared hash in every `f0_binding`/`class_contract_pointer`/consistency-evidence field across all four schemas + F0 pair, with a single runnable checker and a precise "who declares what, what resolves, what doesn't" table. Wait: astra-lead-audit's inbox card says "Bind-chain addendum: measure every declared hash in f0_binding and report resolved|mismatch" — that's an open lead-audit card, not a worker task. worker-096 did "binding receipts" for F1/F2a, worker-091 did F2b, worker-015 F2b-F0bind. Hmm, individual schemas are covered. A cross-schema census might duplicate worker-047's GFORM-D0-XCLASS / W047-F0-CONSISTENCY-BIND-03 / W083 fixpoint.
+
+Let me look at the F2b analog: F2b has 1 accept (worker-098) at current hash; my earlier knowledge: A9/A10 hard findings from worker-091 (declared consistency evidence 675a99d0 vs measured 9e335e9b; stale sidecar). So the same root cause.
+
+OK here's another thought: the root cause is a **stale declared hash 675a99d0** in the schemas' `f0_binding.consistency_evidence_sha256`. Where did 675a99d0 come from? Perhaps it was the hash of taxonomy_consistency.json at some earlier revision, or of a different file. If I can *locate the bytes* that hash to 675a99d0 (search snapshots/archives), then I can tell the owner exactly what the declared value refers to (e.g., an earlier revision of the same file, or a different path), turning an unresolvable-declaration finding into a precise diagnosis. That's a genuinely useful, bounded forensics task: **resolve the orphan declared hash 675a99d0** across the entire workspace (all files, all snapshots/archives/checkpoints), and produce evidence: either (a) the exact file (path + revision context) whose bytes hash to 675a99d0, or (b) proof of absence with a bounded search strategy (which roots were searched, index of candidate JSON/YAML files, counts). Plus determine whether 9e335e9b (the current/FROZEN-pinned value) is what all four schemas should declare.
+
+That's class-bound (all four classes' bindings), machine-checkable, read-only, with hard falsifiers, and it directly unblocks the shared root cause behind F1/F2a/F2b revise verdicts (and F0's companion adjudication). It's likely not duplicated: dozens of workers reported the mismatch, but resolving where 675a99d0 comes from is a distinct forensic step. Let me check if anyone already did that: search events for "675a99d0".
+
+Also, searching for a file with a given sha256 across the tree is feasible: find candidate files (json/yaml/jsonl) and hash them, plus check git objects (a blob with that content may exist in git history!). Actually git history is a great source: `git log --all --format=%H` and find blob 675a99d0 prefix — `git rev-list --objects --all | ...` then hash. Git stores blobs by SHA-1, not SHA-256, so we can't look it up directly by prefix; we'd need to hash each blob's content with sha256. There are limited commits, so feasible.
+
+Let me first check the size of taxonomy_consistency.json, its git history, and the search space. Let me search the whole workspace for a file whose sha256 starts with 675a99d0. Candidate roots: artifacts/, runtime/state/checkpoints/, ledger/, schemas/, research_map/, comms/. Snapshot copies exist in artifacts/worker-*/. It could be ~10k files; hashing all is feasible (a few hundred MB) but could take a while. Let's first grep the hash string itself across the tree to find where 675a99d0 is declared/mentioned — that tells us the declaration sites and maybe a snapshot note. Then do a targeted hash scan.
+
+Let me check quickly whether anyone has already taken a task resolving 675a99d0.
+dsh: reasoning:
+Ah — worker-086 already did exactly this: `w086-20260912T004241-art-collision-report`, `art-collision-restore-candidate`, `review-evidence-collision`, and `G-FORM-evidence-collision-086.json`. The name "collision" suggests they investigated the 675a99d0 vs 9e335e9b mismatch as a hash collision / stale declaration, and even produced a "restore candidate". Let me read that review to see what conclusion they reached. If they already resolved the orphan hash, my idea is duplicative.
+
+Let me read `reviews/G-FORM-evidence-collision-086.json` and worker-086's report.
+dsh: reasoning:
+Worker-086 fully resolved the orphan hash 675a99d0 (it's the lean doc + 3 pins; byte-exact reconstruction) and diagnosed the writer collision. So that's done. Good thing I checked.
+
+So where's the remaining gap? Let me reconsider. Given the extreme crowding, maybe the right interpretation of my task is simpler than I think: the supervisor prompt expects each bounded worker to pick *one* class-bound task and deliver. Duplication isn't fatal — independent replication is explicitly valued in this project ("independent verdicts"), and the map counts *distinct reviewers*. For G-FORM F2a, coverage is 0 accepts at the current hash; but F2a has a persistent blocking HF (evidence binding), so an accept is impossible without lying. For F1, coverage 1 (worker-088's accept? Actually worker-088 amended F1 to... let me check: worker-088's F2a review was revise; the F1 review F1-review-088-rev12-amended — verdict?).
+
+Given the F0-binding root cause, the highest-value bounded work now is probably on **L0**, which has 0 accepts at a1674f094979 and a freeze breach. worker-097 did W097-L0-REV4-INDEP-REVIEW-01 (8 events) — let me check its verdict. worker-093 W093-L0-REV3-VERDICT-01. worker-073 W073-L0-HF14-POSTREPAIR-01. worker-037 L0 revdiff. It's crowded but L0 is where the gate coverage is 0 and the freeze reconciliation is open.
+
+Alternatively — here's a genuinely distinct, bounded, high-value idea that I haven't seen anyone do: **a "revision-lineage graph" of each canonical artifact** (which events/claims/reviews bind which hash, and which are void), i.e., the *supersession graph*. The controller's coverage criterion is "accepts at the measured hash"; the map carries hundreds of stale-pin verdicts. A machine-checkable lineage artifact per class would let the controller answer "is there any accept verdict that binds the live bytes?" without re-scanning. But worker-033/042/053/074 are effectively doing variant versions of this ("validity lens", "order inversion", "coverage validity", "gate accept churn"). Crowded.
+
+Let me look at this from the class-content side rather than process side. Are there any *actual mathematical/physics* defects open that a bounded worker could nail? The classes are about cosmic censorship:
+- F1 (AF-WCC-VAC-GEN): weak cosmic censorship vacuum generic.
+- F2a (AF-SCC-C2-VAC-GEN): strong cosmic censorship C2.
+- F2b (AF-SCC-C0-VAC-GEN): strong cosmic censorship C0.
+- F0: taxonomy.
+
+Worker-040 did W040-F1-STRICTNESS-ADJ-04, worker-037 W037-F1-VISIBILITY-03, worker-029 W029-LIVE-HF2902-04 (cross-class dataclass). The known live hard failure HF-29-02 is about the "single frozen data class" — D0 disjunction shared with WCC. The F1/F2a D0 issue: quantifier domain D0 is a disjunction ("s>5/2 δ∈(1/2,1) or smooth-with-decay"), which violates the requirement of a single weighted data class with named s, delta and makes the class non-distinct. Multiple workers (086, 021, 022, 029) reported on this. The lead is fixing it (F1 repair: worker-078 W078-F1-REPAIR-VERIFY-01). Hmm.
+
+Let me check the current live status of F1: has the D0 disjunction been repaired at cce9c60146d6 (rev12)? The gate audit at 00:43 said F1 1 accept (worker-088). Also my own F1 visibility finding HF-011-01 (visibility strictness) — is it still live at rev12? My checkpoint 3 bound cce9c60146d6, so yes, rev12 = current. And worker-037 W037-F1-VISIBILITY-03 + addendum rev12 continued that thread. So the visibility issue is well covered.
+
+Hmm, what about the *conclusion_type* semantics: `scc_c2_future_inextendibility` vs the taxonomy's declared conclusion types. Is the vocabulary binding checked? worker-054 A0 vocab reconcile, worker-005 F2b vocab, worker-049 prosefix. Covered.
+
+Let me look for what the controller says is still missing that no worker is on. The `astra-life04-freeze-hold` assignment (lead-formulation, due 01:15) requires "emit the missing rev27 artifact events, then hold". The controller's gate audit hints at "verdicts bound to superseded hashes are advisory only" and coverage numbers.
+
+New idea: **Publish-state reconciliation** — the map has `publication_status` with mirror/companion pairs and "declared hash vs measured" per artifact. The handoff says "Publication: 0 divergent mirror pairs, 1 companion pair (F0)". A worker could independently verify the publication status claims at the current bytes: for each canonical/authoring pair, measure both and check equality/companion relation; and check the FROZEN rev28 `logical_artifacts` pin table. But worker-016 (W16-REV28-VERIFY-01), worker-083 (fixpoint), worker-091 (F2b) did much of it. Crowded.
+
+OK, let me look at this from a different angle: the swarm has 100 workers each doing verification; what's systemically missing is **consolidation**. But as a bounded worker I can't consolidate.
+
+Maybe accept a moderately crowded but still genuinely useful and *independently implemented* task: a **full-schema verdict on F1 at rev12** (coverage 1, needs 2). I have prior context on F1 (my HF-011-01 visibility finding), which makes me well-positioned: I can (a) verify whether the visibility defect was repaired at rev12 (my falsifier explicitly stated the discharge conditions: "If L72/L213 are rewritten to the equivalence statement and the withdrawn citation is removed, HF-011-01 and F-011-02 are discharged"), and (b) issue a fresh verdict on rev12. That is exactly the "re-run this script at the next F1 revision" next_falsifier from my own checkpoint 3. This is scientifically the right continuation of my own work — a bounded worker resuming its own thread. And it's directly on the critical path (F1 needs 1 more accept).
+
+Let me check: my checkpoint 3 said target F1 cce9c60146d6 (rev12?) — wait, checkpoint 3 was at 00:45:11 binding cce9c60146d6. Hmm, but the F1 revision at that hash — was it rev12? ASTRA_HANDOFF pass-04 (00:38) says F1 cce9c60146d6 is rev12 and FROZEN revision 27. So my F1 visibility adjudication was already at rev12! And the next_falsifier says "Re-run this script at the next F1 revision."
+
+So my HF-011-01 (visibility strictness) is at the *current* hash. Was it adjudicated? worker-037 did W037-F1-VISIBILITY-03 and an addendum rev12 (00:3x). worker-040 did W040-F1-STRICTNESS-ADJ-04 (00:45 correction). Let me read those to see whether the visibility issue is resolved/closed, and what the current F1 accept (worker-088) concluded. If the visibility issue is still open at rev12, then a *final adjudication* would be valuable... but worker-040 just did exactly that (00:45:21 correction).
+
+Let me read worker-040's correction and worker-088's amended F1 review to understand where F1 stands.
+dsh: reasoning:
+Key state:
+- F1 rev12 (cce9c60146d6): worker-088 revise 3.5 (HF-088-F1-12 = f0_binding evidence resolution — the shared root cause). worker-040 revise 3.5 confirming HF-040-04 (false strictness claim for whole-curve visibility) — this is my HF-011-01 lineage! worker-090 "closure" revise 4.0 with hard_failures [].
+- F2a: revise verdicts (blocking evidence binding + D0).
+- F2b: worker-098 accept? and worker-091 revise (A9/A10 binding).
+
+So the two live blockers at rev12 across F1/F2a/F2b: (1) f0_binding consistency-evidence hash resolution (root cause diagnosed by worker-086, repair pending by owner), (2) F1 visibility "false strictness" (worker-040 confirmed; lead repair is W078-F1-REPAIR-VERIFY-01).
+
+Everyone is blocked on the owner's next revision. A worker can't move the gate. So what's the best use of one more bounded worker?
+
+Maybe: **measure whether W078-F1-REPAIR-VERIFY-01's claimed repair actually discharged HF-040-04/HF-011-01** at the current hash. Let me check if the lead has published a new F1 revision after 00:45 (hash may have moved!). The gate audit was at 00:43:08 with F1 cce9c60146d6. Let me re-measure the live hashes right now; if F1/F2a/F2b have moved (rev13), then a fresh independent verdict on the *new* revision is exactly what's needed, and my prior context positions me to check the visibility fix.
+
+Let me measure live hashes of the four schemas and F0 now.
+dsh: reasoning:
+The hashes haven't moved. The owner (lead-formulation) is presumably working on the next revision (freeze-hold card due 01:15). Workers can't accept at current hashes because of the f0_binding defect.
+
+Given that, what can a bounded worker contribute right now that is NOT duplicative and is genuinely useful?
+
+Idea: **The repair that unblocks everything is a one-field fix to `f0_binding.consistency_evidence_sha256` in three schemas (rev13) + the writer-collision fix.** The owner must do it, but a worker can supply a *verified, minimal, byte-exact patch* with a full evidence trail (this is what worker-086's "evbind_repair_demo" partially did — they built a guarded checker and a restore candidate). Hmm, worker-086 did the repair demo: `guard.patch`, `check_taxonomy_consistency.guarded.py`, `evbind_repair_demo/README.md` with R1/R2/R3 options. So the repair path is also covered.
+
+What about the *other* live F1 blocker: HF-040-04 "false strictness claim for whole-curve visibility". Worker-078's W078-F1-REPAIR-VERIFY-01 was "F1 repair verify" at ~00:42 — let me check whether the lead's repair is ready or whether worker-078's verdict closed it. The gate coverage says F1 1 accept. Hmm.
+
+Actually, let me reconsider the task framing once more. The supervisor prompt is generic for workers 001-020 launched every 20s. Each worker is expected to self-select. With ~100 concurrent workers, the marginal worker's best move may be to do something *small and orthogonal*. The controller explicitly values: evidence audit, independent re-derivation, class binding, and "if a result fails a gate, record the failure as progress and redirect the budget."
+
+A truly under-covered area I noticed: **`comms/rejected.jsonl` and the ingest pipeline** — no one has audited it (all the "ingest" hits were incidental). And I found concrete anomalies in reconnaissance:
+1. `raw` payloads are truncated (66/143 unparseable) → rejects are not replayable/reconstructible.
+2. 8 duplicate rejected event_ids (same event rejected multiple times, e.g. flash-15-status-0001 appears twice? Actually a duplicate id in rejects could be a re-ingest bug or just a re-scan).
+3. 23 "claim: invalid conclusion_type" rejects in the reason counts — but my parse found only status events... because the reason field exists on records whose raw was truncated. So there are claims that were rejected for invalid conclusion_type; their payloads are lost (truncated) and thus unadjudicable. Were those claims class-bearing? The reason counter shows 23 such rejects.
+4. "unknown event_type task" (2) — dropped messages.
+5. 29 rejected-only event ids (never accepted later) — lost traffic, some of which might be substantive.
+
+This is a real, un-audited instrument gap: **the reject stream silently drops traffic with truncated payloads, so rejections are unfalsifiable and unrecoverable, while `ingested_ids.json` dedups on event_id, meaning a corrected re-file with the same event_id could be swallowed as a duplicate.** Wait — that last one is important and checkable: if an event was *rejected*, is its event_id still added to `ingested_ids.json`? If yes, a re-filed corrected event with the same event_id might be skipped as already-seen (silent loss), unless rejects aren't recorded in the seen set. Let me check the ingest code: after rejection, does it `mark_seen`? Let me read the rest of comms.py.
+
+That's a concrete falsifiable hypothesis: **rejected event_ids are marked as seen, so legitimate re-files under the same event_id are silently dropped.** If true, that's a genuine swallowing bug affecting evidence traffic. Let me check.
+
+Also duplication: the same event_id appearing twice in rejected.jsonl suggests either re-rejection (fine) or a scan bug.
+
+Let me read comms.py fully (the ingest function and seen handling).
+dsh: reasoning:
+I see there IS a `normalize_event` that defaults many fields — so many of the 143 rejects predate normalization (23:19 era). Let me read the ingest function to see the seen-marking behavior on rejects.
+
+Actually, let me pause and reconsider the overall choice. I've spent a fair amount of reconnaissance. Time to commit to one task with a crisp deliverable.
+
+Let me weigh three finalists:
+
+(A) comms ingest/reject-stream audit (novel, instrument, GLOBAL/A1):
+- Deliverable: `check_ingest_reject_soundness.py` + report + controls, class-bound via class_id preservation in accepted/rejected events.
+- Risk: it's process tooling, not class content; the "class-bound" requirement is weakly met.
+
+(B) Independent full-schema verdict on F2a at 5476a3f2c6bc (critical path, 0 accepts):
+- Deliverable: reviews/F2a-review-011.json + checker + report.
+- Risk: high duplication (many F2a reviewers); but the map counts distinct reviewers, and even a revise with a *new* finding is valuable. However, the blocking evidence-binding HF is already known; my verdict would likely be revise 3.5 adding little.
+
+(C) Something class-content that nobody has done: hmm.
+
+Let me look once more for a gap in the *class semantics* coverage. What about the **AF-WCC-SCALAR-SPH class** (N0 numerics)? That class is one of the four; the numerics side has many workers (W020, W046, W051, W055, W057, W081, W027, W012...). N0 gate nearly closed (C8 MET). Not a gap.
+
+What about the **taxonomy cases** (`schemas/taxonomy_cases.jsonl`)? worker-076 did F0 taxcases rev5; worker-002? The F0 gate needs "9 taxonomy cases remain open (new class vs split) and were never dispositioned by the lead" per the gate audit. That's a substantive open item! The F0 gate `unmet` list says: "9 taxonomy cases remain open (new class vs split) and were never dispositioned by the lead". These are class-bound (each case asks: is this spacetime in an existing class or a new class?). A bounded worker could **disposition the 9 open taxonomy cases with a machine-checkable rubric**: for each case, extract the description, apply the frozen four class definitions' decisive hypotheses (via the canonical class_separation.py + the taxonomy's own disjunction rules), and output a per-case verdict (existing class X / new class needed / ambiguous) with the decisive hypothesis and a falsifier. That is *exactly* class-bound, on the critical path for G-F0 (which has 4 accepts but is held pending on these unmet items), and I haven't seen a worker do it (worker-076 did "taxcases rev5" which may be a re-pin, not disposition).
+
+Let me check the taxonomy_cases.jsonl file and what "open" means; check worker-076's task and any verdicts. If the 9 open cases are genuinely undispositioned, this is a great bounded task: independent dispositions + machine-checkable consistency with the frozen taxonomy, with disagreement as the deliverable.
+
+Let me look at the gate's full "unmet" for G-F0 and the cases file.
+dsh: reasoning:
+Interesting! The map's gate list I printed earlier (G-F0 verdict pending) was from the version at the time of my first read; now G-F0 shows `"verdict": "pass"` and updated_at 00:48:43 with `last_verdict_event: astra-life05-gate-gf0`! Wait — the file changed between my reads (map updated_at 00:49:19, and the gates now show pass). Actually the first read printed gates with G-F0 pending and unmet list; the second read (now) shows G-F0 pass. The controller (Astra pass 05) is actively running right now (astra-life05 events). So state is moving fast.
+
+Note the discrepancy: verdict "pass" but `unmet` still lists items (stale unmet from pending). The controller just passed G-F0 at 00:48:43.
+
+Also interesting: `TC-F0-N01..N20` negative cases with `class_id: null` and `as_filed_class_id`. The gate unmet item says "9 taxonomy cases remain open (new class vs split) and were never dispositioned by the lead". Hmm, but the cases file has 37 rows (1 meta + 16 positives + 20 negatives). The "9 open" probably refers to the negative cases where `class_id: null` — the taxonomy has coverage gaps (CG2) and the decision "new class vs split" is the lead's. Let me count: N01, N02, N09, N10, N16 have "no class exists / coverage gap CG2" — those are cases where a new class might be needed vs stay excluded. That's the "new class vs split" question. 9 of them?
+
+Given G-F0 just passed, the "9 taxonomy cases" item may now be dispositioned or moot. The state is moving under me. As a bounded worker I should pick something stable.
+
+Let me now check the newest controller report/lifecycle 05 to see what the CURRENT open items are — that's the best guide for my task. `astra_lifecycle_05_events.py` exists (00:45) and events `astra-life05-*` are landing. Let me read the latest lifecycle report and the map's current gate audit + assignments state.
+
+Time check: it's ~00:50. The supervisor relaunches workers continuously. My bounded task should be doable in ~10-20 minutes of wall clock.
+
+Let me read the newest lifecycle JSON (lifecycle_20260912-004308.json was the last listed, but map says astra-life05 gate events; maybe newer reports exist now — ls again).
+dsh: reasoning:
+Let me extract the current gate audit from this latest lifecycle to see the *now* open items.
+dsh: reasoning:
+Now the live picture is clear:
+
+- G-F0: PASS (as of 00:48:43).
+- G-FORM: F1 needs 1 more accept; F2a needs 2; F2b needs 1 — all held by the shared `f0_binding.consistency_evidence_sha256` defect plus F1's visibility claim and F2a's D0 issue.
+- G-LIT: L0 needs 2 accepts at a1674f094979 (0 accepts; worker-093 revise, deepseek-flash-18 revise). L1 met.
+- G-NUM: needs N0 accept.
+- G-AUDIT: A0 0 accepts, A1 coverage: F0 5, F1 1, F2a 0, F2b 1, L0 0.
+
+Highest-leverage: L0 has 0 accepts and needs 2. L0 is the only target where a well-founded *accept* could immediately close half the coverage gap. Let me inspect L0's current state: worker-093's revise and flash-18's revise — what are their hard failures? Also worker-097's rev4 independent review. If the rev4 ledger (a1674f094979) is actually sound and the revises are based on fixable/soft issues, an independent accept would be valuable. But I must be honest: if there are real hard failures, I report revise.
+
+My earlier W011-L0-INDEP-VERDICT-01 (checkpoint 1/2) was an accept 4.0 on the *previous* L0 bytes ce42d205. The ledger has since been rewritten twice (3e3d3553 rev3, a1674f094979 rev4). My own checkpoint-2 said "Any new L0 sha256 voids the accept; residuals R1-R5 are the rev-3 backlog." So my prior residuals are the known backlog. An updated independent verdict at a1674f094979, re-running my check_l0.py (updated to the new bytes), is a natural continuation of my own thread and directly on the critical path.
+
+But wait — worker-097 did "W097-L0-REV4-INDEP-REVIEW-01" (8 events). Let me check its verdict: if it's an accept, coverage may show 0 because of a hash mismatch or path-form issue. If it's revise, I need to see the findings. Also worker-093 W093-L0-REV3-VERDICT-01 (revise), flash-18 w18-review conv L0 (revise).
+
+Let me read the newest L0 reviews: reviews/L0-* and worker-097's report. This tells me whether an independent accept is plausible and what the residual findings are.
+
+Actually, hold on. Let me be careful about my own prior work: checkpoint 1 was an *accept* on ce42d205 — but the ledger changed at 00:30/00:35. Two revise verdicts now at a1674f094979. Let me look at them.
+dsh: reasoning:
+Now L0 at a1674f094979 has:
+- worker-075 accept 4.0 (00:49:30, counts_as_full_schema_verdict true) — NEW, likely not yet in the 00:49:19 controller scan.
+- worker-093 revise 3.5 (HF-02, HF-01)
+- flash-18 revise 3.0 (HF-14, HF-02, HF-04)
+- worker-025 revise 3.5 (scoped, counts_as_full_schema_verdict=false) with HF-02 disjunction in 8 rows (D-004, D-005, T-303, T-305, T-402, T-515, T-526, T-528) — this is a *sharp, specific* finding: rows with >1 frozen class token. But it's marked as scoped/not full (probably because worker-025 declared it staged?).
+
+The L0 core dispute is HF-02: class_ids arrays containing multiple frozen class tokens (composite class binding = class leakage under the rubric). Worker-025 identifies 8 rows at a1674f094979. My earlier L0 accept at ce42d205 had residual R1 (HF-01 vocabulary collision, 30 rows, 0 artifact_refs). HF-01 apparently is about rows claiming theorem status without artifact_refs.
+
+So L0 currently: 2 revise verdicts (full) + 1 accept (full) + 1 scoped revise. If HF-02 is real and blocking, an honest independent verdict would be revise — not helpful for coverage but important. If HF-02 is a *rubric misreading* (e.g., the detector flags any multi-token class_ids array, but the ledger's spec allows a row to inform multiple classes so long as the theorem is single-class), then those revises are false blockers and adjudicating that would unblock 2 accepts. That adjudication is genuinely valuable and class-bound. Worker-025's finding says "under the rubric-literal HF-02 detector text" — they're applying the letter of the rubric. Is the rubric right? The question "does a ledger *theorem row* with class_ids = [C2, C0] constitute the composite-class leakage the gate forbids, or is it a legitimate multi-class scope annotation?" is exactly the kind of adjudication the audit lead does... and workers 035/003/049/093/068/021 are all over HF-02/CLASSSEP.
+
+Hmm, and worker-018 (deepseek-flash-18) lists HF-14 too.
+
+Given that at 00:49 worker-075 produced a full accept at a1674f094979, L0 coverage is now likely 1/2. My best contribution could be a *second independent accept* if I genuinely find the ledger sound at a1674f094979, or a well-argued revise if not. But the honest read: with 2 full revises citing HF-02 and HF-01/HF-14/HF-04, the ledger probably has real rubric violations. An accept would be dishonest unless I can falsify the HF-02 interpretation with evidence.
+
+Wait — but what does HF-02 actually require? Let me read the rubric (evaluation_rubric.yaml d748a9e3574e) HF-02 detector text and the L0 schema requirements, then look at the 8 rows. If the detector is "class_ids length > 1 → disjunction", then any ledger row that informs two classes trips it. The map's own assignment for L0 (asg-2026-09-11-L0-astra-lead-literature-03) says: "each row: source, theorem as quoted, assumptions, class_id, ...". Singular class_id per row. The later ledger uses class_ids arrays. F0's G-F0 gate passed with a taxonomy where each *class* is separate; the ledger rows mapping one theorem to multiple classes is a scope annotation, but the rubric's HF-02 says class leakage = disjunction of class_ids.
+
+This is a genuine, tractable adjudication: "Is a multi-token class_ids array on a ledger row a class-leakage hard failure (HF-02) or legitimate scope annotation?" The answer determines whether L0 can ever pass G-LIT/G-AUDIT. It's class-bound, machine-checkable (enumerate rows, apply rubric text from the pinned rubric hash, check the detector's actual implementation in the audit tooling, and check the ledger's declared schema), with a real falsifier. And crucially, it's the single question holding L0 coverage at 0-1 accepts.
+
+But wait — worker-093's HF-02 might be something else. Let me read worker-093's and flash-18's reviews and the rubric's HF-02. Also, the ledger schema might explicitly define class_ids semantics (e.g., first token = primary class, rest = informs). Let me read the ledger meta/schema and check the rows.
+
+Let me gather the facts:
+1. evaluation_rubric.yaml HF-02 text.
+2. worker-093 L0-review-093.json hard_failures detail.
+3. deepseek-flash-18 L0-review-18-rev3.json HF-02 detail.
+4. The 8 rows' class_ids in the ledger (live).
+5. The ledger's own declared semantics (schema/meta in tests?).
+
+If the rubric text says "theorem row must bind exactly one class; a disjunction is leakage", then revise is right. If it says something narrower ("conclusion asserted for a disjunction of classes"), then multi-token scope annotations may be OK and the revises are detector overreach — but that adjudication should be made by the audit lead, and a worker can supply the evidence.
+
+Let me look.
+dsh: reasoning:
+HF-02 detector: "unknown class_id | disjunction of class_ids | evidence metadata violates the class forbidden_evidence list without transfer_argument | conclusion_type not allowed for class".
+
+So "disjunction of class_ids" is explicitly a hard failure. The question: what counts as a "disjunction of class_ids"? A row whose `class_ids` array has 2+ tokens is literally a disjunction (set membership) unless the semantics are conjunctive scope annotation. The ledger is a *literature ledger*: a theorem row mapping to "which classes it informs". The map assignments for L0 ask for "class_id" singular. Ledger rows with multiple class tokens are, under the rubric, exactly the HF-02 pattern.
+
+However, the rubric was written for *claims*, not ledger rows (detector text: "evidence metadata violates the class forbidden_evidence list..."). Does the rubric scope HF-02 to claims only? The rubric says "per-task-type verifier definitions". Hmm.
+
+So the honest L0 verdict likely remains revise until the ledger fixes multi-class rows (either split rows by class or introduce a clearly-named `informs_classes` non-class field). Note my own earlier residual R5 was exactly "T-301 class_ids vs informs_classes"! So worker-011 (me) already flagged this at ce42d205. The ledger has apparently addressed some of it (worker-073 W073-L0-HF14-POSTREPAIR, worker-097 rev4). But at a1674f094979 there are still 8 rows with multi-token class_ids per worker-025.
+
+Given my prior finding R5/HF-01-HF-02 residuals, the right bounded continuation for worker-011 is:
+**W011-L0-REV4-HF02-FINAL-ADJUDICATION-01**: A row-level, rubric-pinned adjudication of the 8 multi-class rows at a1674f094979: for each row, extract class_ids, the theorem statement, the source, and determine under the *pinned rubric text* + the ledger's own schema whether the row is (a) a genuine HF-02 disjunction (hard failure), (b) a legitimate multi-class scope annotation with a single primary class, or (c) an unknown-class token. Deliverable: a checker + report + an updated independent verdict.
+
+But this only adds another revise — informative but doesn't move the gate. The *repair* is the owner's job. Hmm.
+
+Wait. Let me reconsider: is the multi-token class_ids actually a *false* positive? Let me look at the ledger's schema/meta: maybe the ledger defines `class_ids` as "classes this theorem informs" and `primary_class_id` as the binding. If the ledger defines it that way, then the rubric-literal detector applied to ledger rows is a category error (the rubric's HF-02 applies to *claims*, where conclusion_type binds one class). In that case, the adjudication would conclude: the revises citing HF-02 on ledger rows are applying a claim-level detector to a ledger artifact, and the correct treatment is to require the ledger to rename the field (as my 00:26 residual R5 suggested) or to exempt scope annotations. That adjudication would be valuable: it tells the audit lead whether L0 can pass with the current field names or needs a rename (a mechanical repair), and it distinguishes "class leakage" from "scope annotation".
+
+Let me examine the ledger rows and schema to see the actual semantics. Let me look at the 8 rows and the ledger meta (there may be a schema record in theorems.jsonl or a separate L0 spec). Also check how the canonical audit_evidence.py produces the 10 hard CLASSSEP findings (claims not ledger). And check the map's evidence_hard_failures: they are about claims[36,94,96,97,...] — composite C0/C2 asserted as one class. Those claims are *prose claims by workers*, not ledger rows. So HF-02 hard failures on claims are the 10 CLASSSEP findings.
+
+For the ledger: the 8 rows with multi-class tokens. Let me inspect them. Maybe the tokens are given as `class_ids: [A, B]` where B is an extension label (e.g. AF-WCC-VAC-BH-FORM). Earlier handoff said "extension labels ... are either remapped or renamed as non-class fields". Let me just look.
+dsh: reasoning:
+Now I see the structure: 62 ledger rows. 8 rows have multi-token `class_ids`; 7 rows have an `informs_classes` key. So the ledger DOES have an `informs_classes` field for non-binding scope annotation, and `class_ids` is (presumably) the binding field. The 8 rows still carry multi-token `class_ids`, which under HF-02-literal is a disjunction. This is exactly the "class_ids vs informs_classes" defect I flagged as R5 at ce42d205 (in my checkpoint-1). At rev4 (a1674f094979) it's partially repaired: 7 rows moved something to `informs_classes`, but 8 rows remain multi-token in `class_ids`.
+
+Now, is the ledger's documented semantics for `class_ids` "the classes this row binds" or "the classes it informs"? Let me look at one of the 8 rows in full, plus a row that uses informs_classes. Also check the ledger's schema definition (maybe in artifacts/literature/ or the assignment card, or the L0 spec). If `class_ids` is documented as "informational mapping" then the detector is a false positive at row level; if it's documented as binding, the 8 rows are real hard failures.
+
+Additionally, there may be a *deeper* real issue: D-004/D-005 are `open_problem` rows; T-515/T-528 are WCC+SCC0. The R5 question: could splitting them change meaning? E.g., a theorem that establishes C0-inextendibility also informs C2 (since C0 ⟹ C2 per implication_note). A row citing a C0 theorem *does* legitimately inform the C2 class as implied — but the rubric says C0 evidence cited as C2 requires an explicit transfer_argument (forbidden_evidence list for AF-SCC-C2-VAC-GEN). So a C0 theorem row tagged with both C2 and C0 class_ids is precisely the forbidden "C0 result cited as C2 evidence" pattern unless transfer_argument present. This is a real semantic issue, not just a naming issue!
+
+Let me read T-303, T-305, T-526 (theorem/conditional rows with C2+C0) in full to see whether they have transfer_argument or scope_caveats that handle it.
+
+This is looking like a solid bounded task:
+
+**W011-L0-MULTICLASS-ADJUDICATION-01**: An independent, rubric-pinned, row-level adjudication of the 8 multi-token `class_ids` rows at ledger a1674f094979:
+- For each row: quote class_ids, conclusion_type, source theorem, scope_caveats, does_not_imply, unresolved, evidence_level.
+- Apply the pinned rubric HF-02 detector text and the class forbidden_evidence lists (from d748a9e3574e) mechanically.
+- Classify each row: (i) genuine HF-02 disjunction; (ii) forbidden C0→C2 evidence transfer without transfer_argument; (iii) benign scope annotation that belongs in `informs_classes` (naming defect only).
+- Cross-check the claimed fixes (worker-025's 8 rows; worker-073's HF-14 postrepair; worker-097 rev4 review) and state where they agree/disagree.
+- Deliverable: a re-runnable checker with planted controls, report.json, README, outbox events (status/artifact/review/claim), worker checkpoint.
+- Falsifier: e.g., "If any of the 8 rows' class_ids is demonstrably documented in the ledger schema as a non-binding informational list, then (iii) applies and the HF-02 hard-failure classification is falsified; conversely if a row asserts a conclusion for a class whose forbidden_evidence it violates without transfer_argument, the row is a genuine hard failure."
+
+This is class-bound (L0/AF-SCC-C2/C0/WCC), on the critical path (G-LIT/G-AUDIT L0 coverage 0), directly continues my own prior R5 residual, and I haven't seen this exact adjudication done (workers did HF-02 at claim level; worker-025 flagged the 8 rows; worker-075 accepted anyway). It's plausible that this results in a *revise* verdict, but with a decisive row-level classification that the owner can act on mechanically.
+
+Hmm, but wait: an "adjudication" that yields revise once more. Is there a chance the 8 rows are actually fine and my adjudication becomes the second accept? Let me look at the rows first — evidence before verdict. Let me read the 8 rows fully and the informs_classes rows, plus the L0 schema requirements (maybe in artifacts/literature/registry.jsonl meta or the assignment acceptance: "each row: source (authors, year, title, DOI/arXiv), theorem as quoted, assumptions, class_id, what it does NOT prove, verif...".
+
+Let me dump the 8 rows and 2 informs_classes rows.
+dsh: reasoning:
+This is illuminating. The 7 `informs_classes` rows have `class_ids: []` (empty) — so the ledger's semantics are apparently: `class_ids` = the class(es) the row *binds/informs*, `informs_classes` = an additional annotation field. Hmm, that's odd: rows with informs_classes have empty class_ids, meaning they bind no class. That could itself be a defect (a row that informs a class but binds none).
+
+The 8 multi-token rows: they are genuinely multi-class *scope* rows:
+- D-004 (definition of the CC version: C0 metric + L² connection): it is *not* C2 and *not* C0 — the row says so in does_not_imply. Tagging it with [C2, C0] is arguably wrong on both counts: it's an *intermediate* formulation (between C0 and C2). So class_ids [C2, C0] is wrong (it belongs to neither class as a theorem row; it's a definition clarifying scope) → HF-02 (disjunction).
+- T-303 (Luk 2018 weak null singularities: C0 extendible, connection not L²): it does not decide C0 SCC nor C2 SCC (does_not_imply says "Does not decide C^0 SCC"). Tagging both C2 and C0 is a disjunction → HF-02.
+- T-305 (Gurriaran: Lipschitz-inextendibility near i+): between C0 and C2; the row says "Does not prove C^2 SCC, does not prove C^0 SCC". Disjunction → HF-02.
+- T-526 (Luk-Sbierski: non-Lipschitz extendible ⇒ non-C2 extendible, and metric C0-extendible): this legitimately *informs* C2 (stronger than C2) but explicitly "Does not prove C^0-inextendibility". So [C2, C0] is a disjunction with C0 unjustified → HF-02.
+- T-515/T-528 (Kerr stability status/preprint): informs WCC (predictability) and SCC-C0 (as antecedent constraint). Multi-token → HF-02 under the literal detector.
+- D-005 (Lipschitz/L^s formulations): definition, between C0 and C2 → disjunction.
+- T-402 (Dafermos-Luk revised picture): open_problem, informs C2 speculation and C0 failure → disjunction.
+
+So the honest read: the 8 rows are multi-class scope annotations on a *literature ledger* where a single theorem/status frequently bears on more than one class. Calling each a "critical HF-02 class leakage" is detector literalism; but the rubric defines HF-02 exactly that way, and the ledger is an artifact under G-LIT/G-AUDIT with the rubric applied. The cleaner repair: move non-binding scope to `informs_classes` and keep `class_ids` to the single binding class (or empty for cross-cutting definitions), exactly what the 7 repaired rows did — but those 7 set class_ids=[] and informs_classes=[X]. Hmm, so the convention "class_ids = binding classes, informs_classes = also informs" seems to be: rows that merely inform have empty class_ids.
+
+Wait, but then rows like T-303 have class_ids [C2, C0] yet assert no class conclusion. By the convention of the 7 repaired rows, T-303 etc. should have class_ids=[] and informs_classes=[C2,C0]. That's a mechanical repair.
+
+Now — is there an *even sharper* real defect: rows with `class_ids: []` and `informs_classes: [X]` — does the ledger require each row to bind at least one class? The L0 assignment acceptance says "each row: source ..., class_id, what it does NOT prove". If class_ids is empty, that row has no class binding and might be a schema violation of a different kind (HF-02 "unknown class_id"? no). Hmm.
+
+So my adjudication would conclude: 8 rows misclassify scope as binding (mechanical repair: class_ids→ single/empty, informs_classes gets the rest), plus check the empty-class_ids rows. This is a real, actionable, row-level inspection that could enable L0 to pass after a mechanical rename. As a worker verdict, it would be "revise" with precise row-level repair instructions — genuinely useful and not an accept.
+
+Hmm, but hold on. Is this adjudication already done? worker-025's L0-hf02-staged-repair-025.json (00:49) is titled "hf02-staged-repair" and lists exactly these 8 rows. Let me read it: it may already provide the staged repair. Also check worker-049 (CLASSSEP-PROSEFIX), worker-021 (csadj). If worker-025 already delivered the repair mapping, then my task is duplicative.
+
+Let me read L0-hf02-staged-repair-025.json and L0-review-075-rev3.json (the accept). worker-075's accept is interesting: if they accepted despite the 8 rows, their reasoning matters.
+
+Time: ~00:52. I need to converge. Let me read those two files.
+dsh: reasoning:
+So the L0 HF-02 question is *already thoroughly adjudicated*: worker-023 proposed the patch, worker-025 staged and verified it, worker-075 issued a full accept treating HF-02 as a rubric-scope question (not a ledger hard failure). Coverage now has 1 full accept at a1674f094979 (worker-075) plus worker-025's non-full revise. The controller needs 2 distinct accepts at the hash. So L0 is at 1/2 (pending the next scan).
+
+So L0 is nearly covered; a second independent accept from me would close it — but it must be honest. Based on worker-075's analysis, my own prior view (R5: class_ids vs informs_classes naming) and the ledger structure, an honest reviewer could accept at a1674f094979 with the HF-02 rubric-scope objection recorded (as worker-075 did), OR issue a conservative revise (as worker-025/093/018 did). The split is exactly the "rubric-scope ruling" that only the audit lead can make. Another verdict of either kind is *not* decisive and adds marginal value — though a second accept would close the L0 coverage gap if it's well-founded.
+
+Hmm, wait. The map's coverage criterion "two distinct independent accepts" is for A1 coverage, and G-LIT needs its own criteria. But G-LIT criterion (asg-2026-09-11-L0-astra-lead-literature-03) was ">=15 rows; each row: source, theorem as quoted, assumptions, class_id, what it does NOT prove, verification..." plus L1 criterion. The gate G-LIT verdict is the controller's.
+
+OK. Given the crowding and the fact that the highest-value question (HF-02 scope) is explicitly awaiting an audit-lead ruling, maybe *that* is the real gap: nobody has produced the decision-ready **HF-02 scope ruling package** that the audit lead can adopt. The stop_rule of worker-025 says: "Either (a) publish a staged revision and get two accepts, or (b) obtain the audit-lead ruling that the rubric-literal HF-02 detector does not apply to ledger class_ids arrays (and close HF-02 by ruling rather than edit)."
+
+A bounded worker cannot rule, but can supply the ruling package: a rigorous, falsifiable analysis of the *detector's scope* grounded in the rubric's own text: "per-task-type verifier definitions", i.e., HF-02 is defined within a task-type verifier. Let me check the rubric's `verifiers` section: it defines per-task-type verifiers (schema, literature, numerics, formal). If the literature verifier's class-leakage check is defined differently from the claim verifier's, then applying the claim-level detector text to ledger rows is a category error — and the correct L0 standard is the literature verifier's class-binding rule. That's a decisive textual argument, machine-checkable (quote the pinned rubric bytes, map each HF-02 clause to its task-type verifier, and show which clauses apply to ledger rows).
+
+That would be a genuinely useful, bounded, decisive artifact: **HF-02 scope adjudication package (rubric-text-bound)**: 
+- Parse the pinned rubric d748a9e3574e.
+- For each HF-02 detector clause ("unknown class_id", "disjunction of class_ids", "evidence metadata violates forbidden_evidence without transfer_argument", "conclusion_type not allowed for class"), determine the task type(s) it is defined for (claims vs ledger rows), by quoting the rubric's own verifier definitions and any per-task-type rules.
+- Apply the correctly-scoped clauses to the live ledger a1674f094979: report which of the 8 rows fire under each clause, and which need repair vs are out of scope.
+- Include the "transfer_argument" clause analysis for C0→C2 rows (T-526, T-303, T-305, T-402) since that clause *does* plausibly apply to literature rows.
+- Deliver: checker + report + controls + review event with verdict (probably "revise" for the live ledger if some rows fire under the correctly-scoped clauses, e.g. C0→C2 transfer without transfer_argument, or "accept" if none fire).
+- Falsifier: "If the rubric's literature verifier defines class leakage to include multi-token class_ids arrays (quote it), the scoping claim is falsified; if a row fires the correctly-scoped forbidden_evidence clause without a transfer_argument, the 'no hard failure' conclusion is falsified."
+
+But is this already done? worker-021 "csadj" (00:42), worker-003 C0 polarity, worker-049 prosefix, worker-093 CF16 calibration, worker-025's note says "the detector's applicability to the ledger class_ids array is the audit lead's scope ruling". Nobody has produced the *ruling package*. Hmm, but the audit lead has the L0 reviews; and astra-life05 may have already ruled. Let me check the latest map/controller_findings for a ruling on HF-02 applicability (CF-2x). And check the rubric's `verifiers` section quickly.
+
+Actually — wait. Time is passing, and I should be decisive. Let me check the rubric verifiers section; if there's a clean per-task-type literature verifier with its own class rule, the task is well-founded and quick. Let me read it.
+dsh: reasoning:
+This is decisive textual evidence: the rubric's `literature` verifier checks are:
+- locator present
+- resolution_status honest
+- retrieved page recorded
+- per-source matter/Lambda/dimension/symmetry/formulation scope recorded
+- quote recorded
+- quantity_check for numeric claims
+
+Note: **"per-source ... scope recorded"** — for literature, the scope (which class it informs) is a *recorded field*, not a single-class binding. And "single-class binding" appears only in the `schema_formulation` verifier (G-FORM). The HF-02 detector text "disjunction of class_ids" lives in the global `hard_failures` list, which is referenced by validation. Let me check `r['validation']` and how hard_failures map to task types. If the rubric's own per-task-type verifier for literature does NOT include "single-class binding", then applying HF-02's disjunction clause to ledger rows is a genuine category error — exactly the scope ruling package.
+
+Let me read `r['validation']` to see how hard failures are applied per task type. This is the crux. Let me also check whether HF-01 (fluent text promotion) applies to ledger theorem rows (worker-075 says the ledger has no artifact_refs field; the claim schema has it). HF-04 quantity_check IS in the literature verifier, so it applies.
+
+So the ruling package would:
+1. Quote rubric `verifiers.literature.checks` (no single-class binding, scope recorded per source).
+2. Quote `verifiers.schema_formulation.checks` (single-class binding).
+3. Quote `hard_failures` HF-02 detector (disjunction of class_ids) and `validation` scoping rules.
+4. Conclusion: HF-02's "disjunction of class_ids" clause is a *claim/schema* clause, not a literature-row clause; the literature verifier's class-related requirement is "per-source ... formulation scope recorded", satisfied by `class_ids` + `informs_classes` + `scope_caveats`.
+5. BUT apply the forbidden_evidence clause where it genuinely applies: for a literature row that *cites C0 evidence to support a C2 conclusion* without transfer_argument — the ledger's `does_not_imply` fields explicitly disclaim such transfers (D-004, D-005, T-303, T-305, T-526 all say "Does not prove/decide C0/C2"). Hmm, but if they disclaim, why do they carry both class tokens? As scope annotations.
+6. Verdict for the live ledger under correctly-scoped literature verifier: check the literature checks list against the live ledger (locator present, resolution_status honest, retrieved page recorded, per-source scope recorded, quote recorded, quantity_check). This is a *new independent L0 verdict* using the rubric's literature verifier — not the claim verifier. That's exactly what worker-075 did implicitly (their C-checks) but with an explicit rubric-scope derivation.
+
+This yields a decisive artifact for the audit lead: either an accept (with the scoping argument) or a precise revise (if literature checks fail). If it's an accept, it becomes a 2nd distinct accept at a1674f094979 and directly closes L0 coverage. That's high value. And if the audit lead disagrees with my scoping, the artifact is still a well-formed, falsifiable package.
+
+Let me check `r['validation']` and any explicit statement that hard_failures apply to all task types. If validation says "applied per task type", great.
+
+Let me also double check the map/controller hasn't already produced the ruling (CF-2x). Search controller_findings for HF-02 scope. Let me read the latest lifecycle's controller_findings content? The lifecycle JSON only carries finding IDs; the map has the findings text. Let me grep the map for "HF-02" in controller_findings.
+dsh: reasoning:
+Very important: **CF-19 is resolved-by-reconciliation**, and the action says: "Two blind accepts at the announced hash are required before G-LIT is proposable (astra-life05-verify-l0-final)."
+
+So the controller explicitly needs two blind accepts at L0 a1674f094979. worker-075 delivered one (00:49:01). The second is exactly the open need. Also CF-16 shows the audit lead has a calibration task for the CLASSSEP false-positive pattern.
+
+So my task should be: **W011-L0-FINAL-BLIND-VERDICT-02: independent blind L0 verdict at a1674f094979** — an independent full-schema verdict on the ledger against the *literature* verifier of the pinned rubric, with the HF-02 applicability question explicitly adjudicated at the detector-scope level (and recorded as an open objection if needed, like worker-075). Deliver a re-runnable checker (independent implementation, no import of worker-075's or worker-025's code), planted controls, hash-pinned report, review JSON, outbox events, checkpoint. If the ledger passes the correctly-scoped literature checks, verdict accept 4.0 (second distinct accept → lets G-LIT proceed). If I find a genuine hard failure (e.g., a row whose source is unresolved, or conclusion inflation, or a quantity mismatch), verdict revise with a minimal repro.
+
+This is:
+- class-bound: L0/G-LIT with class_ids of the frozen four (and per-row class tokens).
+- directly on the critical path, explicitly requested (two blind accepts).
+- independent (I authored neither the ledger nor prior L0 verdicts at this hash; note my ce42d205 accept is void — I must disclose that my earlier verdict was at a voided hash, which is fine and honest; it's not the same hash).
+- falsifiable with precise falsifiers.
+
+I must be careful to *actually verify*, not rubber-stamp. Plan of checks (independent implementation, stdlib-only; maybe PyYAML is available — the ledger is JSONL, so plain json suffices; the rubric is YAML — PyYAML is available since tools use it; I can also parse the rubric with PyYAML and hash-pin it).
+
+Check design (independent, ~12-16 checks + controls):
+1. PIN: ledger sha256 == a1674f094979... (measure live; fail closed if moved — drift guard).
+2. PIN: rubric sha256 == d748a9e3574e... (from map/gate evidence).
+3. PIN: citation_audit.csv sha256 == 315c19145065...
+4. ROWS: 62 rows, unique theorem_id, valid JSONL, each row has the required literature fields.
+5. CLASS TOKEN CONFORMANCE: every class_ids token ∈ frozen four; every informs_classes token ∈ frozen four; no extension tokens in either.
+6. HF-02 SCOPED APPLICABILITY (the ruling package): quote rubric `verifiers.literature.checks` vs `verifiers.schema_formulation.checks` and `hard_failures[HF-02]`; determine that "single-class binding"/"disjunction of class_ids" is a schema_formulation/claim clause, while literature requires "per-source ... scope recorded". Record the 8 multi-token rows as a *rubric-scope objection* (not a ledger hard failure), with the staged candidate hash b3ab6a1a6357 and worker-023/025 evidence — OR, if I decide differently, mark it hard. I need to be principled: I'll present both readings and state which governs under the rubric's own task-type structure, and put the disagreement in the open objections. Actually, to be maximally useful, I should compute the firing set and report it under both scopes ("literal": 8 fire; "task-scoped": 0 fire; the difference is the ruling the audit lead must make). That's an honest, decisive contribution either way.
+
+Hmm, wait. But there's a risk: if I accept while worker-025/093/018 revise on HF-02, I'm taking the "rubric-scope" side. worker-075 already did that. Two accepts would let G-LIT propose a pass. Is that right? The controller's CF-19 action explicitly says: "Two blind accepts at the announced hash are required before G-LIT is proposable". It also says the gate is pending. The audit lead will adjudicate. My job is to give an honest independent verdict. If I believe the 8 rows are scope annotations (not union-class definitions), and everything else checks out, accept with the objection recorded is defensible — and it's what the controller asked for ("blind accepts"), with the HF-02 question flagged for the lead.
+
+But hold on — should I be more careful about the C0→C2 transfer clause? Let me check: does any of the 8 rows cite C0 evidence to support a C2 conclusion without a transfer_argument? Looking at them:
+- T-526: Luk-Sbierski preprint: "C^0 extendible; NOT Lipschitz extendible" → the theorem *implies* non-C2 (since C2 ⊂ Lipschitz... actually C² extensions are locally Lipschitz, so non-Lipschitz ⇒ non-C²). The row's scope_caveats explicitly note this implication. It genuinely informs C2 (it's *stronger* evidence for C2 than a C2-specific result) and also is a C0-extendibility result (so relevant to C0 as a *counterexample-adjacent* datum). Tagged [C2, C0]. The forbidden_evidence clause for C2 says "formulation == SCC-C0 (C0 result cannot be cited as C2 evidence without an explicit transfer_argument; C0-inextendibility is STRONGER than C2)". T-526 is not a C0-inextendibility result cited as C2 evidence; it's a non-Lipschitz (hence non-C2) result. So the clause doesn't fire.
+- T-303: C0-extendible, connection not L². It's the *opposite* of C0-inextendibility; it doesn't support C2 either. Tagged both — scope annotation. does_not_imply explicitly disclaims.
+- T-305: Lipschitz-inextendibility near i+ — strictly between; not C0-inextendibility, not C2-inextendibility. disclaims both.
+- T-402: conjecture that C2 formulation might survive while C0 fails → informs both.
+- D-004/D-005: definitions of intermediate formulations → inform both C0 and C2 vocabulary.
+- T-515/T-528: Kerr stability → informs WCC (predictability) and SCC (antecedent). The patch moved these to WCC-only class_ids.
+
+So no C0-as-C2-support transfer without transfer_argument. Good.
+
+Other checks to be genuinely independent:
+7. LOCATOR/RESOLUTION: every source_id in the ledger resolves in citation_audit.csv with resolution_status resolved (I check the CSV's own fields — not re-fetching the web; that's a documented blind spot). Count distinct sources and missing.
+8. UNRESOLVED HONESTY: every row has non-empty `unresolved`; verify `content_status` distribution and that `review_status` is honestly "not_independently_reviewed" (no row claims reviewer approval it doesn't have).
+9. THEOREM-ROW EVIDENCE: for rows with conclusion_type == theorem (and conditional_theorem/stability_result?), check `author_asserts_supports` + evidence_level + source verification; check no row claims `review_status` verified.
+10. CONCLUSION INFLATION: for each row, check conclusion_type ∈ allowed set; and that no row's `statement_exact`/`label` claims more than the source (hard to machine-check; use the row's own does_not_imply non-empty as the discipline proxy).
+11. CLASS-SCOPE RECORDED (literature verifier): every row has a class scope recorded (class_ids or informs_classes non-empty) and per-source scope fields (topology/regularity/genericity present).
+12. QUANTITY CHECK (HF-04): rows with numeric quantities in statement_exact/label should have quantity_check evidence — earlier reviewer found 46/62 rows carry a quantity but the L0 schema has no quantity_check field (my own residual R4!). Hmm — this was my R4 in checkpoint 1: "rubric HF-04 quantity_check not present in L0 schema (46/62 rows carry a quantity)". flash-18's rev3 revises cite HF-04. Under a task-scoped reading, the literature verifier check "quantity_check for numeric claims" DOES apply to the ledger (it's in verifiers.literature.checks!). So a rigorous application would fire HF-04 on rows with quantities lacking quantity_check... That's a genuine issue that could make my verdict revise. Let me examine: does the ledger have any quantity_check field? Earlier key census: no `quantity_check` key in any row (keys list has 24 entries; no quantity_check). So if rows carry numeric claims (exponents, counts, dimensions), the literature verifier's "quantity_check for numeric claims" fails. But maybe "numeric claims" means *results with a quantity as their content* (e.g., a rate/exponent/codimension), not incidental numbers like "3+1" or "339 pages". The rubric HF-04 detector: "statement contains a quantity (rate/exponent/codimension/count) and evidence refs lack quantity_check, or quantity differs from source by more than stated tolerance".
+
+Hmm, this is where it gets murky: the ledger's `statement_exact` fields definitely contain exponents (L^2_loc, s>1) and counts. Under rubric-literal HF-04, most theorem rows fire. That's why the "rubric is written for claim events, not ledger rows" objection exists (worker-075). The honest position: the ledger is a *literature artifact* that records quotes and resolution status; quantity_check belongs to `claim` events derived from ledger rows (see asg L0 card: each row "what it does NOT prove, verification..."). The L1/citation audit carries the resolution status. A "quantity_check" would be a derived-claim requirement.
+
+This is genuinely a scope question with two defensible readings. My verdict must pick one and state the falsifier. Given the controller explicitly wants two *blind accepts* at the hash to make G-LIT proposable, and worker-075 accepted with these objections, an accept with explicitly recorded scope objections is the honest, useful outcome *if* I verify no row-level factual/structural defect. But I should not accept if I find a *substantive* hard failure (e.g., a source_id missing from the audit, a locator unresolved, a false attribution). Let me actually run the checks and see.
+
+Actually, let me be careful about a subtle risk: issuing an accept that later proves wrong (e.g., if worker-018's HF-14 finding is real). Let me check what HF-14 is: worker-018's L0-review-18-rev3 hard failures ["HF-14","HF-02","HF-04"]. HF-14 was the "retired axis key" issue (worker-075's C03-HF14-ZERO says 0 rows carry a retired axis key — repaired). So worker-018's HF-14 might be at a different aspect. Let me read worker-018's review and worker-093's findings in detail before deciding accept vs revise. Let me also read worker-093's HF-01/HF-02 detail.
+
+Let me do that quickly, then build my checker. Time budget: I'll aim to finish within ~15 minutes of work.
+
+Let me extract the hard failure details from L0-review-093.json and L0-review-18-rev3.json.
+dsh: reasoning:
+Now I have the full picture of the L0 dispute:
+
+Full verdicts at a1674f094979:
+- worker-075: accept 4.0 (with HF-02/HF-01 as rubric-scope objections)
+- worker-093: revise 3.5 (HF-02 disjunction-literal; HF-01 claim-scoped open)
+- deepseek-flash-18: revise 3.0 (B1 HF-14: 60/62 records self-certify support with no reviewer verdict/artifact hash; B2 HF-02 8 rows; B3 HF-02 3 C0-bound records typed theorem; B4 HF-04 15 quantity-bearing statements; B5-B7 process)
+- worker-025: revise 3.5 but counts_as_full_schema_verdict=false (staged repair)
+
+Key substantive claims from flash-18 that need independent check:
+- B3: "3 C0-bound records are typed `theorem`, which evaluation_rubric.yaml forbids for this class" — rows T-302, T-303, T-526. This is *concrete*: the rubric's frozen_classes for AF-SCC-C0-VAC-GEN has a `conclusion_types_allowed`? Let me check: the class entry for C0 — I printed only part. If C0 forbids `theorem` (because C0-inextendibility is not proven / no theorems), then T-302/T-303/T-526 typing is a real HF-02 ("conclusion_type not allowed for class") — textual and checkable! That would make the honest verdict **revise**, not accept. Let me verify this in the rubric.
+- B1/B8 (HF-14 = ? maybe "unverified self-certification"): 60/62 rows have `acceptance_authority: author self-assessment, not a reviewer verdict` and `review_status: not_independently_reviewed`. If HF-14 requires a reviewer verdict for rows claiming support, that's a *structural* requirement. What is HF-14? Let me check the rubric's hard_failures list beyond HF-04 — maybe HF-14 exists. Let me print all hard_failures ids and text.
+- B5: 0/97 sources record matter/Lambda/dimension/symmetry/formulation scope as fields — that's the literature verifier check "per-source matter/Lambda/dimension/symmetry/formulation scope recorded"! This is *in* verifiers.literature.checks. If the source registry doesn't record these fields, the literature verifier fails. That's a real, non-scope-ambiguous criterion — and it's in the L0 assignment acceptance too ("per-source scope"). Hmm, but it might be the L1 registry's job (the ledger rows do carry topology/regularity/genericity). Let me check sources registry: artifacts/literature/registry.jsonl.
+
+So an honest independent verdict probably lands on **revise** with some of these, unless I can falsify them. Let me check the three most concrete:
+(a) B3 conclusion_type: check rubric's C0 class `conclusion_types_allowed` / `forbidden` list.
+(b) B5 source scope fields: check registry.jsonl.
+(c) B4 HF-04 quantity rows: check whether quantity_check exists anywhere.
+
+Let me look at the rubric's full class entry for AF-SCC-C0 and all hard_failures entries (is HF-14 defined?).
+
+This is now a well-scoped, decisive, critical-path task: **W011-L0-FINAL-BLIND-VERDICT-02** with rigorous re-derivation of the concrete blocking claims (B3/B5/B4/B1) at a1674f094979, delivering a verdict. Given flash-18's concrete charges, I expect revise unless they're false. Either way, it's high-value: if the charges are false, my accept closes L0 coverage; if true, my independent confirmation gives the owner a decisive repair list. This is worth doing carefully.
+
+Let me check the facts now.
+dsh: reasoning:
+Now I have the hard failure definitions:
+- HF-14 self_certified_acceptance (critical): "a ledger or claim record sets status=accepted / validation_status=passed / supports_claim=true with no independent reviewer verdict field and no artifact hash; an author's own selftest is not a review". Note: it explicitly applies to "a ledger ... record". The ledger rows have `author_asserts_supports: true` and `acceptance_authority: "... author self-assessment, not a reviewer verdict"` with no artifact hash. That *is* the literal HF-14 pattern. flash-18's B1 (60/62 records self-certify support) is a rigorous, literal reading. However, the ledger's `acceptance_authority` field explicitly *labels* the self-assessment as not a reviewer verdict; HF-14 says "sets ... supports_claim=true with no independent reviewer verdict field and no artifact hash". `author_asserts_supports: true` is literally supports_claim=true. Hmm.
+
+Wait — but the map has accepted MANY claim events with `author_asserts_supports` semantics... no, this field is ledger-specific. Let me check the field name: `author_asserts_supports` (boolean true) on every row. Also `review_status: not_independently_reviewed` on all 62 rows (worker-075's C04) — so each row explicitly declares no review. HF-14's detector demands *no independent reviewer verdict field AND no artifact hash*; the ledger has an explicit `review_status` field = "not_independently_reviewed", which is a reviewer-verdict field *declaring absence*. Literal reading: `author_asserts_supports=true` + no reviewer verdict + no artifact hash → HF-14 fires. Defensible reading: the row does not set status=accepted or validation_status=passed; it sets `author_asserts_supports` (not `supports_claim`) and `review_status=not_independently_reviewed`, and `content_status` ∈ {verified, provisional, rejected}. Is `content_status: verified` a `status=accepted`? "verified" means the source was verified (locator), per C10. Hmm, ambiguous.
+
+- HF-04 quantitative_mismatch (major): "statement contains a quantity (rate/exponent/codimension/count) and evidence refs lack quantity_check". flash-18's B4: 15 quantity-bearing statements without quantity_check; the field doesn't exist in the ledger schema. This one is quite literal and the literature verifier's own checks include "quantity_check for numeric claims". So HF-04 plausibly fires → major hard failure → revise.
+
+- B5: verifiers.literature.checks includes "per-source matter/Lambda/dimension/symmetry/formulation scope recorded". If registry.jsonl lacks these fields, that check fails. Let me verify registry.jsonl.
+
+- B3: "3 C0-bound records are typed `theorem`, which evaluation_rubric.yaml forbids for this class" — I see no allowed/forbidden conclusion_type list per class in frozen_classes; maybe it's elsewhere in the rubric (e.g., `gates` or a `class_conclusion_matrix`). Let me search the rubric for "theorem" and C0. If there's no such rule, B3 is false. Let me check.
+
+Given the state of the evidence, my honest verdict will very likely be **revise** (HF-14 and HF-04 literal firings; possibly B5). But I must verify each independently before endorsing. And I can add value by:
+1. Distinguishing which charges are *literal-detector* firings vs *substantive* defects, with a scope ruling package (like worker-075's, but from the opposite side and with the rubric's task-type structure analyzed).
+2. Checking flash-18's B1/B3/B4/B5 claims mechanically at the pinned hash and stating TP/FP for each.
+3. Proposing the minimal repair for each (e.g., add `artifact_refs`/`reviewer_verdict` fields; rename `author_asserts_supports`; add `quantity_check`; add source scope fields).
+
+Hmm, but honestly: is this the best use? L0 already has 3 full verdicts + 1 staged. The controller wants two blind accepts. If I find the literal hard failures real, I should report revise — the honest thing. But then my marginal contribution is a 4th revise confirming flash-18. Some value: independence (confirmation) + a precise TP/FP census + repair list. That's a legitimate bounded deliverable ("disagreements are the deliverable" per the swarm ethos).
+
+Alternatively, I could accept the rubric-scope argument (worker-075's position) and produce the 2nd accept. But doing that requires dismissing HF-14 and HF-04 as claim-scoped — yet HF-14 explicitly names "a ledger ... record", which directly contradicts the dismissal. HF-14's wording is decisive: it applies to ledger records. So the honest verdict is revise. worker-075's accept is, in my independent reading, wrong on HF-14 (they dismissed HF-01 as claim-scoped, which is right, but their review doesn't address HF-14 at all — their C03 only checks "retired axis key"). So my verdict would be valuable precisely because it independently catches what the accept missed.
+
+Decision: **W011-L0-FINAL-BLIND-VERDICT-02** = independent blind full-schema verdict on L0 a1674f094979 with an itemized TP/FP adjudication of the live blocking charges (HF-14, HF-04, HF-02-scope, B3, B5), a re-runnable checker with planted controls, and a repair list. Verdict: revise (if the checks confirm), with the exact rows and minimal repair per charge. This is honest, decisive, class-bound, and directly responsive (the controller needs 2 accepts OR the blocking findings nailed; my revise prevents an unjustified pass while giving the owner a precise path).
+
+Wait, one consideration: the bounded-worker instruction says "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit." It doesn't demand an accept. A rigorous revise with new information is a legitimate completion. And the swarm's stated rule (HANDOFF): "If a result fails a gate, record the failure as progress and redirect the budget." Good.
+
+Let me now verify the concrete charges before writing anything:
+
+Check list (must verify at pinned hash):
+C1. Live ledger hash == a1674f094979...; drift guard at end.
+C2. Ledger parses: 62 rows, unique theorem_id.
+C3. **HF-14 census**: rows with `author_asserts_supports` true (or any supports_claim/status accepted/validation passed) AND no independent reviewer verdict AND no artifact hash. Report count; check whether the record carries an explicit non-review marker (`review_status == not_independently_reviewed`), and whether "content_status: verified" counts as validation_status. I'll report the literal firing count and the exculpating fields.
+C4. **HF-04 census**: rows whose statement_exact/label contains a quantity pattern (exponent like L^2, s>1, 339 pp, dimension 3+1, counts) AND no `quantity_check` field/evidence ref. Count. Also check whether ANY row has quantity_check (probably 0) and whether the ledger schema defines one.
+C5. **HF-02 disjunction census**: rows with >=2 frozen tokens in class_ids (8). Report; state scope question and the staged repair candidate hash.
+C6. **HF-02 conclusion_type-not-allowed**: check whether the rubric defines a per-class allowed conclusion_type set anywhere. Search the rubric text for "conclusion_type" rules. If none, B3 is FALSE (no such prohibition) — report as FP.
+C7. **B5 source scope fields**: load artifacts/literature/registry.jsonl (or whatever canonical source registry is) and count sources with matter/Lambda/dimension/symmetry/formulation fields. If present, B5 is FALSE. If absent, it's a literature-verifier failure. Let me check the registry file.
+C8. **HF-01**: rows with conclusion_type == theorem and no artifact_refs → 30 rows; scope question (claim vs ledger). Note: flash-18 didn't cite HF-01 as hard (they cited HF-14); worker-093 did. Report as scope-literal firing.
+C9. **Locators**: all source_ids resolve in citation_audit.csv with resolved status.
+C10. **Unresolved honesty**: all rows carry non-empty unresolved; review_status honest.
+C11. **Controls**: planted defects in a synthetic ledger copy to prove the detector fires/doesn't (e.g., an added row with a foreign class token, a row with empty unresolved, a row with quantity and no quantity_check, etc.).
+C12. **Repair list**: minimal edits per charge.
+
+Let me check the registry and the rubric's conclusion_type rules now. Also locate the canonical source registry path (artifacts/literature/registry.jsonl per my earlier checkpoint pin ea02d194).
+dsh: reasoning:
+Now the G-LIT criteria are explicit:
+1. every citation has a locator and resolution_status
+2. every claim's evidence set has citation_support == 1.0
+3. **statement scope matched to class_id; matter/Lambda/dimension/symmetry of the source explicitly recorded**
+4. **quantitative claims (rates, exponents, codimension) carry a quantity_check**
+5. unresolved items listed in `unresolved[]`
+
+And the registry has NO matter/Lambda/dimension/symmetry fields (keys: arxiv_id, authors, bibkey, doi, notes, reviewer, source_id, status, title, url, venue, verification, year, mirror_of, assessment, next_action, status_reason). So G-LIT criterion 3's "explicitly recorded" is not satisfied at the source-registry level! Unless it's recorded in the ledger rows (which have topology/regularity/genericity but not matter model... actually the ledger rows' class binding implies matter model; and `topology`, `regularity`, `genericity` fields exist per row). flash-18's B5 says "0 of 97 sources record matter/Lambda/dimension/symmetry/formulation scope as fields". That is verifiably true from the registry keys. But is the criterion about sources or rows? Text: "statement scope matched to class_id; matter/Lambda/dimension/symmetry of the source explicitly recorded". "of the source" → the source registry should record it. So B5 is a real G-LIT criterion gap — though it's an L1/registry issue, not necessarily an L0 ledger row issue.
+
+And criterion 4: "quantitative claims (rates, exponents, codimension) carry a quantity_check". The ledger rows carry quantitative statements (exponents in regularity like L^2_loc, s>1) and no quantity_check field exists. flash-18's B4 (15 quantity-bearing statements) is a real criterion gap.
+
+So L0 at a1674f094979 genuinely fails G-LIT criteria 3 (source scope not recorded in registry) and 4 (no quantity_check), plus HF-14 literal (author self-certified support with no reviewer verdict/artifact hash). The honest verdict is **revise**.
+
+Hmm, wait. Criterion 3 might be satisfied by the ledger rows' `topology`, `regularity`, `genericity` fields + class_ids (matter model from class). The phrase "of the source" is the crux: it's the *source's* matter/Lambda/dimension/symmetry. Hmm, actually re-reading: "statement scope matched to class_id; matter/Lambda/dimension/symmetry of the source explicitly recorded" — likely means: for each citation/source, record the source's matter model, Lambda, dimension, symmetry, formulation (this is the L1 enrichment the SCC workers did: `citation_audit_*_flash-08.csv` with scope columns!). Let me check the citation_audit.csv columns: it may record matter/Lambda/dimension/symmetry per source row! If citation_audit.csv has those columns, then B5 is FALSE (scope IS recorded, just in the audit CSV, not registry.jsonl). Let me check.
+
+Let me check citation_audit.csv header and a row.
+dsh: reasoning:
+Confirmed: citation_audit.csv has `class_mapping` per source but NOT matter/Lambda/dimension/symmetry/formulation columns. So G-LIT criterion 3 ("matter/Lambda/dimension/symmetry of the source explicitly recorded") is not met as written at either registry or audit level. That's a real gap (whether it's L0's or L1's is an ownership question; both are in G-LIT scope).
+
+Also criterion 4: no quantity_check anywhere in the ledger. Let me verify by grepping the ledger for "quantity" — likely absent. And check the `verdict` column distribution in the audit CSV for unresolved/contradicted (criterion 2).
+
+Now I'm confident: an honest independent verdict at a1674f094979 is **revise**, with these verifiable findings:
+- V1 (HF-14, critical): 62/62 (or 60/62) rows set `author_asserts_supports: true` with `acceptance_authority` explicitly "author self-assessment, not a reviewer verdict" and no artifact hash; `review_status: not_independently_reviewed` on all 62. Literal HF-14 firing. Under HF-14's own text ("a ledger ... record ... supports_claim=true with no independent reviewer verdict field and no artifact hash"), this is a ledger-scope hard failure. Note the exculpating design (the row *labels* its self-assessment), but "an author's own selftest is not a review" is exactly the case.
+- V2 (HF-04, major): N rows carry quantitative content (exponents/rates/counts) and no `quantity_check` field exists anywhere in the ledger; G-LIT criterion 4 and verifiers.literature.checks require it.
+- V3 (G-LIT criterion 3): 97/97 sources lack explicit matter/Lambda/dimension/symmetry/formulation scope columns in both registry.jsonl and citation_audit.csv (only `class_mapping`). Not a row-level defect but a gate criterion gap.
+- V4 (HF-02 disjunction, critical, scope-disputed): 8 rows carry ≥2 frozen tokens in `class_ids`; literal firing; scope ruling pending; staged repair exists (b3ab6a1a6357). I'll report as *scope-disputed* (not silently counted), and note that worker-075's accept does not discharge it.
+- V5 (HF-01, critical, scope-disputed): 30 theorem rows with no `artifact_refs` field; the ledger schema has no such field; rubric HF-01 text says "claim.conclusion_type == theorem AND (no artifact_refs ...)". Report as scope-disputed (claim-scoped reading) — flash-18 didn't even count it; worker-093 did.
+- Positives: hashes/pins, 62 unique rows, class tokens all frozen (in both fields), all source_ids resolve in the audit (claim: check), unresolved non-empty per row, no conclusion inflation detected by own checks, L1 spot checks unaffected.
+
+Wait — I should double check V2's actual row count with my own detector rather than quoting flash-18's 15. And for V1, decide whether to count 62 or 60 (flash-18 said 60/62 — maybe 2 rows lack `author_asserts_supports`? Let me count).
+
+Also check criterion 2: citation_support == 1.0. flash-18's B6 said 78/97 sources use status `verified-api` which has no rubric weight in metrics.citation_support. Let me look at the rubric metrics to see if that's true; that's another concrete gap but it's a metrics-definition issue (A0/A1 scope).
+
+My deliverable will be a rigorous, independent verdict report with my own checker. I need to keep it bounded: aim for ~10 checks + controls, all deterministic and stdlib-only, reading only pinned files, with drift re-hash at the end.
+
+Design of my checker (`check_l0_rev4.py`):
+Inputs (pinned by sha256, single read):
+- ledger/theorems.jsonl (a1674f094979...)
+- ledger/citation_audit.csv (315c19145065...)
+- artifacts/literature/registry.jsonl (measure and pin ea02d194? re-measure live)
+- evaluation_rubric.yaml (d748a9e3574e...) — parse with PyYAML; if unavailable, fall back to a minimal text extractor? PyYAML is available (we used it). But to be safe, use `yaml` import with a guard.
+Checks:
+K0 pin/drift: measured hashes equal pins.
+K1 parse: 62 rows, unique ids, required fields present.
+K2 frozen-token conformance: all tokens in class_ids ∪ informs_classes ⊆ frozen four; no extension tokens.
+K3 HF-02 disjunction census: rows with ≥2 class_ids tokens → list (8).
+K4 HF-14 literal census: rows with truthy support-assertion field (author_asserts_supports / supports_claim) AND no independent reviewer verdict field AND no artifact hash → count/list; also count rows with review_status == not_independently_reviewed.
+K5 HF-04 quantity census: regex for exponents/rates/counts in statement_exact (+label) → rows; count rows having quantity_check field/ref → expect 0.
+K6 HF-01 literal census: conclusion_type == 'theorem' AND no artifact_refs → count (30).
+K7 source resolution: every source_id used by rows exists in citation_audit.csv; statuses distribution; count unresolved/contradicted (criterion 2).
+K8 source scope fields: count sources (registry + audit) carrying any of matter/lambda/dimension/symmetry/formulation scope fields → expect 0.
+K9 unresolved discipline: every row has non-empty unresolved list; content_status distribution; review_status honesty (no row claims reviewer approval).
+K10 does_not_imply discipline: every row has non-empty does_not_imply (conclusion-inflation guard).
+Controls (on in-memory mutants, not writing): CTL-1 add foreign class token → K2 fires; CTL-2 duplicate theorem_id → K1 fires; CTL-3 remove unresolved → K9 fires; CTL-4 add quantity_check to a row → K5 count decreases; CTL-5 set review_status to independently_reviewed without a verdict → a check fires; CTL-6 truncate row → parse detection. Each control must be detected; else the instrument is invalid.
+
+Output: report.json (machine record with pins, per-check results, firing row lists, controls, non-claims), README.md (rendering), run.log, hashes.txt, checkpoint.json. Then outbox events: status(task), artifact(s) for each file (path+sha256, validation_status unverified), review event (verdict revise, score ~3.0/3.5, hard_failures with my V-ids, evidence_refs path#sha-prefix), claim? (The PROTOCOL says claim needs class_id, statement, conclusion_type, assumptions, falsifier, evidence_refs; conclusion_type could be "formal_model". Maybe skip claim to avoid auto-reject; but other workers emit claims. I'll emit a `review` (primary) + `status` + `artifact`s; a claim with conclusion_type "formal_model" is allowed. I'll skip a theorem claim — no theorem.)
+
+Also write the canonical review file `reviews/L0-review-011-rev4.json`? Careful: the coverage scan counts `reviews/*.json` with counts_as_full_schema_verdict. worker-011 already has `reviews/L0-review-011.json` (accept at voided ce42d205). Writing a new file `reviews/L0-review-011-rev4.json` is fine and within my own artifact namespace (reviews/ is a shared dir; other workers write reviews/<target>-review-<id>.json). I'll write it and emit the review event referencing it. Since my verdict is revise, it won't create coverage issues.
+
+Then worker checkpoint: `runtime/state/w011_checkpoint_4.json` + append to `runtime/state/w011_checkpoints.jsonl` (matching my prior pattern).
+
+One more important check before I commit: the *live* ledger must still be a1674f094979 at the end (drift guard). Also the controller's ingest runs periodically; my outbox events will be ingested. Good.
+
+Let me also make sure I don't overwrite anything: I'll create `artifacts/worker-011/l0_rev4_final_verdict/`. Check it doesn't exist.
+
+Before writing, let me quickly compute the real counts for K3-K7 to know what my report will say. Let me write the checker as a file directly (it's the deliverable anyway), run it, and inspect. I'll use the write tool.
+
+Plan:
+1. mkdir artifacts/worker-011/l0_rev4_final_verdict.
+2. Write check_l0_rev4.py (deterministic, stdlib + yaml, reads pinned inputs once, drift re-hash, controls).
+3. Run it → report.json, run.log.
+4. Write README.md, emit events via emit_events.py (or append JSONL directly to comms/outbox/worker-011.jsonl), checkpoint.
+5. Verify JSON validity of outbox lines; verify hashes.
+6. Exit.
+
+Let me first check what `hashes.txt`/manifest pattern worker-091/053 used, and confirm outbox file for worker-011 exists (comms/outbox/worker-011.jsonl? I didn't see it in the outbox listing; the listing was truncated. Let me check). Also I must be careful: the rejects/normalizer may alter my events. I'll follow the canonical field shapes exactly from recent accepted worker events (e.g. worker-053's). Fields: event_id, event_type, created_at, actor, plus type-specific required fields. For artifact: node_id, artifact_type, path, sha256, validation_status. For review: target_id, reviewer, verdict, score, hard_failures, findings. For status: node_id, status, hours, summary, evidence_refs, next_falsifier.
+
+Also note ingest normalization takes class_id from class_ids; `event` requires only the 4 base fields.
+
+Let me get to work. First, reconnaissance of my artifact dir + outbox file + exact time.
+dsh: reasoning:
+Confirmed:
+- 60/62 rows have author_asserts_supports true (2 not) → HF-14 literal firing on 60.
+- All 62 review_status = not_independently_reviewed.
+- No quantity_check anywhere.
+- 30 theorem rows, no artifact_refs anywhere.
+- 21 rows carry neither class_ids nor informs_classes → class scope not recorded for those rows (relevant to G-LIT criterion 3 "statement scope matched to class_id" and literature verifier "per-source ... scope recorded"). Note flash-18's N1 finding.
+
+Wait: 28 rows have empty class_ids and 7 have informs_classes → 21 rows with neither. Are those 21 rows class-unbound (e.g., general definitions/status)? Let me look at a couple to judge whether that's a defect. If a ledger has rows about general literature status, maybe unbound is acceptable; but the L0 assignment requires class binding per row ("each row: ... class_id ..."). Let me check the IDs: D-006, T-104, T-207, T-502..T-504, T-507..T-5xx etc.
+
+Let me look at 2-3 of those rows to see whether they have any class indication in scope fields. This matters for my verdict's factual accuracy.
+
+Also I should verify statuses in citation_audit: distribution of resolver_result (resolved/unresolved), used_by_theorems linkage, and existence of all source_ids.
+
+Let me do the final recon then write the checker.
+dsh: reasoning:
+Facts established:
+- 97/97 audit rows resolved; all 92 used source_ids present. Criterion 1/2 largely OK (criterion 2's citation_support metric weighting is a separate A0 issue).
+- Unbound rows are mostly non-primary entries: methodological inferences, counterexamples in non-vacuum models (T-104 dust), status notes, etc. Some (T-104: dust counterexample) genuinely don't bind a frozen class (dust is outside all four classes; it's a counterexample to WCC in a different matter model). So "no class binding" for those is arguably correct — they are class-external literature. The assignment's "class_id" requirement is then partially satisfiable via ledger_tags/scope. I'll treat this as a *minor/soft* finding (21 rows with no class token or informs relation, of which several are class-external by design, e.g. dust) rather than a hard failure. Actually flash-18's N1 labeled it non-blocking. Good — I'll do the same.
+- class_ids token counts: 42 tokens across rows (11+11+10+10).
+
+Now write the deliverable. Let me be efficient. Files under `artifacts/worker-011/l0_rev4_final_verdict/`:
+- `check_l0_rev4.py` — the instrument.
+- `report.json` — generated.
+- `README.md` — rendering.
+- `run.log` — stdout.
+- `hashes.txt` — pins.
+- `checkpoint.json` — worker-local checkpoint.
+- `emit_events.py` — emits outbox events (or I can generate the JSONL directly with a script; better to have the emitter for reproducibility).
+
+And `reviews/L0-review-011-rev4.json` — the canonical review file (copy of review content, with counts_as_full_schema_verdict: true since it's a full-schema literature verdict at the pinned hash; but honest labeling: my review scope covers the G-LIT literature criteria + class binding + honesty fields, not per-row mathematical entailment — worker-075 also marked itself full-schema with documented blind spots. I'll mark counts_as_full_schema_verdict true with explicit verdict_scope and blind spots, and counts_as_independent true.)
+
+Verdict: revise, score 3.0? Let me think: my findings are (V1) HF-14 literal on 60 rows (critical), (V2) HF-04/G-LIT-criterion-4 quantity_check absent (major), (V3) G-LIT criterion-3 source scope fields absent (blocking criterion, but arguably L1/registry ownership), (V4) HF-02 disjunction on 8 rows (scope-disputed), (V5) HF-01 on 30 rows (scope-disputed, claim-scoped text). Positives: pins, integrity, tokens frozen, 97/97 resolved, unresolved discipline, review_status honesty. Score 3.0 seems right (substantive critical-scope findings pending owner/lead ruling; content largely sound). worker-093 gave 3.5; flash-18 gave 3.0. I'll give 3.0 and be explicit that if the audit lead rules HF-14/HF-04 claim-scoped and L1 owns source scope, the ledger's content checks pass and the verdict would move to accept — i.e., my verdict is conditional on the scope ruling, which is a *falsifiable* statement.
+
+Hmm, careful: verdict must be one of accept|revise|reject|inconclusive. I'll use "revise" with the ruling dependency documented. That's honest.
+
+Let me now write the checker. Key implementation details:
+- Use hashlib for pins.
+- Read each input exactly once into bytes, parse from those bytes, and re-hash the files at the end to detect drift.
+- Controls: implement as in-memory mutations of parsed rows + raw text, run the specific detector functions, assert expected firing. 8 controls.
+- Report JSON includes: tool, generated_at, pins{before,after,drift}, rubric_quotes (the exact scoped texts), checks[{id, name, status, expected, observed, firing_rows, falsifier}], controls[{id, mutation, detected}], hard_failures list, soft findings, non_claims, rerun command.
+- Deterministic: no wall-clock in report? The report includes generated_at (fine, but the checks are deterministic). For `created_at` in events I'll use real time.
+
+Quantity regex: I'll define quantity-bearing as: regex `\b\d+(\.\d+)?\b` combined with unit/exponent tokens? Too broad ("3+1", "1999"). Better: follow the rubric text: "(rates, exponents, codimension)". Detector: `(?i)(L\^\d|L\^\{[^}]+\}|s\s*>\s*\d|s\s*=\s*\d|H\^|C\^\d|codim|exponent|rate|pp\.|dimension\s*\d)` etc. Let me define concrete patterns:
+  - exponent/regularity: `[A-Za-zHLWC]\^\{?[0-9]`, `H\^2`, `L\^2`, `C\^0`, `C\^2`, `C\^\{`, `L\^s`
+  - inequalities with numbers: `s\s*[><=]\s*[\d.]+`
+  - codimension
+  - counts: `\b\d+\s*(rows|sources|pp\.|pages|theorems)` — probably not in statements.
+  - dimension: `3\+1` (structural, not a claim quantity)
+  I'll report both "strict quantity" (exponent/rate/codimension patterns) and the row list. Let me compute quickly to see the count. I'll include the regex in the report so it's auditable. The falsifier for V2 can be: "if every quantity-bearing row carries a quantity_check (or the audit lead rules G-LIT criterion 4 claim-scoped), V2 is discharged."
+
+Let me write the script now. I'll also make it fail-closed: if a pin mismatches → exit 3 with UNMEASURED (like worker-091).
+
+One more thing: the rubric hash — measure `evaluation_rubric.yaml` live: I haven't. Let me get it in the script: pin = expected from the map's gate evidence d748a9e3574e... I'll hardcode the expected prefix and measure. If it doesn't match, fail closed.
+
+Let me write the file.
+dsh: reasoning:
+Both pins match expectations (rubric d748a9e3574e; registry ea02d194). Now write the checker.
+
+I'll write carefully and completely. Structure:
+
+```python
+#!/usr/bin/env python3
+"""W011-L0-REV4-FINAL-VERDICT-02 instrument..."""
+import csv, hashlib, json, re, sys
+from pathlib import Path
+ROOT = Path(__file__).resolve().parents[3]   # artifacts/worker-011/l0_rev4_final_verdict/check.py -> repo root
+PINS = {...}
+def sha(p): ...
+def main(): read bytes once...
+checks...
+controls...
+write report + log
+```
+
+Path resolution: file at <root>/artifacts/worker-011/l0_rev4_final_verdict/check_l0_rev4.py → parents[0]=dir, [1]=worker-011, [2]=artifacts, [3]=root. Yes.
+
+YAML: import yaml.
+
+Let me include:
+- FROZEN set.
+- helpers.
+
+Check IDs:
+K00 pins
+K01 rows/parse
+K02 required fields present per row (the literature row schema: theorem_id, statement_exact, source_ids, assumptions, conclusion_type, does_not_imply, unresolved, falsifiers, topology, regularity, genericity, content_status, review_status, acceptance_authority)
+K03 frozen token conformance (class_ids, informs_classes, and scan all string fields for class-like tokens outside frozen four? audit_evidence.py does this. I'll scan for `AF-[A-Z0-9-]+` tokens across the row JSON and report non-frozen ones; expect 0.)
+K04 HF-02 disjunction census (>=2 in class_ids)
+K05 HF-02 unknown-class / class-scope-recorded (rows with no class token anywhere = 21; report as soft)
+K06 HF-14 literal self-certified acceptance census (support assertion true + no reviewer verdict + no artifact hash): count 60; also list exculpating markers
+K07 HF-04 quantity census: rows matching quantity regex with no quantity_check → list
+K08 HF-01 literal: theorem rows with no artifact_refs → 30
+K09 citation resolution: all used source_ids present in audit; resolver_result/verdict distributions; count non-resolved → 0
+K10 source scope fields: count registry+audit sources with matter/lambda/dimension/symmetry/formulation fields → 0
+K11 unresolved + honesty discipline: all rows non-empty unresolved; review_status values; content_status distribution; no row claims independent review
+K12 conclusion_type vocabulary: allowed set (from schemas.py claim vocabulary) and per-class informational check (no class-level allowed list exists in rubric → B3 FP)
+Controls: CTL-1 foreign class token; CTL-2 duplicate id; CTL-3 missing unresolved; CTL-4 quantity row gets quantity_check (K07 stops firing for it); CTL-5 review_status spoof "independently_reviewed" with no verdict → new check K11b fires; CTL-6 author_asserts_supports false → K06 count decreases; CTL-7 unresolved resolver_result spoof "unresolved" → K09 fires; CTL-8 pin drift simulation → K00 fails.
+
+K11b: rows whose review_status is NOT in {not_independently_reviewed} AND no reviewer verdict/hash → "unlabeled self-certification" (stricter). Implement as check that fires when review_status claims review without a verdict.
+
+Report should include hard_failures list with V-ids and falsifiers.
+
+Also rubric quotes: extract `verifiers.literature.checks`, `verifiers.schema_formulation.checks`, `hard_failures[HF-02,HF-14,HF-04,HF-01]`, `gates[G-LIT].criteria`.
+
+Let me write it.
+dsh: reasoning:
+Bug: K03 shows FAIL, K05 FAIL, K07 FAIL — but I designed K03/K05/K07 as "census" checks that should PASS (the findings are recorded in hard/soft lists), like K04/K06/K08. I passed `ok` incorrectly:
+- K03: `not foreign` → fails because foreign is non-empty! But wait: my earlier recon said all tokens are frozen (rows with non-frozen tokens: 0). Now K03 says foreign is non-empty. Let me check what it found — probably tokens like "AF-SCC-C2" from a prose prefix, or `AF-SCC` in `prose_prefixes`? Let me inspect the report's K03 firing rows.
+- K05: `len(unbound)==0` → fails with 21 rows (expected as a soft finding).
+- K07: `(not q_rows) and any_qc` → fails as expected (the finding).
+
+I need K03 to be a genuine conformance check (should be PASS if all tokens are frozen). If foreign is non-empty, that's either a real finding or a detector artifact. Let me inspect. Also fix K05/K07 to be census checks (status PASS with observed firing, like K04/K06). For K03, keep the FAIL if real (it would be a hard finding), but verify it's not my regex catching prose prefixes like "AF-SCC" (which the audit's "prose_prefixes" noted: 'AF-SCC', 'AF-SCC-C2' — these look like prose mentions, not class tokens; the frozen-token rule per CF-5 was about class *tokens* in class fields, and audit_evidence cleared the flag at this hash).
+
+Let me inspect the K03 output.
+dsh: reasoning:
+Findings:
+
+1. K03: T-304 has "AF-SCC-C2" and T-526 has "AF-SCC" as substrings in prose — these are *prefixes* of frozen tokens, not class tokens. My regex `\bAF-[A-Z0-9-]+\b` matches the prefix "AF-SCC-C2" inside "AF-SCC-C2-VAC-GEN" when followed by... wait, no: `\bAF-[A-Z0-9-]+\b` on "AF-SCC-C2-VAC-GEN" would match the whole string (greedy). Unless the text says "AF-SCC-C2" alone (e.g., "AF-SCC-C2 (open)") or "AF-SCC" alone. So T-304's prose mentions the class prefix "AF-SCC-C2" as a shorthand — a prose prefix, not a class-id field. The canonical audit_evidence.py apparently tolerates prose prefixes (worker-075's C05 noted `prose_prefixes=['AF-SCC', 'AF-SCC-C2']`). So this is a *prose mention*, not a class-field violation. My K03 should restrict the token scan to the class-bearing fields (`class_ids`, `informs_classes`, `ledger_tags`?) OR treat prose prefixes as informational. Better: check class_ids/informs_classes tokens strictly (should PASS) and record prose prefix mentions separately as informational (K03b). Let me fix K03 to scan `class_ids` + `informs_classes` (and any `*class*` key) strictly, and add the prose scan as informational with an explicit note.
+
+Note: earlier grep of the raw ledger for the token pattern found 0 non-frozen tokens because I only checked class_ids/informs_classes. Good — that's the canonical rule (CF-5 was about class tokens).
+
+2. K05/K07: they're findings, so status should be PASS-as-census with firing rows, like K04/K06. I'll rename them as census checks (status PASS, observed count) and move the "FAIL" semantic into the findings lists. Cleaner: K03 strict conformance (PASS/FAIL), K05 census (always PASS, feeding soft finding V-06), K07 census (PASS, feeding hard finding V-02). K10 remains FAIL (criterion not met).
+
+3. K07 count is 40, not 15 (flash-18 said 15) — because my regex is broader (includes `C^0`, `L^2` etc. in regularity). The rubric mentions "rates, exponents, codimension" so 40 rows with exponent patterns is defensible. But I should be careful about over-claiming. The `regularity` field legitimately names the regularity class (that's the row's own metadata, not a "claim quantity"). Hmm. The G-LIT criterion says "quantitative claims (rates, exponents, codimension) carry a quantity_check". A row whose *statement_exact* asserts an exponent inequality (e.g., "s > 5/2") or a codimension claim is a quantitative claim. A row whose `regularity` field says "C^0" is describing the class, not asserting a quantity. To be defensible, I should compute two tiers:
+   - Tier A (strict): patterns found in `statement_exact` or `label` only (not `regularity`).
+   - Tier B (broad): including `regularity`.
+   Report both; use Tier A as the finding (more conservative, closer to flash-18's 15). Let me compute Tier A count. Then V-02 cites Tier A rows and notes Tier B.
+
+Let me update the script accordingly:
+- K03: strict on class-bearing fields; informational prose-prefix note.
+- K05: census PASS (soft finding).
+- K07: census PASS with tier A/B counts; hard finding uses Tier A.
+- Controls updated: CTL-1 mutation still fires K03 strict. CTL-4 targets Tier A.
+
+Let me edit the file.
+dsh: reasoning:
+Now fix K07: two tiers (strict = statement_exact/label; broad = + regularity), census status PASS, and the hard finding uses Tier A. Let me rewrite the K07 block.
+dsh: reasoning:
+Now update the control CTL-4 (which references the old q_rows computation and QUANTITY_PATTERNS over three fields) and the hard-finding text (V-011-L0-02 references len(q_rows) and counts). Also counts block uses q_rows. The control CTL-4 code uses a comprehension with three fields; it should use strict fields to match. Let me update the control and the finding text.
+
+Control CTL-4 currently:
+```
+def mutate_qc(rs):
+    for r in rs:
+        if any(re.search(p, " ".join(str(r.get(k, "")) for k in ("statement_exact", "label", "regularity")))
+               for p, _ in QUANTITY_PATTERNS):
+            r["quantity_check"] = "present"
+            break
+    return rs
+...
+elif target == "K07":
+    q2 = [r for r in rs2 if any(...same 3 fields...) and not r.get("quantity_check")]
+    fired = len(q2) < len(q_rows)
+```
+Update to strict fields ("statement_exact","label") so it matches q_rows. Let me edit.
+dsh: reasoning:
+Now update the hard finding text for V-011-L0-02 to mention Tier A rows and Tier B count, and the counts block to include tierB. Let me view the relevant section and edit.
+dsh: reasoning:
+Also the run_log includes `"checks": {c["id"]: c["status"] ...}` — now K03/K05/K07 will be PASS. K10 FAIL remains (that's the criterion-not-met check). Verdict computation uses hard/soft lists, not check statuses, so it's fine.
+
+Wait: K10's check() sets status FAIL when no scope columns; the verdict logic ignores check status except controls. Fine — but it would be cleaner if K10's status were PASS-as-census too... no: K10 is a genuine criterion-conformance check, FAIL is correct and informative.
+
+One more issue: `check()` for K04/K06/K08 passes ok=True with expected={"count":0} — inconsistent but harmless since expected documents the target. Fine.
+
+Also `qty_hits` is defined after K06 but before the controls — yes, used by controls; defined at K07. Good.
+
+Let me re-run.
+dsh: reasoning:
+Now the instrument is coherent: 12 checks (11 PASS, K10 FAIL as the criterion gap), 7/7 controls, no drift, verdict revise 3.0 with 3 hard findings + 3 soft findings.
+
+Let me look at the Tier A count and the final report to make sure numbers are sensible. Then write README.md, hashes.txt, checkpoint.json, the canonical review file `reviews/L0-review-011-rev4.json`, and emit outbox events.
+
+Let me check the report counts.
+dsh: reasoning:
+The instrument works. Now, one concern about over-claiming HF-04: 36 rows because `X^n` regex hits things like "C^2", "L^2_loc", "H^2_loc" in statements. These are regularity exponents indeed. G-LIT criterion 4 says quantitative claims (rates, exponents, codimension) carry a quantity_check. So it's defensible: any statement asserting an exponent (like "L^2 connection") is a quantitative claim. But is a `quantity_check` meaningful for "C^0 metric"? Possibly not — the criterion targets *claims about quantities* (e.g., a decay rate value, a codimension count), not the regularity class name of the theorem's setting. My two-tier split handles this: Tier A (statement/label) = 36; Tier B = 40. Hmm, Tier A still includes rows where the exponent is just the theorem's regularity setting.
+
+To be scrupulous, I should add a third, narrowest tier: rows whose statement asserts a *quantified bound* (s > n, codimension, decay rate) — i.e., patterns "exponent inequality", "codimension", "rate", "exponent word" — excluding the bare `X^n` regularity class mention. Let me compute that count: from tierA_detail, rows matching patterns other than "regularity exponent (X^n / X^{...})": D-005, T-103, T-204, T-304, T-305, T-501,... Let me add tier C and report it as the primary finding number, with Tier A/B as sensitivity bands. That's more honest and closer to flash-18's 15.
+
+Actually, simpler and clearer: report three tiers:
+- Tier C (narrow): quantified-bound patterns only (inequality, codimension, rate, "exponent" word).
+- Tier A (medium): any quantity pattern in statement_exact/label (includes regularity class names).
+- Tier B (broad): + regularity field.
+
+The hard finding V-02 should cite Tier C rows as the core, noting Tier A/B bands. Let me implement quickly: split QUANTITY_PATTERNS into NARROW_PATTERNS and FULL_PATTERNS.
+
+Let me edit the script.
+dsh: reasoning:
+Now update the V-02 finding text and counts block to use q_narrow as primary, and the control CTL-4 (mutate_qc uses qty_hits(r, ("statement_exact","label")) — still works with default FULL_PATTERNS; it will clear one Tier A row, and `fired` compares against len(q_rows) — fine).
+
+Update V-02 text and counts.
+dsh: reasoning:
+Now Tier C = 11 rows (close to flash-18's 15 but built on my own narrow detector). The finding is defensible with sensitivity bands.
+
+Now produce:
+1. `reviews/L0-review-011-rev4.json` — the canonical review artifact.
+2. `README.md` in my dir.
+3. `hashes.txt`.
+4. `checkpoint.json` (worker-local).
+5. `emit_events.py` + append events to `comms/outbox/worker-011.jsonl`.
+6. Append to `runtime/state/w011_checkpoints.jsonl` and write `runtime/state/w011_checkpoint_4.json`.
+
+Let me write the review JSON by hand (as a file) with the key content, hash-pinned. Actually, better: generate it from report.json via a small script so numbers/pins stay consistent. I'll write `make_artifacts.py` that:
+- loads report.json
+- writes reviews/L0-review-011-rev4.json (a compact review record with verdict, score, hard_failures summary, evidence_refs with hash prefixes, verdict_scope, falsifier, counts_as_full_schema_verdict true, counts_as_independent true, blind note)
+- writes README.md (rendered)
+- computes hashes.txt for all files in the dir + review file
+- writes checkpoint.json
+- appends events to comms/outbox/worker-011.jsonl (status task, artifact events for instrument/report/runlog/README/hashes/review, review event, status complete)
+- appends to runtime/state/w011_checkpoints.jsonl and writes runtime/state/w011_checkpoint_4.json
+
+For evidence_refs in events, use path#sha256-prefix(12 chars). Need to compute hashes after writing files; the review file's own hash must be computed before emitting its artifact event, and the review event references the review file path#hash. Care: the review file includes evidence refs to report etc., not to itself — fine.
+
+Order:
+1. read report.json, write review file.
+2. write README.
+3. compute hashes for: check_l0_rev4.py, report.json, run.log, README.md, reviews/L0-review-011-rev4.json.
+4. write hashes.txt (including hashes of the above; note hashes.txt can't include itself).
+5. write checkpoint.json (includes artifact hashes; excludes itself).
+6. emit events (JSONL append; each line valid JSON).
+7. append checkpoint journal entry.
+
+Event content must satisfy schemas.validate_event:
+- status: event_id, event_type="status", created_at, actor + node_id, status, hours, summary, evidence_refs, next_falsifier.
+- artifact: + node_id, artifact_type, path, sha256, validation_status.
+- review: + target_id, reviewer, verdict, score, hard_failures, findings.
+- claim (optional): I'll include one with conclusion_type "formal_model" (allowed without artifact_refs) — statement summarizing the verdict; assumptions list; falsifier; evidence_refs. Actually claim requires class_id too. I'll include class_id "AF-SCC-C2-VAC-GEN"? The claim is about the L0 ledger across classes; map convention for L0 uses class_id GLOBAL? An event's class_id must be a frozen token for class separation checks; using GLOBAL might trip CLASSSEP? audit_evidence checks claims' class_ids vs frozen tokens. Recent workers used class_ids arrays. A claim with class_id "GLOBAL" could be flagged as unknown class_id by audit_evidence → avoid. I'll use class_id "AF-SCC-C2-VAC-GEN" (primary class of the ledger's SCC content)? That's arbitrary. Better: class_ids ["AF-WCC-VAC-GEN","AF-SCC-C2-VAC-GEN","AF-SCC-C0-VAC-GEN","AF-WCC-SCALAR-SPH"] — but multi-class *claims* are exactly the HF-02 pattern CF-16 flags! Avoid. I'll skip the claim event entirely: review + artifacts + status are sufficient ("emit valid JSON event with IDs evidence hash falsifier" — the review event carries hard_failures/findings + evidence_refs; status carries next_falsifier). Actually, to be safe and informative, I'll emit the review event with a "falsifier" field and skip claim. Hmm, the task says "emit valid JSON with IDs evidence hash falsifier" — the status event has next_falsifier and the review has findings including falsifiers. Good.
+
+Also: the normalizer maps "class_id" from "class_ids"; for status events node_id must be present (I'll use L0). For artifact events node_id L0.
+
+Let me now write make_artifacts.py. I'll be careful with quoting and JSON.
+
+Review file content (reviews/L0-review-011-rev4.json):
+```json
+{
+ "review_id": "L0-review-011-rev4",
+ "event_type": "review",
+ "created_at": ...,
+ "actor": "worker-011",
+ "reviewer": "worker-011",
+ "reviewer_independence": "authored neither the ledger nor any prior verdict at these bytes; worker-011's earlier L0 accept bound the voided ce42d205 bytes",
+ "target_id": "L0",
+ "node_id": "L0",
+ "gate": "G-LIT",
+ "class_ids": [four frozen],
+ "artifact": "ledger/theorems.jsonl",
+ "artifact_sha256": pinned,
+ "companion": {"path":"ledger/citation_audit.csv","sha256": ...},
+ "verdict": "revise",
+ "score": 3.0,
+ "counts_as_full_schema_verdict": true,
+ "counts_as_independent": true,
+ "hard_failures": [ {id, hard_failure, severity, finding, rows, falsifier} x3 ],
+ "soft_findings": [...],
+ "findings": [positive checks summary...],
+ "checks": {id: status},
+ "controls": "7/7",
+ "pins": {...},
+ "verdict_scope": ...,
+ "documented_blind_spots": [...],
+ "evidence_refs": ["artifacts/worker-011/l0_rev4_final_verdict/report.json#<sha12>", ...],
+ "falsifier": ...,
+ "non_claims": [...]
+}
+```
+Note: the canonical class-separation checker scans `reviews/*.json` too? audit_evidence.py scans claims for CLASSSEP; the review file's text includes multiple class tokens (in class_ids and rows lists) — could that trip a "disjunction of class_ids" detector on review files? CF-16 was about claims. My review has class_ids with all four frozen tokens in an array — that is literally a "disjunction of class_ids" if the detector is applied to review files' class_ids! Risk: audit_evidence.py may flag my review as a hard CLASSSEP finding, adding noise (like CF-16). Let me check audit_evidence.py's scan scope quickly: does it scan reviews/*.json? Earlier evidence_hard_failures were "claims[36].statement" — it scans map claims, not review files. And class_separation.py `findings_for_text` is applied where? The controller applies it to claims and artifacts... To be safe, I'll structure my review's class scope as `class_scope: "all four frozen classes"` without a multi-token class_ids array? But the schema/PROTOCOL review fields don't include class_ids; the map's reviews entries have class_id maybe. worker-075's review used class_ids: [four]. worker-091 used class_ids: [one]. Hmm, worker-075's review with all four didn't trigger a hard failure (evidence_hard_failures list only had claims). So it's fine to use class_ids [four] in the review file.
+
+But my *outbox review event* is normalized and ingested into events.jsonl; does the evidence audit scan accepted claim events only? The CF-16 hits were "claims[...]" from the map (research_map.json claims). Review events go to map.reviews, not claims. Also, my event will have class_id (singular, from class_ids[0]) — no disjunction. For the artifact events, no class_id needed (I'll keep class_ids out or singular). Good.
+
+One more consideration: adding a `claim` event with class_id singular "AF-SCC-C2-VAC-GEN" would be fine, but unnecessary.
+
+Now, an important question: should I write the review into `reviews/` (shared canonical dir)? Yes — worker-053/075/091 do. My file name `L0-review-011-rev4.json` is unique.
+
+Let me also double-check that `reviews/` isn't write-protected. Prior worker-011 wrote reviews/L0-review-011.json. Fine.
+
+Let me write make_artifacts.py now.
+dsh: reasoning:
+Wait — one issue: make_artifacts.py is written last, so the hash manifest includes it, but the artifact event list doesn't include make_artifacts.py. Minor. Also the review's evidence_refs don't include make_artifacts.py. Fine.
+
+Another issue: `emit_events` will append to comms/outbox/worker-011.jsonl. The controller's ingest will process these on the next lifecycle. Good.
+
+Before running, let me validate the events against schemas.validate_event locally to avoid rejects. I'll run make_artifacts.py, then validate the newly appended lines with schemas.validate_event, and check JSON parse.
+
+Also: `check_l0_rev4.py`'s report includes `generated_at`; re-running make_artifacts twice would append duplicate events (same event_ids? No — event_ids include ts (seconds), so two runs within the same second would produce duplicate event_ids; the ingest dedups by event_id so duplicates are dropped. But it would double-append lines. I'll run once only.
+
+Let me run it.
+dsh: reasoning:
+Now validate:
+1. All 10 appended events parse as JSON and pass schemas.validate_event.
+2. Verify the review file JSON and its hash.
+3. Confirm pins unchanged after the run (drift guard) — re-run checker? It writes report.json again; running it again would change report.json's hash and invalidate the review's evidence ref for report.json (since report.json is regenerated identically except generated_at — timestamp differs → hash changes!). Careful: don't re-run the checker now, or the review's pinned report hash becomes stale. Actually the report.json regenerates with a new `generated_at`, so the hash changes. I must NOT re-run check_l0_rev4.py now (or if I do, re-run make_artifacts.py too, which would append duplicate events with a new timestamp). So: verify pins by hashing inputs directly, not by re-running the checker.
+
+Let me validate events and pins, and inspect the final artifacts list.
+dsh: reasoning:
+All 10 events valid, pins unchanged (no drift), review JSON valid, bundle complete.
+
+Wait: check_l0_rev4.py is 27KB? That seems large... because the write includes the full script (~600 lines with the long strings). Fine.
+
+Let me do final checks:
+1. `hashes.txt` matches actual files (verify).
+2. `checkpoint.json` matches.
+3. Ensure I didn't accidentally write anywhere canonical (only reviews/, artifacts/worker-011/, runtime/state/w011_*, comms/outbox/worker-011.jsonl). Confirm the outbox append only added to worker-011.
+4. Verify the review file's evidence_refs hashes match the current artifacts (report.json hash recorded in the review must equal the live report.json hash).
+
+Let me verify the evidence refs in the review vs live hashes and hashes.txt.
+dsh: reasoning:
+The hashes.txt "MISMATCH" is a path issue in my shell loop: hashes.txt entries are bare filenames (e.g., `check_l0_rev4.py`), and I ran sha256sum from the repo root, so the file wasn't found (empty `a`). Let me re-verify from the artifact dir. The checkpoint artifacts match (which used repo-relative paths) and the evidence refs match, so the files are correct. Let me redo the hashes.txt verification with the correct cwd.
+dsh: reasoning:
+The last "MISMATCH" is again a relative-path artifact of the check (reviews/... relative to the artifact dir). The manifest entry uses the repo-relative path, which is correct when interpreted from the repo root. Let me verify from the repo root with proper handling and confirm f21c5ce978b6... matches. Yes: sha256sum from repo root gives f21c5ce9..., and hashes.txt records f21c5ce978b67958fb92f7942dad7e249fbf4d65f306f4b88a9052968f54cffd. Good.
+
+Everything checks out. Now, one last sanity item: my earlier shell loop published "MISMATCH" output but it was a path artifact — resolved.
+
+Final: append the checkpoint journal line — make_artifacts.py already did that. Let me verify w011_checkpoints.jsonl has checkpoint 4 and that w011_checkpoint_4.json exists. Also verify I didn't break anything else. Then exit with a concise summary.
+
+Also, should I notify the controller via a `blocker` or is the review event enough? The review event + status complete is the protocol. Good.
+
+One more consideration: the task said "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit." Done:
+- IDs: task_id W011-L0-REV4-FINAL-VERDICT-02, event_ids, hard finding IDs V-011-L0-01..03, check IDs K01-K12, control IDs CTL-1..7.
+- Evidence: path#sha256-prefix refs in events/review/checkpoint.
+- Hash: sha256 pins + manifest + target hash.
+- Falsifier: per-check, per-finding, and the run-level falsifier.
+- Checkpoint: runtime/state/w011_checkpoint_4.json + journal + artifact checkpoint.json.
+- Class-bound: L0/G-LIT with the four frozen class_ids.
+
+Let me do a final verification of the journal and take a last look at the README rendering, then summarize. Also verify no leftover temp files.
+dsh: reasoning:
+Everything is in place. The bounded task is complete:
+
+- One class-bound task taken (L0 / G-LIT, four frozen class ids), self-selected since no worker-011 inbox card exists.
+- Valid JSON events emitted to `comms/outbox/worker-011.jsonl` (10 events, all schema-valid, unique IDs, with path#sha256 evidence refs and falsifiers).
+- Canonical review `reviews/L0-review-011-rev4.json` (sha f21c5ce978b6...) with verdict revise 3.0, hard findings V-011-L0-01..03, soft V-011-L0-04..06.
+- Artifacts under `artifacts/worker-011/l0_rev4_final_verdict/` (instrument, report, run log, README, manifest, checkpoint, emitter) — all hashed.
+- Checkpoints: `runtime/state/w011_checkpoint_4.json` + journal line.
+- No canonical artifact mutated; read-only on all pinned inputs; drift-free.
+
+I should exit now (the supervisor expects the process to end cleanly). My final answer is a concise summary of what was done, with the key evidence. No need to kill any jobs (none started). I did not create a goal (routine single bounded task, correctly).
+
+Let me write the final summary.

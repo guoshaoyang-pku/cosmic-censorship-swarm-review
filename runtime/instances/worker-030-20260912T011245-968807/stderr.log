@@ -1,0 +1,1523 @@
+dsh: reasoning:
+Let me start by understanding the context. The user says: "You are a bounded execution worker. Read handoff/map and comms. Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit. worker=030"
+
+I need to look at the workspace to find handoff/map and comms. Let me explore.
+
+Let me start with listing the workspace and finding relevant directories.
+dsh: reasoning:
+No handoff directory in the workspace root. Maybe there's a "handoff" folder within the swarm workdir, or under ai4math-swarm. Let me look for "handoff" and "comms" directories. The task mentions "worker=030" and "handoff/map" and "comms". This is likely a swarm setup with a handoff directory somewhere, possibly in the tar.gz or in a workdir.
+
+Let me search more broadly.
+dsh: reasoning:
+The swarm directory is /data3/guoshaoyang/workdir/ai4math-swarm with a comms subdirectory. Let me look at that. Also there may be a handoff dir there. Let's list it.
+dsh: reasoning:
+This is the ai4math-swarm workspace. Let me read HANDOFF.md, README.md, comms/PROTOCOL.md, and look at the research_map directory (the "map"), and comms/inbox.
+
+Let me read the key files.
+dsh: reasoning:
+Let me now look at:
+1. `research_map/` — the map
+2. `comms/inbox/` — downward messages for me (worker 030?). Agent ids are like `deepseek-flash-01` ... `deepseek-flash-20`. But the user says worker=030. Maybe there are more worker ids. Let me check the inbox and the map.
+
+Let me list research_map and comms/inbox/outbox.
+dsh: reasoning:
+There's no worker-030 inbox yet. Let me check research_map.json (the map) and look for worker assignments. Let me list the research_map dir fully and read the map file. Also check `comms/outbox/assignments/`.
+dsh: reasoning:
+worker-030.jsonl exists in outbox but not in inbox. Wait, the "grep -i 030" on inbox returned nothing, and on outbox returned worker-030.jsonl. Hmm, but there's an outbox worker-030.jsonl? Let me check. Actually the output shows "worker-030.jsonl" under the "=== worker-030? ===" heading, which combined both greps. Since inbox grep produced nothing visible (the last listing of inbox was already shown), the worker-030.jsonl is likely in outbox. Let me verify explicitly.
+
+Actually wait — looking again, the second command was `ls inbox | grep -i 030; ls outbox | grep -i 030`. The output shows one line "worker-030.jsonl". It could be from either. Let me check both explicitly.
+
+Also, I should read the research_map.json (6.5MB — too big to read fully). Let me inspect its structure with Python, and look at ASTRA_HANDOFF.md which is likely the current handoff/map for the swarm. Also, read the most recent worker assignment patterns (e.g., worker-075.jsonl in outbox or deepseek-flash-39.jsonl) to understand the task schema ("class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit").
+
+Let me first read ASTRA_HANDOFF.md — that's likely the "map" referred to. And check worker-030 outbox file.
+dsh: reasoning:
+worker-030 already has an outbox with 77KB, written at 01:11. So I may have already done work? The instruction says "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit. worker=030".
+
+There is no inbox for worker-030. So where do I get the assignment? Perhaps from the research_map.json `assignments` for worker-030, or from the outbox worker-030.jsonl tail (which might show what I was doing). Let me inspect the tail of my outbox and search the map for worker-030.
+
+Let me use python to parse the map and find assignments for worker-030. Also read the tail of comms/outbox/worker-030.jsonl.
+dsh: reasoning:
+So worker-030 already completed a lifecycle: W030E-CLASSSEP-ADJUDICATION-REVIEW-01. The last event in the outbox is a "status-final" at 01:12:30, claiming completion. The instruction says to take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit.
+
+Wait — this appears to be a repeated invocation of a bounded worker pattern. Each invocation of the worker takes one class-bound task. The worker-030 outbox already has a completed lifecycle (7 checkpoints?). The current session's task might be a *new* invocation of worker-030, and I need to take another task.
+
+Hmm. But the user instructions: "You are a bounded execution worker. Read handoff/map and comms. Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit. worker=030"
+
+This suggests a standard worker prompt used by the swarm launcher: each worker invocation should read the handoff (HANDOFF.md / ASTRA_HANDOFF.md), the map (research_map.json), and comms (inbox/outbox), take ONE class-bound task, emit valid JSON with IDs/evidence/hash/falsifier, checkpoint, and exit.
+
+Given worker-030 has no inbox assignment, and the previous lifecycle already ended with `completion_claim: true`, the current invocation might be intended to do another bounded unit. Let me look at the pattern of similar worker invocations to understand what's expected. Look at other workers' outboxes with recent checkpoints, e.g. worker-075, worker-012, worker-015 etc.
+
+Also, let me check the runtime state for worker-030 checkpoints: `runtime/state/w030_checkpoint_7.json`. Let me see if there are existing checkpoints and what the standard worker lifecycle looks like. Maybe there's a worker prompt template in `runtime/` or `schemas/`.
+
+Let me search for "worker-030" and "W030" in the map, and look for a task queue / assignments. Also check if there's a fresh assignment in the map for an unclaimed class-bound task under nodes/gates.
+
+Key context from ASTRA_HANDOFF: open assignments are:
+- astra-life07-classsep-adjudication-review (worker-075, 02:30) — but worker-030 already wrote a review for CLASSSEP adjudication (reviews/CLASSSEP-adjudication-review-030.json). Hmm, the handoff says worker-075 owns it. Worker-030 also did a review of decisions (c). Interesting.
+- astra-life05-verify-gform-r3 (lead-audit, 02:45)
+- astra-life05-verify-l0-final (lead-audit, 02:30)
+- astra-life04-verify-a0 (02:00)
+- astra-life04-n0-stoprule (lead-numerics, 02:30)
+- astra-life04-n0-verify (lead-audit, 03:00)
+
+Workers cannot take lead assignments. So a bounded execution worker should pick a class-bound task that is useful, not duplicating. The previous worker-030 did exactly that: self-selected a review because the adjudication artifact asked for one independent review.
+
+Now the question: what should I do in THIS invocation? The instruction likely comes from `launch_swarm.sh` / `supervise_swarm.sh` which spawns worker=NNN with this prompt repeatedly. Let me read those scripts to understand the intended lifecycle. Also `runtime/` may hold a worker protocol/template.
+
+Let me check launch_swarm.sh, supervise_swarm.sh, supervise_loop.sh, and the runtime/state directory.
+dsh: reasoning:
+Now I understand the worker prompt pattern. The workers are recycled: run, take one bounded class-bound task, checkpoint, exit.
+
+worker-030 has already completed a lifecycle per its outbox (final status at 01:12:30). But this could be a fresh invocation with the same worker id (the supervisor recycles). The instruction here says specifically: "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit."
+
+So my job: read the handoff/map/comms, take ONE class-bound task, do the work (produce artifact + evidence with sha256), emit valid JSON events to comms/outbox/worker-030.jsonl, checkpoint, then exit.
+
+Important constraints:
+- worker events cannot set status=done, validation_status=passed, or gate verdicts.
+- Write one JSON object per line; each event needs event_id, event_type, created_at, actor.
+- Cite evidence as path#sha256-prefix or path:line.
+- Reject own output before sending: does artifact exist? does the falsifier actually falsify? does class id match the file?
+- Never promote fluent text to theorem; conclusion_type theorem requires artifact_refs.
+- Checkpoint via `python3 research_map/checkpoint.py` (controller command) — but as a worker, checkpoints should perhaps be written to `runtime/state/w030_checkpoint_N.json`. The previous worker-030 wrote `runtime/state/w030_checkpoint_7.json`. Let me look at what that is and how it was produced. Maybe the worker wrote it directly.
+
+Let me inspect:
+1. The map's `assignments` for items involving worker-030 or open ones.
+2. `runtime/state/` for checkpoint patterns, especially w030_*.
+3. The tail of some other worker's outbox to see the current standard event shape (e.g., worker-075, worker-012).
+4. What tasks are open that a breadth worker could take, class-bound, that don't duplicate the leads.
+
+Given "Take one class-bound task" — a class-bound task means bound to one of the classes: F1 (AF-WCC-VAC-GEN), F2a (AF-SCC-C2-VAC-GEN), F2b (AF-SCC-C0-VAC-GEN), AF-WCC-SCALAR-SPH. Or possibly the class separation (CLASSSEP) work.
+
+Let me dig into the map to find open assignments and recent events. Let me look at assignments list (127 entries) and filter for statuses.
+
+Also let me check the current time: the files are timestamped Sep 12 01:12-01:13, and now (host time) presumably ~01:13+. Let me check date.
+
+Let me look at the map's assignments and gates, plus recent outbox activity for other workers, to find an unclaimed, useful, bounded task.
+dsh: reasoning:
+Now I see the assignment structure. There are worker assignments with deadlines 02:15 for reviews:
+- F1: worker-071 and worker-085 → reviews/F1-review-rev27-a.json / -b.json
+- F2a: worker-046 and worker-091 → reviews/F2a-review-rev27-a/b.json
+- F2b: worker-015 and worker-035 → reviews/F2b-review-rev27-a/b.json
+- F0: worker-041, worker-052 → reviews/F0-review-rev27-a/b.json
+- A0: worker-089 → reviews/A0-review-worker-089.json
+- N0: worker-012 → reviews/N0-review-worker-012.json
+- A1: worker-075 → CLASSSEP calibration adjudication review
+
+Wait, but these assignments may be stale — the workers may already have delivered. Let me check which of these review artifacts exist on disk. If a task is unclaimed or unanswered and still useful, I could take one. However, the assignments are assigned to specific workers, and CF-12 says "one canonical path, one owner — do not duplicate or repoint."
+
+Since worker-030 is not assigned any of these, and my instruction says to take "one class-bound task", maybe the intended pattern is: pick a class-bound task from the immediate queue, do it, emit JSON, checkpoint, exit. The previous worker-030 invocation self-selected a review because it was requested and unclaimed. Now, maybe another gap exists.
+
+Let me check the state:
+1. Which review artifacts already exist (F1-review-rev27-a/b.json etc.)?
+2. What is the current most urgent need?
+
+From ASTRA_HANDOFF pass-07:
+- G-FORM: rev13 `d9cebb9404b2`, FROZEN rev29 `815e08079aef`; coverage F1 4 accepts, F2a 2, F2b 2 — worker-072/090 — with late F2b revises worker-002/023/050/066; withheld pending `astra-life05-verify-gform-r3` non-author independence + FROZEN/per-file pin binding.
+- G-LIT L0 `a1674f094979` (2 accepts worker-075/079 vs 5 revise + 1 inconclusive) + L1 pending `astra-life05-verify-l0-final`.
+- G-NUM protocol C8 MET; N0 node verdict still revise 3.5 → astra-life04-n0-verify.
+- G-AUDIT A0 rubric + scope artifact unverified → astra-life04-verify-a0; A1 coverage F0 7/F1 4/F2a 2/F2b 2/L0 2.
+- CLASSSEP r3 adjudication landed with decision (c); G-AUDIT stays pending until `astra-life07-classsep-adjudication-review` (worker-075, deadline 02:30).
+
+So worker-075 is assigned the CLASSSEP review. Worker-030 already wrote a review of the adjudication with verdict accept 4.0 at 01:12 — that might conflict/duplicate with worker-075's assignment. Hmm. It was self-selected because "the adjudication artifact asks for exactly one independent review at the frozen hashes and its author is conflicted". But the map assignment says worker-075 owns it (deadline 02:30). The handoff says CF-12 one canonical path, one owner — do not duplicate. The previous worker-030 invocation may have created a duplicate review (reviews/CLASSSEP-adjudication-review-030.json) — perhaps the controller will reconcile. Hmm.
+
+Now for the current invocation, what is the highest-value bounded class-bound task that is not assigned to someone else and not duplicating existing artifacts?
+
+Let me check the map for the current node/gate state and look at recent events (last ~50 events) to see what just happened at 01:12-01:14. Also let me check the review artifacts on disk in `reviews/`.
+
+Let me look for open gaps:
+- F1/F2a/F2b review assignments (rev27) at 02:15: workers 071/085/046/091/015/035/041/052/089/012. Let me check if their reviews exist.
+- A0 review worker-089.
+
+Let me check reviews directory for these files and their timestamps.
+dsh: reasoning:
+Let me now think about which task to take. The pattern from the previous worker-030 run: it self-selected a review task that was requested but not yet delivered at the time, produced an artifact `artifacts/worker-030/classsep_adjudication_review/` with `run_review.py` + `report.json` + `README.md`, wrote `reviews/CLASSSEP-adjudication-review-030.json`, and emitted a claim + status + artifact events, plus a checkpoint.
+
+What's still open and useful now (01:14)?
+
+From the handoff:
+- worker-075's CLASSSEP review is assigned (deadline 02:30). worker-030 already did one — that could be seen as a duplicate, but done.
+- F1/F2a/F2b/F0 review assignments to workers (deadline 02:15) — let me check whether the review artifacts exist. `reviews/F1-review-rev27-a.json`? Let me check.
+- `reviews/A0-review-worker-089.json`, `reviews/N0-review-worker-012.json` exist? N0-review-worker-012.json exists (00:55). A0-review-worker-089? Let me check.
+
+Let me list specific review files.
+dsh: reasoning:
+Interesting — the last events have created_at of 01:32 (future-ish, maybe clock skew or intentional). So the swarm is very active. All the review artifacts assigned at 02:15 exist already. So the assignments are being consumed fast by workers.
+
+Key insight: the worker pattern is that each worker invocation self-selects a bounded class-bound task if no inbox assignment exists, does it, writes artifacts, emits JSON events, checkpoints, and exits. Many workers are doing this (worker-065, 076, 083, etc.).
+
+Now, what's a valuable gap right now? Let me look for unresolved issues in the current state:
+
+1. `CLASSSEP-calibration-adjudication-review.json` is MISSING — assigned to worker-075 (deadline 02:30). Worker-075 may still be working (its outbox updated 01:09). Since worker-030 already wrote `CLASSSEP-adjudication-review-030.json`, a second review would duplicate worker-075's. Not ideal, and CF-12 says don't duplicate. But wait — the previous worker-030 review might actually be the thing the controller needed... but the map assignment explicitly names worker-075 and path `reviews/CLASSSEP-calibration-adjudication-review.json`. Hmm.
+
+2. The F2b containment repairs: worker-076 found neither staged candidate meets containment predicate... worker-083 recommends... These are all in flight by other workers (076, 083, 065).
+
+3. From the handoff: G-FORM withheld pending `astra-life05-verify-gform-r3` (lead-audit) and FROZEN/per-file pin binding. G-LIT pending `astra-life05-verify-l0-final`. G-AUDIT pending worker-075 review. G-NUM N0 node verdict revise 3.5.
+
+I need to find something useful, bounded, class-bound, non-duplicative, and within my ability as a "breadth worker": i.e., deterministic script-based verification of artifacts with hashes, producing evidence.
+
+Let me look at the most recent worker outboxes to see what open threads exist, especially recently mentioned "next steps" that no one has taken. Let me check the tail of the current checkpoint / controller findings (CF-1..CF-30) for open items. Also, look at `runtime/state/current_checkpoint.json` for open assignments/tasks.
+
+Actually, a better approach: check the latest events (which are timestamped up to 01:32) and the latest outboxes for workers; find explicit "next_falsifier" items that are unclaimed. Since the map's assignments list is authoritative, let me get all assignments with their deadlines and see which ones have no corresponding artifact on disk. Also check `research_map.json` `comms` field, which may hold pending downward messages.
+
+Wait — importantly, the events.jsonl contains events up to 01:32 while wall clock is 01:14. That's odd. Maybe the events file has future timestamps from workers whose clocks differ, or "settled window" trick. Anyway.
+
+Let me check:
+- What is the latest controller lifecycle? astra-lifecycle-07 at 01:08-01:10. The controller is presumably running pass 08 now.
+- CF list: latest CF-30.
+
+A fruitful bounded task: "non-author independent verification" tasks. The handoff says F1/F2a/F2b/F0 reviews exist. The missing piece for G-FORM is `astra-life05-verify-gform-r3` (lead-audit) — that's a lead task, not mine.
+
+Alternatively, look for what the newest worker messages say are open. Let me scan the tails of the most recently-modified outboxes (worker-065, worker-076, worker-083, worker-075, worker-012, etc.) for "next" items. And check `runtime/state/counts.tsv` (updated 01:14) — the controller's census maybe shows gaps.
+
+Let me look at the current_checkpoint.json structure: it may summarize node statuses and open assignments. Also the `astra-lifecycle-07-decisions.json` (REC-29...REC-35) tells what the controller just decided and what it wants next — that's probably the best source for "what task to take".
+
+Let me read that decisions file and the lifecycle report summary.
+dsh: reasoning:
+Now, a key detail: The controller decisions list review_coverage:
+- F1: worker-052, 072, 075, 085
+- F2a: worker-017, 072
+- F2b: worker-071, 072, 090
+- L0: worker-075, 079
+- L1: [] — no coverage!
+- N0: []
+- A0: [], A1: []
+
+Hmm interesting: review coverage for L1 is empty, N0 empty, A0/A1 empty. But lead tasks are handling some of those.
+
+Now, G-FORM needs two independent accepts per schema with cited sha256 (criteria says "reviewers 17,18 accept"). The review coverage shows F1 4 accepts, F2a 2, F2b 2. The handoff says F2b late revises from worker-002/023/050/066. G-FORM withheld pending `astra-life05-verify-gform-r3` (lead-audit) and FROZEN/per-file pin binding.
+
+What important gap remains that a breadth worker can fill? Options:
+
+Option A: L1 review coverage is empty. But L1 is literature (G-LIT) — pending `astra-life05-verify-l0-final` (lead-audit). L1 spot checks exist but coverage list empty (maybe because the coverage is computed for a specific artifact revision). Risky to duplicate.
+
+Option B: F2b containment/repair candidates — worker-076 and worker-083 just did adjudications (01:13), plus worker-065's sidepin census. 
+
+Option C: The `numerics_lock` is locked; N0 verdict revise. Workers can't do N1.
+
+Option D: Something around "CF-29 detector freeze" — the CLASSSEP review is assigned to worker-075. Worker-030 already did one review at 01:11. Possibly the controller will reject that as a duplicate (CF-12). Hmm, let me check whether the controller/ingest has accepted worker-030's review. Search events.jsonl for CLASSSEP-adjudication-review-030.
+
+Let me also check worker-075's outbox tail — is it making progress on the assigned review? If worker-075 is on it, I shouldn't duplicate.
+
+Option E: Look at controller_findings CF-1..CF-30 for open items that require worker-level evidence; pick one that is bounded and checkable, e.g. a "pin drift" verification or a "hash binding" check.
+
+Let me look at the newest lifecycle report (01:12:39 — pass 08?) and the decisions for REC-33..REC-35, plus the current open findings. Let me read the rest of the decisions file and the latest lifecycle report's summary/next steps.
+
+Also check what `runtime/state/counts.tsv` is (updated 01:14) — maybe the controller's live census that identifies gaps.
+
+Let me also check the tail of worker-075 outbox and worker-039/021/022 (they appear as deepseek-flash workers). Actually the id scheme seems mixed: worker-030, worker-012, ... and deepseek-flash-NN. There may be a "worker-0NN" series from the supervisor and "deepseek-flash-NN" from earlier.
+
+Let me gather. First, the decisions tail and latest lifecycle report summary.
+dsh: reasoning:
+Now I have a clear picture of the state as of pass-08-open (01:12:40). The controller assigns lead tasks. The remaining open worker-type gaps:
+
+1. `astra-life07-classsep-adjudication-review` (worker-075, 02:30) — missing artifact `reviews/CLASSSEP-calibration-adjudication-review.json`. Worker-030 already did an equivalent independent review (`reviews/CLASSSEP-adjudication-review-030.json`), but the map-assigned path is worker-075's. Since CF-12 one owner and worker-075 is active (outbox updated 01:09), I should not duplicate. But wait — the last event from worker-075? Let me check. Also, worker-030's review might be treated as the independent review if worker-075 fails. Not my call.
+
+2. G-FORM verify is lead-audit's.
+3. G-LIT verify is lead-audit's.
+4. N0 verify is lead-audit's (03:00).
+5. A0 verify is lead-audit's.
+
+Hmm. So all remaining explicit tasks are lead tasks. As a breadth worker, I should find a bounded class-bound supporting task. What would be genuinely useful, non-duplicative, and checkable with a deterministic script?
+
+Idea 1: The "F2b containment repairs" thread: worker-076 (01:13) and worker-083 (01:13) both audited staged repairs. Worker-065 (01:32 events) did sidepin census. Are there open issues from their findings? They found defects in staged candidates and recommended something. A bounded follow-up could be to verify the "line-152/line-246" candidate composite in a read-only way. But worker-083 adjudicated already and recommendation likely landed.
+
+Idea 2: Something for G-FORM's pending non-author independence: The reviews at F1/F2a/F2b have coverage but the "late F2b revises" (worker-002/023/050/066) need weighing — that's the lead's adjudication, not mine.
+
+Idea 3: L1 (citation_audit.csv) — 23 spot checks but a live locator revise (worker-025: 71/97 exact_locator values are not record locators). A breadth worker could do a bounded, read-only, independent measurement of a specific slice: e.g., verify N of the 97 locators against primary records and quantify the locator mismatch rate, with a deterministic script + hashes. But that overlaps with worker-025's revise and lead-audit's final verify... though it could strengthen the adjudication with independent evidence. However CF-12 warns against duplication.
+
+Idea 4: Check the newest worker outboxes (worker-065, worker-076, worker-083, worker-075) for their "next_falsifier" and open threads. Perhaps someone explicitly asked for a follow-up (e.g., "needs an independent re-run at the pinned bytes"). A good pattern followed by worker-030 previously: pick up an explicitly requested review that has no owner.
+
+Let me look at the very latest events (the last ~60) with full detail and see what's currently in flight and whether there's a "request for independent verification" not yet claimed. The events file has events up to 01:32 created_at (clock skew). Let me filter events by created_at >= 01:10 and print event_type/actor/summary/next_falsifier.
+
+Also, the pass-08-open lifecycle at 01:12:40 shows `events_applied: 206`, meaning the map hasn't applied events after 01:12:39 yet; a new lifecycle pass will apply more. Let me check the most recent outbox files' mtimes to see who's active right now.
+
+Let me list outbox files by mtime (most recent 20).
+dsh: reasoning:
+The swarm is highly active, with workers self-selecting F2b repair-verification tasks. Many workers (069, 076, 083, 088, 091, 096, 097, 022) have taken F2b repair tasks. This is a very crowded front. I should pick something else.
+
+What's less crowded?
+
+Let me think about what would be most valuable and fits my constraints (bounded, class-bound, artifact + evidence + hash + falsifier, checkpoint, exit). And importantly, not duplicating.
+
+Potential gaps identified:
+1. `reviews/CLASSSEP-calibration-adjudication-review.json` missing — assigned to worker-075. Let me check whether worker-075 is actively on it. Its outbox mtime? Let me check. If worker-075 has stalled or is doing something else, this is the single most gate-critical open item (G-AUDIT pending on it). But the previous worker-030 already produced an equivalent review at `reviews/CLASSSEP-adjudication-review-030.json` — hmm, was that accepted? Let me check the accepted stream for that artifact.
+
+2. L1 locator revise: worker-025 found 71/97 exact_locator values are not record locators. The lead-audit is adjudicating `astra-life05-verify-l0-final`. A bounded independent measurement could be: sample the 97 locators and verify a specific subset against the primary sources, producing a quantified locator-integrity report at the pinned CSV hash `315c19145065`. But wait — L1 coverage is [] and gate criterion requires ">=3 independent re-fetch spot checks" (already 23 spot checks). The live issue is the locator revise. An independent audit of the *locator claim* could be valuable and non-duplicative if done as a "does the exact_locator field contain a resolvable record locator" classifier with controls. But worker-025 already did that adjudication (L1-locator-adjudication-025.json). Duplicate risk high.
+
+3. A0/A1 review coverage empty. But A0 reviews are all "revise"; A0 adjudication is lead's (`evaluation/A0_detector_scope_adjudication.json`, a26be4b85706, unverified → astra-life04-verify-a0, 02:00). Could a worker help by independently verifying A0 scope artifact semantics? Risky overlap with lead.
+
+4. G-NUM: N0 verdict revise 3.5, `astra-life04-n0-verify` lead-audit 03:00. The N0 C8 adjudication exists. Worker-074 just did N0 checkpoint coverage patch. Others (012) did N0 review.
+
+5. G-F0: pass. Any write voids.
+
+6. F1: F1 review coverage is 4 accepts. Is there anything open on F1? The G-FORM verify is lead. Hmm.
+
+7. The CLASSSEP detector freeze: CF-29 says "detector writes stay frozen through the review; any further write voids the round." A useful *read-only* worker task: build an independent "freeze guard" that monitors `research_map/class_separation.py` bytes and the pinned detector hashes, verifying the live bytes stay at a8c04fc31e4a and that no unauthorized write occurs, with evidence hashes. But that's a monitoring task, not class-bound... though it could be bound to A1/G-AUDIT. Worker-030's previous review already included a pin-drift check (exit 2 on pin move). Hmm.
+
+8. There's a very interesting thread: worker-097's finding — at F2b b2ab6acb2bbe, the two carriers flagged by revise verdicts are not disposed by any accept; a "sufficient-disposition requirement". Worker-097 requests "an accept at b2ab6acb2bbe whose artifact or cited instrument disposes of line 246 or line 152". That's for the lead's adjudication. Multiple workers are on it.
+
+9. What about F2a? Worker-091 (01:13) did an independent accept of W047-F2A-EXT-FREEZE-SPEC-02: six axes unresolved on live bytes; applies option-A patch → resolved. The F2a review coverage is 2 (worker-017/072). Is there an open F2a gap? The claim says "at F2a=e9a27996 ... A1-A6 all unresolved on live bytes". That means F2a's live schema has 6 unresolved freeze axes! That's a G-FORM blocker similar to F2b. Worker-091 accepted a *repair spec* (W047 spec) for F2a extension freeze, but did anyone verify a *repair candidate* for F2a? The F2b side has many workers on candidates. The F2a side seems to have only worker-091 on the spec.
+
+Actually wait: the handoff says G-FORM has F2a coverage 2 accepts (worker-017/072) and F2b 2. If worker-091 found A1-A6 unresolved on live F2a bytes, that's a new blocker for G-FORM at F2a e9a27996. A bounded task: independent verification of the F2a extension-freeze repair spec and/or its candidate patch, similar to what worker-096 did for F2b. Let me investigate the F2a thread to see what exists and what's missing.
+
+Let me look at:
+- W047 spec: find artifacts/worker-047 or worker-091 artifacts.
+- Whether a repair candidate for F2a exists and whether anyone verified it.
+- The F2a review coverage and revise verdicts.
+
+Let me search artifacts for worker-091 and w047, and read worker-091's outbox tail.
+dsh: reasoning:
+There's a rich F2a thread. worker-047 has `f2a_ext_freeze_spec` (01:08) and `c2c0_pred_containment` (01:14 — just now!). worker-091 verified the W047 F2a freeze spec independently (accept 4.5). The next falsifier from worker-091: "Re-issue this check after the owner applies the repair at a new revision."
+
+So the F2a repair path: W047 spec → owner lands repair → new revision. The question is whether an independent *owner-side* candidate exists to land. worker-047's `c2c0_pred_containment` (01:14) is being worked right now. Hmm.
+
+Let me think about what is a genuinely useful, non-duplicative bounded task that I (worker-030) can complete reliably in this session:
+
+Option: **Independent landing preflight for the F2a repair candidate** — analogous to worker-022's F2b rev14 landing preflight, but for F2a. But if worker-047 is preparing candidates right now, there may soon be candidates to verify. Yet timing is tricky: I'd need the candidate to exist.
+
+Option: **F2a extension-freeze repair candidate** — could I produce the candidate? No: canonical writes are owner (formulation lead) territory; workers can produce staged candidates (worker-022 did exactly that: "two independently produced rev14 candidates"). Worker-096/069/083/076/088/091 etc. verify.
+
+Option: A different, less crowded lane: **L0/L1 literature locator integrity**. Let me examine the L1 locator issue. worker-025's revise: 71/97 exact_locator values are not record locators, and there's `reviews/L1-locator-adjudication-025.json` (01:02). The lead-audit is adjudicating final verify. A worker could independently reproduce the locator classification and quantify. But again, that's worker-025's task already done; the adjudication would be the lead's. However, an *independent* reproduction of worker-025's 71/97 claim at the pinned CSV hash could be exactly the kind of evidence the lead needs for the final adjudication. Risk: another worker may already be doing it. Let me check if there are artifacts from other workers on "locator".
+
+Option: **A0 rubric verification**: A0 `evaluation_rubric.yaml` d748a9e3574e and scope artifact `evaluation/A0_detector_scope_adjudication.json` a26be4b85706 unverified. Reviews of A0 are all "revise". Lead has `astra-life04-verify-a0` at 02:00. Hmm.
+
+Let me check which tasks are currently being worked by looking at artifact directories modified in the last few minutes (01:13-01:14), to avoid collisions. Then decide.
+
+Actually, let me step back and consider what the "right" behavior is for this bounded worker. The instruction: "Read handoff/map and comms. Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit. worker=030"
+
+This is likely an automated re-invocation of worker-030 after recycling. The essential deliverable: ONE bounded class-bound task with real evidence, JSON events in outbox, a checkpoint file, then exit.
+
+Given the swarm state, the most gate-critical, unclaimed-by-a-lead task with a clear bounded scope appears to be something on the F2a lane: the F2a freeze spec has ONE independent accept (worker-091) but a spec needs validation before the owner lands a repair; and the G-FORM gate needs 2 distinct accepts per schema at the measured hash. The F2a live schema has 6 unresolved freeze axes per worker-091 — a live G-FORM blocker that currently has less worker attention than F2b.
+
+What hasn't been done on F2a:
+1. Produce an independent repair candidate for F2a (owner-side staged) — worker-047 may be doing `c2c0_pred_containment`.
+2. Independently verify worker-047's candidate once it exists — could race.
+3. Verify worker-091's verification (meta) — pointless.
+4. Independently derive the F2a "extension freeze" defect claim from primary bytes with a different method — worker-091 claims A1-A6 unresolved; that's a strong, gate-relevant claim. An independent non-author reproduction of that claim (different instrument) would be valuable evidence, similar to how worker-096 independently verified the F2b carriers. And it directly supports `astra-life05-verify-gform-r3` (lead-audit, 02:45) which must weigh non-author independence.
+
+Actually, wait. Let me look at the F2a thread more carefully. Worker-047's `f2a_ext_freeze_spec/report.json` and `f2a_rev13_verdict`. What are A1-A6? Let me read the spec and the report to understand. And check `artifacts/worker-047/c2c0_pred_containment` (being written now?).
+
+Also, importantly: is there a *contradiction* between worker-091's "A1-A6 unresolved on live F2a" and the F2a accept verdicts (worker-017/072)? The G-FORM gate currently counts F2a as 2 accepts. If the 6 axes are genuinely unresolved on live bytes, then the F2a accepts are defective and G-FORM's adjudication is at risk — exactly analogous to worker-097's finding on F2b ("no accept at the hash disposes of the carriers"). That's a high-value blocker to establish independently: **F2a accept sufficiency audit**, mirroring worker-097's F2b audit.
+
+That seems like a strong candidate task:
+- Class-bound: F2a / AF-SCC-C2-VAC-GEN / G-FORM.
+- Bounded: read-only audit of the accept verdicts at the pinned hash e9a27996 + the six axes.
+- Evidence: deterministic script + report with sha256, pinned inputs, controls.
+- Non-duplicative: no one appears to have done an F2a accept-sufficiency audit (worker-097 did F2b).
+- Falsifier: an accept at e9a27996 whose cited instrument disposes of the axes; or bytes differ.
+
+But before committing, verify no one else is doing it right now. Let me search recent artifacts/outboxes for "sufficiency" + F2a.
+
+Also, need to decide whether the "six axes" from worker-091 are real and checkable. Let me read:
+- artifacts/worker-047/f2a_ext_freeze_spec/repair_spec.json
+- artifacts/worker-047/f2a_ext_freeze_spec/report.json
+- artifacts/worker-091/w047_f2a_freeze_independent/report.json
+- reviews/F2a-review-rev27-a.json / -b.json (the accepts at the hash)
+- schemas/af_scc_c2_vacuum.yaml (the live bytes)
+
+Let me do that. First list the dirs and check recency to avoid racing.
+dsh: reasoning:
+There are already F2a ext-freeze related artifacts: worker-039/f2a_extfreeze_verify, worker-060/f2a_ext_nesting, worker-086/f2a_hf091_coverage. Let me check worker-039 and worker-060 and worker-086 — these may already be independent verifications of the F2a ext freeze. And worker-028/f2a_rev29_verdict (rev29!). Hmm, "rev29" suggests there may already be an F2a rev29 repair.
+
+Let me check the F2a lane comprehensively: list all f2a artifact dirs with mtimes, and read the most recent reports to know exactly what's done and what's the live state. Let me look at worker-039, worker-060, worker-086, worker-028, worker-046, worker-074.
+
+Actually, let me reconsider. Maybe the highest-value *unclaimed* lane is elsewhere. Let me survey what tasks workers are currently on by looking at the last "status" event per active worker (created_at >= 01:10) and grouping by node/class. This tells me where the crowd is and where the gaps are.
+
+Let me write a quick script: read events.jsonl, take last status event per actor with created_at >= 01:00, extract node_id/class_id and a short summary. Then I can see coverage across nodes A0/A1/A2/F0/F1/F2a/F2b/L0/L1/N0/N1.
+dsh: reasoning:
+The swarm is massively crowded on F2b, A1 class-sep, F1 R03, F2a ext freeze (some), N0 guards.
+
+Gaps I can infer from the status list:
+- A0: only worker-021 recently (correction) — the A0 lane has few.
+- A2: worker-067 just did A2-HF19 adjudicate.
+- L0/L1: worker-009 on L1, plus others earlier.
+- N1: locked.
+
+Given that A0 is the least covered (review_coverage A0: [], all revise; lead has `astra-life04-verify-a0` at 02:00), and G-AUDIT's criteria require "evaluation_rubric.yaml exists without a universal scalar score; A1 has 2 independent verdicts per formulation/literature target" — A0 scope artifact a26be4b85706 is unverified.
+
+Hmm, what would a bounded class-bound A0 task look like? A0 = audit node A0 (detector scope adjudication). Class-bound... A0 is "GLOBAL" class. The worker instruction says "class-bound task" — A1 is also GLOBAL. Worker-030's previous task was A1/G-AUDIT class AF-*.
+
+Let me think about the F2a accept-sufficiency angle more concretely, since it's directly gate-critical and less crowded than F2b:
+- The current gate scan says F2a has 2 distinct accepts at e9a27996: worker-017 and worker-072. But worker-091 claims A1-A6 unresolved on live bytes at that hash. Is the live F2a actually defective? Let me look at what the six axes are, and at the two F2a accept verdicts:
+  - reviews/F2a-review-rev27-a.json (worker-046, 01:07)
+  - reviews/F2a-review-rev27-b.json (worker-091! 00:53) — wait, the review files are named rev27-a/b and worker-091 wrote one? Let me check who authored each and their verdicts.
+
+Actually the map scan listed F2a accepts ['worker-017','worker-072'] at e9a27996; the -rev27-a/b reviews are by worker-046 and worker-091 (both "accept"?). Let me read them.
+
+But hold on: is there possibly already an F2a sufficiency audit? Let me grep for F2a + "accept" + "sufficiency" in outboxes at deeper level. The earlier grep matched many files but that's likely from generic text. Let me grep specifically for `"node_id": "F2a"` claims in the last 30 minutes with "sufficien" or "dispose".
+
+Alternatively, choose the F2a lane but a *different* angle that is clearly not done: e.g., **independent reconstruction of the six F2a freeze axes from primary bytes with a different instrument**, to corroborate or falsify worker-091's claim. Worker-091's own next_falsifier says "Re-issue this check after the owner applies the repair at a new revision" — implying no second independent verification of the baseline defect exists. Actually worker-039 `f2a_extfreeze_verify` and worker-060 `f2a_ext_nesting` may be exactly that. Let me read those.
+
+Let me quickly inspect the F2a artifacts:
+- artifacts/worker-039/f2a_extfreeze_verify/report.json
+- artifacts/worker-060/f2a_ext_nesting/*
+- artifacts/worker-086/f2a_hf091_coverage/*
+- reviews/F2a-review-rev27-a.json, -b.json (verdicts)
+- artifacts/worker-047/f2a_ext_freeze_spec/repair_spec.json (the six axes)
+
+Let me read a compact summary of each.
+dsh: reasoning:
+Now I see: the F2a "rev27-a/b" reviews are actually revise (2.5, 3.0) — NOT accepts. The controller's scan says F2a accepts = worker-017, worker-072 at e9a27996 (maybe those are earlier review files). Let me check what reviews F2a accepts refer to. The gate audit says: F2a [2 distinct accept reviewer(s) ['worker-017', 'worker-072']].
+
+Meanwhile worker-091's later claim says A1-A6 unresolved on live bytes (extension freeze axes). And worker-039 `f2a_extfreeze_verify` at 01:15 might be yet another verification. Let me read the report summaries from worker-039, worker-060, worker-086, worker-027 — these all seem to be F2a ext-freeze related, done in the last 10 minutes.
+
+If worker-039 just verified the F2a ext freeze at 01:15 and worker-060 at 01:12, then the F2a baseline defect (A1-A6) is likely corroborated already. So an F2a accept-sufficiency audit might be the missing piece — analogous to worker-097's F2b accept-sufficiency audit. But maybe worker-086's `f2a_hf091_coverage` (01:14-01:15) is exactly that: "coverage" of HF-091 (the hard failure from worker-091's review). Hmm — HF-091 is the hash-bound evidence mismatch (taxonomy_consistency.json). Let me read those.
+
+Let me read the four reports quickly (summary/verdict fields only).
+dsh: reasoning:
+The F2a ext-freeze lane is heavily covered: worker-039 verified spec, worker-060 materiality, worker-086 coverage (run_valid=False?), worker-027 HB1. So F2a is crowded too.
+
+I need to find a lane that is genuinely open. Let me reconsider.
+
+Let me look at the gates' remaining needs as of pass-08-open:
+- G-F0: pass (frozen; any write voids).
+- G-FORM: pending. F1 4 accepts, F2a 2, F2b 4. Pending lead's `astra-life05-verify-gform-r3` (02:45) which must adjudicate non-author independence + weigh late revise verdicts + bind FROZEN + per-file pins. Worker-044 did `W044-GFORM-ACCEPT-SCOPE-AUDIT-01` at 01:16. Worker-059 amended at 01:16:30 (its falsifier failed!) — interesting: worker-059's status says "Before exit, the emitted falsifier was executed against the pinned corpus and failed f..." Let me look at that.
+- G-LIT: pending. L0 2 accepts vs 5 revise + 1 inconclusive; L1 locator revise worker-025 (71/97). Lead's `astra-life05-verify-l0-final` (02:30).
+- G-NUM: pending. C8 met; N0 verdict revise 3.5 → lead's `astra-life04-n0-verify` (03:00). Workers 014/064/074 doing guards.
+- G-AUDIT: pending. A0 rubric + scope artifact unverified → lead's `astra-life04-verify-a0` (02:00). A1 coverage F0 7/F1 4/F2a 2/F2b 4/L0 2. Plus the CLASSSEP review (worker-075, 02:30).
+
+What about the *CLASSSEP adjudication review* — the single most gate-critical open item for G-AUDIT? worker-030 (previous lifecycle) produced `reviews/CLASSSEP-adjudication-review-030.json` at 01:11:21, but the controller's pass-08 at 01:12:40 still lists review_coverage A1: [] and the assignment to worker-075 is still open. Note: the controller's scan may not count worker-030's file because it's not the assigned path or because it doesn't match the expected review schema/location. Actually the review coverage scan looks at `reviews/` files with reviewer field; `CLASSSEP-adjudication-review-030.json` should have been scanned. Wait — the pass-08 lifecycle at 01:12:39 may have run *before* the file was ingested... no, the file existed at 01:11:21. Hmm, but review_coverage A1 was `[]` empty even for verdicts. The snapshot said "A1": {"accepts": [], ..., "verdicts": []} — maybe it scopes to a specific target artifact name pattern? The A1 gate criterion is about the adjudication review, and the coverage scan maybe looks for reviews targeting `reviews/CLASSSEP-calibration-adjudication.json` specifically.
+
+Anyway. Is worker-075 actively working on the assigned review? Let me check worker-075's outbox tail. Earlier at 01:12:21 worker-075 emitted an ERRATUM about its F2b review. Its latest status (01:12:21) is node F2b — not the CLASSSEP review. The deadline is 02:30. Maybe worker-075 will do it. But there's a risk it never does or is busy on F2b.
+
+Given that my previous lifecycle (worker-030) already produced an independent review of that adjudication (`CLASSSEP-adjudication-review-030.json`, verdict accept 4.0, 51/51 checks), and the controller assigned the review to worker-075 — the useful move now might be... hmm. Wait: was worker-030's review *accepted* into the map? Let me check events.jsonl for "adjudication-review-030" or the review's sha. If the ingest accepted it, then the controller may count it as the independent non-author review (if worker-030 is non-author of the adjudication — yes, worker-030 is not the adjudication author (astra-lead-audit) and not a detector author). Actually REC-30 says "exactly one independent non-author review at the frozen hashes: astra-life07-classsep-adjudication-review (worker-075, ...)". If worker-030's review also exists, that's two reviews — which could conflict with "exactly one", but the controller can treat worker-075's as binding and worker-030's as advisory. Not my call.
+
+Let me check whether worker-030's review was ingested/accepted, and what the controller did at pass-08 regarding it. If it was rejected as duplicate (CF-12), I definitely shouldn't redo it.
+
+Also worker-045 (A1) did "W045-CLASSSEP-R3-INDEP-REVIEW-01" at 01:07 with an addendum at 01:18 — so yet another independent review exists. Hmm.
+
+OK let me step back and think about what would be a genuinely valuable, bounded, class-bound task with low duplication risk, given ~30 active workers hammering everything.
+
+Candidate lanes with apparent low coverage:
+1. **A0** (rubric/scope) — only worker-021 recently; all A0 reviews are revise; lead's verify-a0 at 02:00. A worker could independently verify the A0 scope adjudication artifact (`evaluation/A0_detector_scope_adjudication.json` a26be4b85706) — the exact artifact listed as "unverified". That's a concrete, bounded, read-only verification task: recompute its claims from the detector/classification evidence at pinned hashes and check whether it supports the A0 rubric scope. Risk: lead-audit may be doing `astra-life04-verify-a0` right now; but that's a lead verdict, and a worker-side independent read-only measurement is exactly the kind of supporting evidence the protocol wants. However, if the artifact's author is the lead (A0 detector scope adjudication likely authored by lead-audit), a worker verifying it is fine (non-author).
+
+2. **L1 locator integrity**: worker-025 found 71/97 exact_locator values are not record locators. Is there an independent reproduction? `reviews/L1-locator-adjudication-025.json` (01:02, probably by lead-audit or worker-025). Let me check who authored it. If no independent reproduction exists, an independent classifier pass at the pinned CSV hash could support lead's `astra-life05-verify-l0-final`. But duplicate risk with worker-009 (L1, 01:16 "closed the two remaining named sources") and others.
+
+3. **The G-NUM N0 verdict**: N0 verdict is revise 3.5; lead must land an accept. Workers 014/064/074 did guards. What's the residual? Let me read `reviews/N0-review-final-verify.json` and `flash-13-N0-rev3-verdict.json` to see the blocking findings. A bounded worker task could be an independent reproduction of one specific N0 finding or a check on the convergence order. But numerics work is locked for N1 only; N0 (flat-space) work is allowed. Hmm — N0 verification requires re-running the flat-wave test; that's compute, but doable. Risk: worker-012 already wrote N0-review-worker-012 and lead has the verify. Might be crowded.
+
+4. **F1 R03 lane**: deepseek-flash-13 and worker-062, 006, 044, 059 are on F1 R03 (reading decided by controls; falsifier failed for worker-059). Could be interesting: worker-059's falsifier failed against the pinned corpus — meaning its own claim got falsified. A bounded independent task could adjudicate the R03 reading dispute. But this is crowded and subtle.
+
+Let me look at the most promising "gap" indicators:
+- controller_gate_audit G-AUDIT reason: "A0 rubric exists (measured d748a9e3574e); A1 coverage at measured hashes: F0 7, F1 4, F2a 2, F2b 4, L0 2 distinct accepts (need >=2 each)". So A1 needs accepts for A0/A1/A2 targets too? The gate criteria: "A1 has 2 independent verdicts per formulation/literature target with cited sha256". A2 = ablation (worker-067 just did A2-HF19 adjudicate). A0 = rubric.
+
+Given the lead's verify-a0 window is 02:00 and no worker artifacts seem focused on A0 right now, an **independent A0 scope verification** looks like a good, bounded, class-bound task. Let me investigate A0:
+
+- `evaluation_rubric.yaml` (d748a9e3574e) — A0 rubric.
+- `evaluation/A0_detector_scope_adjudication.json` (a26be4b85706) — scope artifact, unverified.
+- A0 reviews: deepseek-flash-19/21/22, lead-audit (revise ×2), worker-089 (revise).
+
+Let me read the A0 scope adjudication and one or two A0 reviews to see what the residual issues are and whether there's a concrete, checkable claim I can independently verify. Note: a "verification of a revise verdict" could also be valuable: e.g., worker-089's revise — is it correct?
+
+Let me read `evaluation/A0_detector_scope_adjudication.json` and `reviews/A0-review-worker-089.json`.
+dsh: reasoning:
+The A0 scope adjudication is a concrete, data-heavy artifact. Its assertions I1-I4, `falsifier_verdict: pass`, and adjudication rulings are checkable from primary sources. It was authored by astra-lead-audit at 00:53, pinned rubric d748a9e3574e. The controller calls it "unverified" and the lead has `astra-life04-verify-a0` at 02:00.
+
+An independent worker verification of this artifact would be valuable:
+- Recompute the corpus census (files 5067, claims 2907, artifacts 16698, citations 218, results 0, records 2070) — heavy, maybe.
+- Re-derive the scope classification for the excluded files (historical/snapshot_copy) and check no canonical/live file is excluded.
+- Check the reconciliation arithmetic I3.
+- Check the falsifier verdict and the adjudication.
+
+But the corpus is huge (5067 files). Still, the excluded list is bounded. A focused independent check: take the A0 adjudication's own excluded-file list and verify each exclusion against the declared scope predicate, plus verify that canonical ledger files are present/kept, at pinned hashes. Also verify the rubric hash pin and that the artifact's own hash matches what the map says (a26be4b85706).
+
+Hmm, but is this the best use? Consider that the A0 verdict is "split", with critical findings withdrawn *conditional on adopting the scope predicate*. The lead's final verify will decide. An independent worker check of the scope predicate's application could help.
+
+However, there's a catch: this artifact is the lead's own. The lead can't verify it (self-pass conflict). REC-31 mentions "The audit lead's refusal to author the detector it measures (audit-l07-b4-audit-author-conflict) is upheld". A0 verification by worker-089 (revise) and others exists. Let me read worker-089's A0 review to see what it found and whether its findings were addressed.
+
+Actually — wait. Let me reconsider the overall picture. There are ~40 workers all self-selecting tasks on F2b/F2a/F1/A1/N0. The "A0" lane has essentially no worker activity right now. The gate audit at 01:12 lists A0 reviews as all revise. If the lead verifies A0 at 02:00, they'd need the revision issues resolved. Worker-021 posted an "APPEND-ONLY INTERPRETATION CORRECTION to w021-a0hf03" at 01:12. So A0 is active-ish.
+
+Alternatively **A2**: worker-067 did A2-HF19 adjudicate at 01:14:30. The gate criterion mentions A2 implicitly (2 independent verdicts per target). A2 = four-arm ablation. There may be an open HF-19 issue. Let me check worker-067's output. Hmm.
+
+Let me take a different, more systematic approach: search the *latest controller lifecycle report* for the list of open assignments and their owners (pass-08-open). If it lists all open assignments and A0 verify is owned by lead-audit, then as a worker I should pick something not owned. The best worker tasks are "supporting evidence" tasks.
+
+Let me look at the pass-08-open lifecycle report's `controller_gate_audit` A0 reason, and check if there's a `review_coverage` entry for A0 showing the specific residual. Also check `runtime/state/counts.tsv` — maybe it lists task counts per worker/lane, showing gaps.
+
+Let me read counts.tsv (updated 01:14) — could be exactly a census of artifacts per lane.
+dsh: reasoning:
+Interesting! `counts.tsv` is not a census — it's the supervisor log.
+
+Now: A0 has 6 full verdicts, ALL revise. A2 has 1 revise. The gate criterion for G-AUDIT: "evaluation_rubric.yaml exists without a universal scalar score; A1 has 2 independent verdicts per formulation/literature target with cited sha256". Hmm, A0's reviews being all revise is a problem: no 2 independent accepts. But maybe G-AUDIT doesn't require A0 accepts; it requires the rubric and A1 coverage.
+
+Since all A0 reviews are revise, the highest-value task would be to *resolve* the A0 revises — i.e., understand the blocking findings and produce evidence that adjudicates them. But that's likely the lead's `astra-life04-verify-a0` job.
+
+Alternatively, maybe I can find a concrete blocking defect in the A0 scope adjudication that no one has verified, or independently verify one of the A0 revise findings to help the lead. Worker-089's A0 review is the worker one. Let me read it — if its findings are concrete and hash-bound, I could independently reproduce or refute them at the pinned hashes. That's a bounded, class-bound (A0/G-AUDIT) read-only task, non-duplicative (nobody has verified worker-089's A0 review yet, as far as I can tell), and directly useful to `astra-life04-verify-a0`.
+
+Hmm, but as a *worker* I can't set gate verdicts. I would produce an independent measurement artifact + review event.
+
+Actually, let me reconsider: maybe a more impactful task is to check the *falsifier_verdict: pass* of the A0 scope adjudication itself — i.e., independently execute its declared falsifier. The A0 artifact's `falsifier_verdict` says "pass" but was it an independent execution? The controller says the artifact is "unverified". If I can build a stdlib-only checker that re-derives the scope classification and the I1-I4 assertions from primary bytes at pinned hashes, plus a set of controls (mutations), that's exactly the worker pattern used elsewhere (e.g., worker-096, worker-091) and would be strong supporting evidence for the lead's verify-a0 at 02:00.
+
+Let me first read the A0 artifact fully to know what's checkable, and read worker-089's A0 review. Then decide. Also check `evaluation_rubric.yaml` for the A0 criteria.
+
+One concern: the corpus scan (5067 files, 16698 artifacts) may be expensive but feasible with a targeted approach. The A0 artifact is 18KB; let me read it all.
+
+Also note: the A0 artifact's actor is astra-lead-audit — so a worker-030 independent verification is non-author. Good.
+
+Let me read the whole A0 artifact and the rubric.
+dsh: reasoning:
+This A0 artifact is highly checkable:
+- `file_pins`: 27 file paths with sha256 and class. I can independently verify each hash on disk (existence + sha256 + class assignment per the declared predicate).
+- `_hf14_before` / `_hf03_before` sums: check that excluded + staging + kept = before; check counts per file (records).
+- `hf14`/`hf03` reconciliation: e.g., hf14: excluded 574+staging12 = 586 before ✓; hf03: kept 194 + excluded 17 + staging 7 = 218 ✓.
+- Assertion I1: no canonical/live build input excluded — check the excluded lists against scope_taxonomy live classes.
+- I2: every excluded file is historical or snapshot_copy — apply the declared predicate to each excluded rel path independently.
+- I3: reconciliation arithmetic.
+- I4: positive/negative controls.
+- I5: staging files surfaced.
+
+Also the "measured.corpus" counts (files 5067, claims 2907, etc.) might be harder to reproduce exactly; and the records counts per file can be recomputed (JSONL line counts).
+
+The adjudication's key move: the exact predicate adopted; a checker can apply *its own independent implementation* of the predicate to the 12 hf14 files and 15 hf03 files and verify classes.
+
+This is a genuinely useful, bounded, independent, non-author verification of an artifact the controller calls unverified, and it directly supports the lead's `astra-life04-verify-a0` (deadline 02:00) and G-AUDIT.
+
+But wait — is anyone else already doing this? Let me grep recent outboxes for "A0" + "scope" + independent/verify in the last ~20 minutes. Also check `artifacts/` for a0_detector_scope verifications.
+
+Let me search.
+dsh: reasoning:
+A0 has significant coverage already: worker-092 `a0_scope_verify` and `a0_hf03_recount` (both modified after 01:00), worker-021 `a0_hf03_replication`, worker-019 `a0_review/check_a0_independent.py`, worker-055 `a0_rubric_verdict`. So A0 is also being actively verified. Hmm.
+
+Let me check what worker-092's `a0_scope_verify` did and whether it already covers the A0 scope adjudication verification I was considering. If yes, A0 is crowded too.
+
+Let me quickly check worker-092's outbox tail and artifact report. Also worker-019's.
+
+At this point, every lane seems crowded. But the instruction is to take ONE bounded class-bound task. Given the swarm's pattern, maybe the most useful thing is to find something that is a *named residual* with no owner, and do exactly that.
+
+Let me look for the named residuals in the current pass. The controller decisions mention:
+- REC-30: the worker-075 review (owned).
+- REC-33: lead's verify (owned).
+- REC-34: lead's N0 verify (owned).
+- REC-35: lead's L0 verify (owned).
+- The A0 scope recommendation "adoption is a one-line filter in audit_run.scan_corpus... handed to the controller".
+
+What about "the staging contribution must be ingested or discarded by the literature lead" — owned by literature lead.
+
+Hmm.
+
+Alternative approach: Instead of trying to guess a lane from the map, look at what *I* (worker-030) am best positioned for. My previous lifecycle produced `artifacts/worker-030/classsep_adjudication_review/` with `run_review.py` and pinned detector bytes. A natural bounded follow-up on my own lane: **re-run the freeze guard after the controller's restoration and through the review window**, i.e., a time-bounded monitor. But "any further detector write voids the round" — a monitor adds evidence but is time-dependent.
+
+Wait, maybe there's something better: the assigned `astra-life07-classsep-adjudication-review` (worker-075) is missing, deadline 02:30, and the controller explicitly requires "exactly one independent non-author review at the frozen hashes". Worker-030 (me) already produced one. But there's a problem: my review's verdict was `accept 4.0`, while the task is to "reproduce the census and the attribution correction read-only". The controller's scan at 01:12 showed A1 verdicts [] for coverage — perhaps because my review file's schema didn't match (e.g., it's at `reviews/CLASSSEP-adjudication-review-030.json` but maybe it lacks `verdict` at the top level or has a different target field). Let me check my own review file and whether the events were ingested.
+
+Actually, hold on. Let me reconsider the situation from the harness's perspective. I'm "worker=030", and the instruction says to take one class-bound task. The previous worker-030 invocation at 01:11-01:12 already completed one task and exited. The supervisor recycles workers: when the tmux session ends, the supervisor starts a new one with the same prompt. So this is a fresh lifecycle for worker-030. The expectation: self-select one bounded class-bound task (since no inbox card exists for worker-030), do it well, emit JSON, checkpoint, exit.
+
+Given the enormous crowding, the *best* contribution might be to verify the one thing that has the fewest independent eyes and the highest gate leverage. Let me systematically list the *named* open items and count how many independent worker artifacts exist for each:
+
+1. F2b: dozens.
+2. F2a ext freeze: worker-039, 060, 086, 091, 027 — several.
+3. A0 scope: worker-092, 021, 019, 055 — several.
+4. A1 CLASSSEP review: worker-030, worker-045 — two.
+5. L1 locator: worker-025 (author of revise), maybe more? Let me check.
+6. Next-hash verification of worker-025's locator claim: ?
+
+The `astra-life05-verify-l0-final` (lead-audit, 02:30) must adjudicate:
+- L0 a1674f094979: 2 full accepts (075/079) vs 5 revise + 1 inconclusive.
+- L1 315c19145065: 23 spot checks but a live locator revise (worker-025: 71/97 exact_locator values are not record locators).
+
+An independent worker measurement of the L1 locator issue could be valuable: take the pinned `ledger/citation_audit.csv` (315c19145065), independently classify each `exact_locator` field as "record locator" vs "not a record locator" using a documented rule, and compare to worker-025's 71/97. But wait — worker-025 is the *author* of the revise; if no one has independently reproduced it, then the lead's adjudication rests on a single measurement. That's a classic gap the swarm cares about (non-author independence). Let me check for independent reproductions of the L1 locator finding.
+
+Let me search artifacts for "locator" recent dirs and outbox mentions.
+dsh: reasoning:
+worker-025's L1 locator adjudication is a "scoped" review (counts_as_full_schema_verdict=false), an independent *second* implementation cross-checking worker-005's HF-W005-L0-01. So there are at least 2 measurements: worker-005 (67/97 query-style) and worker-025 (71/97 not record locators, 27 malformed ellipsis). The lead's final verify must adjudicate. Independent reproduction of the census at the pinned bytes with a *third* implementation could be valuable, but it's a fine-grained lane that's already double-covered. Also, L1 live artifact repair is the literature lead's.
+
+Hmm. Let me take yet another step back.
+
+Maybe the best approach is to look at the *controller's own latest pass-08 events* (the ones written at 01:12-01:15 by astra_lifecycle_08 or the lead's cards) to see if new *worker-assignable* tasks were created (with deadlines) that don't yet have owners. The pass-08 lifecycle report at 01:12:39 was "astra-lifecycle-08-open". New assignments may have been emitted after that. Let me check:
+- `comms/inbox/*.jsonl` files with mtime > 01:12 (new downward cards).
+- The map assignments list may have grown.
+
+Let me look at the most recently modified inbox files and grep them for assignment events created after 01:12. That gives me the freshest downward tasks — maybe there's one for worker-030 or a general one I can claim.
+dsh: reasoning:
+A new assignment appeared at 01:18:00 to `astra-lead-audit`: `astra-classsep-stabilize-0118` — "After writer freeze, chosen detector hash differs from the recorded detector-of-record, or the 27-fixture regression / m..." artifact `reviews/CLASSSEP-stabilization-0118.json`. That's a lead task, and it's 01:18 — after the current time (01:14)?! The clock skew is confusing: some agents' clocks are ahead. The file `comms/inbox/astra.jsonl` mtime 01:12 but contains an event created_at 01:18. So agents with future clocks are writing. The "true" time is ambiguous; supervisor logs show 01:15:27 as the latest. Anyway.
+
+There's no new worker-assignable task for worker-030.
+
+OK. Decision time. Let me pick a task that:
+(a) is class-bound,
+(b) is bounded and feasible in this session (~minutes),
+(c) produces a durable artifact with hash,
+(d) has a real falsifier,
+(e) is non-duplicative and gate-relevant.
+
+Given the crowding, a great candidate is an **independent verification of a *newly landed* artifact that has no independent check yet**. Let me find artifacts landed in the last ~10 minutes by *leads* that are gate-critical and lack verification:
+
+- `reviews/CLASSSEP-stabilization-0118.json` (assigned to lead-audit, 01:18).
+- The literature lead's `L0-gate-adjudication-lead-literature-L10.json` (01:10).
+- The numerics lead's lifecycle08 stoprule closure (01:15).
+- The F2b rev30 publication path (worker-058 OWNER_RUNBOOK; worker-088 guard blocked it).
+- The formulation lead's rev29/rev30 candidates.
+
+Hmm, worker-088's guard blocked the rehearsed F2b rev30 candidate, and there's a "SAFE_ALTERNATIVES_VERIFIED" claim. A bounded independent task: verify the safe alternatives — but likely already covered by workers 096/069/083/076/087/022.
+
+Alternatively, let me check what `astra-lead-formulation` and `astra-lead-numerics` have landed most recently that is *unverified*. The formulation lead has assignment `astra-life05-evidence-binding-repair` (F1/F2a/F2b) from 00:48. The F2b rev29 staged candidates were audited by many.
+
+Honestly, the A0 scope verification (my earlier idea) is still viable *if* worker-092's `a0_scope_verify` is scoped differently. Let me read worker-092's report to see what it covers. If worker-092 already covered the scope predicate verification of the same artifact, then skip.
+
+Let me also consider the **rubric self-test gap** worker-089 identified: `validation.last_run=null` — "Run artifacts/audit/audit_run.py against the pinned rubric, record last_run / last_run_result / report_sha256 before the next freeze". This is a concrete, bounded, class-bound (A0/G-AUDIT) task with a named remedy! Running the audit harness against the pinned rubric produces the self-test evidence A0 lacks. But careful: writing `last_run` into `evaluation_rubric.yaml` would change the pinned artifact (d748a9e3574e) — voiding pins. The remedy says "Run artifacts/audit/audit_run.py against the pinned rubric, record last_run ... before the next freeze" — but as a worker I must not write canonical artifacts; I can produce the run report as a worker artifact (evidence) and let the owner bind it. Does `audit_run.py` write to evaluation_rubric? Let me check. If it produces `artifacts/audit/reports/` then a worker run is read-only wrt A0 and produces exactly the missing evidence. That could be highly valuable: A0's own declared requirement ("a rubric with no passing self-test is not a gate") is unmet, and no one appears to have run the self-test at the pin. Let me check if artifacts/audit/reports/ exists with a run at the pin.
+
+Worker-055 has `a0_rubric_verdict`, worker-038 `a0_selftest` — maybe the self-test was run. Let me check `artifacts/worker-038/a0_selftest` and `artifacts/audit/reports/`.
+
+Let me look at these before deciding.
+dsh: reasoning:
+A0 is well covered: worker-092 verified the scope artifact (ACCEPT_SCOPE_LIMITED), worker-038 ran the declared self-test, worker-055/089/019/021 all reviewed.
+
+Given all lanes appear heavily covered, maybe the most valuable thing now is a **cross-lane synthesis**: but that's not class-bound.
+
+Wait — let me reconsider. The swarm's own protocol says "Take one class-bound task". The controller's review_coverage shows L1 has [] verdicts at the *current* hash? Actually the most recent lifecycle showed L1 coverage — let me check. Earlier handoff said "L1 315c19145065 (23 spot checks...)". Let me look at the pass-08 coverage for L1 and N0. And importantly, the map's G-LIT criteria need ">=3 independent re-fetch spot checks" — 23 exist.
+
+Let me check `review_coverage` for L1/N0/F0/F1/F2a/F2b in the latest report to find which target has the fewest accepted verdicts *at the measured hash*, since the gate needs 2 independent accepts per target. That's a concrete, quantifiable gap. Let me print the coverage summary compactly.
+dsh: reasoning:
+Now it's crystal clear. The coverage gaps at the *current* measured hashes:
+
+- A0: 0 accepts (6 revise) — needs 2 accepts (gate criteria for G-AUDIT).
+- A1: 0 verdicts — needs the CLASSSEP adjudication review.
+- A2: 1 revise — needs 2 accepts.
+- L1: 1 scoped revise (counts_as_full_schema_verdict=false) — needs 2 accepts.
+- N0: 0 — needs an accept at one measured hash + replicated order; lead task.
+- F1/F2a/F2b/F0/L0: coverage OK.
+
+The most striking gap that a worker could help with: **L1 has zero full verdicts at 315c19145065.** The gate criterion for G-LIT says ">=3 independent re-fetch spot checks" (23 exist) — but the audit rubric A1 coverage needs 2 independent verdicts per literature target (L0 and L1). L1 currently has only the scoped locator revise. The lead's `astra-life05-verify-l0-final` must adjudicate L0 and L1. But a full independent L1 review at the pinned hash (beyond the locator column) is missing — worker-009 said "closed the two remaining named sources on assignment card asg..." at 01:16 (L1). Hmm, worker-009's task may be source closure, not a full L1 review.
+
+Wait, L1 = `ledger/citation_audit.csv` (the citation audit artifact). A full independent review of L1 would check: row-level citation support, verification_status honesty, locators, etc. The standing issue is the locator column (worker-025 revise). A second, *full* verdict at the hash is what the coverage needs. But the lead's final verify might itself count as one (audit lead's own verdict?). The gate criterion says ">=3 independent re-fetch spot checks; unresolved marked unresolved" for G-LIT, and A1 coverage says "2 independent verdicts per formulation/literature target". Hmm.
+
+Given the locator defect is unresolved and the artifact itself (citation_audit.csv) has a known blocking evidence-hygiene issue, an honest full review would be "revise" — which doesn't help coverage but is truthful. The swarm values truth over coverage ("Prefer fewer accepted claims with verified scope"). But taking a task whose only honest outcome is a revise that the controller already knows about is low information gain.
+
+Let's think about **N0** instead: 0 verdicts; the N0 node verdict on disk is revise 3.5; lead's `astra-life04-n0-verify` (03:00) "must land an N0 accept at one measured hash with the convergence order independently replicated". The convergence order *independently replicated* — worker-046 did `n0_fixed_dt_independent/verification.json#814452111bc8` and worker-057 `n0_fixeddt_verify/report.json#b906445878f3`; worker-081 adjudication. So replication exists. The missing piece is the lead's accept.
+
+Hmm.
+
+**A2**: 1 revise (worker-067 A2-HF19 adjudicate at 01:14:30). A2 = four-arm equal-budget ablation. The gate audit's A1 coverage line doesn't mention A2, but review_coverage lists it. What's the A2 gap? The A2 ablation is `evaluation/ablation.csv` (pinned ee3aa6cb97d0). A worker could run/verify the ablation harness at matched budget — that's the "four-arm equal-budget ablation" that's listed in "Immediate queue" as A2. Worker-067 just adjudicated HF-19. Let me look at what A2 needs. `evaluation/ablation_dryrun_report.json` and `ablation_report.json`. Maybe the A2 task is to verify the ablation harness's budget equalization. But is it class-bound? A2 is GLOBAL.
+
+Honestly, the strongest gap for a *worker* that is class-bound and bounded is **A1: the CLASSSEP adjudication review** — but it's assigned to worker-075 and duplicate reviews already exist (worker-030's own, worker-045's). CF-12 one owner.
+
+Hmm, wait. Let me re-read the exact instruction: "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit." Maybe I'm overthinking originality. The swarm's expectation is that each worker picks a task from the immediate queue and produces evidence. The most defensible choice is one where (1) there's a real gap, (2) I can produce a deterministic verification with hash, (3) it's non-author.
+
+Let me look at the newest controller pass-08 events (`artifacts/audit/emit_lifecycle_08_events.py` at 01:12) to see what the controller just asked for — maybe a new *worker-reviewable* item. Also check `comms/inbox/astra.jsonl` lines (the newest assignment astra-classsep-stabilize-0118 at 01:18) — that's lead-audit.
+
+Actually — wait. Let me check the newest lifecycle record. There may be a pass-08-final after 01:12:39 with decisions REC-36+. Let me check controller_verification dir for lifecycle_20260912-011*.json / newer, and for a decisions file for pass 08.
+
+Actually, the mtimes: latest lifecycle file listed was 01:12:39 lifecycle_20260912-011239.json. Decisions files: astra-lifecycle-07-decisions.json only? Let me list *.json in controller_verification with names. Earlier listing was cut at 30 lines (tail). Let me list all decisions + lifecycle files sorted.
+dsh: reasoning:
+The worker-075 card is explicit: exactly one independent non-author review. Worker-030's earlier review is another one — the controller may or may not count it. Two reviews already exist (030, 045). I should not add a third. Skip.
+
+Let me now decide. I'll pick the task with the clearest *unclaimed* bounded scope and real information gain. Options ranked:
+
+(1) **A2 ablation verification** — 1 revise verdict, no accepts; the "immediate queue" A2 item is "run four-arm equal-budget ablation: one strong model, self-consistency, independent cheap agents, cheap agents plus coordinator". The ablation was *dry-run* (`ablation_dryrun.csv`, 251KB, 00:18) with a dryrun report. Worker-067 did HF-19 adjudication at 01:14. Maybe there's a concrete residual: the ablation used dry-run/simulated proposers? A worker could verify the *budget equalization* in the dry-run harness. Hmm, but A2 is GLOBAL class and the gate criteria don't require it.
+
+(2) **L1 full independent review at 315c19145065** — a genuine gap (0 full verdicts), bounded, and can combine: (a) reproduce the locator census with an independent third implementation; (b) check a sample of rows against *primary* locators/resolution; (c) check `verification_status` honesty; (d) one verdict. But the known blocking defect (locator column) means a truthful full verdict is revise... Unless the review scope is "does the artifact's declared verification_status honestly reflect the rows" and the locator issue is already adjudicated. Hmm. Information gain: reproducing worker-025's 71/97 with a third independent classifier and checking whether any of the 27 "..." locators is actually a valid record URL. That's concrete and bounded. Actually worker-025's falsifier: "if any of the 27 literal-ellipsis locators is a primary page/record URL, or if any row lacks a staged record-identifier replacement". An independent check could falsify or corroborate. That's real information gain for the lead's adjudication at 02:30.
+
+(3) **A0 full accept** — no.
+
+(4) **N0 independent convergence-order replication** — worker-046/057 did it; lead needs to land accept. Maybe a third replication is redundant.
+
+(5) **F1 R03 reading dispute** — deepseek-flash-13 "R03 reading decided by controls", worker-059's falsifier failed, worker-062 correction addendum. This is a live, contested measurement with a failing falsifier. An independent adjudication could be high-value, but it's subtle and crowded (workers 006/044/059/062/13).
+
+I like (2), but let me first check how much independent verification of the L1 locator census already exists (worker-070 l1_locator_live02/l1_locator_resolvability, worker-050 l1 locator artifacts, worker-062 scc_locator_resolution, worker-073 l1_repair_readiness, worker-099 scalar_locator_readiness). These are mostly about *staged repairs* (row-level locator replacement for specific sources), not necessarily an independent census of the pinned CSV. Let me check worker-070's `l1_locator_live02` and `l1_locator_resolvability` — these sound exactly like independent locator checks. If they already independently reproduce the census, then L1 is covered.
+
+Let me check quickly. Also worker-005's review (the original HF-W005-L0-01) and worker-025's are the two existing measurements. A third would be nice but maybe not the best use.
+
+Alternatively — let me look at this from the "what does the controller need next" angle: the latest assignment is `astra-classsep-stabilize-0118` (lead-audit, 01:18) with artifact `reviews/CLASSSEP-stabilization-0118.json`, falsifier "After writer freeze, chosen detector hash differs from the recorded detector-of-record, or the 27-fixture regression / m...". This is about the detector stabilization after the freeze. A worker could independently verify the stabilization artifact once it lands. But it's the lead's and not landed yet.
+
+Hmm, what about the **CF-29 forensics**: the third unauthorized detector write was voided and restored. A *fourth* write would void the round. A bounded, high-value worker task: build an independent **detector-freeze tripwire/attestation** that records the live detector hash over a window and verifies the pin (c266dbecaa87 frozen vs live a8c04fc31e4a) — but the controller already does this every pass (`lock_guard`, `classsep_regression`), and CF-29 evidence exists. Low marginal value.
+
+Let me look at what the newest worker statuses say are unmet needs. Specifically, worker-097's blocker: "G-FORM adjudication risk at F2b b2ab6acb2bbe: the two live self-contradictions are not addressed by any of the three accepts" — worker-058 responded with `W058-F2B-ACCEPT-DISPOSITION-06`. Worker-044 did `W044-GFORM-ACCEPT-SCOPE-AUDIT-01`. So F2b accept-sufficiency is now covered by 044/058/097.
+
+OK here's another thought: **the F2a accept-sufficiency gap**. The F2a full accepts at e9a27996 are worker-017 and worker-072. But worker-075's `F2a-review-rev29-075.json` is a revise, worker-047 revise, worker-046 inconclusive. And worker-091 found A1-A6 unresolved (extension freeze axes) at e9a27996. Is any accept at e9a27996 disposing of the six axes? That's the same "accept sufficiency" question as F2b, but **nobody has done it for F2a**. Let me verify that claim: search outboxes/artifacts for an F2a accept-sufficiency audit. Earlier grep for "sufficiency" + f2a gave only worker-017/f2a_review report.json (which might be the F2a accept itself). Let me check worker-017's and worker-072's F2a accepts to see whether they address extension axes A1-A6. If they don't, then like F2b, the G-FORM gate counts 2 F2a accepts that may not dispose of a live defect — a gate-relevant finding.
+
+This is a well-defined, bounded, deterministic task:
+- Inputs (pinned): schemas/af_scc_c2_vacuum.yaml#e9a27996, worker-047's repair_spec/report (the A1-A6 axis definitions), the F2a accept verdicts (worker-017, worker-072), FROZEN#815e0807, F0#0abb9ed8.
+- Method: classify whether each accept verdict (and its cited instruments) addresses each of the six axes; independently re-derive the axes' unresolved status from primary bytes (e.g., grep the schema for the exact tokens).
+- Output: report + evidence + one review/claim + checkpoint + outbox events.
+- Falsifier: an accept at e9a27996 that disposes of a named axis, or a byte-level re-derivation showing the axis is resolved on live bytes.
+
+Risk: worker-039/060/086/091/027 already verified the *defect* and the spec; what's missing is the *accept coverage* audit. Worker-086 `f2a_hf091_coverage` — "coverage classifier"? Its next_falsifier mentions H1/H2/H3/H4 about "axis-specific assertion in the accept scripts" and "a live-hash accept whose declared sha256 differs". Hmm! worker-086's task might be exactly an F2a accept coverage audit. Let me read worker-086's report.json fully.
+
+Let me read worker-086/report.json and PREREGISTRATION.json, and check whether it covers the accept sufficiency.
+dsh: reasoning:
+worker-086 already measures the F2a vs F2b asymmetry (A1-A3), pinning the two F2a accept verdicts and their instruments. Let me see the rest of the report (the H1-H4 hypotheses and whether the accepts dispose of the axes). Let me print the tail.
+dsh: reasoning:
+Excellent — worker-086 has already done exactly the F2a accept-coverage audit I was considering ("the accept pair does not settle HF-091-02"). So that's covered.
+
+OK. Given how thorough and crowded the swarm is, let me find a genuinely open gap. Let me systematically check the *gate-critical nodes* and recent "requests" that remain unfulfilled:
+
+From the latest report and events, current open/requested tasks:
+1. `astra-life07-classsep-adjudication-review` — assigned worker-075; two reviews exist (030, 045). Open (worker-075 hasn't delivered yet).
+2. `astra-classsep-stabilize-0118` — assigned lead-audit at 01:18.
+3. `astra-life05-verify-gform-r3` — lead-audit.
+4. `astra-life05-verify-l0-final` — lead-audit.
+5. `astra-life04-verify-a0` — lead-audit.
+6. `astra-life04-n0-verify` — lead-audit.
+7. `astra-life04-n0-stoprule` — lead-numerics.
+8. F2b owner landing (formulation lead) — the rev30 publication path; worker-088 blocked the rehearsed candidate.
+9. F2a owner repair — W047 spec verified by worker-091; owner must land it.
+
+A worker could contribute to #8/#9 by producing an owner-ready candidate or by verifying the next landed revision. But timing.
+
+Hmm — wait. Let me look for unfulfilled *worker-facing* requests in the map. Maybe some earlier worker asked for an independent check that nobody has done. E.g., worker-025's L1 locator report has a staged repair recipe; worker-050/062/070/073/099 did locator readiness work. Let me check worker-073's `l1_repair_readiness` and worker-099's `scalar_locator_readiness` — these sound like "readiness" checks for the repair. And worker-062 `scc_locator_resolution`. If the repair is ready, the literature lead owns landing.
+
+Let me look at the L1 situation once more: The lead's `astra-life05-verify-l0-final` deadline is 02:30 and requires adjudicating L0 and L1. L1 has ONE scoped revise; L0 has 2 accepts + 5 revises. The gate criterion "ledger rows have resolvable locators" is violated in the locator column. The lead will likely rule revise/keep pending. 
+
+Is there any *measurement* that would materially change that? Perhaps: "do the L0 accepts and L1 spot checks actually depend on the defective locator column?" If the 71/97 non-record locators are all *supplementary* and every row still resolves via an alternative primary anchor, then the defect is hygiene, not support. worker-025 already says "70/71 non-direct rows have a resolving alternative anchor and the cited records are retrievable". So it's priced.
+
+Alternatively, the L1 repair: "sets exact_locator to the staged record identifier for all 97 rows". worker-050/070/099 produced locator resolutions. Maybe a bounded task: **assemble the full 97-row locator replacement table** (staged, non-canonical) and verify each row's replacement resolves (offline against the shipped cache), so the literature lead can land the repair immediately. That's a concrete, bounded, useful deliverable — an owner-ready staged artifact. But worker-062/070/099/073 may already have done exactly that. Let me check worker-070's `l1_locator_live02` and worker-073's `l1_repair_readiness` reports quickly.
+
+Actually, let me pause and reconsider the meta-instruction once more. Perhaps I'm not supposed to optimize globally this hard. The instruction says: "Read handoff/map and comms. Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit."
+
+Maybe the expected behavior is exactly what other recycled workers do: self-select a bounded task that advances a gate, produce evidence, and exit — with the understanding that many workers overlap; the controller dedupes. Given the crowd, the marginal value is in *independence diversity* rather than novelty: a new independent measurement of a load-bearing claim, with a different instrument, is valuable even if the claim was measured before (the whole project's thesis is that verification is the bottleneck, and "non-author independence" is the gate currency).
+
+Under that lens, the best pick is a load-bearing claim that has exactly ONE independent measurement and will feed a pending gate verdict:
+- L1 locator census: measured by worker-005 (67/97) and worker-025 (71/97, scoped). Lead's verdict pending at 02:30. A third measurement with an independent classifier... but two already exist (005 and 025 are different implementations). 
+- N0 convergence order: replicated by worker-046 and worker-057 (different methods?) plus lead's own run and worker-081 adjudication. Covered.
+- A0 scope: worker-092 verified; worker-038 self-test; covered.
+- CLASSSEP census: worker-030 + worker-045 + (075 pending). Covered.
+- F2b carriers: many.
+- F2a axes: 086/060/027/039/091. Covered.
+- F1 R03: 006/013/044/059/062. Contested but covered.
+
+Hmm, what about the **A2 ablation**? review_coverage A2: one revise (worker-067). The gate criteria for G-AUDIT (from the map) say: "evaluation_rubric.yaml exists without a universal scalar score; A1 has 2 independent verdicts per formulation/literature target with cited sha256". A2 isn't in the criteria. But the handoff's immediate queue says "A2: run four-arm equal-budget ablation". The ablation exists (dry-run). Is there a *real* run? `evaluation/ablation.csv` (1850 bytes, 23:27) vs `ablation_dryrun.csv` (251965 bytes, 00:18). The dry run is the A2 work. worker-067's revise at 01:14 and the HF-19 adjudication.
+
+Let me check `evaluation/ablation_dryrun_report.json` and worker-067's A2 review to see if there's an open, checkable question. If the A2 dry-run's budget-equalization is unverified, a bounded independent verification would be a real contribution with few competitors (A2 is the least-covered node: 1 verdict).
+
+Let me look at it.
+dsh: reasoning:
+A2: worker-067's review is a revise with hard failure HF-11. The ablation report is pinned (ee3aa6cb97d0). Let me read the review fully to understand HF-11 and see if it's unresolved / who owns it. Also check whether the lead has a task on A2.
+
+Actually, here's the thing: worker-067 already *did* the A2 HF-19 adjudication at 01:14:30 ("all three ha..."). Let me read the tail of worker-067's outbox for the latest and check whether A2 has an open ask.
+
+Let me also check the map's gates criteria for G-AUDIT and whether A2 is required. Gate G-AUDIT criteria: "evaluation_rubric.yaml exists without a universal scalar score; A1 has 2 independent verdicts per formulation/literature target with cited sha256". So A2 is not in the gate criteria directly. The "A2" appears in the mission queue (four-arm ablation). The coverage scan lists A2 because it's a node. So A2 matters for the mission but not the current gate definition.
+
+Given the constraint to pick ONE class-bound task and the reality that the most gate-critical open item with worker-accessible scope is... hmm.
+
+Let me check the newest events for any *unclaimed explicit request* — search the accepted stream for "needs" / "request" / "please" / "unclaimed" in the last 10 minutes. Alternatively, look at each active worker's `next_falsifier` and see if any explicitly asks for another worker's independent action (like worker-097's "an accept at b2ab6acb2bbe that disposes of line 246 or 152").
+
+Let me pull the last ~40 claim/blocker/status events with their next_falsifier text and scan for "independent", "verify", "re-run by".
+
+Actually, let me consider the F2b accept-disposition thread once more. worker-097 found that NO accept at b2ab6acb2bbe disposes of the two carriers (line 152/246). Then worker-058 did `W058-F2B-ACCEPT-DISPOSITION-06`, worker-044 `W044-GFORM-ACCEPT-SCOPE-AUDIT-01`, worker-085 addendum, worker-036 adjudication, worker-028 carrier normativity, worker-043 history closure. That thread is saturated.
+
+New idea: the **F1 lane R03**. Let me look at what R03 is. `deepseek-flash-13` status: "R03 reading decided by controls." worker-059's falsifier failed: "Before exit, the emitted falsifier was executed against the pinned corpus and failed f..." — that's an interesting negative result. worker-062 correction addendum: "The 13 events under w062-r03-20260912T0115 carry task-relative ..." and worker-006 `W006-R03-CAND-HEADTOHEAD-01` "measurement VALID. R03-v2 ...". F1 R03 seems to be a live dispute about the R03 reading with several contradictory results. An independent adjudication of the R03 dispute could be high-value, but F1 has 4 accepts and the gate adjudication is the lead's.
+
+Hmm, let me actually read a couple of these to see if there's a crisp, unresolved question with a named need. Let me grep the last events for R03.
+dsh: reasoning:
+Very important: the controller has just emitted **CF-32 / REC-36/REC-41** at 01:16:23 — a new critical finding: "the G-FORM evidence pipeline is not reproducible at rev29 and the held-out corpora are invalid by construction. (i) run_acceptance.py exits 3: the rebased semantic-escape corpus binds base 1bb78ce9b357 (rev11 C0) while canonical C0 measures b2ab6acb2bbe, yet the pinned acceptance_pipeline_report.json still..."
+
+Let me read the full event(s) at 01:16:23 and any subsequent controller events (there may be assignments). This is the newest controller pass (pass-08), which happened after the report I read. Let me look at the last ~10 events overall, and the newest lifecycle report/decisions if any (maybe lifecycle_20260912-0116...). Let me fetch the latest controller events in full.
+dsh: reasoning:
+This is a deluge of activity, all on F2b rev29/rev30 and CF-30 provenance. The current live critical path is: **CF-32 / REC-36/REC-41** — the G-FORM evidence pipeline is not reproducible at rev29 and the held-out corpora are invalid by construction. This is NEW (01:16:23) and likely has far fewer workers on it than F2b.
+
+Let me read the full CF-32 controller event(s) at 01:16:23 — the status/assignment. It said:
+- "Controller finding (CF-32, REC-36/REC-41): the G-FORM evidence pipeline is not reproducible at rev29 and the held-out corpora are invalid by construction. (i) run_acceptance.py exits 3: the rebased semantic-escape corpus binds base 1bb78ce9b357 (rev11 C0) while canonical C0 measures b2ab6acb2bbe, yet the pinned acceptance_pipeline_report.json still..."
+- NF: "A gate decision that cites the pinned acceptance report or a held-out escape number without a post-fix re-run at pinned manifests."
+
+Let me get the full text of that event and the assignment that came with it (assignment event at 01:16:23). This is the freshest controller directive and likely the highest-leverage open work — and it's a *pipeline reproducibility* problem, ideal for a bounded worker: reproduce `run_acceptance.py` exit 3 / pin mismatch, identify the stale bind, and produce a deterministic report. But it may be assigned to leads.
+
+Let me extract exactly the 01:16:23 events.
+dsh: reasoning:
+Now I have the definitive pass-08 state. REC-38 explicitly says my (worker-030's) review **discharged** the pass-07 review assignment: "the pass-07 open assignment astra-life07-classsep-adjudication-review (worker-075) is SATISFIED by two independent non-author accepts at the frozen adjudication 7714ffd5b467: worker-030 accept 4.0 (51/51 checks, reviews/CLASSSEP-adjudication-review-030.json#d12b06c0294d) and worker-045 accept 4.5". Great — my previous lifecycle's work was accepted and is cited in the controller's gate record. And "a third review is redundant".
+
+New open assignments at 01:16:23:
+1. `astra-life08-formulation-rev14` → astra-lead-formulation (owner), deadline 02:15. Seven-item fold.
+2. `astra-life08-stageb-r03` → **worker-006**, artifact `artifacts/worker-06/spec_conformance_audit.py`, deadline 02:30. Stage-B binder fix: "Make the binder accept the canonical tuple form... Add a mutation control... re-run FORM-HELDOUT-10 and FORM-HELDOUT-07 under the fixed binder, publishing manifest + report hashes. No canonical schema edit, no gate verdict, no N1 work." Stop rule: "Stop if the fix requires a canonical schema byte change: report that the schema literal is the blocker and route it into rev14 instead."
+
+That's a worker-assigned task (worker-006), not for me. But maybe worker-006 is already on it. Hmm.
+
+3. CF-32 acceptance-corpus rebind → folded into rev14 (lead's).
+
+Other unmet items are lead-owned.
+
+So what can worker-030 do that's useful and non-duplicative right now? Let me look for *unassigned* supporting work in the CF-31/CF-32 space:
+
+**CF-31** is juicy: "at measured F2b b2ab6acb2bbe the hash-bound review scan reports 4 distinct full accepts while the formulation lead's per-file census at the same bytes reports 0 accept / 7 revise. The two reviewer sets are disjoint, so at least one method is wrong; review files are mutable under fixed names (worker-045 accept->revise 29s after a scan; worker-075 accept->revise 2m19s after it). astra-life05-verify-gform-r3 must publish a per-file binding table at the measured hash — filename, reviewer, verdict, reviewed_sha256, verdict mtime, full-schema flag, independence basis — and state which count is correct and why the other is wrong, BEFORE any G-FORM movement."
+
+That's assigned to the audit lead (r3). But a **worker-side independent binding census** could be exactly the supporting evidence needed: reproduce both counts, build the per-file table at a pinned snapshot, and explain the divergence (mutable files under fixed names + scan-time skew). The controller even warns "coverage is re-measured from disk at use time; the controller_gate_audit scan is an index, not evidence". 
+
+Wait — but mutability means any table I build is only valid at a pinned snapshot. Still, a deterministic re-measurement with copy-on-read snapshots + hashes is a classic bounded worker task, and it would materially help r3. However, "the two reviewer sets are disjoint, so at least one method is wrong" — actually they may both be right at different times: the scan counted 4 accepts at ~01:12, the lead's census counted 7 revises at ~01:13 after those files were rewritten (worker-045 accept→revise, worker-075 accept→revise noted). So the resolution is temporal: the accept files were overwritten. A worker could reconstruct the timeline from file mtimes + the accepted-stream events, proving the "both right at different times" hypothesis (or refuting it). That's a genuinely useful adjudication-support measurement, and it's *not* the same as the lead's binding table: it's the forensic explanation of the divergence (CF-31 itself).
+
+Is anyone already doing CF-31? The lead-audit's r3 must publish the binding table. worker-093 did CF-30 provenance (inbox). worker-049 did attribution provenance. Let me check if any worker has picked up CF-31. Search recent outboxes/artifacts for "CF-31".
+
+Actually — hold on. Let me check `comms/inbox/` for a card to worker-030 (none) and whether the controller's pass-08 created any *unassigned* worker-worthy item. REC-39 (CF-31) says r3 must publish the table. Nothing assigned to a worker.
+
+A CF-31 forensic reproduction is a strong candidate:
+- Class-bound: F2b / AF-SCC-C0-VAC-GEN (or F1/F2a/F2b; the divergence is at F2b b2ab6acb2bbe).
+- Bounded: scan `reviews/*.json` for verdicts binding reviewed_sha256 = b2ab6acb2bbe, record filename, reviewer, verdict, mtime, event emission times; reconstruct the timeline of rewrites; reproduce the lead's "0 accept / 7 revise" and the scan's "4 accepts" at their respective snapshots; identify which files were rewritten and when (mtime + sha of current bytes); check whether any *currently* valid accept exists.
+- Evidence: deterministic script + JSON report + snapshots of the review files at T0 (copied) with hashes; controls (synthetic rewrite, hash binding).
+- Falsifier: a review file binding b2ab6acb2bbe with verdict accept whose full-schema flag is true and whose bytes are unchanged since an accept scan timestamp; or the lead's census being reproducible as a snapshot (then the divergence is not temporal)... etc.
+- Non-duplicative: r3 (lead) will make the binding *table*; my measurement is a forensic timeline that the lead can cite. But there's overlap risk. Hmm.
+
+Alternatively, given `astra-life08-stageb-r03` is assigned to worker-006 with a **1.0 agent-hour** budget and it's a concrete repair task... maybe worker-006 will do it. I shouldn't duplicate.
+
+Wait, actually — I should consider that the pass-08 controller findings are brand new (01:16:23) and most workers were spawned before them. There might be a *fresh* unassigned need: CF-32 item (i) acceptance pipeline — "run_acceptance.py exits 3 ... pinned acceptance_pipeline_report.json still records 3/3 pass ... it cannot be regenerated from live bytes." The rev14 assignment folds the corpus rebind into the lead's revision. But an independent worker measurement of **which exact pins the semantics-escape corpus binds vs live** and what a correct rebind requires could support the lead. However, the lead owns it.
+
+Hmm, what about the *stage-B binder* task (worker-006)? The controller's stop rule says stop if the fix requires a canonical schema byte change and route it into rev14. The lead's rev14 item (6) already includes "re-observe F1-AMB-11/F1-AMB-17/F1-AMB-23 against the rev13 text (worker-029 spec)". Interesting: so the stage-B binder fix is a worker task with a real, bounded instrument repair. If worker-006 doesn't pick it up quickly, someone should. But I'm worker-030, and taking another worker's assigned task violates CF-12 one-owner. Let me check if worker-006 is active on it (its outbox mtime, latest status). Earlier, worker-006's status at 01:14:04 was "W006-R03-CAND-HEADTOOTH-01 complete... measurement VALID. R03-v2..." — worker-006 was working on R03 candidate head-to-head! So worker-006 is likely already on the stage-B R03 issue. Good, skip.
+
+So: CF-31 forensic timeline seems like a good, genuinely useful, unclaimed task. But let me double check nobody has taken CF-31. Let me grep for "CF-31" in outboxes and artifacts.
+
+Actually, let me reconsider the whole thing once more. There's a real risk I'm over-engineering: 100 workers are active, each ~0.5h budget. The best contribution might be something small, certain, and directly citable. 
+
+Options:
+A. CF-31 binding-divergence forensic reproduction (F2b, G-FORM). 
+B. CF-30 follow-up: worker-093 found a NEW unbacked controller card `astra-classsep-stabilize-0118` (in both astra.jsonl:4 and astra-lead-audit.jsonl:31, created 01:18:00, files last wrote 01:12:31). They already wrote the census. A follow-up could be to quarantine it? No — workers can't. The controller will handle. Skip.
+C. The A0 unverified artifact — covered by worker-092.
+D. The L1 locator — lead-owned disposition; third census marginal.
+E. N0 stop-rule item — lead-owned; worker-014/064 doing guards.
+F. The F1 R03 dispute — worker-006/013/044/059/062 on it.
+
+I'll go with A, but let me first check CF-31 coverage and confirm the facts (review file mtimes, the 4 accepts, the 7 revises) quickly with a read-only scan. If the divergence is trivially explained by mtimes and the lead is already on it, maybe I can instead do a **sharper, more useful variant**: an independent "live verdict census at pinned bytes with copy-on-read snapshots", plus a *mutability guard* that shows exactly which of the two counts is correct *now*, and identifies the 4 accept files' current state. That directly feeds r3's required table.
+
+Let me look at how the divergence arises. The 4 accepts per controller scan: F2b-rev13-full-090.json (worker-090), F2b-review-rev13-052.json (worker-052), F2b-review-rev13-worker-071.json (worker-071), F2b-review-worker-072-rev29.json (worker-072). The lead's census: 0 accept / 7 revise (worker-066 x2, worker-035, worker-017, worker-075, worker-018, worker-053).
+
+Let me check the current verdicts on disk for the 4 accept files, and their mtimes; plus worker-045/075 accept→revise rewrites mentioned. If the 4 accepts are now revise, then the scan at 01:12 was stale and the lead's census (0 accepts) is correct now. If the 4 accepts are still accept but bind a *different* reviewed_sha256 (e.g., an older F2b hash), then the scan's hash-binding is wrong. That's a crisp question with a crisp answer.
+
+Let me check now.
+dsh: reasoning:
+Fix the script: reviewed_sha256 might be a dict. Let me handle.
+dsh: reasoning:
+Now I have the data to explain CF-31. Current state at ~01:17:
+
+Hash-bound full-schema verdicts at b2ab6acb2bbe currently:
+- worker-090 `F2b-rev13-full-090.json`: accept, full=True, mtime 01:08:56
+- worker-071 `F2b-review-rev13-worker-071.json`: accept, full=True, mtime 01:10:18
+- worker-052 `F2b-review-rev13-052.json`: accept, full=None(!), mtime 01:11:15
+- worker-072 `F2b-review-worker-072-rev29.json`: **revise** now, full=True, mtime 01:14:54 (was accept at the earlier scan; the controller listed it as accept "F2b-review-worker-072-rev29.json")
+
+So the controller's 4-accept scan (at ~01:12:39) counted worker-072 as accept, but worker-072 rewrote it to revise at 01:14:54. worker-052's file has `counts_as_full_schema_verdict: None` (missing?) — maybe the controller scan treated missing as true, while the lead's census requires explicit true. worker-075's file went accept→revise (per CF-31: "worker-075 accept->revise 2m19s after it" — F2b-review-rev29-075.json now revise, mtime 01:03:36? Hmm, that doesn't fit. Actually CF-31 said worker-045 accept→revise 29s after a scan and worker-075 accept→revise 2m19s after it; the F2b-review-rev29-075.json is revise at 01:03:36. Maybe worker-075's accept was in a different file (F2b-rev13-full... no). Let me not worry.)
+
+Current count of full accepts bound to the pin: worker-090 (full=True), worker-071 (full=True), worker-052 (full=None), worker-072 now revise. Also there may be files that mention the pin but bind a different reviewed hash — needs careful hash-binding classification.
+
+So the divergence is a **time/snapshot artifact**: the scan was right at 01:12:39 (or at its cut), and the lead's census at ~01:13-01:14 was right at its cut. But is the lead's census right *now*? Right now (01:17) there appear to be at least 2-3 hash-bound full accepts still on disk (090, 071, 052-maybe). Hmm, so the lead's "0 accept / 7 revise" is questionable as a *current* census: worker-090's accept (01:08:56) and worker-071's accept (01:10:18) look intact and full. Unless the lead's census has different criteria (e.g., "hash-bound" means the file's `reviewed_sha256` field equals the pin AND the verdict file declares `counts_as_full_schema_verdict: true` AND maybe the review is earlier than the rev29 defect?).
+
+Wait — actually the controller's REC-33 said "review coverage is F1 4 distinct accepts (worker-052/072/075/085), F2a 2 (worker-017/072) and F2b 2 (worker-072/090, superseding the F2b=0 snapshot in the gate record text and the coverage notice; late revise verdicts worker-002/023/050/066 also bind the same hash)". Then pass-08 changed it to F2b 4 by scan vs 0 by census.
+
+This is precisely the CF-31 calibration. The lead-audit's r3 must publish the per-file binding table. A worker-side forensic census that snapshots the current bytes + mtimes + verdict fields, and reconstructs the timeline from (a) file mtimes, (b) the accepted-stream event timestamps for each review event, and (c) the controller scan times, would be a strong, concrete contribution — and it can answer the crisp question: **which count is correct now, at a pinned snapshot?** and **why do the methods disagree?** (mutable filenames; missing full-schema flags; acceptance of non-full verdicts; time skew).
+
+Given CF-31 explicitly says "at least one method is wrong" and "coverage is re-measured from disk at use time", this is high-value and directly on the critical path (G-FORM movement is blocked until the count resolves). And it's NOT assigned to any worker (r3 = lead-audit). The risk of duplication is moderate: worker-048 did `W048-GFORM-COVERAGE-RECOUNT-01.json` (revise, mtime 01:10:02) and worker-044 did `W044-GFORM-ACCEPT-SCOPE-AUDIT-01` (01:16:30). Hmm! Worker-048's "GFORM coverage recount" may already be a coverage census. And worker-044's accept-scope audit. Let me read those two to check overlap.
+
+If worker-044/048 have already produced the binding table, then I'd duplicate. Let me read them.
+dsh: reasoning:
+The CF-31 coverage divergence is already heavily worked: worker-048 (recount with corpus digest), worker-044 (accept-scope audit), worker-019 (preflight), worker-100, worker-029, etc. The lead-audit's r3 will adjudicate. Not a gap.
+
+OK. Let me now think about what genuinely remains. Looking at the pass-08 gate records:
+
+G-FORM unmet items:
+1. F2b content defects D1/D2 + contested coverage (CF-31) — heavily worked; lead's r3 + owner rev14.
+2. F2a extension-manifold category (HF-091-02) — worked by 086/091/027/039/060; folded into rev14 by the owner.
+3. conclusion_type token crosswalk (REC-37) — folded into rev14.
+4. Acceptance pipeline non-reproducible (CF-32) + FORM-HELDOUT-10 invalid (stage-B R03) — **stage-B binder fix assigned to worker-006**; acceptance corpus rebind folded into rev14.
+5. Post-rev14 r3 re-measure.
+
+G-LIT unmet:
+1. L0 verdict split — lead's verify-l0-final.
+2. L1 locator disposition — lead-literature.
+3. "G-LIT unmet figure '201 citations' is not a measured universe... gate text must cite one measured universe" — hmm, that's a *measurement* task: produce a single measured universe count with evidence. worker-075 source-meta census (151 unique sources / 77 theorems / 228 union / 388 class rows) is cited as evidence. Is there someone who can pin that? The gate text update is the controller's. Probably covered.
+
+G-NUM unmet:
+1. Fourth resolution rung or scoped 3-level order with tolerance justification — lead-numerics stop rule (02:30).
+2. Class re-bind to F0 0abb9ed8a961.
+3. One independent replication verdict at the frozen run hash — lead-audit verify (03:00).
+
+G-AUDIT unmet:
+1. A0 6 revise; no accept; detector scope artifact unverified — lead's verify-a0 (02:00).
+2. A1 no full accept at measured hashes; CF-31 coverage divergence — lead.
+3. Detector freeze continues.
+
+Everything remaining is lead work. As a breadth worker, the best I can do is generate *independent supporting evidence* for one of these lead adjudications. Among them, which has the least independent worker evidence?
+
+- N0 class re-bind + 4th rung: worker-074 did a coverage patch; worker-014/064 did guard checks. The convergence-order replication has worker-046/057. The "fourth rung or scoped 3-level order with tolerance justification" is a numerical experiment — could a worker do it? It requires running the flat-wave convergence at a 4th resolution. That's compute-light (flat-space wave) and N0 is allowed. If the data exists, a worker could independently execute the 4th rung and measure the order. That would DIRECTLY discharge G-NUM unmet item 1 (or provide the tolerance-justified 3-level scope). Hmm — "worker-014/064 GNUM guard" tasks suggest others are looking at the guard. Let me check what `numerics/results/flat_wave_convergence_rev3.json` (da7c36071995) contains and whether a 4th rung is computationally feasible. If it's an ODE/PDE solve in Python, a worker could run it.
+
+But wait: "numerics_lock remains LOCKED: ... no N1 or solver work in this pass. N0 work is the only permitted numerics." So N0 work is allowed. The stop-rule item 1 (fourth rung) is assigned to lead-numerics (`astra-life04-n0-stoprule`, deadline 02:30). Taking it would duplicate a lead assignment.
+
+Hmm, but actually, an independent 4th-rung run by a worker would be exactly the kind of independent evidence the lead needs. Still, the lead owns the stop rule; overlapping could be fine but the crowd may already be on it. Let me check how many workers are on N0 right now: worker-014 (GNUM guard ver...), worker-064 (GNUM guard channels), worker-074 (N0 ckpt coverage patch), worker-099 (scalar_locator_readiness), worker-050 (scc_locator_readiness + wcc_locator_resolution), worker-012 (N0 review).
+
+N0 has moderate coverage. The key unmet: "one independent replication verdict at the frozen run hash" — assigned to lead-audit. "Fourth rung or scoped 3-level order with tolerance justification" — lead-numerics.
+
+OK, let me take yet another approach: look at the *most recent* worker statuses (after 01:16) to see which fresh tasks workers have self-selected, and find a lane that is *empty*. Let me list artifacts/ dirs with mtime >= 01:16 and the latest statuses. If everything is F2b/F2a/CF-30/CF-31/CF-32, maybe the empty lane is... A2? L0? Let me check.
+
+Actually, let me look at the newest statuses after 01:16:23 (pass-08) to see how workers responded to CF-32/stage-B, and identify what's NOT taken.
+dsh: reasoning:
+Now I see the freshest state. Some notable items:
+- worker-017 `W017-N0-STOPRULE-CLOSURE-VERIFY-01` (01:16:16) — N0 stop-rule closure verification (self-selected).
+- worker-012 `W012-GNUM-ERRFIELD-VERIFY-01` (01:16:08) — N0.
+- worker-079 `W079-GFORM-REV29-BINDCHAIN-CENSUS-01` — PASS.
+- worker-036 `W036-GFORM-R3-BIND-01` (01:17:17) — "F1/F2a recorded coverage reproduces; F2b recorded 4 vs fresh 3 after worker-072 withdrew its accept in place at 01:14:54; 7 findings (2 major, 5 minor)". So worker-036 did a coverage recount too.
+- worker-065 `SIDEPIN_TRAP_CONFIRMED` — 8/96 declared pins stale.
+- worker-025 `W025-L1-IDENTITY-AUDIT-01` — full-population identity audit (12/97 rows of hash-bound independent coverage). L1.
+- worker-073 `L1 repair-readiness` — REPAIR_READY_WITH_RESIDUAL.
+- worker-019 `W019-L0-HF14-MATRIX-01` — L0.
+- worker-034 `F1 repair-candidate adjudication` — TRUTHFUL_NOT_FREEZE_READY.
+- worker-024 `SET-STRENGTH-REPAIR-01` — F0 variant SET (one of the rev14 items!).
+- worker-042 `F0 canon candidate`.
+- worker-100 `W100-F2B-REV30-DIRECTION-CROSSVERIFY-01` — recommended rev30 remedy cand023_v2.
+- worker-023 `F2B-DIR-GUARD-01`.
+- worker-077 `CLASSSEP-PINRECON-01`.
+- worker-056 `REJECT-REPAIR-01`.
+- deepseek-flash-02 routed its ledger to astra-lead-audit as input for r3.
+
+Missing lanes? Let me count by node in the fresh statuses: F2b (many), A1 (several), L0/L1 (several), N0 (a few), F0 (a few), F1 (2), F2a (2), A2 (0!), and the CF-32 stage-B R03 (worker-006 — its status is at 01:14:04, before the assignment; likely now on it).
+
+**A2 has zero fresh activity.** But A2 isn't in the gate criteria... it's "GLOBAL"/mission item. The controller's gate records don't mention A2 unmet. The mission queue says "A2: run four-arm equal-budget ablation". The ablation exists as a dry-run with worker-067's revise (HF-11). 
+
+Hmm, what about **CF-32 stage-B R03** (astra-life08-stageb-r03, assigned worker-006, deadline 02:30)? It's a *worker-assigned* task and directly on the G-FORM critical path ("Restores the held-out corpus as a valid falsifier"). If worker-006 is busy elsewhere, the task may be unclaimed. But taking another worker's assignment is exactly what CF-12 forbids... though the swarm's practice has been that workers take "the successor the immediate queue implied" when no card exists for them. worker-006 DOES have the card.
+
+Let me check worker-006's current activity: its latest status was at 01:14:04 (W006-R03-CAND-HEADTOHEAD-01). It's 01:17+. Let me check if worker-006 has started the stage-B fix (artifact mtimes in artifacts/worker-06/). If worker-006 is not on it, maybe I can do something *complementary* rather than the same: e.g., an independent verification harness for the fixed binder? That's premature.
+
+Let me step back one final time and consider the *simplest defensible* choice given the instruction "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit."
+
+Given the swarm's demonstrated pattern, a clean choice: **verify one freshly landed, unverified artifact that is now load-bearing and has no independent check yet**. From the fresh statuses:
+- worker-100's rev30 direction crossverify (F2b) — unverified, but others (053) cover.
+- worker-024's SET-STRENGTH-REPAIR-01 (F0 variant SET) — this is one of the seven rev14 items ("SET strength label: VARIANT_REGISTRY.json and the SET delta get a level-qualified wording plus an assertion-correct SET clause in check_variant_registry.py"). worker-024 produced a 3-site candidate repair; the owner (lead-formulation) will fold it into rev14. Is worker-024's candidate verified? If not, an independent verification of that candidate would be directly useful and *specific* (the rev14 fold needs trustworthy inputs). Let me check: worker-094 filed the original finding; worker-024 repaired. Who verified worker-024's repair? Let me look.
+
+- worker-034's F1 repair-candidate adjudication (TRUTHFUL_NOT_FREEZE_READY) — F1 is one of the rev14 items? Not directly (F1 items: f1-suite rebind). 
+- worker-047's C2C0 pred containment (F2a/F2b/F0/A1) — just landed 01:16, unverified?
+- worker-079's bindchain census PASS — unverified.
+- worker-036's r3-bind recount — unverified.
+- worker-025's L1 identity audit — unverified, but L1 has lots.
+
+The **SET strength repair** is attractive: it's one of the controller's seven rev14 fold items, it's class-bound (AF-WCC-VAC-GEN variant SET), and worker-094 filed the finding. Let me check the artifacts and whether anyone verified worker-024's candidate. If not, an independent verification is a clean, bounded, high-value task with an obvious falsifier ("the candidate fails to make the SET clause assertion-correct", "a mutated registry still passes", etc.).
+
+Let me look at the worker-024 artifact and worker-094's finding.
+dsh: reasoning:
+worker-024's SET strength repair is a candidate repair for one of the seven rev14 items. It says 21/21 verifier assertions PASS, but that's *self*-verification. Has an independent worker verified it? worker-094 filed the original finding and has `cf21_scope_audit` (01:17) — maybe related to CF-21, not SET.
+
+The rev14 fold (item 5) says: "SET strength label: VARIANT_REGISTRY.json and the SET delta get a level-qualified wording (predicate-level label, class-level subject) plus an assertion-correct SET clause in check_variant_registry.py". worker-024 produced exactly that candidate (CANDIDATE_VARIANT_REGISTRY.json, CANDIDATE delta, CANDIDATE_check_variant_registry.py, repair.patch) with a self-verifier. The lead will apply it during rev14 (deadline 02:15). An **independent verification of the candidate repair** before the lead folds it would be genuinely valuable: verify the three-site minimal diff, the checker contrast (must fail closed on the live label, pass on the candidate), the patch round-trip, and that no unrelated bytes change. That's a classic worker task: bounded, deterministic, hash-pinned, with a crisp falsifier, and it's *not* the same as the author's self-check.
+
+Is anyone already independently verifying it? Let me search recent outboxes for "set_strength_repair" or "W024" or "CANDIDATE_VARIANT_REGISTRY". If not, this is my task.
+
+Also note the controller gate record explicitly lists the SET item as one of the seven rev14 folds; the lead is likely to apply worker-024's candidate. Independent pre-fold verification = high value, low duplication.
+
+Let me check.
+dsh: reasoning:
+There's a whole cluster of SET strength work: worker-003 (set_strength_level_audit), worker-027 (set_strength_convention), worker-039 (f0set_level_adjudication), worker-056 (set_direction_sense), worker-063 (set_direction_adjudication), worker-078 (f0_set_strength_adjudication), worker-094 (f0_setdir_audit). So the SET axis has plenty of analysis, but worker-024's *specific candidate repair* may still lack an independent verification. The outboxes mentioning set_strength_repair: worker-003, 024, 027, 078. Let me check whether 003/027/078 mention it as verification or just reference.
+
+Let me grep the actual lines mentioning set_strength_repair in worker-003/027/078 outboxes.
+dsh: reasoning:
+The grep -o pattern didn't match because the JSON is one long line and maybe the term appears differently. Let me grep -c and use python to find occurrences.
+dsh: reasoning:
+No other worker references worker-024's exact candidate paths (`set_strength_repair`, `W024-SET-STRENGTH`, `CANDIDATE_VARIANT_REGISTRY`). The earlier `grep -l` matched files probably because of generic strings like "CANDIDATE_VARIANT_REGISTRY"? Hmm, it returned worker-003/027/078; but my python check found nothing. Wait — bash grep -l matched the *literal* pattern set_strength_repair|SET-STRENGTH|CANDIDATE_VARIANT_REGISTRY. Python found nothing for those substrings. Contradiction? Oh — grep -l was run on `comms/outbox/*.jsonl`, and python on worker-003/027/078... maybe the files are large and my read loop is fine. Let me recheck: maybe grep matched "SET-STRENGTH" (uppercase) in those files but python looked for 'W024-SET-STRENGTH' (with W024 prefix) — yes! I searched 'W024-SET-STRENGTH' but grep matched 'SET-STRENGTH' generally. Let me redo with 'SET-STRENGTH'.
+
+Regardless, the key question: has anyone independently verified worker-024's candidate? Let me search for 'SET-STRENGTH' contexts.
+dsh: reasoning:
+Confirmed: worker-024's SET-strength repair candidate (landed 01:16:47) has **no independent verification** — worker-024's own verifier (`verify_set_strength_repair_024.py`) is author-side. The SET axis has multiple independent findings (003, 027, 078, 094, 039, 063, 056) but the *candidate repair* itself is fresh and unverified, and it is item (5) of the controller's seven-item rev14 fold which the formulation lead must apply by 02:15.
+
+This is my task: **W030-SET-REPAIR-CANDIDATE-INDEPENDENT-VERIFY-01** — an independent, non-author, read-only verification of worker-024's SET strength repair candidate at the pinned bytes.
+
+Class-bound: AF-WCC-VAC-GEN (variant SET), node F0 (or F1), gate G-FORM (the rev14 fold is G-FORM; the SET label is in VARIANT_REGISTRY.json + F0-adjacent delta). I'll bind node F0/F1, class AF-WCC-VAC-GEN, gate G-FORM.
+
+What to verify (independently, with my own instrument):
+1. Pins: verify the entry pins (VARIANT_REGISTRY.json 6bac9adea19e, SET delta 64b8d6394a04, check_variant_registry.py c471da4b7be9, F0 canonical 0abb9ed8a961, F0 supplement d7419b4e8963, F1 d9cebb9404b2, FROZEN 815e08079aef) match live bytes at T0 and T1 (hash-pinned; drift => void/exit 2).
+2. Candidate integrity: the three candidate files hash to the claimed hashes (5c05a8cc7ea2, 7a1f6212ad70, 8b15f43e843d); the patch applies cleanly to the pinned originals and reproduces the candidates byte-for-byte (round trip).
+3. Minimality: the candidate differs from live only at the declared sites (line 57 label in VARIANT_REGISTRY.json; line 11 label in the SET delta; the SET clause in check_variant_registry.py) — independently parse and diff.
+4. Semantic claim: candidate label is level-qualified (class-level STRONGER + predicate-level WEAKER) consistently in both artifacts (byte-identical label strings).
+5. Checker contrast (the load-bearing behavioral claim): run **my own** checker/adapter against (a) live bytes → must fail closed on the live level-mixed label; (b) candidate bytes → must pass. I should not merely re-run worker-024's checker; better to implement an independent predicate that reads the label fields and asserts level-qualification, then run it on live/candidate. Also verify worker-024's candidate checker is assertion-aware: it must reject a synthetic de-qualified (note-stripped) label while the original checker accepts it (the "fail-closed contrast"). I can use sandboxed copies to avoid any canonical write.
+6. Controls (positive/negative): synthetic mutations — e.g., strip the level qualifier from the candidate → my checker must fail; flip the qualifier direction → fail; hidden extra diff → minimality catches it.
+7. Regression: run the sibling canonical checkers on the candidate tree if they're stdlib-callable — `check_variant_deltas.py` and `check_taxonomy_consistency.py` (worker-024 claims VALID/CONSISTENT). I can re-run them in a sandbox copy.
+8. Output: artifacts/worker-030/set_repair_candidate_verify/{verify_set_repair_030.py, report.json, README.md, manifest.json, snapshots/, sandbox/} + reviews/SET-STRENGTH-REPAIR-030.json (a scoped review: counts_as_full_schema_verdict=false, since it's a candidate-level verification) + checkpoint runtime/state/w030_checkpoint_8.json + outbox events (artifact, claim, review, status).
+
+Falsifier: e.g., "Falsified if, at the pinned bytes: (a) any entry pin drifts; (b) the patch does not reproduce a candidate byte-for-byte; (c) a leaf outside the three declared sites changes; (d) the live label is already level-qualified (then the defect/repair is moot); (e) the candidate fails my independent level-qualification predicate; (f) a synthetic de-qualified mutation passes my predicate or the candidate checker; (g) worker-024's claimed hashes don't resolve."
+
+This is a solid, bounded, non-duplicative, gate-relevant task. Feasible in this session. Let me first check whether the candidate files exist and inspect them, the live files, and worker-024's verifier to know exact paths/hashes. Then I'll write my own independent instrument.
+
+One caution: the task must not modify canonical bytes. I'll work in a sandbox under my artifacts dir and copy files there. Also, the `research_map/` is the map; the canonical files are:
+- artifacts/formulation/VARIANT_REGISTRY.json (live 6bac9adea19e?)
+- artifacts/formulation/variants/... SET delta 64b8d6394a04 — need exact path from worker-024's report
+- artifacts/formulation/tools/check_variant_registry.py c471da4b7be9
+- research_map/formulation_taxonomy.yaml 0abb9ed8a961 (no-write)
+- artifacts/formulation/formulation_taxonomy.yaml d7419b4e8963
+- schemas/af_wcc_vacuum.yaml d9cebb9404b2
+- artifacts/formulation/FROZEN.json 815e08079aef
+
+Let me read worker-024's report.json and exit_hashes.json to get exact paths and hashes, then check the live bytes.
+
+Also: before committing, quickly double-check no one else is doing an independent verification of this candidate (I found no references; worker-094's cf21_scope_audit is a different thing — CF-21). Good.
+
+Let me set up a todo list and get to work. Time budget: the session should be efficient. Let me inspect the artifacts.
+dsh: reasoning:
+The report is detailed and self-consistent. Key point: the *live* label says "strictly weaker" at the class level (rev13 direction corrected from 'strictly STRONGER'), and the frozen anchors say class-level STRICTLY STRONGER (taxonomy:94) + predicate-level strictly WEAKER (F1:235). The candidate makes the label level-qualified: class-level STRONGER, predicate-level WEAKER. The live label is level-mixed: it states "strictly weaker than AF-WCC-VAC-GEN (the parent's single-q tail predicate entails...)" — i.e., predicate-level wording applied to a class-level subject. And the checker only tests `"STRONGER" in strength`, which passes because the note contains "STRONGER" (mention-match).
+
+Let me read the rest of the report (candidate, patch, verifier, checker_contrast, no_regression) and the entry/exit hashes. Then build my independent verification.
+
+Let me print the remaining keys.
+dsh: reasoning:
+Now I have everything. Let me design my independent verification instrument.
+
+**Task**: W030-SET-REPAIR-CANDIDATE-INDEPENDENT-VERIFY-01
+- Node: F0 (with F1 anchor), gate G-FORM, class AF-WCC-VAC-GEN.
+- Target: worker-024's repair candidate + its claimed behavioral contrast.
+- Read-only on canonical paths; all work in `artifacts/worker-030/set_repair_candidate_verify/`.
+
+**Independent instrument** (`verify_set_repair_030.py`, stdlib only + PyYAML if needed — the registry/delta are JSON; the checker is Python source; FROZEN.json is JSON; taxonomy YAML needs PyYAML or a line-scan. I'll avoid YAML parsing for the taxonomy and use line-pinned text checks, since the anchors are line-specific).
+
+Checks (each hash-bound, with recorded evidence):
+
+P. Pin checks (T0):
+- P1: sha256 of 6 canonical live files equals claimed entry pins.
+- P2: sha256 of 9 candidate/deliverable files equals claimed hashes (3 candidates, 3 patches, repair.patch, verifier, report? — I'll check the three candidates + repair.patch + exit_hashes).
+- P3: after all checks, re-measure T1 → equal to T0 (no drift).
+
+C. Candidate structural checks:
+- C1: For each candidate/source pair, compute a line-level diff; assert changed lines == declared changed_lines exactly, and content differences are confined to the declared carrier.
+- C2: Patch round-trip: apply `repair.patch` to sandbox copies of the three live files using `patch -p1` (in a sandbox tree mirroring paths) and assert byte-identity with the three candidates.
+- C3: Patch minimality: apply with `--dry-run` and count hunks; assert 3 files/hunks as declared; assert no other file in the sandbox changes.
+- C4: Cross-artifact label consistency: extract the `strength` strings from registry candidate and delta candidate; assert byte-identical; assert the label contains both class-level qualifier and predicate-level qualifier (my own independent predicate).
+
+S. Independent semantic predicate (my own, not worker-024's):
+- S1: On the LIVE registry/delta, my predicate classifies the label as LEVEL_MIXED (asserts a class subject "than AF-WCC-VAC-GEN" with a predicate-level direction "weaker" while the frozen anchors say class-level STRONGER) — actually I must be careful: what exactly is my independent rule? The controller's rev14 item (5) says "level-qualified wording (predicate-level label, class-level subject)". So the rule: a strength label comparing to the parent class must state the class-level direction explicitly; predicate-level statements must be explicitly qualified as predicate-level. My predicate:
+  - has_class_level_token: `class statement` or `as a class statement` present.
+  - has_predicate_level_token: `predicate` present and qualified.
+  - class direction = STRONGER (must match frozen anchor taxonomy:94).
+  - predicate direction = WEAKER (must match F1:235).
+  - live label: class direction reads WEAKER (predicate wording applied to class subject) and lacks level qualifiers → FAIL.
+  - candidate label: class STRONGER + predicate WEAKER, both explicit → PASS.
+- S2: Frozen anchor agreement: candidate label must simultaneously agree with taxonomy:94 (class-level STRONGER) and F1:235 (predicate-level WEAKER). Live label must disagree with at least the class anchor.
+
+B. Independent behavioral contrast (my own adapters):
+- B1: Extract the SET clause from the live checker and candidate checker; build a mutation battery:
+  - M1: candidate label with the level qualifiers stripped (i.e., the live label) must be rejected by the candidate checker and accepted by the live checker (reproducing the mention-match false pass).
+  - M2: candidate label with the class direction flipped to WEAKER must be rejected by candidate checker.
+  - M3: candidate label with the predicate direction flipped to STRONGER must be rejected by candidate checker.
+  - M4: candidate label with an unrelated change must still pass (non-vacuity/negative control).
+  - Implementation: sandbox copies of the registry/delta with a modified `strength` value; run the checker (live and candidate) with the sandbox registry path; capture exit codes. I need to know the checker's CLI. Let me read check_variant_registry.py and the candidate.
+- B2: Run worker-024's candidate checker on live → must fail (V3 reproduction); original on live → pass (V1); original on candidate → pass (V5); candidate on candidate → pass (V4). This reproduces the claimed contrast with my own harness (I'm running *their* checkers but *my* orchestration; that's the standard "independent re-run" pattern). Plus my own predicate above is fully independent.
+
+R. Regression:
+- R1: run `check_variant_deltas.py` and `check_taxonomy_consistency.py` in a sandbox candidate tree → expect VALID/CONSISTENT (as claimed). Need to read their CLIs.
+- Note: these tools may read the repo root via relative paths; running them against a sandbox tree requires care. worker-024 has sandbox_cand/ etc. I can check how they invoked them (build_candidate.py / verify script) and replicate. But to keep my verification *independent*, I'll write my own runner that copies the candidate tree into a sandbox and runs the tools from there with cwd=sandbox.
+
+Let me look at the tools and the candidate checker to determine CLIs. Then write my instrument.
+
+Also important: my instrument must not write to canonical paths. I'll copy live files into `artifacts/worker-030/set_repair_candidate_verify/snapshots/` and sandbox trees into `.../sandbox/`.
+
+One more check to be careful about: the F2b/VOCAB conflict is unrelated. Fine.
+
+Let me read:
+1. `artifacts/formulation/tools/check_variant_registry.py`
+2. `artifacts/worker-024/set_strength_repair/CANDIDATE_check_variant_registry.py`
+3. `artifacts/worker-024/set_strength_repair/repair.patch`
+4. `artifacts/worker-024/set_strength_repair/entry_hashes.json` and `exit_hashes.json`
+5. The live registry line 57 and delta line 11; candidates' corresponding lines.
+dsh: reasoning:
+Important observation about the checker: **it writes** `artifacts/formulation/evidence/variant_registry_check.json` (`(ROOT/"artifacts/formulation/evidence/variant_registry_check.json").write_text(...)`). So running the checker directly against the live tree would WRITE a canonical evidence file! worker-024's verifier must have run it in a sandbox tree (copies). My instrument must do the same: copy the whole relevant tree into a sandbox and run there. Good catch — this is exactly the kind of hazard to handle fail-closed. Also note: ROOT is `Path(__file__).resolve().parents[3]` — so the checker expects to live at `<ROOT>/artifacts/formulation/tools/check_variant_registry.py`. In a sandbox I need to recreate that structure: `sandbox/<root>/artifacts/formulation/tools/check_variant_registry.py`, `sandbox/<root>/artifacts/formulation/VARIANT_REGISTRY.json`, `sandbox/<root>/artifacts/formulation/FROZEN.json`, and the canonical schemas + delta files (for existence checks). Also `artifacts/formulation/evidence/` dir must exist (write target).
+
+Let me now check the build_candidate.py / verify script to see the exact sandbox approach worker-024 used (to avoid missing dependencies), and check `check_variant_deltas.py` and `check_taxonomy_consistency.py` CLIs/dependencies. Rather than reading all of them fully, I can design my sandbox to copy the *entire* `artifacts/formulation/` directory plus `schemas/` and `research_map/formulation_taxonomy.yaml` into a temp root (cheap: formulation dir size?). Let me check sizes. If artifacts/formulation is small (<50MB), copy it wholesale into the sandbox root, then overwrite the three target files with candidates. That makes the sibling tools runnable in-tree.
+
+Wait — but copying the whole formulation tree into my artifacts dir would duplicate lots of bytes into `artifacts/worker-030/...`, bloating the repo. Better: use a temp dir under `/tmp` (session temp is writable per the sandbox note: "Some platform temporary areas may also be writable"), and copy back only the small evidence outputs + report. The other workers used `sandbox_*` dirs inside their artifacts — which permanently duplicates. I'd rather use `/tmp/w030_...` and record the manifest of the sandbox inputs; the durable artifact is my instrument + report + selected pinned snapshots.
+
+But caution: the environment's file sandbox is workspace-write; writing to /tmp may be allowed ("Some platform temporary areas may also be writable"). Let me test /tmp write. Actually the bash tool spill files already go to /tmp. I'll test.
+
+Plan for the instrument (`verify_set_repair_030.py`), stdlib only:
+
+```
+ROOT = repo root (Path(__file__).resolve().parents[3])
+WORK = Path(__file__).resolve().parent
+SANDBOX = Path(tempfile.mkdtemp(prefix='w030_setverify_'))  # or WORK/sandbox if /tmp not writable
+```
+
+Checks:
+1. `pins_T0`: measure 6 canonical pins; compare to claimed dict; exit 2 on mismatch (fail-closed, drift voids).
+2. `candidates`: measure 3 candidate files + repair.patch; compare to claimed hashes.
+3. `patch_roundtrip`: create sandbox root layout; copy live formulation tree + schemas; apply repair.patch with `patch -p1` (subprocess) in sandbox; compare resulting 3 files byte-for-byte to candidates. Count changed files.
+4. `minimality`: line-diff live vs candidate for registry and delta (difflib), assert exactly declared lines; for the checker, assert the diff is confined to the SET clause block (lines 86-98 area) and that the rest is identical.
+5. `independent_level_predicate`: my own rule-based classifier over the strength strings:
+   - parse `subject_level`: if "as a class statement" or "class statement" in label and "than AF-WCC-VAC-GEN" appears after/before → class-level assertion present.
+   - `class_direction`: the direction token immediately preceding "than AF-WCC-VAC-GEN" (e.g., "STRONGER than AF-WCC-VAC-GEN") → must be STRONGER.
+   - `predicate_direction`: look for "predicate" near WEAKER → must be WEAKER.
+   - live: class_direction == WEAKER (or level-mixed) → FAIL with reason.
+   - candidate: class_direction == STRONGER and predicate WEAKER and both qualified → PASS.
+   - Also cross-artifact equality of the strength strings between registry candidate and delta candidate → byte-identical.
+   - Anchor agreement: taxonomy:94 (class-level STRONGER) and F1:235 (predicate-level WEAKER) — read those exact lines and assert tokens.
+6. `behavioral_contrast` (my orchestration, their checkers + my mutations):
+   - Build sandbox tree S_live and S_cand (candidate files over live tree).
+   - Run live checker on S_live → expect exit 0 VALID; on S_cand → expect exit 0.
+   - Run candidate checker on S_live → expect exit 1 INVALID; on S_cand → expect exit 0 VALID.
+   - Mutations in S_mut (candidate tree with registry strength replaced):
+     M1 = live label (qualifiers stripped) → candidate checker must exit 1.
+     M2 = class direction flipped to WEAKER → must exit 1.
+     M3 = predicate direction flipped to STRONGER → must exit 1.
+     M4 = benign append to the label (e.g., add "(rev14)") → must exit 0 (non-vacuity).
+     M5 = note-stripped live label (remove bracket note) → live checker must exit 1 (reproduces worker-094).
+   - For M-mutations, also check the *delta* file if the checker reads it (it doesn't for SET; the registry only). I'll mutate the registry.
+   - Note: the candidate checker strips bracket provenance notes before asserting; M1 (live label) retains the bracket note containing "STRONGER" — after stripping, it becomes "strictly weaker than AF-WCC-VAC-GEN (...): ... but not conversely" → must fail. Good.
+   - M2: replace "strictly STRONGER than AF-WCC-VAC-GEN as a class statement" with "strictly WEAKER than AF-WCC-VAC-GEN as a class statement" → must fail.
+   - M3: replace "single-q tail predicate" WEAKER phrase → "single-q tail predicate is strictly STRONGER" → must fail.
+7. `sibling_regression`: run `check_variant_deltas.py` and `check_taxonomy_consistency.py` on S_cand. Need CLIs: they may write outputs too. Run from sandbox root with cwd=sandbox root. Capture exit codes and stdout; assert VALID/CONSISTENT.
+   - Risk: these tools may depend on repo-root-relative paths and write into the sandbox (fine).
+   - If a tool needs network or extra deps, mark check SKIPPED with reason (not a failure) — but better to attempt.
+8. `pins_T1` == T0 (no canonical byte changed by my run) and also assert `artifacts/formulation/evidence/variant_registry_check.json` hash unchanged (since a careless direct run would rewrite it) — this is a strong "read-only" proof.
+9. Controls: 
+   - K1: a synthetic drift (mutate a sandbox copy pin) is detected by the pin guard (self-test of the guard).
+   - K2: patch round-trip on a mutated source fails / doesn't reproduce.
+   - K3: my level predicate's classification flips on the M2/M3 mutations (discrimination).
+   - K4: determinism: run the whole check twice → same digest (or at least the two report payloads identical modulo created_at).
+10. Report: JSON with checks[], controls[], verdict, pins, digests, falsifier, non-claims. Verdict: e.g., `CANDIDATE_VERIFIED_LEVEL_QUALIFIED_AND_ASSERTION_AWARE` or if something fails, `CANDIDATE_REJECTED_*`.
+
+Exit codes: 0 = all checks pass (candidate verified), 1 = a check failed (candidate falsified), 2 = pin drift (void).
+
+Then:
+- README.md, manifest.json (hashes of all outputs + inputs), snapshots of the 3 live files and 3 candidates (small).
+- review `reviews/SET-STRENGTH-REPAIR-030.json`: scoped review (`counts_as_full_schema_verdict: false`), verdict accept/revise, referencing my report + worker-024's candidate hashes.
+- checkpoint `runtime/state/w030_checkpoint_8.json`.
+- outbox events: artifact (instrument, report, README, manifest, review), claim, review, status — one JSON per line, with event_id, event_type, created_at, actor, node_id, class_id, gate, evidence_refs, falsifier, plus non-claims.
+
+Let me check the sibling tools' CLIs quickly and test /tmp writability. Then write the instrument.
+
+One more consideration: worker-024's candidate checker path is `CANDIDATE_check_variant_registry.py`; in the sandbox tree it must be placed at `<root>/artifacts/formulation/tools/check_variant_registry.py` for `parents[3]` to resolve to the sandbox root. Yes: `<root>/artifacts/formulation/tools/x.py` → parents[0]=tools, [1]=formulation, [2]=artifacts, [3]=root. Good.
+
+For the live checker, same path.
+
+Let me check the sibling tools.
+dsh: reasoning:
+Good:
+- /tmp is writable.
+- artifacts/formulation is 4.5MB, schemas 1.5MB — copying into a /tmp sandbox is cheap.
+- Both sibling tools require PyYAML (`import yaml`) and write evidence outputs into the tree. My instrument needs PyYAML available: `python3 -c "import yaml"` check. Worker-024's verifier ran them, so yaml should exist. Let me verify.
+
+Note `check_variant_deltas.py` reads `artifacts/formulation/variants/*.delta.json` and validates each delta's `base.sha256` against the live base artifact, and each change's `from` against the YAML. With the candidate delta in the tree (same base hash, and the `strength` field isn't a "change" in `changes`, so it passes). Good.
+
+Now, the sandbox tree needs:
+- artifacts/formulation/** (copy)
+- schemas/** (copy: F1/F2a/F2b yaml)
+- research_map/formulation_taxonomy.yaml (copy)
+- Any other paths referenced: FROZEN.json lists files; checker checks `path not in MAN["files"]` and `(ROOT/path).exists()` for the three canonical schemas only. check_taxonomy_consistency needs research_map/formulation_taxonomy.yaml + artifacts/formulation/formulation_taxonomy.yaml + VOCAB_ALIASES.json. Fine.
+
+Copy cost: ~6MB, fine.
+
+Wait — a subtlety for the sandbox: `artifacts/formulation` contains files owned by others with mode -rw------- (some are 0600). Copying with shutil.copytree preserves? Default copy2 preserves mode; I'm the owner, so readable. Fine.
+
+Another subtlety: my instrument will run the candidate checker, which writes `<sandbox>/artifacts/formulation/evidence/variant_registry_check.json`. Good — sandbox only.
+
+Also the `__pycache__` dirs get copied; harmless.
+
+Now, my independent level predicate design. Let me look at the exact candidate strings to write a robust classifier.
+
+Let me view candidate registry line 57 and candidate delta line 11, plus taxonomy:94 and F1:235 lines.
+dsh: reasoning:
+The candidate label is exactly what the rev14 item (5) requires: class-level STRONGER, predicate-level WEAKER, both explicit.
+
+Note the live registry label starts with lowercase "strictly weaker than AF-WCC-VAC-GEN" and the candidate says "strictly STRONGER than AF-WCC-VAC-GEN as a class statement ... while the SET predicate S is strictly WEAKER than the parent's single-q tail predicate P". 
+
+My independent predicate:
+- Level qualification: label must contain a class-level assertion (regex: direction + "than AF-WCC-VAC-GEN" + optional "as a class statement") AND a predicate-level assertion (contains "predicate" and a direction token).
+- Parse class direction: regex `(STRONGER|WEAKER|stronger|weaker)\s+than\s+AF-WCC-VAC-GEN` → group 1 uppercased. For candidate: "STRONGER" (first match). For live: "weaker" → WEAKER.
+- Class-level qualifier: `as a class statement` present → for candidate True. For live False.
+- Predicate direction: find occurrence of "predicate" and look for direction token within the same clause: candidate has "the SET predicate S is strictly WEAKER than the parent's single-q tail predicate P" → WEAKER. Live has "the parent's single-q tail predicate entails the union reading" — no predicate-level direction assertion (it's the class statement that's labeled weaker). So live: predicate direction = None.
+- Anchor agreement: class anchor from taxonomy:94 → "Strictly stronger than the parent class" → STRONGER. Predicate anchor from F1:235 → "strictly WEAKER than this class's single-q tail predicate" → WEAKER.
+- Verdict:
+  - candidate: class=STRONGER (match), class_qualified=True, predicate=WEAKER (match) → LEVEL_QUALIFIED_AND_ANCHOR_CONSISTENT.
+  - live: class=WEAKER (mismatch with anchor), class_qualified=False, predicate=None → LEVEL_MIXED (defect reproduced independently).
+
+Also cross-artifact: registry candidate strength == delta candidate strength byte-identical → True.
+
+Behavioral mutations for the candidate checker (my own harness):
+- S_cand: candidate registry at live path in sandbox + candidate delta + candidate checker → candidate checker exit 0.
+- S_live: live registry + live delta + live checker → exit 0; candidate checker on S_live → exit 1.
+- M1: registry strength := live strength (note-stripped? no, as-is) in candidate tree → candidate checker strips bracket note → asserts "STRONGER than AF-WCC-VAC-GEN" absent → exit 1. 
+- M2: candidate label with class direction flipped: replace "strictly STRONGER than AF-WCC-VAC-GEN as a class statement" with "strictly WEAKER than AF-WCC-VAC-GEN as a class statement" → must exit 1.
+- M3: replace "SET predicate S is strictly WEAKER than" with "SET predicate S is strictly STRONGER than" → must exit 1 (this is subtle: if the checker only does substring checks, it might still pass if it looks for "WEAKER than the parent's single-q tail predicate" — after replacement the phrase becomes "STRONGER than the parent's single-q tail predicate", so the required substring "WEAKER than the parent's single-q tail predicate" is absent → exit 1. Good.)
+- M4: candidate label + benign suffix " [rev14]" → exit 0 (non-vacuity).
+- M5: live label with bracket note stripped → live checker exit 1 (reproduces the mention-match mechanism).
+- M6 (extra): candidate checker on a registry where the note contains "STRONGER" but the assertion is missing (i.e., live label) — that's M1; fine.
+
+Sibling regression on candidate tree: check_variant_deltas.py exit 0 VALID; check_taxonomy_consistency.py exit 0 CONSISTENT.
+
+Pin guard self-test control: run the pin check function on a fake expected dict with a wrong hash → must raise DriftError/exit 2 path (I'll implement `check_pins(expected)` and test with a mutated expectation in-memory).
+
+Determinism: run the main check suite twice, compare a digest of the results payload (excluding created_at). Actually re-running sibling tools writes same outputs; fine. I'll implement `--replay` maybe. Simpler: the report includes `run_digest` = sha256 of canonical JSON of checks; I'll run the script twice (subprocess) and compare run_digest from both runs (recorded as a control). I'll add a `--emit-digest` mode? Simpler: the script always prints the digest at the end; I can run it twice from bash and compare stdout digests.
+
+Timing: this is all small; should run in seconds (copying 6MB twice). 
+
+One important detail: my instrument must not write to the canonical repo at all. It will use `/tmp/w030_setverify_<pid>/` sandboxes and write outputs only under `artifacts/worker-030/set_repair_candidate_verify/`. I'll also include a `canonical_write_guard`: hash a set of canonical files (including `artifacts/formulation/evidence/variant_registry_check.json`, `variant_delta_check.json`, taxonomy, FROZEN, schemas, registry, delta, tools) at T0 and T1 and assert equality.
+
+Let me now check exit_hashes.json for the exact claimed candidate hashes (to compare against my measurements) and check the current live hashes match the entry pins. Then write the script.
+
+Let me also make sure worker-024's claimed hashes are what I think:
+- CANDIDATE_VARIANT_REGISTRY.json 5c05a8cc7ea2583a97d3a977d81aef4de74ff9378337b42a00ef992b61aa1c2a
+- CANDIDATE_AF-WCC-VAC-GEN.variant-SET.delta.json 7a1f6212ad70e55ee760e0c271c339eca30ac7bdfca2dd5969ba14df771e6927
+- CANDIDATE_check_variant_registry.py 8b15f43e843dfcce87035215b92efd4b995b8fba4ac272391932364ee2ecd7fe
+- repair.patch 9fb0c6674849477350bbac7a0ef838f7c344dae6b3d3d918b30bc5aebf1be6ba
+- verifier afa5269d7e2e249fd9fcf0c77317f33d9c6af59a65fb3dd4af54f3c1b549c5af
+- verify_results bb6c9ac0b346...
+Live:
+- VARIANT_REGISTRY.json 6bac9adea19e17efe625342ef4d2098e3775491aa3d0e06596cd5d75912348fb
+- delta 64b8d6394a044686de770879675eb4932ff980a942d45d16758b295d4851cecf
+- checker c471da4b7be9a9b0ac884d3722a223c1c7a9fc7dcf5718a0f4707d65e8757f4d
+- taxonomy 0abb9ed8a961...
+- supplement d7419b4e8963...
+- F1 d9cebb9404b2...
+- FROZEN 815e08079aef...
+
+Let me verify live hashes now and read exit_hashes.json.
+dsh: reasoning:
+All pins and candidate hashes verified live. Now let me write my independent instrument. I'll be careful and thorough but keep it manageable.
+
+Design of `verify_set_repair_030.py`:
+
+```python
+#!/usr/bin/env python3
+"""W030-SET-REPAIR-CANDIDATE-INDEPENDENT-VERIFY-01 ..."""
+import argparse, difflib, hashlib, json, os, re, shutil, subprocess, sys, tempfile, time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[3]
+WORK = Path(__file__).resolve().parent
+TARGET = ROOT/"artifacts/worker-024/set_strength_repair"
+
+PINS = {...6 canonical...}
+CAND_HASHES = {...3 candidates + patch...}
+
+def sha(p): return hashlib.sha256(Path(p).read_bytes()).hexdigest()
+
+class Void(Exception): pass  # pin drift
+
+results = {"checks": [], "controls": [], "mutations": []}
+def check(cid, ok, detail, severity="blocking"): ...
+
+def measure_pins(): return {rel: sha(ROOT/rel) for rel in sorted(set(PINS)|set(EXTRA_GUARD))}
+```
+
+Steps in `main()`:
+1. pins T0 (canonical 6 + extra guard: FROZEN, evidence/variant_registry_check.json, evidence/variant_delta_check.json, sibling tools, delta, registry, checker). Compare against PINS. If mismatch → exit 2 (VOID) and write report.
+2. candidate hashes; compare.
+3. level predicate on live + candidate (independent).
+4. structural diff/minimality.
+5. sandbox: create temp root; copy `artifacts/formulation`, `schemas`, `research_map/formulation_taxonomy.yaml`, maybe `research_map/` only that file. Then create S_live / S_cand / S_mut dirs. Actually cheaper: one sandbox root per scenario, each built from the *pristine* sandbox template via copytree. 6 scenarios × 6MB = fine.
+   - Scenarios: live (live files), cand (cand files), m1..m5 (cand with mutated registry/delta or live with note stripped).
+   - Run checkers:
+     * live checker on live → expect exit 0
+     * live checker on cand → expect exit 0
+     * cand checker on live → expect exit 1
+     * cand checker on cand → expect exit 0
+     * cand checker on m1 (live label in cand tree) → exit 1
+     * cand checker on m2 (class dir flipped) → exit 1
+     * cand checker on m3 (pred dir flipped) → exit 1
+     * cand checker on m4 (benign suffix) → exit 0
+     * live checker on m5 (live label, bracket note stripped) → exit 1
+   - For each run, record exit code, stdout last line, and the sandbox evidence file hash (the checker writes variant_registry_check.json) — verifying it wrote inside sandbox only.
+6. sibling regression on cand tree: run check_variant_deltas.py (expect exit 0, stdout VALID) and check_taxonomy_consistency.py (expect exit 0, stdout CONSISTENT). Note these write evidence JSON in sandbox.
+7. canonical write guard T1 == T0 for the full guard set (especially evidence files must be unchanged!). Also verify no sandbox leaked: assert no new files under ROOT created by my run (hard to prove generally; instead assert the T0/T1 hash equality of canonical guards, and record `sandbox_root` outside ROOT).
+8. Controls:
+   - K1 pin-guard self-test: tamper an in-memory expectation, assert guard raises Void.
+   - K2 determinism: recompute the check payload twice (or run main twice via bash) — I'll do bash-level double-run and compare printed digests.
+   - K3 predicate discrimination: predicate flips between live (MIXED) and cand (QUALIFIED); assert.
+   - K4 patch round-trip on mutated source fails to reproduce (flip one line in sandbox source before applying patch → applied output != candidate).
+9. verdict + digest + report.
+
+Mutation construction:
+- m1: cand registry SET strength := live strength. m1 delta strength := live delta strength.
+- m2: cand label with "STRONGER than AF-WCC-VAC-GEN as a class statement" → "WEAKER than AF-WCC-VAC-GEN as a class statement".
+- m3: "predicate S is strictly WEAKER than" → "predicate S is strictly STRONGER than".
+- m4: append " [w030 benign control]".
+- m5: live label with bracket note removed: live.copy with `strength` = re.sub(r"\s*\[[^\]]*\]", "", live_strength) — yields "...but not conversely".
+- m1' patch-tamper source: change a byte in the sandbox source registry before `patch` → patch may fail to apply (context mismatch) → record as control K4 (expect failure OR applied != candidate). Simplest: append a benign line to the sandbox source registry file before applying patch; patch should still apply (context lines are around line 57) but the result must differ from the candidate (extra line) → assert !=.
+
+For m4, the candidate checker's bracket-strip loop strips `[...]` notes; appending " [w030 benign control]" gets stripped → still passes. Good non-vacuity control.
+
+Also I want to double-check the "assertion-aware" claim independently: the candidate checker must assert level qualification. My mutations m2/m3 test that.
+
+Report structure:
+```json
+{
+ "schema": "w030-set-repair-independent-verify/v1",
+ "task_id": "W030-SET-REPAIR-CANDIDATE-INDEPENDENT-VERIFY-01",
+ "actor": "worker-030",
+ "node_id": "F0",
+ "class_id": "AF-WCC-VAC-GEN",
+ "gate": "G-FORM",
+ "authority_note": "...",
+ "created_at": ...,
+ "pins": {"claimed":..., "measured_T0":..., "measured_T1":..., "stable": true},
+ "candidate_hashes": {...},
+ "independent_level_predicate": {...live/cand classification + anchors...},
+ "structure": {...diffs, minimality, patch roundtrip...},
+ "behavioral_matrix": [...],
+ "sibling_regression": {...},
+ "controls": [...],
+ "canonical_write_guard": {...},
+ "verdict": "...",
+ "falsifier": "...",
+ "not_claimed": [...],
+ "run_digest": "..."
+}
+```
+
+Exit code: 0 verified / 1 falsified / 2 void.
+
+Now write the script. Must be careful with:
+- `patch` command availability (used by worker-024). Check `command -v patch`.
+- Running checkers: `subprocess.run([sys.executable, str(checker)], cwd=sandbox_root, capture_output=True, text=True, timeout=60, env={...PYTHONDONTWRITEBYTECODE=1})`.
+- The checker computes ROOT from `__file__`, so cwd doesn't matter, but for sibling tools it doesn't matter either.
+- The sandbox tree must include `artifacts/formulation/evidence/` dir (copy includes it).
+- Copy `schemas/` and `research_map/formulation_taxonomy.yaml`.
+
+Let me check `patch` availability and then write the file. Also note `artifacts/formulation` may contain a symlink (`evaluation_rubric.yaml`? no, that's artifacts/audit). copytree with symlinks=True to be safe.
+
+Let me write the instrument now. I'll create the directory and file with the write tool.
+dsh: reasoning:
+Wait, there's a bug in my B-matrix logic: the `runs` loop's checker selection is convoluted and wrong. Let me think:
+
+Sandbox scenarios:
+- `live`: live registry/delta + LIVE checker at tools/check_variant_registry.py.
+- `cand`: candidate registry/delta + CANDIDATE checker at tools/check_variant_registry.py.
+- `m1..m5`: candidate registry (mutated) + candidate delta + CANDIDATE checker.
+
+Runs:
+- B1 live checker on live → the sandbox `live` has the live checker. exit 0.
+- B2 live checker on candidate → I need a sandbox with candidate files + LIVE checker. The `cand` sandbox has the candidate checker. So I need a fourth scenario: `cand_livechecker`. Similarly:
+- B3 candidate checker on live → sandbox `live` doesn't have the candidate checker. Need `live_candchecker`.
+- B4 candidate checker on candidate → `cand` sandbox. exit 0.
+- B5-B8 candidate checker on mutations → m1..m4 sandboxes. exit 1,1,1,0.
+- B9 live checker on m5 → m5 sandbox currently has candidate checker; need live checker for B9. Or use `cand_livechecker`-style: m5 with LIVE checker but live label (note-stripped).
+
+So I need to make checker placement explicit per scenario. Let me simplify: build each scenario with an explicit checker parameter, and define scenarios:
+- `live_lc`: live files + live checker
+- `cand_lc`: candidate files + live checker
+- `live_cc`: live files + candidate checker
+- `cand_cc`: candidate files + candidate checker
+- `m1_cc` ... `m4_cc`: mutated candidate files + candidate checker
+- `m5_lc`: live files with note-stripped label + live checker
+
+Then runs are simple. Let me rewrite the B section of the script. I'll use edit to fix.
+
+Also the `runs` loop currently redefines chk weirdly. Let me replace the whole B block.
+
+Additionally, m1 needs both registry and delta live labels (delta_s given). m5 only registry (delta unchanged) — fine, but the checker only reads the registry. OK.
+
+Another bug: in `level_predicate`, `a_class` computation: `class_anchor.lower()` contains "strictly stronger than the parent class" → `"stronger than the parent class" in ...` True → a_class = STRONGER. Good.
+
+Predicate anchor from F1:235 contains "strictly WEAKER than this class's single-q tail predicate" → lower contains "weaker than this class's single-q tail predicate" → a_pred = WEAKER. Good.
+
+For the live label: `strip_notes` removes the bracket note. `class_qualified` = "class statement" in subject → live subject has no such phrase (it's in the bracket note only) → False. class_dir from regex: "weaker than AF-WCC-VAC-GEN" → WEAKER. pred_dir: search `predicate[^.;)]{0,120}` → "predicate entails the union reading; the converse fails on the omega-chain witness, W076-GFORM-STRICTNESS-RECONCILE-06 T4): gamma not contained in the union J^-(I+) implies no single past J^-(q) contains a tail of gamma, but not conversely" — wait `[^.;)]` stops at the first "." or ";" or ")". The text after "predicate" is " entails the union reading;" → stops at ";" → segment "predicate entails the union reading" → no direction → pred_dir stays None? Then the loop continues to the next "predicate" occurrence... there is only one "predicate" in the stripped live label? The live label: "strictly weaker than AF-WCC-VAC-GEN (the parent's single-q tail predicate entails the union reading; the converse fails on the omega-chain witness, W076-GFORM-STRICTNESS-RECONCILE-06 T4): gamma not contained in the union J^-(I+) implies no single past J^-(q) contains a tail of gamma, but not conversely" — after stripping the bracket `[...]`, only one "predicate". So pred_dir = None → level_qualified False → verdict: class_dir not None → "LEVEL_MIXED". 
+
+For the candidate label: subject contains "class statement", class_dir = STRONGER (first match "STRONGER than AF-WCC-VAC-GEN"). pred_dir: search "predicate..." — first occurrence is "SET predicate S is strictly WEAKER than the parent's single-q tail predicate P (P entails S; the converse fails..." → segment "predicate S is strictly WEAKER than the parent's single-q tail predicate P (P entails S; the converse fails on the omega-chain witness, W076-GFORM-STRICTNESS-RECONCILE-06 T4)" (stops at ";" after "S")... Actually `[^.;)]{0,120}` matches "predicate S is strictly WEAKER than the parent's single-q tail predicate P (P entails S" — wait "(" is allowed, ";" stops. So the segment includes "strictly WEAKER" → direction WEAKER. Good. But careful: the first match might start at "predicate" inside "single-q tail predicate"? re.finditer finds the leftmost occurrence: "SET predicate S..." at that position. Good.
+
+Now, mutation m2: cs.replace("STRONGER than AF-WCC-VAC-GEN", "WEAKER than AF-WCC-VAC-GEN") — careful: cs contains "strictly STRONGER than AF-WCC-VAC-GEN as a class statement". Replace yields "strictly WEAKER than AF-WCC-VAC-GEN as a class statement ... while the SET predicate S is strictly WEAKER than the parent's single-q tail predicate P...". Candidate checker asserts `"STRONGER than AF-WCC-VAC-GEN" not in set_strength` — after stripping the bracket note, the label starts "strictly WEAKER than..." → no "STRONGER than AF-WCC-VAC-GEN" → fails → exit 1. Good. Also my predicate would flag it (class WEAKER, pred WEAKER) — but that check isn't in the matrix; fine.
+
+m3: replace "predicate S is strictly WEAKER" with "predicate S is strictly STRONGER" → candidate checker requires "WEAKER than the parent's single-q tail predicate" → absent → exit 1. Good.
+
+m4: append " [w030 benign control]" — the checker's while loop strips bracket notes; after stripping, the label is intact, all assertions pass → exit 0. Good.
+
+m1: live label (with bracket note) in the candidate tree; candidate checker strips the note then requires "STRONGER than AF-WCC-VAC-GEN" → absent → exit 1. Good.
+
+m5: live label with note stripped + live checker → live checker requires "STRONGER" in strength (mention) → stripped label has no "STRONGER" → exit 1. Good.
+
+Now B2: live checker on candidate files. Live checker requires `"STRONGER" not in setv.get("strength","")` → candidate contains "STRONGER" → passes. And other checks about H2LOC/TWOSIDED/CH unchanged → exit 0. Good.
+
+B3: candidate checker on live files → live label lacks assertions → exit 1. Good.
+
+Another issue: `run_checker` writes `variant_registry_check.json` in the sandbox; when multiple runs share a sandbox, evidence hash may be overwritten. Each scenario is separate, fine.
+
+Also `build_sandbox` copies the whole formulation tree including `evidence/variant_registry_check.json` from live; then the checker overwrites it in the sandbox. Fine.
+
+One more: the B-matrix expects `evidence_written` True — yes since the checker writes it. But for a failing run it still writes before exit. Good.
+
+Also: `diffs` for the delta candidate: `CANDIDATE_ + Path(rel).name` → "CANDIDATE_AF-WCC-VAC-GEN.variant-SET.delta.json" ✓. For canonical registry → "CANDIDATE_VARIANT_REGISTRY.json" ✓.
+
+`S3` compares `sha(psb / rel)` for rel in DECLARED_SITES plus CHECKER → candidate names: CANDIDATE_VARIANT_REGISTRY.json, CANDIDATE_AF-WCC-VAC-GEN.variant-SET.delta.json, CANDIDATE_check_variant_registry.py. `ch` keys match. ✓
+
+`patch -p1` in the sandbox: the patch file was generated with paths like `a/artifacts/formulation/...`? Let me check the repair.patch header to be sure -p1 works from the sandbox root. Let me view it quickly. worker-024 claims it applies with `patch -p1` on a sandbox tree.
+
+Also the `run_tool` for siblings: `root / tool` where tool = SIBLING_DELTAS (relative path) ✓.
+
+Let me now fix the B section and run. I'll rewrite the block from `# B -- behavioral matrix` through `report["sibling_regression"] = reg`.
+
+Also note: `a` and `b` variables reused; fine.
+
+One more potential issue: `sandboxes = Path(tempfile.mkdtemp(...))` → /tmp/w030_setverify_xxx. Good, outside repo. But the report records the path, which will be ephemeral — fine (report includes all hashes). Maybe I should also copy a small `sandbox_manifest.json` into my artifact dir listing scenario hashes for durability. I'll add that: after building, record scenario → registry/delta/checker sha256 in report. Let me add a `sandbox_scenarios` dict.
+
+Let me make the edit.
+dsh: reasoning:
+Also fix the sibling regression reference: it uses `scen["cand"]` which no longer exists → change to `scen["cand_cc"]`.
+
+Let me check the patch file header before running, then edit the sibling line.
+dsh: reasoning:
+Patch uses a/ b/ prefixes → `patch -p1` from root works.
+
+Now let me run the instrument. Note it copies ~6MB × ~9 sandboxes = 54MB in /tmp; fine.
+
+Careful: the instrument writes `report.json` into my artifact dir. Run it.
+dsh: reasoning:
+The instrument ran and reports VERIFIED with digest. Let me inspect the report to confirm all checks passed and verify the key details (level predicate classification, mutation matrix results, guard unchanged, sibling regression). Then run it a second time to confirm determinism (same run_digest).
+
+Let me check the report's checks and controls.
+dsh: reasoning:
+All 21 checks + 4 controls pass. The verification independently confirms:
+- Live label is LEVEL_MIXED (class direction WEAKER vs anchor STRONGER; no class qualification; no predicate-level assertion).
+- Candidate label is level-qualified and consistent with both frozen anchors.
+- Candidate checker is assertion-aware: fails closed on live and on class-flip/predicate-flip mutants; passes on candidate and benign mutation; live checker false-passes the live label but fails on the note-stripped live label (mention-match mechanism reproduced).
+- Patch round-trips; minimal diffs; siblings green; no canonical writes.
+
+Now run it a second time to confirm determinism (run_digest identical). Then write README.md, manifest.json, review JSON, checkpoint, and emit events.
+
+Note the report's `created_at` and `duration_s` and `sandbox_root` vary; run_digest excludes them, so it should be identical.
+
+Let me run again (in background? it takes 0.6s, foreground fine).
+dsh: reasoning:
+Deterministic digest identical. report.json sha256 = f9058cc96c92f055672825d02a68b30fb6233468bcb878195bf7c64483429409.
+
+Now produce the remaining deliverables:
+1. README.md — method, pins, checks, verdict, falsifier, reproduction, non-claims.
+2. manifest.json — hashes of instrument, report, README, review + pinned inputs.
+3. snapshots/ — pinned copies of the two live labels and the two candidate labels? Maybe copy the live registry/delta and candidate files for durability (small: ~34KB). Also the anchor lines. I'll create `snapshots/` with the 4 JSON files + `anchors.txt` (the two anchor lines with line numbers + hashes). Good for evidence durability.
+4. reviews/SET-STRENGTH-REPAIR-030.json — scoped review (counts_as_full_schema_verdict=false; candidate-level verification), verdict accept (score 4.5), hard_failures [], findings (advisory: adoption requires FROZEN bump/re-pin of evidence/variant_registry_check.json and variant_delta_check.json; F0:199 open adjudication remains; unrelated F2b vocab blocker). Falsifier = my report's falsifier.
+5. runtime/state/w030_checkpoint_8.json — worker checkpoint.
+6. Append events to comms/outbox/worker-030.jsonl: artifact x4-5, claim, review, status. Each needs event_id, event_type, created_at, actor; plus node/class/gate/evidence_refs/falsifier. Do NOT set status=done/validation_status=passed/gate verdict.
+
+Let me compute hashes after writing each file and use them in subsequent files. Order:
+- Write README.md and manifest.json (manifest needs report+instrument+README hashes; write README first, compute hashes, then manifest).
+- Snapshots: copy files, then hash.
+- Review file: references report/instrument/README/manifest + snapshot hashes.
+- Checkpoint: references all.
+- Events: reference everything with sha256 prefixes.
+
+Careful about the checkpoint: the previous worker-030 checkpoint was `runtime/state/w030_checkpoint_7.json`; mine will be `w030_checkpoint_8.json`. Since the report is the main measurement, and the review is the verdict record, the checkpoint should record task, pins, hash, digest, verdict, next falsifier, and authority note.
+
+Let me check the shape of the previous checkpoint (w030_checkpoint_7.json) to match conventions.
+dsh: reasoning:
+Now write the remaining deliverables. Let me create snapshots first, then README, then manifest, then review, then checkpoint, then events.
+
+Snapshots dir: copy the live registry, live delta, candidate registry, candidate delta, plus anchors. Also include the sandbox-scenario pin table? The report has it.
+
+Let me do it with bash cp, then compute hashes.
+dsh: reasoning:
+The snapshots hash-match the pins/candidates. Now write README.md (with hashes: instrument 94f12bae..., report f9058cc9...). Then manifest.json.
+
+Let me write README.md.
+dsh: reasoning:
+Now the manifest. Include: schema, task, actor, created_at, target, pins (claimed/measured), candidate hashes, deliverables (instrument/report/README/snapshots), review path+hash (will write next — manifest can list it, then I compute review hash after; chicken-and-egg. I'll write the review first, then manifest referencing it. But README references manifest.json only loosely. Let me write review now, then manifest, then checkpoint, then events.
+
+Review file `reviews/SET-STRENGTH-REPAIR-030.json`. Fields similar to previous: artifact, review_kind, target_id, target_path, reviewed_sha256 (candidate), reviewer, reviewer_role, verdict accept, score, gate, node_id, class_id, class_ids, created_at, scope, independence, verified, findings, hard_failures, falsifier, next_falsifier, evidence_refs, artifact_refs, counts_as_full_schema_verdict: false, counts_toward_gate_accept: false, authority note, not_claimed.
+
+Score: 4.5 (no hard failures, candidate verified; advisory findings only).
+
+Findings (advisory):
+1. W030-SET-V1: adoption requires FROZEN rev30 bump + re-pin of evidence/variant_registry_check.json and evidence/variant_delta_check.json; the candidate alone changes none of them (measured).
+2. W030-SET-V2: the live checker's SET clause is a mention-match (`"STRONGER" not in strength`), independently reproduced: it passes the live level-mixed label and fails once the bracket note is stripped; the candidate's assertion-aware clause removes this class of false pass.
+3. W030-SET-V3: F0:199 position-A/B remains open (worker-094 vs lead measurement_6); candidate labels are correct under either reading but a predicate-level clarification of F0:199 would need the same authorized revision and cannot be done by a worker (G-F0 no-write).
+4. W030-SET-V4 (non-blocking): the sandbox scenario matrix binds the candidate checkers' *exit codes*; the candidate checker's write target (evidence/variant_registry_check.json) is still a live-tree write when run in-tree — running it directly on canonical paths would rewrite a FROZEN evidence file, so adoption must re-pin it. (Actually that's V1; make V4 about the fact that my verification is candidate-level and does not re-run the full G-FORM acceptance pipeline.)
+
+Let me keep findings concise and useful: 3 findings + non-claims.
+
+created_at: use current time. Let me get `date -Is`.
+dsh: reasoning:
+Now the manifest.json in my artifact dir, and the checkpoint `runtime/state/w030_checkpoint_8.json`. Then the outbox events.
+
+Let me compute the review hash and anchors hash. Then write manifest.
+
+Manifest contents:
+- schema, task_id, actor, created_at
+- target/task authority (self-selected, controller rev14 item 5 context)
+- pins (entry measured, with T0/T1 equality)
+- candidate hashes measured
+- deliverables: path → sha256 (instrument, report, README, snapshots, review)
+- verdict + digest + falsifier + non-claims
+- reproduction command.
+
+Then checkpoint (schema worker-030/checkpoint/v1, checkpoint_id w030-checkpoint-8), similar to #7:
+- task info, verdict, artifacts (hashes), measured_pins, digest, next_falsifier, authority note, canonical_writes: none, hours.
+
+I'll write manifest after computing all hashes; but the manifest itself can't include its own hash (fine). Checkpoint can include manifest hash once written. Sequence:
+1. hash review → write manifest (with review hash) → hash manifest → write checkpoint (with manifest hash) → emit events (with all hashes).
+
+Let me get hashes.
+dsh: reasoning:
+Now the checkpoint. Compute manifest hash first, then write `runtime/state/w030_checkpoint_8.json`. Also verify the pins are still stable right now (before the checkpoint) — quick sha256 of the 6 canonical files; important because other workers may have written (e.g., rev14!). If bytes moved, my verification is void and I must report that. Let me check now.
+dsh: reasoning:
+All canonical pins still stable. Manifest hash = 90e86920f98548a1ab39aa584ad4d39bd9df189207464763c3d9c711d23ded53.
+
+Now write the checkpoint `runtime/state/w030_checkpoint_8.json` with:
+- schema, checkpoint_id, created_at, actor, hours (I'll estimate 0.5)
+- task info (id, kind, node, class, gate, self-selection rationale, target)
+- verdict (overall, review_verdict accept 4.5, checks 21/21 + 4/4, digest, hard_failures [])
+- artifacts (hashes)
+- measured_pins (7 entries + evidence pins)
+- canonical_writes: []
+- next_falsifier
+- authority note.
+
+Then the outbox events. Let me write the checkpoint now.
+dsh: reasoning:
+Now emit the JSON events to `comms/outbox/worker-030.jsonl`. Rules:
+- One JSON object per line.
+- Each event needs `event_id`, `event_type`, `created_at`, `actor`.
+- Upward types: `status`, `claim`, `artifact`, `blocker`, `review`, `direction_update`, `resource_request`.
+- `claim` with `conclusion_type: theorem` requires artifact_refs. I'll use `conclusion_type: "formal_model"` (or "instrument_measurement"? The enum isn't specified; previous worker-030 used "formal_model" for its review-ish claim. I'll use "formal_model" with artifact_refs present anyway).
+- Cite evidence as `path#sha256-prefix`.
+- Do not set status=done/validation_status=passed/gate verdict.
+
+Events to emit:
+1. artifact: instrument `verify_set_repair_030.py` (sha 94f12bae...)
+2. artifact: report.json (f9058cc9...)
+3. artifact: README.md (353ac2dc...)
+4. artifact: manifest.json (90e86920...)
+5. artifact: review `reviews/SET-STRENGTH-REPAIR-030.json` (34dbe45d...)
+6. artifact: checkpoint `runtime/state/w030_checkpoint_8.json` (hash — compute)
+7. claim: the verification statement with assumptions + falsifier + evidence.
+8. review: scoped review event (verdict accept 4.5, counts_as_full_schema_verdict false).
+9. status: task complete at worker level (status field "active", not "done").
+
+Also possibly a `blocker`? No — the residual items are owned by the lead; I recorded them as review findings. Not a blocker per se. The F0:199 position A/B is an open adjudication but already known; my review records it as advisory. I'll skip a blocker event to avoid noise... Actually, the "adoption requires FROZEN bump + re-pin" is a real owner action; the lead is already authorized to do it in rev14. No blocker needed.
+
+Let me compute the checkpoint hash, then write the events with a Python script appending lines (safer JSON encoding). I must be careful not to clobber the existing outbox (77KB) — append only.
+
+Event timestamps: use current time ISO with +08:00. Let me get the time and hash, then append via python.
+
+Also note: the protocol says worker events cannot set status=done — I'll use "active" with `completion_claim: true` and a `completion_scope` note like the previous worker-030 status did.
+
+Let me write the events.
+dsh: reasoning:
+9 events appended, all parse. Now run the repo's comms ingest / validate to check the events are schema-valid and accepted. The controller command is `python3 research_map/comms.py ingest` — but should a worker run ingest? The protocol says "accepted stream | research_map/events.jsonl | research_map/comms.py ingest only". Running ingest is a controller command, but workers have been running it? The pass-08 lifecycle does the locked ingest. The instruction says "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit." It doesn't say to ingest. Running ingest could race with the controller. Safer: run `python3 research_map/validate_map.py` (read-only, validates map+event schema) — no, that validates the map, not my outbox.
+
+Better: validate my event objects against `research_map/events.schema.json` locally without ingesting, and optionally dry-run comms.py if it has a validation mode. Let me check `comms.py` for a validate/dry-run option. Also check the schema to ensure required fields are present for `review` events (e.g., hard_failures etc.).
+
+Let me read events.schema.json and comms.py's CLI quickly.
+dsh: reasoning:
+There's `python3 research_map/comms.py ingest --dry-run` — perfect for validating without writing the accepted stream. Let me run it and inspect the result for my events (accepted/rejected). It processes all outboxes, which is fine in dry-run (read-only). The controller runs real ingest periodically; my dry-run validates schema.
+
+Note: the dry-run may be somewhat slow (220 files) but fine.
+
+Also, importantly: `status` events aren't in the schema's oneOf! The schema has direction_update, claim, artifact, review, resource_request — no `status` or `blocker`. Yet the protocol lists status/blocker as upward types, and many status events are in the accepted stream. So validate_event likely has custom handling. Let me just run dry-run and see if any of my 9 events are rejected.
+dsh: reasoning:
+One event rejected: my `claim` uses `conclusion_type: "instrument_measurement"`, which is not in the allowed enum. Let me check schemas.py for the allowed conclusion_type values, then fix the claim event in place (allowed? The protocol says "A message is not a result"; workers have been correcting their own events with erratum/addendum events when they can't edit. But since the event is *rejected* and not yet ingested, I can rewrite my own outbox line — it's my own file and the event was never accepted. The CF-30/045 practice shows addenda for already-ingested events; for a rejected one, fixing the line before ingestion is cleaner. However, "do not hand-edit inbox JSONL" applies to inbox; my own outbox is written by me. Still, to be safe and append-only-clean, I could either (a) edit the rejected claim line in place, or (b) append a corrected claim and an erratum status. Since the claim was never accepted (rejected at dry-run; nothing ingested yet for my lines), replacing it in place is not rewriting accepted history. But the controller may ingest between my dry-run and my edit — the ingest is 15-min auto-cycle and the controller pass; the rejected line would land in rejected.jsonl, and then I'd need an addendum.
+
+Safest: edit the claim line in place now (before any real ingest), because it's my not-yet-accepted output and rule 5 says "Reject your own output before sending". Let me check allowed conclusion_type values first.
+dsh: reasoning:
+Allowed: theorem, conditional_theorem, stability_result, counterexample, numerical_evidence, formal_model, open_problem. My claim is an instrument/artifact measurement → `formal_model` is the closest used by other workers (e.g., worker-016 used "formal_model" for an instrument-and-checker measurement, worker-093 similar). I'll fix the rejected claim line in place by reloading the file, replacing that event's conclusion_type, and rewriting only that line. Then re-run dry-run to confirm 9/9 accepted.
+
+Let me do it carefully: read lines, find the JSON line with event_id w030-set-20260912T0121-claim, parse, set conclusion_type="formal_model", dump back, rewrite the file preserving all other lines byte-for-byte.
+dsh: reasoning:
+All 9 of my events now pass the dry-run validation. Let me confirm the accept/reject counts specifically (the tail only showed lines). Let me run once more and grep the summary plus any REJECT lines for worker-030.
+
+Also, I should re-verify that the claim-line fix didn't alter the checkpoint/review references (the claim event content changed slightly — adding a conclusion_type_note — but the hashes I cited are of artifacts, not the event itself; that's fine).
+
+After validation, final steps:
+1. Confirm no canonical writes (pins unchanged) — re-check quickly.
+2. Update todos.
+3. Final summary to the user.
+
+Also consider: should I run the real `comms.py ingest`? The protocol says the accepted stream is written by `comms.py ingest` only, and the controller runs it (15-min cycle + passes). Workers typically just write outbox. I'll leave ingest to the controller.
+
+One more check: the outbox file now has 57 lines; my 9 events appended; the first 48 from the previous lifecycle remain intact. Let me verify the last line and the claim line.
+
+Let me also double check the review event's required fields: target_id, reviewer, verdict, score, hard_failures, findings — yes all present. The artifact events have node_id, artifact_type, path, sha256, validation_status — yes. The claim has class_id, statement, conclusion_type, assumptions, falsifier, evidence_refs — yes.
+
+Let me run the final validation and pin re-check.
+dsh: reasoning:
+Everything validates: 0 rejects, all pins unchanged.
+
+Let me do a final consistency check of my emitted artifacts and events (spot-check that the outbox has the 9 events, hashes cited match actual files), then update the todo list and finish.
+
+Quick verification:
+- For each evidence_ref in my events, check path exists and sha256 prefix matches. Let me run a small script over the last 9 events verifying all `path#sha256:xxxx` refs resolve.
+
+Then finalize todos and write the exit summary. Also clean up /tmp sandboxes? They're in /tmp and ephemeral; but the report references the sandbox path as evidence. Leaving them is fine; they'll be cleaned by the platform. I could remove them to save space (~50MB). The report records scenario hashes durably, so removing is safe. I'll remove the accumulated sandboxes to be tidy — actually, two runs created /tmp/w030_setverify_nhwumme0 and _h7x418rw (~50MB each). Removing is fine since the report's `sandbox_scenarios` + snapshots preserve the pins. Let me remove them.
+
+Let me verify refs and clean up.
+dsh: reasoning:
+All 54 cited refs resolve with matching hashes. 9 events emitted. Deliverables on disk. Pins unchanged. Dry-run ingest: 0 rejects.
+
+Final todo update and summary. The instruction: "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit."
+
+Let me mark all todos completed and give a concise final report:
+- handoff/map/comms read
+- task taken (class-bound: F0 / AF-WCC-VAC-GEN / G-FORM)
+- what was verified and result
+- IDs, evidence, hashes, falsifier
+- checkpoint
+- no gate verdict / no canonical writes
+- exit.
+
+Also note worker-030's previous lifecycle work (CLASSSEP review) was ruled satisfied at pass-08 (REC-38) — good context to mention briefly.

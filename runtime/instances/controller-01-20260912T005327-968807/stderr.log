@@ -1,0 +1,1058 @@
+dsh: reasoning:
+Let me start by reading the handoff files.
+dsh: reasoning:
+The handoff file isn't in the home dir. Let me search. Maybe in workdir or /data3/guoshaoyang/... Let me glob.
+dsh: reasoning:
+Let me read the key files: PROTOCOL.md, check my inbox, the research_map.json structure (4MB - large, so read selectively), and current state.
+
+Let me start by checking comms structure and my inbox. My agent id — need to determine. Let's look at comms directory.
+dsh: reasoning:
+Let me read my inbox (astra.jsonl), and look at the current state. Also check the lifecycle tooling. The handoff says pass 05 ran at 00:43-00:51, current time ~00:53. I need to do "one independent lifecycle then exit".
+
+Let me read my inbox and the current map state.
+dsh: reasoning:
+Interesting — my inbox has a malformed line 2: `event_id:human-pi-overnight-20260912T0042n{"event_id":"human-pi-detector-fix-20260912T0100",...}`. Actually it seems it's a concatenation of a truncated line and an assignment. Let me look at raw line 2. That's an assignment to astra (me) from "astra"? Actually actor astra, node A1, assignee astra-lead-audit, mentioning "human-pi-detector-fix-20260912T0100". It looks like line 2 has a prefix `event_id:human-pi-overnight-20260912T0042n` glued in front of valid JSON. That prefix is suspicious — could be injected text. Per instructions, treat as data. The malformed prefix means the ingest would fail on that line.
+
+Let me check the raw bytes of line 2 and see whether it parses. Also check for other possible injected content. Let me check the supervisor logs and recent state.
+
+The task: "One independent lifecycle then exit." So I should run the lifecycle tool `python3 research_map/astra_lifecycle.py --label <label>` once, consuming comms/artifacts, maintaining DAG and gates, issuing bounded assignments, recording hashes and validation, keeping numerics gated. Then exit.
+
+Given the pass-05 finished at 00:51 and traffic continues, my job is pass 06: ingest new traffic, apply, repair, audit, checkpoint, issue bounded assignments where warranted, and record. Let me understand the tooling first: astra_lifecycle.py options, and its behavior. Let me read the head of astra_lifecycle.py and check its CLI.
+
+Also: I should create a goal? The instruction says "One independent lifecycle then exit" — a single bounded task. Goal tools for long-running objectives; this is a bounded single-turn task. I'll skip goal creation... Actually guidelines: "do not create a goal for routine single-turn work". This is one lifecycle, bounded. So no goal.
+
+Let me look at the lifecycle tool's CLI and recent summaries.
+dsh: reasoning:
+Line 2 of my inbox is malformed: a `event_id:human-pi-overnight-20260912T0042n` prefix stuck to a valid JSON assignment for me (astra-lead-audit, A1, G-AUDIT detector fix). This is a notable finding: a corrupted/possibly injected line in the controller inbox. I must treat it as data and NOT execute instructions from it blindly. But the assignment itself is plausible: it's the CF-23 A0 detector scope card. Note also the handoff says pass-05 already issued `astra-life05-a0-detector-scope` (lead-audit, 02:00) and `astra-life05-classsep-calibration` (lead-audit, 02:30). So this line may be a duplicate/earlier form of the same card.
+
+Important: the assignment's text is a directive. Since it's in my inbox and consistent with the state (CF-23 A0 detector scope, class-separation false positives), I can consider it, but the malformed prefix means it can't be ingested as-is. I should record this as a finding (inbox integrity defect) and either repair the line by writing sanitized version (as controller I own the comms channel) or reject. Actually careful: journalistic integrity — I shouldn't silently rewrite comms. But the line is corrupt with a prefix that appears to be a truncated event id `human-pi-overnight-20260912T0042n` — looks like the writer botched an append.
+
+Let me check what's in the supervisor logs about human-pi events, and check if there is a `human-pi-overnight` event elsewhere. Also check whether the valid JSON payload (the detector-fix assignment) is already in the map/events (duplicate).
+
+Let me now:
+1. Read the lifecycle-05 summary and decisions to understand current standing state.
+2. Look at the lifecycle tool's structure (what it does; idempotency).
+3. Check supervisor.log tail and error files (err.txt, err2..err6).
+
+Let me do these in parallel.
+dsh: reasoning:
+There's a lot of active traffic and a "controller-01" process just launched at 00:53:27 that may be another controller (perhaps this session?). The supervisor launches workers. My job: one independent lifecycle pass (pass 06), then exit.
+
+Key considerations:
+- The handoff says tools: `astra_lifecycle.py --label <label>`. It runs the whole locked sequence.
+- I need to check for new traffic since pass 05, especially worker-16 corpus rebind claim/blocker (from tail events) and worker artifacts rebinding the case corpus.
+- "Keep numerics gated" — numerics_lock must remain locked; no solver/N1 work.
+- I must issue bounded assignments where warranted, record hashes/validation, and produce a summary.
+
+Let me first inspect the lifecycle tool enough to know what it does (it's 54KB). Let me check its main() and key steps. Also, check what `run_cycle.py` does. And check the map's current gates and assignments summary via python.
+
+Also important: there's an active "controller-01" launched by the supervisor — is that me? The supervisor log shows launch events; this session may be "controller-01". Let me check running processes to understand. Also relevant: the malformed inbox line mentions `human-pi-detector-fix-20260912T0100` (future-dated 01:00) — with a prefix `human-pi-overnight-20260912T0042n`. This looks like an external human PI message, possibly genuine, that got mangled. Where did it come from? Check the supervisor log and outbox for human-pi. Let me grep for "human-pi" in the repo.
+dsh: reasoning:
+I am controller-01 (this session, pid 1603017/1603019). Good.
+
+The gates are a list. Let me inspect properly. Also, there is a human-pi in reviews/L0-review-032.json and numerics/blockers.md. Let me check those references to understand what "human-pi" events exist. Also, check the events.jsonl for events with actor human-pi.
+
+Let me look at the map structure more carefully.
+dsh: reasoning:
+No human-pi events in the accepted stream. The malformed inbox line is thus the only trace of a "human-pi" instruction — appearing in `comms/inbox/astra.jsonl`, written directly (inbox is written by Astra/leads normally). It's an assignment with actor "astra" (!), created_at 01:00 (future), event_id human-pi-detector-fix-20260912T0100, with a stray prefix `event_id:human-pi-overnight-20260912T0042n`.
+
+So this is suspicious. Note the pass-05 handoff already says `astra-life05-a0-detector-scope` and `astra-life05-classsep-calibration` cards exist — the malformed line is likely an attempted duplicate/overwrite card with slightly different acceptance ("Freeze writers; record pre/post sha256; make the narrowest context-aware fix...") which conflicts with the standing card's scope (calibration is a measurement census, not a code fix). Per rules: worker events cannot set gates; controller owns assignments. I should:
+1. Record an integrity finding (malformed inbox line; future-dated; actor mismatch: event claims "astra" but content attributes to human-pi).
+2. Reject/quarantine it: move to a quarantine file rather than letting ingest break. Actually, does ingest read the controller's own inbox? `comms.py ingest` pulls outbox → events.jsonl. Inbox is downward, not ingested. So the malformed line only matters for me reading it. There may be a `send` tool that appends to inbox; the malformed line was probably produced by an external writer appending without newline handling.
+
+Let me check comms.py send and how inbox files get appended, plus whether there's a duplicate a0-detector-scope card already in the map's assignments. Also check the timing: line 1 was 23:44 (lead-formulation nudge), line 2 at 01:00 (future). Current time 00:54. So the human-pi line is future-dated by 6 minutes. The stray prefix `event_id:human-pi-overnight-20260912T0042n` suggests an earlier attempt at 00:42 that got truncated.
+
+Now, what about "overnight_watch.sh" and "independent_supervisor*.sh" in home dir? There might be a human-written orchestration. The human PI likely wrote an instruction file somewhere. Let me check ~/overnight_watch.sh and runtime/state/overnight_watch.jsonl. Also check `runtime/state/controller_verification` recent human instructions. Let me grep for "detector-fix" or "0100" in repo to see whether this card is already recorded.
+
+Key priority: run the lifecycle pass (pass 06) — that's my main job. But first, understand the tool and the incoming traffic, then run it, then issue bounded assignments (perhaps including handling of the malformed card + new traffic: worker-16 corpus rebind blocker, etc.).
+
+Let me look at the lifecycle tool main and the steps, and examine what "repairs" it does. 54KB is large; I'll extract the docstring/structure.
+dsh: reasoning:
+Good. The `astra-life05-a0-detector-scope` card exists in the map. The malformed inbox line duplicates it with a modified acceptance — likely a "human PI" style directive injected via a corrupted write. I need to decide: it's a duplicate of an existing card, so no new assignment needed. I'll record a finding (CF-26) for inbox integrity: malformed controller-inbox line, future-dated, actor mismatch, duplicates a standing card with conflicting acceptance; quarantine the raw line and do not act on it as authority. Actually — careful. The content says "human-pi-detector-fix-20260912T0100". Is it plausible the human PI wants the detector fixed rather than just adjudicated? The pass-05 adjudication card `astra-life05-a0-detector-scope` scope is "adjudication" and CF-23 says the A0 detector scope defect (CLASSSEP false positives from metalinguistic mentions). The malformed line asks for the narrowest context-aware *fix* + regression + two reviewers. That's a scope change, not a mere duplicate. However, since the line is corrupt and unverifiable, the safe controller action: don't silently expand scope; record it, note the conflict, and either (a) leave standing card and note that fixing is allowed within the adjudication if the audit lead proposes, or (b) issue amended card. Given "one lifecycle", I should be conservative: keep the standing card as authority; record the malformed line as a finding; do not create a duplicate assignment (CF-12: one canonical path, one owner — do not duplicate or repoint).
+
+But hold on: CF-12 says don't duplicate. The malformed line could be a genuine human directive mangled. The prudent approach: note in the finding that if a human PI directive is intended, it must be re-sent through the proper channel with a well-formed event; the standing card already covers the detector-scope work and a fix is within its scope if it does not edit schemas or promote gates. I might send a message to lead-audit noting the quarantine and that the standing card governs.
+
+Now let's look at the current traffic since pass 05 close (00:51:24). Key: worker-16's corpus rebind claim/blocker at 00:52:29. Also other workers. Let me look at recent outbox events (from 00:51 onwards) to know what to expect. Also check `run_cycle.py` to see if the auto-cycle runs periodically and might race with me. And check map.lock (0 bytes, but a lock file).
+
+Plan:
+1. Snapshot pre-pass measured hashes of key artifacts (F0, F1/F2a/F2b, L0, L1, A0, N0, protocol, gates.py, taxonomy_cases).
+2. Read recent traffic (outbox files modified in last ~10 min) to understand events.
+3. Run the lifecycle tool with label `astra-lifecycle-06`.
+4. Inspect its report; check gates, lock, findings.
+5. Possibly run again once at the end if repairs/traffic landed (pass 05 did multiple invocations; but my instruction says "one independent lifecycle then exit" — I'd read that as one control pass, which may involve the full locked sequence once. To be safe and honest: run the lifecycle once. If traffic lands mid-pass and something requires follow-up, an idempotent second invocation is still the same pass. The pass-05 precedent did exactly that. But minimal is fine.)
+6. Emit controller events (like pass-05 events script) — should I? "issue bounded assignments, record hashes and validation". If the audit finds new gate reasons/assignments needed, I should record them. Maybe I need a pass-06 events script, or use `comms.py send` to issue cards. Let me see how pass-05 did it and whether the lifecycle tool itself emits events. The lifecycle tool "never sets a gate verdict (gate events from astra carry verdicts through the normal event path)". So the events script is separate.
+
+Let me first check recent traffic and the run_cycle.py.
+dsh: reasoning:
+Traffic is heavy. Let me examine the events that will be ingested but not yet applied — i.e., outbox events whose event_id is not in ingested_ids.json. Let me write a quick script to list pending events (accepted-but-not-ingested) grouped by actor, showing event_type and key payload fields. That tells me what the pass will apply.
+
+Also, check recent worker-16 events (corpus rebind claim+blocker). Let me do this analysis.
+dsh: reasoning:
+The payload key names differ; my "keep" printed {} because payload is nested differently. Let me inspect a couple raw events to see structure. Also, the worker-16 events were already ingested (they were in the tail of events.jsonl). Pending are newer.
+
+Let me check a few raw pending events with their full structure.
+dsh: reasoning:
+The outbox files are append-only with old events; only new event_ids are pending. My earlier pending list correctly showed newly appended pending events (my `keep` map just failed because fields are top-level). Good.
+
+Now let me get a better digest of the 60 pending events: actor, type, node, key summary fields. Let me print compact lines with fields of interest. Also verify current hashes of key artifacts before running the pass.
+
+Then run the lifecycle. Note that traffic is arriving continuously (workers write every ~30s). The lifecycle tool takes maybe 30-60s. The ingested_ids check plus apply handles it.
+
+One risk: the supervisor keeps launching new workers, and my pass will apply whatever exists at ingest time. That's fine.
+
+Before running: note that there may be a race with the 15-min checkpoint_loop / astra-cycle auto-loop (run_cycle.py) — it uses map.lock so it's serialized.
+
+Let me now:
+1. Snapshot pre-pass hashes of the key artifacts.
+2. Get compact pending-event digest.
+3. Run lifecycle pass 06.
+
+Let me look at what `astra_lifecycle.py` main does around events/gates to know what to expect, particularly whether it requires my own event emission for gates. Let me read main() and gate_audit briefly.
+dsh: reasoning:
+Big drift since pass 05 exit:
+- F1/F2a/F2b schemas now `d9cebb9404b2` / `e9a27996dfd3` / `b2ab6acb2bbe` (was rev12 `cce9c60146d6`/`5476a3f2c6bc`/`55d0a1ea9bda`). So the formulation lead landed rev13 repair! Mirrors aligned (same hashes both trees) — good.
+- FROZEN.json now `3d9e3d77fd87` (was rev28 `2f358f6722d9`) — FROZEN rev29 landed.
+- taxonomy_cases.jsonl `ccf7041bd0ff` (matches handoff's ccf7041b).
+- research_map.json `ed28b714464e` still pass-05 exit value (auto-cycle may not have run yet; or ran and no changes).
+- class_separation.py changed to a8c04fc31e4a (handoff pass-05 said c266dbceca87 in worker-085 refs; pass-05 summary said classsep regression PASS). Hmm, need details.
+- evaluation/A0_detector_scope_adjudication.json now exists with a26be4b85706 (assigned to lead-audit, deadline 02:00) — landed early? It's in artifact_hashes. Interesting.
+- F0 canonical unchanged 0abb9ed8a961 + companion d7419b4e8963 — good, G-F0 intact.
+
+So the pass 06 pass will apply lots of traffic and audit at the new rev13 hashes. Note: new schema hashes mean the review coverage entries at rev12 no longer bind; worker-091's F2b review at rev12 may bind to rev12 but file moved to rev13. This is exactly the "in-flight" issue the handoff warns about.
+
+Careful: worker-071's pending review "w071-review-F1-rev27-a" — rev27? That's confusing: rev27/28 in claims referred to the claim revision numbers, not schema file revision. Anyway.
+
+Let me now run the lifecycle pass 06 with label `astra-lifecycle-06`. Before that, ensure no stale lock (map.lock exists 0 bytes, flock-based so fine).
+
+I should also check the auto-cycle: is there a checkpoint_loop running that runs run_cycle.py every 15 min? The ps showed `checkpoint_loop.sh` from earlier and overnight watch. There's `runtime/logs/astra-cycle.log`. The 15-min cycle may be running. Since flock serializes, fine.
+
+Let me run the lifecycle now (in foreground; it may take ~1 min). Timeout 600000.
+dsh: reasoning:
+The lifecycle ran: 338 events applied, VALID, gates unchanged (G-F0 pass; others pending), lock locked. Let me read the full report to understand what changed, especially gate audit reasons, lock guard, findings, and whether the rev13 schemas are aligned and what the F0 companion status is. Also check publication pairs (did any mirror diverge?), the classsep regression, and the check for evidence hard failures.
+dsh: reasoning:
+Pass 06 first invocation results:
+- Applied 338 events, ingest accepted 80, rejected 0, map VALID, lock locked.
+- G-F0 pass, others pending.
+- F1/F2a/F2b rev13 (d9cebb9404b2/e9a27996dfd3/b2ab6acb2bbe) mirrors aligned, 0 accepts at these hashes → G-FORM withheld pending r3 reviews.
+- Evidence hard failures: 17 CLASSSEP false positives (CF-16 pattern) + 1 new: "frozen artifact drifted during review: research_map/class_separation.py c266dbecaa87 -> a8c04fc31e4a" — that's the A0 detector itself changing during review. This is likely the detector-scope defect being fixed by lead-audit (assigned card), but it constitutes drift against reviews bound to the old hash.
+- Review coverage: F0 7 accepts, L0 1, F1/F2a/F2b 0.
+- classsep regression PASS.
+
+Now, the pass-05 open items and what pass 06 needs:
+1. G-FORM r3 re-review at rev13 hashes — the `astra-life05-verify-gform-r3` card (lead-audit, deadline 02:45) is still open; not my pass's job to judge gates without evidence. The map now shows evidence-binding repair landed (rev13 + FROZEN rev29). But G-FORM still 0 accepts at new hashes.
+2. G-LIT L0 1 accept at a1674f094979 (worker-075) + several revise (including worker-011, worker-025, worker-093, flash-18, worker-005, worker-063 inconclusive). Hmm — L0 has 1 accept and 5 revise at the measured hash. The verify-l0-final card needs to settle. Note: L0 `a1674f094979` — is that the same as pass 05? Yes.
+3. G-NUM: protocol C8 `1e6cdf04d7a2` — report says criterion C8 MET (accept 4.5 binds). N0 node verdict on disk revise 3.5. Wait — handoff said "C8 protocol 1e6cdf04d7a2 contested (accept 4.5 vs two revise on the re-based evidence)". The report claims criterion C8 is MET. Hmm, that's the tool's automated logic; the adjudication card still pends.
+4. G-AUDIT: A0 rubric exists d748a9e3574e, but the A0 detector-scope adjudication artifact now exists (a26be4b85706). Coverage: A1 needs ≥2 accepts per target — F1/F2a/F2b now 0 at rev13, L0 1, F0 7.
+5. Evidence hard: drift of class_separation.py during review (new finding — should be recorded as CF-26), plus 17 CLASSSEP false positives.
+
+Let me look at the map's controller_findings and controller_repairs_log to see what the tool added/updated this pass, and the assignments state (deadlines vs now ~00:56). The pass-05 cards have deadlines 01:40–02:45. My pass should:
+- Record hashes (done by checkpoint).
+- Maintain DAG and gates (audit done).
+- Issue bounded assignments: what's needed? Perhaps:
+  (a) A card for re-review of F1/F2a/F2b at rev13 (already covered by astra-life05-verify-gform-r3, deadline 02:45).
+  (b) A card to adjudicate the class_separation.py drift + A0 detector scope (already `astra-life05-a0-detector-scope`; artifact a26be4b85706 exists — maybe review it).
+  (c) Perhaps the pending worker reviews (w085, w091, w071, w038, w057) need verdict-binding checks — that's the audit lead's job.
+
+I should check the current assignments list with status/deadline and determine which are open/overdue, and whether new evidence (rev13) voids pass-05 reviews. Also the malformed inbox line → new finding + decision.
+
+Let me inspect the map: assignments (latest 15), findings (25 + new), repairs log, and reviews at new hashes. Also check `evaluation/A0_detector_scope_adjudication.json` content and its review status; check whether lead-audit's detector fix (class_separation.py a8c04fc31e4a) broke anything: the classsep regression PASS 27 cases 0 fp 0 fn. But wait: the evidence audit still finds 17 CLASSSEP hard failures — those are on claims text, using the *current* detector. Let me verify the drift finding: is class_separation.py's measured hash matching what artifact_hashes/checkpoint recorded, and did the detector get reviewed after change? The pass-06 evidence hard failure says "frozen artifact drifted during review" — the pinned hash in some review was c266dbecaa87, now a8c04fc31e4a.
+
+Let me dig into the map state.
+dsh: reasoning:
+The findings lack titles in my print (different keys). Let me print a full finding for CF-23 and CF-20 and CF-16 to see structure, then check the assignments' full structure (status is under a different key, maybe "state").
+
+Also check controller_repairs (5 items) and controller_repairs_log empty? The lifecycle tool writes controller_repairs_log = controller_repairs(...) which returns a log list. It printed nothing → maybe entries have different keys.
+
+Let me dump the last finding fully and the last assignment fully.
+dsh: reasoning:
+Now I understand the structure. The `controller_repairs_log` came back empty in this pass — the tool may only write when there are new repairs; findings get updated_at.
+
+Now, my pass-06 duties:
+1. ✅ Ingest/apply/audit/checkpoint (done, first invocation).
+2. Record hashes (checkpoint did; also artifact_hashes.json).
+3. Maintain DAG and gates (gate audit recomputed).
+4. Issue bounded assignments. What new assignments are actually warranted at this state? Let's think about what's genuinely new/changed this pass:
+   a. Rev13 schemas + FROZEN rev29 landed → G-FORM r3 re-review already assigned (astra-life05-verify-gform-r3) — but wait: its acceptance may reference "rev13 schemas + case corpus + FROZEN rev29" already. Yes, pass-05 card anticipated this. So no new card needed; but the card's deadline 02:45 and its acceptance need to bind the new hashes. The card says "rev29 pins". Good.
+   b. A0 detector scope: artifact `evaluation/A0_detector_scope_adjudication.json` (a26be4b85706) now exists, and `research_map/class_separation.py` changed to a8c04fc31e4a. The A0 card (deadline 02:00) may be effectively delivered but not yet reviewed; the evidence audit flags "frozen artifact drifted during review: class_separation.py c266dbeca87 -> a8c04fc31e4a". This is new: the detector changed while reviews referenced the older hash. New finding CF-26 (detector drift) + the malformed inbox line finding CF-27 (comms integrity). Also note the standing `astra-life05-classsep-calibration` card (deadline 02:30) requires a measured TP/FP/FN census + adopt/reject of the staged candidate detector. If lead-audit has *already replaced* the live detector (class_separation.py changed), then the calibration card's "adopt/reject decision for the staged candidate" is partially overtaken: the live detector is now a8c04fc31e4a, and the regression passes 27/27, but the audit evidence still flags 17 hard failures at the new detector, which suggests the new detector did not fix the metalinguistic false positives (or the hard findings were computed before... no—the audit ran at 00:55 with a8c04fc31e4a and still produced 17 CLASSSEP hard failures). Hmm wait: were those hard failures computed at the new detector or is the audit reporting cached pins? The evidence hard list says `frozen artifact drifted during review: class_separation.py c266dbecaa87 -> a8c04fc31e4a` — that's a separate item appended. The 17 CLASSSEP hard failures are from claims whose statements contain "C0/C2". With the new detector, if it had fixed the false positives, those hard failures should have dropped. Let me verify by running audit_evidence.py now and counting; also inspect class_separation.py version and the A0 adjudication artifact to see what was decided.
+
+   Actually, let me directly check: run `python3 research_map/audit_evidence.py` and see the hard list, and inspect A0 adjudication JSON for its conclusion (scope fix vs detector calibration). And check git/recent writes to class_separation.py to know who changed it when.
+
+   c. The malformed inbox line: I'll create CF-26/27 finding + a decision (quarantine, no action, standing card governs). Since the map's `controller_findings` are generated by the tool's `findings_merge` (it appends its own CF entries). Can I add custom findings? The tool's findings_merge writes the list; if I add my own entry into the map before running the tool again, would it survive? Let me check `findings_merge` implementation to know whether custom findings persist or get overwritten. Better: use the events path — but worker events can't set findings. Hmm. Controller can write the map directly (it's the controller). The pattern is: controller-owned map writes happen via lifecycle tool (deterministic repairs) and via event emission scripts (gate/assignment/decision records) + comms send.
+
+   Let me look at how pass-05 recorded decisions: `runtime/state/controller_verification/astra-lifecycle-05-decisions.json` plus events in `astra_lifecycle_05_events.py` (gate records, cards, decision notices). The events are ingested into events.jsonl and applied to the map (assignments/gates). Decision notices presumably are `direction_update`/`claim`? Let me inspect the events script to mirror the pattern for pass 06.
+
+5. Then possibly run the lifecycle a second time after emitting events so the map reflects them and the report is the pass-exit state (like pass-05's multiple invocations). Then write the pass-06 summary md and decisions json, then exit.
+
+Let me first check `findings_merge` and `controller_repairs` to see what the tool considers; then inspect the A0 artifact and class_separation.py history; then look at pass-05 events script structure.
+dsh: reasoning:
+Note: `evaluation/A0_detector_scope_adjudication.json` was created at 00:53:51 by astra-lead-audit, assignment `astra-life05-a0-detector-scope`. So the card's artifact exists but was created before my pass. It's now applied/registered, but not reviewed (A0 coverage 0 accepts).
+
+Important: was `research_map/class_separation.py` changed by lead-audit as part of the A0 scope work or calibration? It's now a8c04fc31e4a. The evidence hard failure "frozen artifact drifted during review: research_map/class_separation.py c266dbecaa87 -> a8c04fc31e4a" suggests the audit pinned c266dbec at review time and the file moved. Let me find where the pinned hash c266dbec comes from (a review or artifact). And compare current detector to the "staged candidate" e2d24b927ee8 (proposed/class_separation.py). Let me check hashes:
+- research_map/class_separation.py = a8c04fc31e4a now.
+- proposed/class_separation.py = e2d24b927ee8 (per CF-16).
+Let me measure both and diff.
+
+Also check who wrote research_map/class_separation.py recently (mtime) and whether it's the same as the proposed candidate. If the live detector was replaced without a controller decision, that's a finding: unauthorized replacement of a frozen artifact under review; and CF-16's calibration card must now adjudicate the *new* live detector, and reviews bound to c266dbec are void.
+
+Let me check the detector's provenance: mtime, and whether artifacts/audit contains the "narrowest fix" work. Also whether there's a lead-audit outbox event about editing class_separation.py. Let me grep the outbox for class_separation mentions in recent events.
+dsh: reasoning:
+My sha script timed out due to a bug (infinite read loop — `iter(lambda:open(p,'rb').read(),b'')` — oops, that opened/read repeatedly forever until empty... whatever). Let me redo hashes properly with a simple loop.
+
+Key: worker-049 emitted an artifact `w049-art-classsep-prosefix-module` at 00:52:00 — "prosefix". And worker-098 emitted a drift report/blocker at 00:54. So the live `research_map/class_separation.py` (mtime 00:52:00) was probably written by worker-049 as a "prosefix module" — did it overwrite the canonical detector without authorization? That's a significant integrity event: a worker editing a canonical detector file, causing drift flagged by another worker (098) and by audit_evidence.
+
+Let me look at:
+1. The worker-049 events (artifact + claim) with paths — is the artifact path `research_map/class_separation.py` (canonical overwrite) or a staging path?
+2. worker-098 drift report/blocker content.
+3. The current detector hash and whether it matches worker-049's declared artifact hash.
+
+This is exactly the kind of thing the controller must handle: unauthorized write to a canonical/frozen artifact, reviews bound to old hash void, and the calibration card needs re-pointing.
+
+Let me pull those events.
+dsh: reasoning:
+This is a major integrity issue. worker-098's blocker says: "G-AUDIT remains blocked after **the controller's applied detector change** a8c04fc31e4a". The canonical detector `research_map/class_separation.py` was modified at 00:52:00 to a8c04fc31e4a — apparently the controller (pass 05? or someone) applied a detector change. Wait — the mtime 00:52:00.197 is right after pass-05 exit (00:51:24). Was it me? No — I started at 00:53. Pass-05 ran 00:43–00:51. mtime 00:52:00. The malformed inbox line at 01:00 asks astra-lead-audit to "make the narrowest context-aware fix" — consistent with an application at 00:52 by some agent. Also `runtime/state/w098_classsep_prose_shadow_checkpoint_2.json` may record it.
+
+Also worker-049 says "proposal staged under artifacts/worker-049/; canonical research_map/class_separation.py untouched" — but that event's `_received_at` is 00:47:45 while created_at 00:52:00 (future-dated; workers use fake timestamps). Its claim is that the canonical file was untouched (at their c266dbec reference).
+
+Let me check who wrote the canonical detector at 00:52. Candidates: an audit lead ("the controller's applied detector change" per worker-098, but maybe worker-098's attribution is wrong). Let me search events around 00:52 mentioning "applied" or "canonical" detector change. Also check `runtime/state/w098_classsep_prose_shadow_checkpoint_2.json` and the drift_recheck.json to see what it says about provenance. And check the file's content diff against c266dbec. Do we have a copy of c266dbec? `artifacts/worker-098/classsep_prose_shadow/shadow_provenance.json` might include the canonical base hash and bytes. Also git may have prior version? The repo has .git; `git diff`/`git log` returned nothing earlier (maybe not a git repo with the file tracked, or shallow). Let me check `git status` quickly.
+
+Key controller decisions needed:
+1. The canonical detector changed mid-review; all reviews bound to c266dbec are void (drift). The change (a8c04fc3) was applied by whom? If by the controller (pass-05 or a script), it was an unauthorized/improper write? Pass-05 summary said "classsep regression PASS (27 cases, 0 fp, 0 fn)" and tools lists don't mention editing class_separation.py. Actually the evidence-hard in my pass-06 report said "frozen artifact drifted during review: research_map/class_separation.py c266dbecaa87 -> a8c04fc31e4a" — a new hard item generated by audit_evidence.py comparing pinned vs measured.
+
+Hmm, wait. Maybe worker-098's phrasing "the controller's applied detector change" refers to the *lead-audit's* application (they may call the orchestrator "controller"). Let me find the artifact that applied it: maybe `artifacts/audit/...`. Let me search for files with hash a8c04fc3 or mentioning "prose_precision" applied.
+
+2. Regardless of who applied it: the current canonical detector a8c04fc3 is a *partial improvement* (17→13 hard findings on snapshot, 20→16 live), but the CLASSSEP calibration card is now inconsistent: it asked for adopt/reject of staged candidate e2d24b92/proposed; meanwhile some patch was applied live. The controller must:
+   - Record the drift as a finding (CF-26): canonical detector modified during active review without a recorded controller decision; reviews at c266dbec void; the applied patch is unverified at its new hash (worker-098 revise 3.0; worker-049's candidate is a different file, dc8aa0de).
+   - Direct lead-audit: the `astra-life05-classsep-calibration` card must now adjudicate the *live* hash a8c04fc3 (with worker-098's drift recheck + worker-049's candidate + worker-035 controls), i.e. re-point/amend it; and `astra-life05-a0-detector-scope` artifact exists but needs review (its scope predicate excludes historical/snapshot paths; must verify measured before/after).
+   - Possibly issue a bounded card to worker-098/worker-049? Careful with CF-12 (one owner per path). The lead-audit owns the calibration.
+
+3. Also, importantly: was the change *properly frozen*? The detector is referenced as a pinned artifact by many reviews. A canonical write mid-review invalidates all review verdicts bound to c266dbec — that's a process finding, not necessarily a gate failure.
+
+Let me gather the facts:
+- Find the event/artifact that wrote the detector; check `artifacts/worker-098/classsep_prose_shadow/drift_recheck.json` provenance field.
+- Check `research_map/audit_evidence.py` frozen-artifact pin list: where does c266dbec come from? Probably `runtime/state/artifact_hashes.json` historical pin or the reviews' reviewed_sha256. The audit's "frozen artifact drifted during review" check probably compares a pinned baseline (in some config) to measured. Let me grep audit_evidence.py for that string.
+
+Then decide the pass-06 actions.
+
+Also: check if the applied detector change is what made the CLASSSEP hard count go 20→16. The evidence hard list in my report still shows 17 CLASSSEP hits (claims list) — the audit ran at 00:55 with the new detector. worker-098 says live count 16. Discrepancy: my report lists 17 CLASSSEP + 1 drift = 18? Let me count precisely from the report JSON: I printed a truncated list. Let me count and compare; and run audit_evidence directly to get the current count at this instant. Traffic keeps adding meta-claims, so counts grow. Fine.
+
+Let me also check whether "17 hard" in my pass-06 report is at snapshot f06d40a8226a or live. The audit_evidence.audit(MAP) runs on the live map. OK.
+
+Let me gather.
+dsh: reasoning:
+Interesting: grep found no files containing "c266dbec" outside runtime/instances? That's odd — worker-098's events referenced c266dbec and they're in events.jsonl... Ah, my grep included `--include="*.jsonl"` and should have matched comms/outbox/worker-098.jsonl and research_map/events.jsonl. Unless grep -rl with the pattern ... hmm, `grep -rl "c266dbec" ... .` with include filters; events.jsonl should match. Maybe the command's output got truncated by the pipe to head with grep -v filtering? No... Let me recheck. Possibly events.jsonl is huge and grep -rl matched, but then `grep -v runtime/instances` left it. It printed nothing though. Weird. Let me retry a direct grep.
+
+Also need to find the frozen-artifact pin list in audit_evidence.py (lines ~140-155) — where does it get `f['sha256']`? Let me read that part of audit_evidence.py.
+
+And find who applied a8c04fc3: search events for events containing "a8c04fc3".
+dsh: reasoning:
+Now clear: `frozen_artifacts` in the map contains an entry pinning `research_map/class_separation.py` at c266dbec, and the file now is a8c04fc3 → hard failure "drifted during review".
+
+Who applied a8c04fc3? worker-049's blocker says "The controller-applied detector change a8c04fc3 removes CF-16 mention false positives by skipping a..." — so the attribution is to the controller. Given the mtime 00:52:00 and pass-05 ended 00:51:24, and the malformed inbox line (future-dated 01:00, actor astra) instructing the audit lead to make the fix... There's an inconsistency: someone wrote the canonical detector at 00:52, possibly the lead-audit or a worker directly, and attributed to "controller". Not me — I started 00:53. Maybe "controller" in worker parlance = the orchestration loop/supervisor.
+
+Let me check the frozen_artifacts entry to see when it was pinned, and look for an artifact event/claim that applied the patch to the canonical path (a worker that edited research_map/class_separation.py directly). Let me search for events with path research_map/class_separation.py and sha a8c04fc3 — the 14 events mentioning a8c04fc3 are all reviews/blockers referencing it, plus worker-049's fn audit. None declares "I wrote it". So the write is unrecorded in the event stream.
+
+Could it have been the pass-05 controller? Pass-05 events script `astra_lifecycle_05_events.py` — does it modify the detector? Let me grep for class_separation in it. Also check `research_map/astra_lifecycle.py` (does controller_repairs write it? no). Let me grep the whole repo scripts for writes to research_map/class_separation.py.
+
+Also: check file ownership/mode and maybe the applier left a backup: artifacts/worker-049/classsep_fn_audit/pinned/class_separation_c266_recovered.py (c266dbec recovered copy — good, the old bytes are preserved). And worker-098 has shadow.
+
+Let me check:
+1. `frozen_artifacts` entries (path, sha, at, active, reason).
+2. grep in scripts for writing the detector.
+3. Whether there's a `proposed/classsep_prose_precision_patch.md` and artifacts/formulation/proposals/classsep_prose_precision_patch.md.
+
+Then formulate pass-06 decisions:
+- CF-26: canonical detector changed mid-review at 00:52 (c266dbec → a8c04fc3) with no controller-recorded decision or artifact event declaring the write; all reviews/controls bound to c266dbec are void; the frozen_artifacts pin is stale; the applied change is a strict improvement (17→13 snapshot, 20→16 live per worker-098; worker-049 says...) but does not close CF-16 (3/4 declared FP probes still fire; growth mechanism 3 findings; 16 live hard at 00:54). Action: lead-audit calibration card is amended to adjudicate the live hash a8c04fc3 + worker-049's fn-audit + worker-098 drift recheck, and to record an adopt/rollback/continue decision; controller re-pins the frozen_artifacts registry only through a decision (the pin currently records the *reviewed* hash; keep pinned until adjudication, because re-pinning now would hide the drift).
+- Hmm — what should be the correct handling of frozen_artifacts? The entry's purpose is "frozen artifacts must not drift during review". The right action is: reviews bound to c266dbec are void; a new review round must bind a8c04fc3; and the frozen pin should be updated *after* the adjudication. Alternatively, the controller should decide whether the live detector change is adopted. As controller I shouldn't edit another agent's artifact, but the canonical detector is not another agent's authored artifact — it is a controller/audit-owned instrument. The calibration card owner is lead-audit. Better: issue a bounded assignment to lead-audit (amend the existing `astra-life05-classsep-calibration`) to adjudicate the live hash and either adopt it (with the pin refresh recorded) or revert to c266dbec (recovered copy exists), with measured evidence.
+
+- Also verify the malformed inbox line as CF-27 (comms integrity): quarantine and no authority; note the standing cards govern. I need to be careful not to overstep: the line instructs "make the narrowest context-aware fix" — which apparently *was* applied at 00:52 by someone. The line is future-dated 01:00 (after the write at 00:52) and malformed. Record integrity finding.
+
+- G-FORM: rev13 landed, mirrors aligned. G-FORM r3 verification card open (deadline 02:45). 0 accepts at rev13. My pass should re-assert the rev12 pins void (already recorded in CF-20) and update CF-20 status to "repair-landed; r3 review pending" with measured hashes. The tool may update findings automatically? findings_merge is controller-owned rewrite; CF-20's finding text is static from the code. Hmm, the tool's findings_merge builds `want` list of findings with static text. Since it preserves first-seen order/id and presumably replaces entries with `want` ones. Custom findings I add would survive only if the tool preserves unknown ids (by_id retains all ids, and it likely merges: entries not in want remain?). Let me read the rest of findings_merge to know exactly (the tail after the `want` list).
+
+Let me read the remainder of findings_merge (from where I stopped) to understand merge semantics, and identify CF-20/CF-23 status updates.
+
+Actually, the better mechanism for controller decisions/findings additions: the pass-05 precedent is a separate idempotent events script `astra_lifecycle_05_events.py` that emits gate records/assignment cards/decision notices through the outbox → ingest → apply path. Findings though are in the map, written by the lifecycle tool. Pass-05's tool updates (findings_merge) encoded CF-20..CF-25 in code. To add CF-26/CF-27, I'd either patch `astra_lifecycle.py` findings_merge (controller-owned tool) or write the map directly. Patching the tool is the established pattern ("controller tools for the next pass", pass-05 modified astra_lifecycle.py for CF-20…CF-25). So pass-06 should extend findings_merge with CF-26 (detector drift mid-review) and CF-27 (inbox integrity malformed line), plus update CF-16/CF-20/CF-23 statuses based on measured facts.
+
+That's a significant code edit to a 54KB tool. It's doable: add entries to the `want` list. But I must be careful to keep it syntactically valid and idempotent. Let me read the findings_merge tail (after CF-10 ... through end) to see the exact structure and how entries are merged, including how it handles existing ids not in `want`.
+
+Then the events script for pass-06: emit:
+- An amended assignment card for the classsep calibration (re-point to live hash a8c04fc3) — or is a `direction_update`/`priority_change` better? Protocol has no "amend assignment" type. Pass-05's events script emitted `assignment` events with `supersedes`. I'll emit a new assignment `astra-life06-classsep-live-adjudication` superseding `astra-life05-classsep-calibration`, with the artifact `reviews/CLASSSEP-calibration-adjudication.json` (same artifact) — hmm CF-12 says one canonical path, one owner; use the same artifact path and mark supersedes, so the map's assignments carry the new card and old card gets status superseded (how does apply_events handle `supersedes`? Let me check).
+- Possibly a card for A0 scope review? The A0 artifact exists; G-AUDIT needs A0 verdict. The `astra-life05-a0-detector-scope` card's artifact now exists but no review. A1 coverage requires ≥2 accepts per target. The existing audit-r2 sub-cards are void on drift (per pass-05: "eight audit-r2-*-bindchain cards" superseded by the r3 card). There is `astra-life05-verify-gform-r3` for G-FORM. For A0 there may be a standing card `astra-life04-verify-a0`. Let me check assignments for A0/A1 open cards and their deadlines.
+- A `gate` event? Only if a gate verdict changes — none should change this pass (G-F0 stays pass, others pending). But protocol rule: gates can be re-asserted. Pass-05 emitted "5 gate records" (probably re-asserting all five). I could re-assert them idempotently with current reasons. That's reasonable "maintain gates".
+- Decision notices: pass-05 emitted 3 `direction_update`? Let me inspect the events script to mirror.
+
+Rather than writing a fully new script, I can copy pass-05's script and adapt: it's idempotent (skips duplicates). Let me inspect its structure to decide.
+
+Also, importantly: check if there are *newly warranted bounded assignments*:
+1. `astra-life06-classsep-live-adjudication` (lead-audit) — required.
+2. Perhaps a card to preserve the reverted/canonical bytes: worker-049 already recovered c266dbec copy; no new card needed.
+3. G-FORM r3: standing card already covers rev13 (deadline 02:45). But wait — does the standing card's acceptance reference the rev13/FROZEN rev29 hashes correctly? Let me read it fully. If yes, no new card.
+4. G-LIT L0: standing card `astra-life05-verify-l0-final` (02:30) covers; L0 still 1 accept/5 revise. Note: the handoff said L0's owner announced rev3 FINAL build product. Reviews at a1674f094979: worker-075 accept; several revise. The card exists.
+5. G-NUM: `astra-life05-gnum-protocol-adjudication` (02:15) covers the protocol contest; N0 node verdict revise 3.5 with `astra-life04-n0-verify` (03:00) covering.
+
+So the main new card is the classsep live-adjudication amendment, plus recording CF-26/CF-27 and the detector drift.
+
+Another thing: the evidence hard failures count — 17 CLASSSEP + 1 drift. G-AUDIT cannot pass with hard failures; the detector drift should be resolved (either reviews rebind to the new hash and the frozen pin updates, or revert). The controller should keep the lock LOCKED (no solver). Also verify no N1/solver work: lock_guard reports solver absent, n1 hash absent.
+
+Also: numerics gating — check `numerics/` for any new solver work by workers. The lock guard passed (solver_absent). Let me double check for new files under numerics/ with "solver" or N1. The lock_guard only checks `numerics/spherical_solver` presence and N1 hash. Let me do a broader check: find files modified recently under numerics/ and artifacts/numerics/ mentioning solver/self-gravitating.
+
+Let me now:
+1. Read the rest of findings_merge.
+2. Read pass-05 events script structure.
+3. Check frozen_artifacts entries.
+4. Check numerics for solver-ish work.
+5. Check A0/A1 assignment cards states.
+
+Then implement pass-06 events and findings, run lifecycle again, compose summary + decisions, exit.
+
+Let me be efficient: parallel bash calls.
+dsh: reasoning:
+Good. Notes:
+- `frozen_artifacts` has an active entry for `research_map/class_separation.py` pinned at c266dbec with reason "class-separation gate used for G-FORM/G-AUDIT; regression PASS 17TP/10TN". The live file changed to a8c04fc3 → hard drift. This pin was created 23:30:20 by whom? Presumably controller/pass. There's no event declaring the write; the drift is real.
+- `astra-life05-classsep-calibration` exists (deadline 02:30) → I can amend/supersede it with a pass-06 card.
+- `astra-life04-verify-a0` (02:00) exists for A0 review; and `astra-life05-a0-detector-scope` artifact is now on disk.
+
+Now: who changed the live detector? Let me check the audit lead's outbox for events around 00:52 where they say they applied it. Search events for "applied" + "class_separation" or for actor astra-lead-audit at 00:51-00:53. Also check `runtime/state/w098_classsep_prose_shadow_checkpoint_2.json` for provenance. Let me grep lead-audit outbox recent lines.
+
+Actually, the auditor's worker-098 wording "the controller's applied detector change" might reflect what a lead told them ("controller applied"). Let me grep the lead-audit outbox for "a8c04fc3" or "applied".
+
+Also let me check the `proposed/class_separation.py` (e2d24b92, staged candidate per CF-16) vs live a8c04fc3: the live change added a 3-line meta-skip guard. Is live derived from the proposed candidate? Let me diff.
+
+And confirm the timeline: `research_map/class_separation.py` mtime 00:52:00.197 — suspiciously exactly on the minute, matching worker timestamp conventions (workers write artifacts with created_at on minute boundaries). Worker-049's event had created_at 00:52:00 and `_received_at` 00:47:45. Hmm, the write at 00:52:00.197 is a real filesystem mtime, so real time 00:52:00. My pass-05's last invocation was 00:51:24. So the write happened 36s after pass-05 exit. Who was running at 00:52:00? Many workers. The pass-05 events script? No.
+
+Wait — maybe it WAS the pass-05 controller session! Pass-05's handoff says the tool was invoked at 00:51:24 and the session exited after. But maybe another controller invocation (controller-00?) or the "independent supervisor" applied it. There's `/data3/guoshaoyang/independent_supervisor_100.sh` and `supervise_swarm.sh` in home. Let me look at those — the supervisor might have logic that applies detector fixes. Also `runtime/state/controller_verification/astra-lifecycle-05.md` mentions "astra-life05-classsep-calibration (audit lead)". Hmm.
+
+Let me search the whole repo for scripts that write `research_map/class_separation.py`.
+dsh: reasoning:
+The applied change is "NOT the lead's proposal" per worker-098. So who applied it? Possibly the pass-05 controller session or an "independent supervisor" script. Let me check the pass-05 events script at line ~193 and ~317 (evidence refs) and see if it has an "apply" action. And check `astra_lifecycle_04_events.py:126`. Those are just refs.
+
+Candidates for the writer at 00:52:00.197:
+- `independent_supervisor*.sh` in home dir (Sep 12 00:11/23:58/00:03) — these might launch "independent" workers, maybe a "supervisor" that applies patches.
+- The 15-min `run_cycle.py`? It doesn't write the detector.
+- Some worker artifact script that copies into canonical (e.g. worker-049's validate_prosefix.py did a sandbox copy; worker-093's verify_calibration.py copies CANONICAL into a tmp sandbox, not live).
+
+Could the "controller" here be a different controller session (like a previous controller-00) that applied it as a "controller repair" without recording? Pass-05 handoff says the pass ran 00:43–00:51 and mentions only tool repairs. The mtime 00:52:00 is after pass-05's last report 00:51:24.
+
+Hmm, maybe the pass-05 controller did apply it after writing the last report (the session may have continued a bit). But the summary says "exit" at 00:51. The write at 00:52:00 could have been done by the *lead-audit* agent (working between 00:51-00:53), and worker-098 mislabeled it "the controller's applied detector change" (they may treat the orchestrator/lead as controller). Lead-audit's outbox has no mention of a8c04fc3 though (grep count 0 in lead-audit outbox). Hmm, the lead-audit outbox's latest events shown were from 00:35-00:36 — but the A0 adjudication artifact was created 00:53:51 by astra-lead-audit. So lead-audit events may be pending in the outbox file not yet flushed? Let me check the tail of the raw lead-audit outbox and its mtime.
+
+Actually the read of last 8 lines printed old 00:35-00:36 events, meaning the file hasn't been appended for the A0 artifact? But the artifact exists with actor astra-lead-audit, created 00:53:51. Maybe ingestion happened via a different file (outbox/assignments/) or the lead writes events later. Also possible: the artifact was created by an agent whose events go to another channel, e.g. `comms/outbox/astra-lead-audit.jsonl` mtime 00:36 (from ls earlier: astra-lead-audit.jsonl 62548 Sep 12 00:36). Hmm, the artifact `evaluation/A0_detector_scope_adjudication.json` exists and is registered (a26be4b85706). It might have been emitted via the lead's own events file or an events script.
+
+Let me check `comms/outbox/assignments/` directory.
+
+Regardless of exact authorship, the controller finding is: canonical detector changed at 00:52 with no recorded authorizing event or artifact claim; reviews bound to c266dbec are void; the frozen_artifacts pin is stale. The controller should not "un-know" it; it should route adjudication to the owner (lead-audit) via the calibration card, and record the drift.
+
+Let me also check whether the change is *actually* beneficial or harmful:
+- worker-098: safe, strict improvement (17→13 snapshot, 20→16 live), but 3/4 declared FP probes still fire, growth untouched, corpus PASS, 0 over-suppression.
+- worker-049's fn audit (00:56) says: "The controller-applied detector change a8c04fc3 removes CF-16 mention false positives by skipping a..." and mentions corpus_guard_twin_fix.json — maybe they found FN issues? Let me read worker-049's blocker fully and the fn audit results.
+
+Given the live detector is now the operative instrument for the classsep regression (which PASSes), keeping it is likely the right call pending adjudication. But the process requires:
+1. The pin must be re-established at the new hash through a recorded adjudication (or reverted).
+2. Reviews of the detector at c266dbec (worker-093 etc.) are void at the new hash.
+3. The calibration card must be amended.
+
+Also: the *staged candidate* `proposed/class_separation.py` e2d24b92 is a different patch (with over-suppression hazards per worker-098). The applied a8c04fc3 is a narrower 3-line skip.
+
+Now for pass-06 events, I'll produce a bounded set (idempotent):
+1. Gate re-assertions (5 `gate` events with current measured reasons) — pass-05 did this; keeps gates current. But careful: `gate` events from astra set verdicts; re-asserting G-F0 pass is fine; others pending with reasons. Evidence refs at measured hashes.
+2. Assignment cards:
+   - `astra-life06-classsep-live-adjudication` (lead-audit, deadline 02:30) superseding `astra-life05-classsep-calibration`; artifact `reviews/CLASSSEP-calibration-adjudication.json`; acceptance: adjudicate live a8c04fc3 + worker-098 drift recheck + worker-049 fn audit + worker-035 controls; adopt/rollback/replace decision; pin refresh or revert; measured before/after; no schema edits; no gate self-pass.
+   - Maybe `astra-life06-detector-pin-reconcile`? That's part of the same card.
+   - `astra-life06-a0-scope-review`? The A0 scope artifact exists; the standing `astra-life04-verify-a0` and `audit-r2-A0` cards cover the review, but worker-089's audit-r2-A0 reviewed the rubric at d748a9e3574e, not the scope artifact. The verify-a0 card artifact is `reviews/A0-review-final-verify.json` (deadline 02:00, still open). That covers it. No new card needed.
+   - G-FORM r3 standing card covers rev13; but its deadline 02:45. Fine.
+3. Decision notices: pass-05 emitted 3 decision notices. What type? Let me check its script. Probably `direction_update` events with the decisions embedded or `status`. I'll mirror.
+4. Controller findings CF-26 (detector drift) and CF-27 (inbox integrity) — add via patching findings_merge in astra_lifecycle.py, then re-run lifecycle.
+5. Update CF-16 status from "calibration-assigned" to "live-detector-drift-adjudication-assigned"; CF-20 status to "repair-landed-review-pending" with rev13 measured hashes; CF-23 status to "artifact-landed-verification-pending".
+
+Careful with the tool edit: findings_merge's `want` list is static; editing it is the established controller-owned path. I'll add:
+- CF-20 status update (text updated: rev13 + rev29 landed, mirrors aligned, 0 accepts; r3 card pending).
+- CF-16 status: mention live detector changed at 00:52 without a recorded authorizing event; all c266dbec-bound verdicts void; live hash a8c04fc3 in adjudication.
+- CF-23 status: scope artifact a26be4b85706 landed, verification pending (reviews at it: 0).
+- CF-26: canonical detector drift mid-review (c266dbec → a8c04fc3), no authorizing event; hard failure in audit; strict improvement but not closure; action = calibration card amended + pin decision.
+- CF-27: controller inbox integrity — malformed future-dated line in comms/inbox/astra.jsonl (prefix `event_id:human-pi-overnight-20260912T0042n` + an assignment attributed to actor astra with human-pi event id, 01:00), duplicate of standing A0 detector-scope card with conflicting acceptance; quarantined; not authority; only well-formed events through the protocol bind.
+
+Hmm — but should CF-26 be attributed conservatively? "writer unrecorded" rather than "unauthorized". Also worker-098's claim that the fix came from "the controller": I can't confirm. I'll say: "no controller-recorded decision or artifact event declares the write; the pass-05 lifecycle records contain no such repair" — that's verifiable from the pass-05 summary + controller_repairs. Good.
+
+Additionally consider: does the frozen pin's c266dbec correspond to the regression PASS 17TP/10TN? Yes.
+
+Now: is class_separation.py a "frozen artifact" or does `frozen_artifacts` need updating by controller? The controller owns `frozen_artifacts` (map). The correct move: keep the pin as-is until adjudication, OR create a new active pin at a8c04fc3 with a decision. If I leave the pin, the audit keeps reporting a hard failure → G-AUDIT can't pass anyway (it can't pass until CLASSSEP hard = 0). The live detector is what audits use; a stale pin is itself the recorded evidence of drift. Worker-098's recheck binds a8c04fc3. I'll leave the pin and let the adjudication decide adopt (then controller refreshes the pin) or revert (then pin matches again).
+
+But there's a subtlety: the calibration card's deliverable is `reviews/CLASSSEP-calibration-adjudication.json`, and its owner is the audit lead who (per worker-098) applied the fix... potential self-review conflict. The card requires independent reviewers for the gate, but the adjudication itself is the lead's. Fine.
+
+Another consideration: Should I issue a bounded assignment to *verify* the detector drift (e.g., worker-049's fn audit already does)? worker-049 is already auditing FN effects and found a corpus guard issue. Their blocker (00:56) mentions "corpus_guard_twin_fix" — let me read it to see if they flag a problem with the applied change. Let me pull worker-049's fn-audit blocker and result.
+
+Also check the latest pending/unapplied traffic as of now (00:57+) — there may be new events from lead-audit/lead-formulation addressing these. My lifecycle ran at 00:55; a second invocation at the end will apply newer traffic. The pass-05 pattern: multiple invocations, last one = pass exit. My instruction says "One independent lifecycle then exit" — one pass; multiple idempotent invocations inside one pass are consistent with precedent, but I should keep it to a small number (2: open + close).
+
+Let me read worker-049's latest events and check the newest outbox traffic (since 00:55).
+dsh: reasoning:
+Excellent — worker-049's FN audit is crucial evidence:
+- The applied a8c04fc3 guard causes **10/10 cue-induced false negatives** on genuine merge assertions (adversarial corpus v2), 9 HIGH. So it's NOT safe as a closure: it suppresses genuine assertions. That changes the picture: worker-098 said "safe: 0/6 over-suppression", but worker-049's independent corpus shows severe over-suppression on cue-carrying genuine assertions. This is exactly the kind of contested evidence the calibration adjudication must settle.
+
+So my CF-26 must record: canonical detector changed mid-review without a recorded authorization; the applied change (a8c04fc3) is contested: worker-098 revise 3.0 ("safe but insufficient; 3/4 FP probes still fire; growth untouched"), worker-049 independent FN audit (10/10 cue-induced FN, declaration-surface diffs on 13 fixtures) → the change trades FP for FN and is not a safe closure. Controller action: do NOT adopt or refresh the frozen pin; route to the amended calibration card with both evidence sets; require the adopt/rollback/record-not-lexically-separable decision at measured hashes, and independent review.
+
+Also literature lead has pending events at 01:02 (future-dated; likely L8 work) including blockers.
+
+Now, about the A1 node: worker-049 cites `research_map.json#groups[3].nodes[1].blockers[25]` and `reviews[455]`. Fine.
+
+Let me now check whether the frozen detector drift also voids prior CLASSSEP-based audits (A0 rubric conformance runs used c266dbec?). The evidence hard failure stands.
+
+Decisions for pass 06 (REC-22…):
+- REC-22: Detector drift recorded, no adoption, no pin refresh; calibration card superseded by pass-06 card requiring adopt/rollback/limit decision on live a8c04fc3 with worker-098 + worker-049 evidence and independent review; c266dbec-bound verdicts void.
+- REC-23: G-FORM rev13/FROZEN rev29 accepted as the repair landing (mirrors aligned, item closure per CF-20), rev12 pins void; r3 review card remains the only path to G-FORM; no gate moved.
+- REC-24: A0 scope artifact landed (a26be4b85706) but unverified; verify-a0 card remains; no gate move.
+- REC-25: Comms integrity — malformed future-dated inbox line quarantined, not authority; no duplicate card; the standing card governs; writers must use the protocol.
+- REC-26: Lock stays LOCKED; no N1/solver; nothing in this pass changes numerics gating.
+- REC-27: G-F0 re-asserted pass at unchanged bytes (0abb9ed8a961 + d7419b4e8963); any write voids.
+- Maybe REC-28: G-NUM stays pending; C8 criterion met but N0 node verdict revise; protocol adjudication + N0 verify cards remain.
+
+Events to emit:
+1. Five `gate` events (G-F0 pass; G-FORM/G-LIT/G-NUM/G-AUDIT pending) with measured-hash reasons. These go through the normal event path (from actor astra). But do gate events get applied only if actor is authority? `AUTHORITY_ACTORS` includes astra. And the lifecycle tool says it never sets gate verdicts (gate events carry them). Since gates are already in those states, emitting is idempotent-ish (event_ids unique).
+   Question: do I need to emit gate events at all? The map's gates already hold the right verdicts/reasons updated by gate_audit. Pass-05 emitted gate records; keep parity: re-assert current state.
+2. Assignment: `astra-life06-classsep-detector-adjudication` (lead-audit, 02:30) supersedes `astra-life05-classsep-calibration`; artifact `reviews/CLASSSEP-calibration-adjudication.json`; acceptance includes both evidence sets and a decision among adopt / rollback-to-c266dbec / record-as-not-lexically-separable; measured before/after; no gate self-pass; independent reviewers at the detector hash chosen.
+3. Possibly a `direction_update`/decision notices (3) mirroring REC-sets: one for detector drift ruling, one for G-FORM rev13 landing, one for comms integrity + lock.
+4. Perhaps an assignment to lead-audit to review the A0 scope artifact? The standing `astra-life04-verify-a0` (02:00) covers it; but its acceptance may bind the rubric only. Let me read it quickly. If it doesn't reference the scope artifact, I'll amend via a new card? CF-12 says don't duplicate. Let me check its text.
+
+Let me also check the standing `astra-life05-verify-gform-r3` card text to confirm it references rev13/rev29 and FROZEN rev29 acceptance.
+
+Then implement:
+- Patch `astra_lifecycle.py` findings_merge: update CF-16 status/text, CF-20 status, CF-23 status, and add CF-26, CF-27.
+- Create `astra_lifecycle_06_events.py` (idempotent, modeled on 05) emitting gate records, the new/amended card, and decision notices.
+- Run the events script; run lifecycle again with label `astra-lifecycle-06-close`; write summary `runtime/state/controller_verification/astra-lifecycle-06.md` and decisions JSON; update ASTRA_HANDOFF.md live-state section? Pass-05's handoff top section was written by the pass-05 controller. The handoff file is the entry point for the next controller; I should update the LIVE CONTROLLER STATE section for pass 06. But careful — the ASTRA_HANDOFF.md is not a frozen artifact (it's controller-owned guidance). Updating it is appropriate and expected ("read this before doing anything"). I'll append/replace the live-state header with pass-06 state. Actually the instruction says "record hashes and validation" — the handoff update is valuable for the next pass. Let me do it via edit (replace the live-state section).
+
+Also update the todos? The task list tool: this is a multi-step task; I'll create a todo list now to track. Let me do that.
+
+One more check: the classsep regression runner `runtime/bin/classsep_regression.py` is pinned 9f1cf9c3 and unchanged; good.
+
+Also, check `evaluation/A0_detector_scope_adjudication.json` review coverage: 0 accepts. The standing verify-a0 card (deadline 02:00) is due. Fine.
+
+Also, the A0 detector scope finding: the A0 scope artifact's predicate excludes `snapshot`/`probe`/`proposed`/`staging` paths. Note that `proposed/class_separation.py` (staged candidate) is excluded from audit scans — fine.
+
+Let me read the three card texts I care about.
+dsh: reasoning:
+Standing cards are good. `astra-life05-classsep-calibration` explicitly requires adjudicating the live canonical detector + staged candidate with a measured TP/FP/FN census, and the stop rule says "Stop if assertion-vs-mention cannot be separated on the labeled set; record that as the finding rather than shipping a patch." Perfect — the card already covers the situation, but it does NOT mention the drift event (a8c04fc3 applied live) nor worker-098/049 evidence. So an amended card (same artifact path, supersedes the old id) is warranted: re-point acceptance to the live hash and require the adopt/rollback/limit decision.
+
+Now, before writing the patch files, let me verify the current exact text of the findings entries in astra_lifecycle.py that I'll modify (CF-16, CF-20, CF-23) so I can edit precisely. Let me view the relevant source segments. I'll grep line numbers.
+dsh: reasoning:
+Now I'll implement the edits. Plan for the tool patch:
+
+1. CF-16: change status to "live-detector-drift-adjudication-assigned"; update finding text to record the live change and the two independent audits; update action to reference the pass-06 card.
+2. CF-20: status → "repair-landed-review-pending"; text records measured rev13 hashes + FROZEN rev29 and 0 accepts; action: r3 card is the only binding path; rev12 pins void.
+3. CF-23: status → "artifact-landed-verification-pending"; text notes scope artifact a26be4b85706 landed 00:53:51; action: verify-a0/r2-A0 review at the measured hash.
+4. Add CF-26 (detector drift mid-review) and CF-27 (comms integrity).
+5. CF-24 text mentions FROZEN rev28; keep as historical (it's a pass-05 record). Fine.
+
+I must be careful with syntax. I'll use edit tool with exact strings.
+
+For the docstring header of `astra_lifecycle.py`, maybe update the note? Not needed.
+
+Then create `research_map/astra_lifecycle_06_events.py`. Let me first read pass-05's events script skeleton to reuse its helpers (EVENTS list emit pattern, idempotency via ingested check, gate record construction). Let me view key parts: beginning and one gate + one card + decision notices + main.
+dsh: reasoning:
+I see the pattern: `comms.append_event(ev)` appends to the actor's outbox (astra.jsonl) presumably; ASSIGNMENTS get sent to inboxes via comms.send. Let me see the remaining lines of main() and the CARD constant, plus how `comms.append_event` works.
+
+Let me read the last lines and the CARD definition.
+dsh: reasoning:
+I now have a clear picture of the tooling. Time to write the pass-06 artifacts.
+
+Plan of concrete edits:
+
+A. Patch `research_map/astra_lifecycle.py` findings_merge:
+   1. CF-16: update finding + action + status ("live-detector-adjudication-assigned"), evidence adds worker-098 drift recheck + worker-049 fn audit.
+   2. CF-20: status "repair-landed-review-pending"; finding + action reference measured rev13/rev29 hashes (static text can cite names; measured text with f-strings would be nice but findings text in this file is static — I can insert dynamic values? `want` is built inside findings_merge which has `h()` helper for hashes! Indeed the CF-7 entry uses `h('L0')`, `ledger_clear`, etc. So I can use h('F1'), h('F2a'), h('F2b') — need to confirm hashes dict keys. In gate_audit it used hashes.get('F1') etc. Yes: measured_hashes keys are node ids F0, F1, F2a, F2b, L0, L1, A0, N0. Good — I can use h() in the CF-20 text. Also `hashes` may not include FROZEN (not a node). I can cite FROZEN path without hash, or compute? Keep it textual: "FROZEN rev29 (artifacts/formulation/FROZEN.json)".
+   3. CF-23: status "artifact-landed-verification-pending"; text with measured A0 scope artifact hash? h() only covers nodes; A0 = evaluation_rubric.yaml. I'll cite path + note the artifact registered at a26be4b85706 (static, since it's a controller finding text — but if it changes, text goes stale; acceptable, it's a finding record).
+   4. Add CF-26, CF-27.
+
+B. Write `research_map/astra_lifecycle_06_events.py` with:
+   - measured pins (F0, F0_SUP, F1, F2A, F2B, FROZEN, CASES, CONSIST, L0, L1, A0, PROTO, NGATES, N0REV3, DETECTOR (research_map/class_separation.py), DETECTOR_OLD cannot measure (only pinned constant), A0SCOPE (evaluation/A0_detector_scope_adjudication.json), REG (runtime/bin/classsep_regression.py), RUBRIC).
+   - 5 gate records with pass-06 measured reasons.
+   - 1 new assignment: `astra-life06-classsep-detector-adjudication` superseding `astra-life05-classsep-calibration` (same artifact path, same assignee, deadline 02:30 unchanged? Pass-05 card deadline 02:30; keep 02:30 or extend to 02:45? The amendment adds work (contested evidence). I'd keep the deadline 02:30 but mark it supersedes; the standing group budget covers it. Hmm, adding scope without budget... The card already had 1.5 h and stop rule. The new evidence exists; adjudication is mostly deciding. Keep 1.5 h and 02:30 deadline.)
+   - Maybe an amendment card for `astra-life04-verify-a0` to include the scope artifact? The verify-a0 card says verdict must state whether each prior finding is resolved; scope artifact is the response to the literature lead blocker. I think adding one line to the acceptance is helpful but duplicating cards is discouraged. Instead, the notice can direct the verify-a0 owner to bind the scope artifact. I'll include it in the decision notice (not a new card).
+   - 3 notices: (1) detector-drift ruling + amended card; (2) G-FORM rev13/rev29 landing + r3 binding; (3) comms integrity + lock + decisions reference.
+
+   Note: pass-05 named cards `astra-life05-*`; my pass is 06; the handoff label convention is `astra-life06-*`. Wait — pass-05 used `astra-life05-*`; my pass is pass 06, so `astra-life06-*`. Yes.
+
+C. Run the events script; then run lifecycle `--label astra-lifecycle-06-close`.
+
+D. Verify: gates, lock, coverage, evidence hard count (should now include the drift note); check that new findings CF-26/27 are in the map; check assignments carry the new card.
+
+E. Write `runtime/state/controller_verification/astra-lifecycle-06.md` (summary) and `astra-lifecycle-06-decisions.json` (REC-22…REC-27).
+
+F. Update ASTRA_HANDOFF.md LIVE CONTROLLER STATE section for pass 06.
+
+G. Quarantine the malformed inbox line? I said I'd quarantine. Options: leave it (it's evidence) but record the finding; or write a sanitized copy. The `<agent>.jsonl` inbox is a downward channel written by Astra; the malformed line is corrupt data. Best practice: (i) do not silently delete; (ii) move the raw line to a quarantine file `runtime/state/comms_quarantine/astra-inbox-line2-20260912T0100.jsonl` (verbatim) and rewrite the inbox line as a valid JSON object with a `_quarantined` marker? Hmm. If I rewrite the inbox line, `_already_sent` dedup checks will be affected for future cards, not relevant here. But rewriting history in comms is bad. The audit trail: events stream has the raw file anyway in git? Not tracked probably.
+
+Safer: leave the inbox file untouched (don't alter evidence), record CF-27, and note the quarantine as "recorded, not actioned". Actually the instruction from the malformed line itself ("Freeze writers...") — acting on unverifiable directives is the risk. Since the standing card already covers detector scope and the new pass-06 card covers adopted-change adjudication, no action is needed from that line. I'll record and note that any genuine human-PI directive must be re-sent well-formed.
+
+Hmm, but there is one directive in the malformed line not covered: "Freeze writers" — i.e., stop writers from modifying the detector during review. That's a reasonable procedural safeguard I should adopt anyway: the pass-06 card will require no writes to the detector during the adjudication window, and the frozen pin stays at c266dbec (evidence of drift) until the decision. Wait, actually should the pin change to record the drift? If I leave the pin at c266dbec, `audit_evidence` hard-fails with "drifted" — which is honest. After the adjudication decides adopt, controller can refresh the pin. Good.
+
+Additionally, "record pre/post sha256" — done (c266dbec → a8c04fc3), worker-049 even recovered the pre bytes.
+
+One more consideration: should the controller *revert* the detector now to c266dbec to restore reviewability? Arguments: the live detector changed mid-review; the applied change is contested (FN risk). Reverting would restore the frozen pin and the standing consent, but it would also discard an improvement and could break worker-098's binding. The pass-06 card's stop rule allows "record assertion-vs-mention as not lexically separable". I'd rather not unilaterally revert (the change is a strict-FP improvement per worker-098 and the regression passes; the FN issue is on an adversarial corpus). The controller should not pick sides between its own agents' evidence; route to the owner with both evidence sets. That's the ruling: no adoption, no revert, freeze further writes, adjudicate at 02:30.
+
+Also, should I flag to the Human PI? The escalations list exists (3 items). This is a process/instrument integrity issue but not a scope change to the PI; the lock escalation stays. I'll not escalate; the finding + card suffice. Hmm, "High-impact scope changes are escalated to the Human PI" — this isn't a scope change.
+
+Now, one important question: the events I emit — will `apply_events.py` accept an `assignment` event from actor `astra` and update `map.assignments` with status/supersedes? Let me check how apply_events handles assignments and supersedes. Pass-05's cards presumably landed fine. Let me check the map for how `astra-life05-classsep-calibration` looks — does it have a "supersedes" key, and are old superseded cards marked? In the earlier dump, cards have no status field visible ("?"). Let me inspect apply_events assignment handling quickly.
+
+Let me grep apply_events.py for "assignment" handling.
+dsh: reasoning:
+Good. Let me look at apply_events assignment branch lines 368-380 to see exact stored fields, and whether unknown keys are kept.
+dsh: reasoning:
+Note: apply_events stores only a fixed set of keys ("supersedes" would be dropped). So the amended card cannot carry a "supersedes" field into the map. Pass-05's handoff mentioned supersedes in the summary but the map card doesn't have it (I saw no supersedes in the map card). So my pass-06 card will land as a separate card with a distinct event_id; supersession must be recorded in the acceptance text and in the decisions record/summary. Good.
+
+Also note gate events: let me check how `gate` events apply (verdict handling). Fine.
+
+Now, one more important check — the `astra-life06-*` card event_ids will be new; apply_events will append them.
+
+Let's now write the code edits.
+
+First patch findings_merge. I'll do careful edits with the edit tool.
+
+CF-16 edit: replace lines 523-540 block (status + finding + action + evidence).
+
+New CF-16:
+```python
+        {"id": "CF-16", "severity": "minor", "status": "live-detector-adjudication-assigned",
+         "finding": ("audit_evidence.py reports hard CLASSSEP failures on claims whose statements "
+                     "quote, negate, split or audit the merged-case token: a metalinguistic mention, "
+                     "not a composite class assertion, so traffic ABOUT the finding reproduces the "
+                     "token and per-author rewording is an unbounded loop. This pass an unrecorded "
+                     "write replaced the pinned detector: research_map/class_separation.py moved "
+                     "c266dbecaa87 -> a8c04fc31e4a at 00:52:00 with no controller repair, gate event "
+                     "or author artifact declaring the change (CF-26). Two independent measurements "
+                     "contest the change: worker-098 (revise 3.0, a8c04fc3) measures corpus PASS "
+                     "17/17+10/10, 0/6 over-suppression, strict 4-finding reduction, but 3/4 declared "
+                     "false-positive probes still firing, growth untouched and 16 live hard findings; "
+                     "worker-049's pre-registered adversarial FN audit (a8c04fc3 vs recovered "
+                     "c266dbec) measures 10/10 cue-carrying genuine merge assertions suppressed "
+                     "(9 HIGH), 13 declaration-surface diffs, and the staged prosefix candidate "
+                     "dc8aa0de worse still (11/12 cleared)."),
+         "action": ("No adoption and no frozen-pin refresh: the c266dbec pin stays active as the "
+                    "recorded drift. astra-life06-classsep-detector-adjudication (audit lead) "
+                    "supersedes astra-life05-classsep-calibration and must return one operative "
+                    "decision at cited hashes - adopt a8c04fc3 / roll back to the recovered c266dbec "
+                    "/ record assertion-vs-mention as not lexically separable at this window - with "
+                    "the worker-098 + worker-049 + worker-035 evidence bound and an independent "
+                    "review; detector writes freeze during the round. The controller does not edit "
+                    "another agent's claim text (CF-4 policy)."),
+         "evidence": ["research_map/class_separation.py#a8c04fc31e4a",
+                      "artifacts/worker-098/classsep_prose_shadow/drift_recheck.json#ffabb753313f",
+                      "artifacts/worker-049/classsep_fn_audit/results.json#9e1bf2043934",
+                      "artifacts/worker-049/classsep_fn_audit/pinned/class_separation_c266_recovered.py#c266dbceca87",
+                      "proposed/class_separation.py#e2d24b927ee8",
+                      "runtime/state/controller_verification/astra-lifecycle-06-decisions.json"]},
+```
+Careful: I must verify these artifact hashes exist as cited. results.json 9e1bf2043934 (from event), drift_recheck ffabb753313f (from event), recovered copy c266dbec. Good.
+
+CF-20 edit: status "repair-landed-review-pending"; update text with h('F1') etc. Note: in the findings_merge function, `h` is available. Use it.
+
+New CF-20 text:
+```python
+        {"id": "CF-20", "severity": "major", "status": "repair-landed-review-pending",
+         "finding": ("Evidence-binding chain was stale at the frozen formulation bytes: "
+                     "schemas/taxonomy_cases.jsonl had 36/36 rows bound to the superseded taxonomy "
+                     "hash 66bf917bd368 and all three rev12 schemas declared consistency_evidence "
+                     "675a99d0 against live evidence 9e335e9ba1bf. The repair landed before this "
+                     "pass: the case corpus is rebound (schemas/taxonomy_cases.jsonl ccf7041bd0ff) "
+                     "and the schemas are rev13 " + h("F1") + " / " + h("F2a") + " / " + h("F2b") +
+                     " with FROZEN rev29, all three mirror pairs aligned. Review coverage at the "
+                     "rev13 hashes is 0 accepts per class: the rev12 verdicts are void with the old "
+                     "pins, so G-FORM is withheld on fresh review, not on a known defect."),
+         "action": ("astra-life05-verify-gform-r3 (audit lead, deadline 02:45) is the only binding "
+                    "path: two independent non-author reviewers per class at the rev29 pins, "
+                    "measured hashes cited, no target write during the round. The controller does "
+                    "not re-pin review verdicts and does not move G-FORM on landed repair alone."),
+         "evidence": ["schemas/taxonomy_cases.jsonl#ccf7041bd0ff",
+                      "artifacts/formulation/FROZEN.json",
+                      "schemas/af_wcc_vacuum.yaml#" + h("F1"),
+                      "schemas/af_scc_c2_vacuum.yaml#" + h("F2a"),
+                      "schemas/af_scc_c0_vacuum.yaml#" + h("F2b"),
+                      "runtime/state/controller_verification/astra-lifecycle-06-decisions.json"]},
+```
+
+CF-23 edit: status "artifact-landed-verification-pending"; text notes the scope adjudication artifact a26be4b85706 landed at 00:53:51 (exclusion predicate + measured before/after lists), unverified (0 accepts), and the rubric verdict card `astra-life04-verify-a0` must bind it.
+
+New CF-23:
+```python
+        {"id": "CF-23", "severity": "minor", "status": "artifact-landed-verification-pending",
+         "finding": ("A0 detector scope defect (literature lead, 00:44): the HF-14/HF-03 detectors "
+                     "reported corpus-level hits on archive/, incoming/ and worker snapshot paths "
+                     "that are historical records, not live artifacts. The scoped adjudication "
+                     "landed this pass at evaluation/A0_detector_scope_adjudication.json "
+                     "(a26be4b85706, 00:53:51): exclusion predicate classify(rel) in "
+                     "{historical, snapshot_copy}, explicit class lists, and a measured "
+                     "before/after file census at pinned hashes. It carries no independent verdict "
+                     "yet."),
+         "action": ("astra-life04-verify-a0 (audit lead, deadline 02:00) must bind the rubric and "
+                    "state for each prior finding whether the scope artifact resolves it, with a "
+                    "cited sha256; no rubric edit, no gate self-pass. Verification of the exclusion "
+                    "must confirm no live-artifact hit is hidden."),
+         "evidence": ["evaluation/A0_detector_scope_adjudication.json",
+                      "artifacts/audit/reports/audit-20260912T003820.json",
+                      "evaluation_rubric.yaml:244-252"]},
+```
+
+Add CF-26 and CF-27 after CF-25:
+CF-26 (major, "recorded-adjudication-assigned"): detector drift.
+Actually I folded the drift into CF-16; but CF-26 should be its own finding since it's a process integrity issue. I'll define CF-26 as the detector-drift finding (with the contest details), and keep CF-16's update shorter referencing CF-26. Let me structure:
+
+CF-16 finding: the metalinguistic FP pattern + counts (keep, update counts to "17 CLASSSEP hits at pass-06 open measured on the live map (claims[36,...])" — careful, counts shift. I'll say "17 hard CLASSSEP hits at this pass's checkpoint (list in controller_gate_audit)".
+CF-16 action: calibration card superseded by the pass-06 detector-adjudication card.
+CF-16 evidence: existing + card.
+
+CF-26 finding: the detector write + contest + hard audit failure.
+CF-26 action: no adoption/refresh; card; freeze writes.
+CF-26 evidence: hashes.
+
+CF-27 finding: inbox integrity malformed line.
+CF-27 action: quarantined as non-authority; standing cards govern; writers must use comms.append_event/send; no duplicate card; if a human-PI directive was intended it must be re-sent well-formed.
+CF-27 evidence: "comms/inbox/astra.jsonl:2 (raw line, byte-verified malformed)", "comms/PROTOCOL.md", decisions record.
+
+Now, an important subtlety: findings_merge's `want` list replaces entries by id. But CF-26/CF-27 will be added to the map. On subsequent passes, if the code lacks them, they'd remain (by_id retains unknown ids). Good.
+
+B. Events script. I'll write a new file modeled on 05 but leaner. Let me define the pins I need:
+- F0, F0_SUP, F1, F2A, F2B, FROZEN, CASES, CONSIST, L0, L1, A0, A0SCOPE, DETECTOR, REG, PROTO, NGATES, N0REV3.
+  Note: 05's `PROTO = numerics/CONVERGENCE_PROTOCOL.md` exists? Let me verify; handoff cited protocol `1e6cdf04d7a2`. Let me measure a few candidates before writing (PROTO path, N0REV3, etc.).
+
+Also the gate records should reflect pass-06 measured state:
+- G-F0: pass, 7 distinct accepts now (map gate audit says 7: deepseek-flash-18/19, worker-025/038/041/052/078; plus astra-lead-audit accept and worker-094 revise). I'll cite the measured gate audit rather than hardcoding? The script measures hashes at run time; for review counts I can read the map's controller_gate_audit... but that's written by the lifecycle at pass-06 open; stable enough. Simpler: hardcode the counts measured at 00:55 (7 distinct accepts) and note "as measured in controller_gate_audit at this pass". Traffic may add more accepts; the gate event is a snapshot record with timestamp, that's fine.
+- G-FORM pending: rev13 hashes, mirrors aligned, 0 accepts; r3 card.
+- G-LIT pending: L0 1 accept + 5 revise/inconclusive at a1674f094979; L1 23 spot checks.
+- G-NUM pending: lock locked; C8 met per gate audit; N0 node verdict revise 3.5; cards open.
+- G-AUDIT pending: A0 0 accepts; A1 F0 7, others 0; 17 hard CLASSSEP + 1 drift hard.
+
+Wait — careful with G-NUM: the gate audit at 00:55 said "criterion C8 is MET (review verdict accept score 4.5 binds 1e6cdf04d7a2)" but also the handoff says the protocol is contested by two revises, and the adjudication card exists. I'll phrase: "C8 criterion met per the standing accept 4.5 at the cited protocol hash; the contest from the two revise verdicts is being adjudicated (card); N0 node verdict revise 3.5 → withheld." That is consistent and doesn't pick a side.
+
+- Notices: 3 status events from astra (they land in map? `status` events applied by apply_events: what does it do with a status event from astra? Let me check apply_events status branch. Astra status events likely set node status. Pass-05's notices used node_id + status active. It's fine. But careful: a status event from astra on node A1/L0/F1 could change node status to active — fine, no done demotion. But CF-25's repair prevents non-authority demotion; astra is authority, so it could demote a done node! Which nodes are done? F0 (done/passed) — don't emit a status on F0. Pass-05 notices used L0, F1, A1 — none done. My notices will use node A1 / F1,F2a,F2b / GLOBAL? Use existing node ids that are active: A1, F1, F2b, N0. Avoid F0. Also avoid N1 (killed/queued?). I'll use A1 for the detector notice, F1 for the G-FORM notice, and N0 for the lock/comms notice? Better: use A1 for comms integrity? Node ids are somewhat arbitrary for notices; pass-05 used them. I'll use: A1 (detector), F2a (G-FORM rev13 landing), A0 (comms integrity + lock? no—lock relates to N1/N0). Hmm, the notice event requires node_id and status per the schema for status events. I'll use:
+  1. notice detector drift → node A1, status active
+  2. notice G-FORM rev13 landing → node F1 (or F2a), status active
+  3. notice comms integrity + lock + decisions → node N0, status active (N0 is active)
+  
+  Wait: will setting N0 active cause problems? N0's on-disk status is active (CF-22 restored). Fine. But is it appropriate to attach a comms-integrity notice to N0? It also carries the lock ruling, so N0 is defensible.
+
+Let me check apply_events' status branch to be sure about authority + fields.
+
+C. Decisions record JSON: I'll write it with REC-22…REC-28 including measured context.
+
+D. Summary md: follow pass-05 format.
+
+E. Handoff update: replace the top LIVE CONTROLLER STATE section (lines 3-74) with a pass-06 version. That's a big edit; I'll rewrite that section while keeping the rest.
+
+Wait — is ASTRA_HANDOFF.md tracked/frozen? It's in research_map/ directory. audit_evidence's registry scans... "research_map/" wasn't in scan roots except specific files. Not a frozen artifact. Pass-05 wrote it (its own summary). Fine.
+
+Time budget: I should move quickly now. Let me check apply_events status handling + measure needed paths, then write code.
+dsh: reasoning:
+Important: `numerics/CONVERGENCE_PROTOCOL.md` is still 1e6cdf04d7a2 (unchanged) — good, matches the protocol pin used in gate audit.
+FROZEN.json now 815e08079aefbc16 — wait, earlier I measured 3d9e3d77fd87 at 00:54! It changed again → FROZEN rev29 may have been superseded or rewritten between 00:54 and 00:58. Let me check the current map/applied events for FROZEN changes. Also schemas: F1/F2a/F2b — measure now.
+
+That's important: if FROZEN moved again, the rev29 pins may be moving. Let me measure the schemas and check FROZEN content/revision.
+
+Also note the gate audit in my first lifecycle run measured F1 d9cebb9404b2 etc. If the schemas changed again since 00:55, the review round is over a moving target.
+
+Let me measure now and inspect FROZEN.json revision + recent formulation lead events.
+dsh: reasoning:
+FROZEN.json is revision 29 at 00:57:26 (mtime 1789145847 → let me convert: 1789145847 epoch... my earlier reading at 00:54 showed 3d9e3d77fd87. So FROZEN was rewritten at ~00:57:27, still rev29. Probably the formulation lead refined the FROZEN file (added rev13_delta). Schemas unchanged at rev13 hashes since ~00:53:41/00:53:21.
+
+This means FROZEN rev29's content changed after pass-06 open (00:55), within the review window. Is FROZEN.json a frozen artifact with an active pin? `frozen_artifacts` list only had F0/F1 schemas/detector/regression/regularities — not FROZEN.json. So no hard audit failure, but it's a moving pin document. The r3 card references FROZEN rev29 pins; as long as the pins for the schemas/taxonomy remain the same (they do), and FROZEN's own revision stays 29, the correction is metadata. But the r3 card's stop rule says "if a pinned file moves mid-round; report rather than re-review a moving target". FROZEN moved at 00:57:26. Let me check whether any of the *pinned hashes in FROZEN* changed vs the earlier version — i.e., did the FROZEN file's `files` entries change? We don't have the old bytes (unless git/backup). The map may have recorded FROZEN hash in artifact_hashes at 00:55 checkpoint (checkpoint at 00:55:14 would have recorded 3d9e3d77fd87). So the drift is measurable from the checkpoint.
+
+I should record this: CF-26 can cover the instrument/pins drift class: (a) detector drift; (b) FROZEN rev29 moved at 00:57:26 (same revision number, content changed) *while* the r3 review card is opening. That's important for the r3 round: the reviewer must pin the FROZEN meta hash and the per-file hashes; a same-revision-number content change is exactly the "moving target" hazard the card's stop rule covers.
+
+Let me check FROZEN's recorded hash history in checkpoints: current_checkpoint.json at 00:55:14 has artifact_hashes for artifacts/formulation/FROZEN.json? Let me check. And what the rev13_delta says (maybe it just added the delta record). Let me quickly diff: check `runtime/state/checkpoints/ckpt-20260912-005514.json` for FROZEN hash.
+
+Then write the pass-06 material accordingly:
+- CF-27 could be "same-revision content drift on FROZEN rev29 + malformed inbox" — no, keep separate: CF-27 = FROZEN rev29 content move during the r3 review window; CF-28 = inbox integrity. Or include both in one "artifact/pin integrity" finding. Let me use:
+  - CF-26: detector drift mid-review + contested change (instrument integrity).
+  - CF-27: FROZEN rev29 same-revision content move during the r3 review window (binding-document integrity); action: r3 reviewers must cite FROZEN's measured bytes and per-file hashes; the r3 card stop rule applies; controller records both the 00:55 checkpoint hash and the 00:57 measured hash.
+  - CF-28: controller inbox malformed line (comms integrity).
+So findings CF-26/27/28. Good.
+
+Let me verify the 00:55 checkpoint FROZEN hash to cite both values. Then write everything.
+
+Also check the recency of writes to FROZEN: 1789145847 — that epoch is plausible for 2026-09-12 00:57:27 CST (the system clock). Let me confirm with date -d @1789145847.
+
+Let me now do the verification and then write the tool patch.
+dsh: reasoning:
+The checkpoint's artifact_hashes may be nested differently. Let me check the checkpoint structure, and the artifact_hashes.json registry (which is updated by checkpoint). Let me grep for FROZEN in runtime/state/artifact_hashes.json and current_checkpoint.json.
+dsh: reasoning:
+The registry has 417 entries but none containing FROZEN? Odd. Let me list a few registry keys and sample values. Maybe keys are hashes mapping to paths.
+dsh: reasoning:
+The registry apparently doesn't register artifacts/formulation/FROZEN.json (scan roots: artifacts/formulation/... maybe partial). Hmm, `artifacts/` root should include it. Let me check if 'artifacts/formulation/FROZEN.json' key exists; the search for 'FROZEN' across keys/values printed nothing, meaning not registered. Maybe the registry scan excludes some files (e.g., only certain extensions, or `artifacts/` isn't a root; earlier audit_evidence mention "registry scan roots now cover numerics/, artifacts/numerics/ and repo-root evaluation_rubric.yaml in addition to the earlier roots"). Earlier roots probably: ledger/, reviews/, schemas/, research_map/, evaluation/. So artifacts/formulation isn't fully scanned. Fine.
+
+To record FROZEN's before/after, I have my own measurement from 00:54: 3d9e3d77fd87 (via my pre-pass measurement) and now 815e08079aefbc. That's a legitimate controller measurement (I measured it in this session pre-pass). Also the pass-06 open report's measured_hashes may include FROZEN? Let me check the report's measured_hashes keys. Probably node-only. But I measured 3d9e3d77fd87 at 00:54:16-ish and FROZEN mtime is 00:57:27 → the rewrite happened after. Good enough evidence; I'll cite both values as controller measurements.
+
+Wait, actually: I measured 3d9e3d77fd87 at the very start (my pre-pass hash snapshot) — timestamp ~00:54:30. Yes.
+
+Now let me implement the edits. First the findings_merge patch. I'll be surgical.
+
+Edit 1: CF-16 block (lines 523-540).
+Edit 2: CF-20 block (598-614).
+Edit 3: CF-23 block (644-655).
+Edit 4: insert CF-26, CF-27, CF-28 after CF-25 block (before the closing `]`).
+
+Let me write exact old_strings (verbatim from the file as read).
+dsh: reasoning:
+Now insert CF-26, CF-27, CF-28 after CF-25 block (which ends with `"research_map/research_map.json#controller_repairs"]},` followed by `    ]`). I'll add before the closing `]`.
+
+The evidence for CF-26 should include the worker-049 blocker and worker-098 review event ids. Let me write the entries.
+
+CF-26 (instrument integrity — detector drift):
+- finding: unrecorded write at 00:52:00 changed canonical detector c266dbec → a8c04fc3; the pass-05 repair/summary lists no such write and no artifact/gate event declares it; audit_evidence now hard-fails "frozen artifact drifted during review"; the change is contested (098 vs 049).
+- action: no adoption, no pin refresh; card; freeze detector writes; reviews bound c266dbec void; recovered pre-change bytes exist at worker-049 pinned copy; audit verdicts citing the detector must cite the hash they used.
+- evidence: paths/hashes.
+
+CF-27 (binding-document drift — FROZEN rev29 rewrite): 
+- finding: artifacts/formulation/FROZEN.json measured 3d9e3d77fd87 at 00:54 (controller pre-pass measurement) and 815e08079aefbc at 00:57:27 with `revision` still 29 → same revision number, new bytes, inside the r3 review window; the rev13 schema hashes themselves were stable across the same window (d9cebb9404b2/e9a27996dfd3/b2ab6acb2bbe).
+- action: r3 reviewers must cite FROZEN's measured bytes + per-file pins; the r3 stop rule (moving target) applies; formulation owner must record what changed in the FROZEN rewrite (rev13_delta) — well, the owner may have already. Action: verify before binding; if the schema pins moved, stop and report.
+- evidence: artifacts/formulation/FROZEN.json, schemas.
+
+CF-28 (comms integrity — malformed inbox line):
+- finding: comms/inbox/astra.jsonl line 2 is not valid JSON: a stray prefix `event_id:human-pi-overnight-20260912T0042n` glued to a well-formed assignment object with event_id human-pi-detector-fix-20260912T0100, actor "astra", created_at 01:00 (future), assignee lead-audit; it duplicates the standing A0 detector-scope card with a different acceptance (fix the detector) and arrived after the detector was already written (00:52). No human-pi event exists in the accepted stream; the line cannot be ingested; it is not authority.
+- action: recorded and quarantined (no card issued, no duplicate path, CF-12); the standing/amended cards govern; any genuine Human-PI directive must be re-sent well-formed via PROTOCOL; writers must not hand-edit inbox JSONL.
+- evidence: comms/inbox/astra.jsonl, comms/PROTOCOL.md, decisions record.
+
+Careful about "quarantined": I haven't quarantined it. Let me actually create a quarantine record file with the raw line and a note, e.g. `runtime/state/comms_quarantine/astra-inbox-line2-20260912.jsonl` containing a record {raw_bytes_sha256, raw_line, finding: CF-28, action}. That makes "quarantined" true (recorded copy), while leaving the original in place as evidence. I'll do that after the patch.
+
+Let me insert the findings.
+dsh: reasoning:
+Now verify the tool still compiles: `python3 -m py_compile research_map/astra_lifecycle.py`. Then create the quarantine file, then write the events script.
+
+Let me also update the todo list.
+dsh: reasoning:
+Wait: the quarantine record's "at" uses 01:00 (the embedded created_at) — fine, but better to use actual time. It's fine as a descriptor; the field name "at" might be read as quarantine time. Let me not fuss; I can adjust quickly later if needed. Actually, let me fix to avoid ambiguity: set "recorded_at" now and "embedded_created_at" kept. Minor; I'll leave it but change "at" semantics? Simpler: rewrite with recorded_at. Quick.
+
+Now the events script. Let me write `research_map/astra_lifecycle_06_events.py`:
+
+Structure:
+- docstring
+- imports (hashlib, json, sys, datetime, pathlib, comms)
+- ROOT, CST, NOW
+- measure() fail-closed
+- pins: F0, F0_SUP, F1, F2A, F2B, FROZEN, CASES, CONSIST, L0, L1, A0, A0SCOPE, DETECTOR, DET_OLD (constant), DET_RECOVERED, REG, PROTO, NGATES, N0REV3, D2_REVIEW (drift recheck), W049 (results)
+- GATES: 5 records, pass-06 text.
+- ASSIGNMENTS: 1 card `astra-life06-classsep-detector-adjudication` superseding the pass-05 card (with `supersedes` in the event, which apply_events drops for the map but the event stream keeps; also include in acceptance text).
+  Also maybe a second card to formalize the freeze: `astra-life06-detector-freeze-hold`? That's basically the same as the adjudication card's constraint. CF-12 says one canonical path one owner; the freeze is an instruction inside the card + notice. No second card.
+- NOTICES: 3 status events:
+  1. `astra-life06-notice-detector-drift` (node A1)
+  2. `astra-life06-notice-gform-rev13` (node F1)
+  3. `astra-life06-notice-lock-comms` (node N0)
+- main(): append events; send assignment cards to inbox with `_already_sent` dedup.
+- print pins.
+
+Validation notes: `comms.append_event` calls `validate_event`. Let me check `events.schema.json` required fields for assignment/gate/status to avoid rejections. Let me read the schema and validate_event. Also `normalize_event`. Let me check quickly.
+dsh: reasoning:
+The schema's top-level `oneOf` only covers direction_update/claim/artifact/review/resource_request! Status, assignment, gate, budget, kill/revive are not in the schema's oneOf... but `append_event` calls `validate_event` — how did pass-05's gate/assignment/status events pass? Let me look at `validate_event` (maybe it has lenient handling for authority events, or the schema is only used for ingest of outbox files and `validate_event` checks a different set). Let me read validate_event.
+dsh: reasoning:
+The Python validator (used by append_event) accepts all event types with required fields. Good.
+
+Note: assignment requires `evidence_refs` and `falsifier`. Fine.
+
+Now write the pass-06 events script. Content details:
+
+Gates:
+
+G-F0 (pass):
+- criteria text: taxonomy 0abb9ed8a961 rev5 + companion d7419b4e8963, 7 distinct accepts at the measured hash (worker-025, worker-038, worker-041, worker-052, worker-078, deepseek-flash-18, deepseek-flash-19), 6/6 disjointness, bytes stable since 00:31:41; residual CF-20/21 recorded; freeze directive: any write voids.
+- Wait: "7 distinct accept reviewers" from pass-06 gate audit list: ['deepseek-flash-18','deepseek-flash-19','worker-025','worker-038','worker-041','worker-052','worker-078'] = 7 (accept verdicts include astra-lead-audit accept too; distinct accept reviewers list has 7 because lead-audit may not be counted? It listed 7 names). Actually the audit reason printed 7 names and also "[worker-038:accept, worker-078:accept, worker-082:accept, worker-025:accept, deepseek-flash-18:accept, deepseek-flash-19:accept, worker-041:accept, worker-052:accept, astra-lead-audit:accept, worker-094:revise]" — 9 accept verdicts incl. lead-audit and worker-082, but distinct accepted reviewers 7. I'll cite "7 distinct independent accept reviewers at the measured hash (gate audit)".
+
+G-FORM (pending): rev13 hashes, mirror aligned, 0 accepts; repair landed (CF-20); FROZEN meta move (CF-27); r3 card.
+G-LIT (pending): L0 a1674f094979: 1 accept (worker-075) + 5 revise/inconclusive (worker-025, worker-011, worker-093, deepseek-flash-18, worker-005 revise; worker-063 inconclusive); L1 23 spot checks; verify-l0-final card.
+G-NUM (pending): lock locked; solver absent; guard present; N1 hash absent; protocol 1e6cdf04d7a2 accept 4.5 + two revise contested → adjudication card; N0 node verdict revise 3.5; N0 stop-rule deliverable da7c36071995; ckpt N0 replication 6542db93eebc registered; N1 additionally requires G-FORM+G-AUDIT.
+G-AUDIT (pending): A0 rubric d748a9e3574e 0 accepts after 3 revises; scope artifact a26be4b85706 landed unverified; A1 coverage F0 7, F1/F2a/F2b 0 at rev13, L0 1 (need ≥2); 17 hard CLASSSEP + detector drift hard; classsep regression PASS 27 cases at the changed detector; calibration card superseded.
+
+Assignments (1):
+`astra-life06-classsep-detector-adjudication`
+- node A1, assignee astra-lead-audit, artifact reviews/CLASSSEP-calibration-adjudication.json, gate G-AUDIT, class_id GLOBAL
+- evidence_refs
+- deadline 2026-09-12T02:30:00+08:00, budget 1.5
+- acceptance: supersede the pass-05 calibration card. Adjudicate at cited hashes: the applied a8c04fc3, the recovered c266dbec, the staged candidate e2d24b927ee8. Bind worker-098 drift recheck ffabb753313f, worker-049 fn audit 9e1bf2043934 (pre-registered corpora), worker-035 control battery, 27-fixture regression. Deliver per-fixture census + explicit decision: adopt / rollback / record not-lexically-separable; if adopt: freeze the exact bytes + controller pin refresh request; if rollback: reproduce c266dbec from the recovered copy; claims-retirement policy for historical metalinguistic claims; independent review at the chosen hash. No detector write during the round; no schema/claim edits; no gate self-pass. Falsifier: adopted patch suppressing genuine assertion on labeled corpus; decision without cited hashes; any detector write during the round.
+- expected_information_gain
+- stop_rule
+
+Notices (3 status):
+1. `astra-life06-notice-detector-drift` node A1: ruling + card + freeze.
+2. `astra-life06-notice-gform-rev13` node F1: repair landed (CF-20) + FROZEN meta move (CF-27) + r3 binding only; no gate move.
+3. `astra-life06-notice-lock-comms` node N0: lock LOCKED; N1 untouched; CF-28 quarantine; decisions record path.
+
+main(): append GATES+ASSIGNMENTS+NOTICES; send cards; print pins.
+
+One concern: `comms.append_event` writes directly to events.jsonl and `_load_seen`/`_save_seen` — concurrent appends from workers via ingest? It's fine; flock on map.lock is held only during lifecycle, not during append_event. Pass-05 did the same. OK.
+
+Also: send() to inbox appends; dedup via `_already_sent`. Note the malformed line in astra.jsonl doesn't matter for `astra-lead-audit` inbox.
+
+Let me write the file now. I'll base on pass-05 but keep it tight.
+dsh: reasoning:
+Wait — there's an issue with `CARD`: I included a `supersedes` key in the assignment event. `validate_event` allows additional properties (it only checks required fields), so it passes. apply_events drops it from the map card but the event stream keeps it. Good.
+
+Also `DET_STAGED = "e2d24b927ee81c45"` is only 16 chars; in the acceptance I slice [:12] → "e2d24b927ee8". Fine.
+
+One issue: variable `CARD` dict includes `created_at=NOW` etc. Fine.
+
+Check that `proposed/class_separation.py` exists (measured? no, I don't measure it; only cite 12-prefix). It exists (e2d24b927ee81c45 measured earlier). Good.
+
+Also the docstring says "the hashes measured on disk at run time" — fine.
+
+Let me py_compile and dry-check event validation without appending. I'll write a quick test that imports the module and validates each event with schemas.validate_event (not running main). But importing the module executes the measures (fail-closed). Fine. Let me run a check that doesn't append.
+dsh: reasoning:
+My silly assertion failed (`json.dumps(ev).startswith('{')` is always true). Remove it and re-run.
+dsh: reasoning:
+All 9 events validate. Now emit them: run the script. Then run the lifecycle close invocation.
+
+Note: FROZEN measured 815e08079aef — but it may move again; the events script measures at run time and fail-closes only if absent. Fine.
+
+Run the events script.
+dsh: reasoning:
+Events emitted. Now write the decisions record JSON before the close lifecycle (the CF evidence refs point to it; not strictly required to exist but better to have it). Let me write `astra-lifecycle-06-decisions.json` with REC-22..REC-28, then run the close lifecycle (which will apply the new events and rewrite findings with CF-16/20/23/24/26/27/28).
+
+Decisions content:
+- REC-22: detector drift not adopted, pin not refreshed, writes frozen, amended card supersedes pass-05 calibration. Evidence.
+- REC-23: evidence-binding repair landed (rev13 + FROZEN rev29, mirrors aligned, corpus rebound); rev12 pins void; G-FORM withheld pending r3; gate not moved.
+- REC-24: FROZEN rev29 same-revision move recorded; reviewers must pin its bytes + per-file pins; no gate movement on meta move alone.
+- REC-25: A0 scope artifact landed unverified; verify-a0 binds rubric + scope; no gate move.
+- REC-26: controller inbox malformed line quarantined, not authority, no duplicate card.
+- REC-27: numerics_lock stays LOCKED; no solver/N1; nothing in this pass changes lock criteria (release still G-FORM+G-AUDIT + N0 accept).
+- REC-28: G-F0 re-asserted pass at unchanged bytes; gates re-asserted; gate audit/coverage recorded; G-LIT/G-NUM unchanged pending with cards.
+
+Let me write the JSON with a structure mirroring the pass-05 decisions file (which I haven't read; let me quickly inspect its shape to match).
+dsh: reasoning:
+Good structure. Let me construct the pass-06 decisions JSON. I'll compute full measured hashes at write time via a script (so values are exact), then write the file. I need map_sha at decision and at pass exit — the decision map sha right now (after events appended but before close lifecycle applies them) and the pass-exit sha after the close run. I'll write the decisions file with placeholders and update after? Simpler: write decisions after the close lifecycle, capturing the exit map sha; set `map_sha256_at_decision` = map sha measured when the events were emitted (I can measure now) and `map_sha256_at_pass_exit` after close. I'll generate the file in two steps: first build the dict with all pins + decision map sha at emission (current), run close, then update exit sha and report path/sha.
+
+Let me capture the "decision-time" map sha now (before close applies): sha256 of research_map/research_map.json. Then run the close lifecycle.
+
+Actually the close lifecycle applies events and rewrites findings — the decisions file can be written after close with the exit sha, while citing decision-time sha measured now. Let me record now: compute sha and save to a temp variable/file.
+
+Let me run close lifecycle first (it's quick), then write decisions + summary with exact values from the report. I'll compute the decision-time map sha now.
+dsh: reasoning:
+Interesting: it's already 01:00:41. My pass started ~00:53:30. Time moves. The wall-clock deadlines (02:00-03:00) are still ahead.
+
+Now run the close lifecycle: `python3 research_map/astra_lifecycle.py --label astra-lifecycle-06-close`. This applies the 9 new events (plus any new traffic) and rewrites findings. Then check output and report.
+dsh: reasoning:
+Close lifecycle ran: 670 events applied, VALID, gates unchanged, lock locked.
+
+Now verify:
+1. New findings CF-26/27/28 landed with correct statuses; CF-16/20/23 updated.
+2. New assignment card in map.
+3. Gates events applied (they update gate criteria/reasons in map? apply_events gate branch — check).
+4. Latest report + checkpoint id.
+5. Evidence hard failures count now.
+6. Publication pairs aligned.
+7. Lock guard.
+
+Then write decisions JSON + summary MD + handoff update.
+
+Let me inspect the close report and map.
+dsh: reasoning:
+Big surprise in the close report: review coverage now shows F1: [worker-045, worker-075, worker-085], F2a: [worker-017, worker-072, worker-075], F2b: [] — these are *accepts at the measured rev13 hashes*! So during the close window (00:55–01:00), workers landed reviews at rev13. F1 has 3 accepts, F2a 3 accepts, F2b 0. That's new evidence: G-FORM needs 2 accepts per class; F1/F2a now meet it, F2b does not (0).
+
+Also `hard: 20` — 17 CLASSSEP + drift + maybe 2 new? Let me list the hard failures from the close report to see what else appeared (maybe new CLASSSEP hits from meta-claims = the growth mechanism).
+
+Also note "rejected: 2" in ingest — two events rejected. Let me check rejected.jsonl recent entries; likely the malformed inbox line is not ingested (inbox isn't ingested). The 2 rejects might be worker events with schema issues. Let me look.
+
+Also, the ingest accepted 40; duplicates 4990.
+
+Important: F1/F2a now have 3 accepts at rev13 → G-FORM is only missing F2b accepts (≥2). The r3 card requires 2 non-author reviewers per class. So G-FORM remains pending but closer. My gate event (emitted at 00:59ish) said 0 accepts per class; by 01:00 the coverage changed. The gate audit in the map (recomputed at 01:00:44) has the fresh reason. My gate *event* is a snapshot at emission; the map's controller_gate_audit is authoritative and fresh. I should note this in the summary/handoff: G-FORM F1/F2a accepts landed inside the pass; F2b still 0.
+
+Hmm — should I re-emit gate events? The instruction "one lifecycle then exit" and the precedent of multiple invocations. I've already run two lifecycle invocations (open + close). The map's gate audit is fresh as of close. The gate events in the stream are slightly stale on coverage counts but their verdicts match and the criteria text is qualitative. I can note the refresh in the summary. Alternatively, emit one more small event updating G-FORM reason... That risks scope creep; better: record in summary + handoff and let the next pass's gate audit be authoritative. Actually, for the map's own `gates[].criteria`, gate events update it — the map's G-FORM criteria are the original static criteria (from the schema), and reasons live in controller_gate_audit. So no issue.
+
+Let me check the 20 hard failures and the 2 rejects, then write decisions + summary + handoff.
+
+Also should double-check that the coverage F1/F2a accepts are real (review events with verdict accept and reviewed_sha256 matching rev13). Let me verify quickly: reviews for worker-045/075/085 at F1 rev13; worker-017/072/075 at F2a. And check the reviews' hashes. Let me pull those review events.
+dsh: reasoning:
+Confirmed: new rev13 accepts are real:
+- worker-017 F2a accept 4.0 at e9a27996dfd3 (00:56:15)
+- worker-072 F2a accept 4.5 at e9a27996dfd3 (00:56:38)
+- worker-085 F1 accept 4.0 at d9cebb9404b2 (01:00:41)
+- Coverage list also shows worker-045 (F1) and worker-075 (F1, F2a) accepts — those events may be older but bound at rev13 (perhaps applied in the 670). Let me trust the coverage computation (it scans reviews with reviewed_sha256 at measured hashes).
+
+Hard failures: 19 CLASSSEP + 1 drift = 20. Note two new CLASSSEP entries (claims 327, 336) — the growth mechanism (meta-claims about the audit). Good to note.
+
+Rejects: 4 in tail are claim invalid conclusion_type (worker claims using invalid types, e.g. "formal_model"? no—invalid ones). The close report said rejected 2 for that ingest window. Fine; these are worker schema errors, nothing to act on beyond noting.
+
+Now G-FORM is at F1 3 accepts, F2a 3 accepts, F2b 0. That's a significant status update. The r3 card requires "two independent non-author reviewers per class" — F1/F2a may now satisfy if those reviewers are non-author and independent; the audit lead adjudicates. My summary/handoff must record this measured coverage.
+
+Given F2a coverage came from worker-017/072 (not previously listed) and F1 from worker-045/085/075, likely those landed within pass-06's apply. My gate event said 0 accepts — stale. Should I emit a corrected gate record? The map's controller_gate_audit (fresh) is what matters, plus the handoff. But the events stream has my G-FORM "0 accepts per class" statement which is now wrong-looking at 01:00:44. It was true at 00:59 (emission time), so it's a timestamped snapshot — fine. However, to be precise and avoid a stale claim in the stream, I could emit one more small `gate` event `astra-life06-gate-gform-refresh` with the coverage at 01:00:44. Hmm. The instruction: "record hashes and validation" and "maintain DAG and gates". A refresh event improves accuracy and is idempotent (unique event id). But it also triggers another apply cycle... I could emit it and run one more lifecycle invocation. That's a 3rd invocation — pass-05 did 4. It's still one control pass. I think it's justified: the gate record is part of the map's gate history, and F1/F2a crossing the 2-accept threshold mid-pass is exactly the kind of state the next controller must see.
+
+But wait: are those accepts *binding*? The r3 card requires two independent non-author reviewers per class at rev29 pins; the gate audit's coverage only counts distinct accept reviewers at measured hashes (not independence/non-author). The audit lead's r3 card must adjudicate independence. G-FORM stays pending regardless. So the refresh should say: F1 3 accepts, F2a 3 accepts, F2b 0; independence/non-author adjudication still with the r3 card; G-FORM withheld pending F2b + r3 adjudication.
+
+Let me emit a single refresh event plus maybe update the F2b card? No new card needed.
+
+Actually — cleaner: since this is one pass, I'll emit the refresh gate event and run the final lifecycle invocation labeled `astra-lifecycle-06-final`. That gives the pass-exit state and report. Then write decisions (with exit sha), summary, handoff.
+
+Before that, let me also double-check the `_received_at`/apply of my gate events: did the map's gates get the new criteria? The map gate `criteria` shown are the static ones from schema; apply_events gate branch may store reason/history. Let me check how gate events are applied (gate_proposals/reviews). Not critical.
+
+Also, I want to confirm no solver appeared and no N1 work in this window (lock guard passed; also check for new files under numerics/ with solver). Lock guard: solver_absent true, n1 hash absent. Good.
+
+One more integrity check: the frozen pin for class_separation.py — did the close lifecycle's controller_repairs change it? Let me check `frozen_artifacts` now. It should still be c266dbec active.
+
+Let me do these checks and then emit the refresh.
+dsh: reasoning:
+Good: pin intact at c266dbec, no solver files, lock locked.
+
+Now emit the G-FORM coverage refresh gate event. I'll add it as a small standalone script inline rather than editing the events file? Better to append it to `astra_lifecycle_06_events.py` so the pass record is reproducible. But re-running the whole script would skip duplicates and append only the new one. That's clean and idempotent. Let me add a GATE refresh entry to GATES (or a separate list) with event_id `astra-life06-gate-gform-refresh`, and re-run the script (duplicates skipped). Then run lifecycle `astra-lifecycle-06-final`.
+
+Text for refresh:
+"G-FORM re-measured at 01:0x: coverage at rev13 pins moved inside the pass: F1 3 distinct accept reviewers (worker-045, worker-075, worker-085), F2a 3 (worker-017, worker-072, worker-075), F2b 0. The >=2 threshold is met numerically for F1/F2a but binding requires astra-life05-verify-gform-r3 to adjudicate independence/non-author status and F2b must reach >=2 accepts; no gate move on count alone. FROZEN meta move (CF-27) still applies; schemas stable."
+
+I need to be careful: the events script measures hashes at import; coverage counts I'll hardcode from the close report (F1 3, F2a 3, F2b 0) and state "as measured in the pass-06 close gate audit at 01:00:44". Good.
+
+Let me edit the script to add this event (in GATES list, append before closing bracket). Then run it, then final lifecycle.
+dsh: reasoning:
+Idempotency verified. Now run the final lifecycle invocation `astra-lifecycle-06-final`, which applies the refresh event and any newer traffic, then produces the pass-exit report.
+dsh: reasoning:
+Final invocation done: 99 events applied, VALID, gates same, lock locked.
+
+Now gather the final numbers for the summary and decisions:
+- Final report path/sha, checkpoint id, map sha before/after, ingest numbers, hard/soft, classsep, coverage, clock, publication, lock guard, gates reasons.
+Let me extract everything.
+dsh: reasoning:
+Final state:
+- F1 now 4 distinct accepts (worker-045, worker-072, worker-075, worker-085), F2a 3, F2b 0. A1 coverage apparently counts F1/F2a accepts too (gate audit G-AUDIT says F1 4, F2a 3 — interesting: A1 coverage includes formulation targets).
+- G-FORM still pending (F2b 0 + r3 independence adjudication required).
+- G-NUM: N0 node verdict now "revise score 3.5 (N0-pin-split-adjudication-wor...)" — changed from "N0-review-worker-042.json" to a new adjudication? Let me check: N0 status/verdict on disk. The audit says revise 3.5 from "N0-pin-split-adjudication-worker-..." — a new review. Fine, still revise.
+- 20 hard failures (19 CLASSSEP + 1 drift).
+- Lock locked, solver absent.
+- Map sha final f344ed2aaea5.
+
+Wait: G-FORM coverage now F1 4 accepts — but my refresh event said F1 3. Traffic continued (worker-072 accept added or another). The map's gate audit is authoritative; my summary should cite the final report numbers (F1 4, F2a 3, F2b 0).
+
+Now write:
+1. `runtime/state/controller_verification/astra-lifecycle-06-decisions.json` (REC-22..REC-28) with measured pins + coverage from final report.
+2. `runtime/state/controller_verification/astra-lifecycle-06.md` summary.
+3. Update ASTRA_HANDOFF.md live-state section.
+
+Let me generate the decisions JSON via a Python script (with exact hashes measured now, including possible new moves). I need pins:
+F0, F0_SUP, F1, F2A, F2B, FROZEN, CASES, CONSIST, L0, L1, A0, A0SCOPE, DET, DET_OLD, DET_STAGED, REG, PROTO, NGATES, N0, N0REV3.
+Note N0 node artifact: `numerics/tests/flat_wave.py`? measured_hashes['N0'] in report likely 8b52014dac47 or new. Let me pull from the final report's measured_hashes directly — safest.
+
+Also include:
+- map_sha256_at_decision = 262da69798578d77... (full)
+- map_sha256_at_pass_exit = f344ed2aaea5...
+- post_pass_note: traffic continues; auto-cycle may mutate after exit.
+- checkpoint, report path + sha, gates verdicts, coverage, hard counts, lock guard, publication summary.
+- decisions list REC-22..REC-28 with text/evidence.
+
+Let me build it.
+dsh: reasoning:
+Now write the pass-06 summary markdown. Then update ASTRA_HANDOFF.md.
+
+Summary content (follow pass-05 style):
+
+# Astra lifecycle pass 06 — summary (2026-09-12T00:53–01:02+08:00)
+- Controller astra (independent session, one control pass then exit).
+- 3 idempotent lifecycle invocations + 1 event emitter.
+- Headline: instrument drift found and contained; evidence-binding repair landed; G-FORM coverage moved; G-F0 unchanged; lock locked.
+- Final state table.
+- Gate reasons.
+- Assignments issued.
+- Rulings REC-22..REC-28.
+- Tooling changes (findings ledger + events script + quarantine).
+- Open risks for pass 07.
+
+Also mention the events emitted (11) and that the detector adjudication card landed in map + inbox; G-FORM refresh.
+
+Then handoff update: replace the "LIVE CONTROLLER STATE" section with pass-06 content. I need to be careful editing the file (it's 137 lines; lines 1-74 are the live state + a blank; I'll replace lines 3-74 block).
+
+Let me write the summary file first.
+dsh: reasoning:
+Wait — I need to double check one claim in the summary: "All nine evidence-batch events plus the refresh are in the accepted stream". I said 11 events appended: 5 gate + 1 refresh + 1 assignment + 3 notices = 10, not 11. Let me count what the script printed: APPENDED gf0, gform, glit, gnum, gaudit, assignment, notice x3 = 9 appended at first run; then refresh appended (10 total). But the script's second run: SKIPPED 5 gates (including gform), APPENDED refresh, SKIPPED assignment + 3 notices = 10 unique. So "11 events" in the summary/docstring is wrong: it's 10 (5 gate records + 1 refresh + 1 card + 3 notices). Let me fix both the summary and the decisions `post_pass_note` (which says 11 events: 5 gate records, 1 refresh, 1 card, 3 notices — that sums to 10; the "11" is wrong).
+
+Let me correct:
+- Summary: "appended 10 events (5 gate records, 1 G-FORM coverage refresh, 1 superseding detector-adjudication card, 3 notices)".
+- Decisions post_pass_note: same.
+- Also "All nine evidence-batch events plus the refresh" → "All ten pass-06 events are in the accepted stream".
+
+Docstring of the events script doesn't state a count. Good.
+
+Let me fix those two files.
+dsh: reasoning:
+Now update ASTRA_HANDOFF.md's live-state section. I'll replace lines 3–74 (the pass-05 LIVE CONTROLLER STATE block, which ends before "## Mission"). Let me construct the new block.
+
+I need to be accurate:
+- pass 06 ran 00:55–01:01 (open 00:55:14, close 01:00:44, final 01:01:17).
+- map sha at pass exit f344ed2aaea5.
+- F0 0abb9ed8a961 + d7419b4e8963; G-F0 pass.
+- F1/F2a/F2b rev13 d9cebb9404b2/e9a27996dfd3/b2ab6acb2bbe; FROZEN rev29 815e08079aefbc (moved under same rev); coverage F1 4, F2a 3, F2b 0; G-FORM pending r3.
+- L0 a1674f094979 (1 accept/5 revise), L1 315c19145065; A0 rubric d748a9e3574e; A0 scope a26be4b85706; N0 8b52014dac47? Let me check measured hashes for N0 from final report: I should cite the N0 hash. Also protocol 1e6cdf04d7a2; gates.py fcd1d70991b6; taxonomy_cases ccf7041bd0ff; detector live a8c04fc31e4a vs pin c266dbecaa87; regression runner 9f1cf9c336be; lock LOCKED; solver absent.
+- Findings CF-1..CF-28; new CF-26/27/28.
+- Cards open (pass-05/06) with deadlines; new card astra-life06-classsep-detector-adjudication.
+- Decisions REC-22..REC-28; summary path sha.
+- Next pass tools: astra_lifecycle.py --label astra-lifecycle-07; astra_lifecycle_06_events.py idempotent.
+
+Let me get N0 hash from the final report measured_hashes to cite correctly.
+dsh: reasoning:
+N1 absent confirmed (hash null). N0 flat_wave.py 8b52014dac47. Good.
+
+Now update the handoff. I'll replace the live-state section (lines 3 through 74, ending just before "## Mission"). Let me view the exact boundaries to craft the edit: line 1 "# Astra controller handoff", line 2 blank, line 3 "## LIVE CONTROLLER STATE — ...", ... line 74 "  decisions record above.", line 75 blank, line 76 "## Mission".
+
+I'll use edit with old_string = the whole block? That's long. Alternative: replace just the header line and insert new content, then delete the old block. The edit tool needs exact match; a 72-line old_string is risky but it's literal from the read. Simpler approach: use Python to rewrite the file: keep lines 1-2, insert new block, keep from "## Mission" onward. That's a file write via script — allowed (controller owns this file). But I should use the write tool ideally... The file is 137 lines; rewriting via bash python is fine but the fs-observation policy prefers read-then-write tools. I've read it. I'll use a Python script for precision (splitting on '## Mission').
+
+Let me compose the new live-state block carefully with accurate facts.
+dsh: reasoning:
+Now final verification steps:
+1. Verify map still VALID after everything (run validate_map.py). Note: traffic continues and auto-cycle may modify; still let's check.
+2. Confirm the new findings/card/events are in the map (already done post-close, but the final invocation applied 99 events; verify CF-26..28 + card + gates again quickly).
+3. Check artifact_hashes registers the new files (quarantine, summary, decisions?) — checkpoint.py runs at final invocation before I wrote summary/decisions, so those two new files may not be registered. Registration matters for PROTOCOL rule 2 (done nodes) — not for controller records, but C4/PROTOCOL suggest registering controller evidence. The next pass's checkpoint will pick them up. Could run `python3 research_map/checkpoint.py --label astra-lifecycle-06-post` to register them — that's a checkpoint, not a lifecycle; pass-05 handoff mentions checkpoint registration as a repair. Running checkpoint after writing controller records is good practice and cheap. But it writes artifact_hashes.json + checkpoints. Let's do it: `python3 research_map/checkpoint.py --label astra-lifecycle-06-post` then re-check map validity.
+
+Actually careful: checkpoint.main(label) may also apply nothing; it snapshots. Fine.
+
+4. Verify events count and that no duplicate gate events.
+5. Update todo list to completed.
+6. Final answer summarizing the lifecycle.
+
+One more consideration: "One independent lifecycle then exit" — I've done the pass. I should not start new long-running things. Wrapping up.
+
+Let me run the final validation + checkpoint.
+dsh: reasoning:
+Interesting: the checkpoint registered the summary and decisions (they're under runtime/state/controller_verification/, which is a scan root), but not the quarantine file or the events script (expected — different roots: runtime/state/comms_quarantine and research_map are not fully scanned... research_map/class_separation.py was registered though? The scan roots include specific research_map files maybe. Not critical).
+
+Wait: registry shows summary cdbda3313c13 — but I edited the summary after the final lifecycle; the checkpoint just registered the current bytes; good. Decisions 62d47cc64349 — matches after my fix.
+
+Everything is consistent:
+- Map VALID, gates unchanged, lock locked, CF-26/27/28 present, card present.
+- Final map sha f344ed2aaea5 (same as pass-exit; the checkpoint label didn't change the map).
+
+One last check: the quarantine file hash (b672eb8790c4) and summary/decisions hashes — my decisions record references the quarantine file hash as measured earlier (b672eb8790c4...). Let me confirm the full sha in the decisions measured_pins matches the file (it was measured at decisions-write time). Quick verify. Also verify the decisions JSON's `lifecycle_report_sha256` and `map_sha256_at_pass_exit` match the final report/map. Let me run a consistency check.
+
+Also the handoff: I should confirm the file looks right (read first lines). And mark todos complete.
+
+Let me do a final consistency verification pass.
+dsh: reasoning:
+Two problems:
+
+1. The handoff now starts with `# ## LIVE CONTROLLER STATE ...` — my `head=txt[:2]` took the first 2 *characters*, not lines! So the file begins "# ## LIVE CONTROLLER STATE..." — the title line got mangled and the "# Astra controller handoff" line was replaced by "# " concatenated with the new block. I need to fix: the file should start with "# Astra controller handoff\n\n## LIVE CONTROLLER STATE...".
+
+2. The consistency script failed because `d['measured_pins']['F0']` is a string (the pins dict comprehension used v.get('sha256')), not a dict. Fix the check accordingly.
+
+Let me repair the handoff first.
+dsh: reasoning:
+Handoff fixed. Now re-run the consistency check with the corrected pins access.
+dsh: reasoning:
+All consistency checks pass. Note: the summary sha cdbda3313c13 — registered by the post checkpoint. Wait, the summary I edited (two edits) before the checkpoint — yes cdbda331 is the edited version; consistent.
+
+One remaining nit: the decisions record's DET_STAGED measured pin uses `full("proposed/class_separation.py")` — check it matches the staged candidate prefix e2d24b927ee8. Let me verify quickly. Also the decisions record's `class_separation_recovered_copy` — verified above.
+
+Also I should ensure the handoff update didn't break anything about the rest of the document (## Mission follows at line 86). Fine.
+
+Let me also sanity check that the git status doesn't matter (no commits needed).
+
+Final: mark todos complete and write the final answer. Also — per instructions: "Before giving a final answer, collect every still-relevant job with job_output... and job_kill jobs that stopped mattering." I started no background jobs. Good.
+
+Let me update the todo list to all completed, then give a concise final summary with the key facts and hashes.
+dsh: reasoning:
+Everything checks out. The working tree has the expected modifications (handoff, lifecycle tool, map) plus the new files (events script, quarantine, summary, decisions are untracked/ignored? The new files under runtime/state are probably gitignored).
+
+Time to give the final answer: concise report of the one lifecycle pass, decisions, hashes, gates, lock, and what's handed to next pass.
+
+Let me summarize:
+
+**Pass astra-lifecycle-06** (00:53–01:02, one control pass, three idempotent invocations + one event emitter; now exiting).
+
+Consumed: 217 outbox files, ~7,000 events totals; final invocation accepted 62, applied 99 (cumulative applied across invocations: 338 + 670 + 99 = 1,107 — careful: events_applied counts all applied events each run? In the reports: open 338, close 670, final 99. These are counts of events applied during each run? apply_events.main returns applied list of events not yet applied. Open 338, close 670, final 99 → total 1,107 new applied in the pass. Fine to mention ~1.1k applied).
+
+Key findings/decisions:
+1. CF-26/REC-22 detector drift contained: class_separation.py c266dbec → a8c04fc3 at 00:52 unrecorded; not adopted, pin frozen, writes frozen; new card astra-life06-classsep-detector-adjudication (lead-audit, 02:30) superseding pass-05 calibration, with contested evidence (098 revise 3.0; 049 10/10 FN).
+2. CF-20/REC-23 G-FORM repair landed: rev13 hashes, mirrors aligned, corpus rebound; coverage F1 4/F2a 3/F2b 0; G-FORM still pending (r3 independence + F2b).
+3. CF-27/REC-24 FROZEN rev29 same-revision move (3d9e3d77fd87 → 815e08079aefbc) inside the r3 window; bound to r3.
+4. CF-23/REC-25 A0 scope artifact a26be4b85706 landed unverified; verify-a0 binds.
+5. CF-28/REC-26 malformed future-dated inbox line quarantined, not authority.
+6. REC-27 lock LOCKED, no N1/solver.
+7. REC-28 G-F0 pass re-asserted at 0abb9ed8a961 + d7419b4e8963 (7 accepts).
+
+Gates: G-F0 pass; others pending. Evidence hard 20 (19 CF-16 + 1 drift), soft 0. Classsep regression PASS. Map VALID; exit sha f344ed2aaea5; checkpoint ckpt-20260912-010117 (+ post ckpt-20260912-010244); report sha 076d03a64321; decisions REC-22..28; summary sha cdbda3313c13.
+
+Next pass tools. Exit.

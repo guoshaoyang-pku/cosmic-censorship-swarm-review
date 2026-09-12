@@ -1,0 +1,1073 @@
+dsh: reasoning:
+Let me start by understanding the task. I'm worker=020, a bounded execution worker. I need to read handoff/map and comms, take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit.
+
+Let me explore the workspace first.
+dsh: reasoning:
+No `handoff/` at the root. There's a `workdir/` and `tmp/` with stuff. Let me look for "handoff" directories and "comms".
+dsh: reasoning:
+Found it: `/data3/guoshaoyang/workdir/ai4math-swarm/comms`. Let's look at the ai4math-swarm directory.
+dsh: reasoning:
+This is the ai4math-swarm project. There's a HANDOFF.md, README.md, comms/PROTOCOL.md, research_map, artifacts, ledger, etc.
+
+I'm worker=020. Let me read the key files: HANDOFF.md, README.md, comms/PROTOCOL.md, and look at the inbox for tasks.
+
+Let me do this efficiently. The task says: "Read handoff/map and comms. Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit. worker=020"
+
+So I need to:
+1. Read handoff (HANDOFF.md), map (research_map/research_map.json), and comms (PROTOCOL.md, inbox/outbox)
+2. Take one class-bound task (a task bound to a research class in the map)
+3. Emit valid JSON with IDs, evidence, hash, falsifier
+4. Checkpoint
+5. Exit
+
+Let me read the main docs. HANDOFF.md is 16KB, README 5KB, PROTOCOL 3KB.
+dsh: reasoning:
+This is a large project. I'm "worker=020" which likely maps to `deepseek-flash-20`. Let me check the inbox for `deepseek-flash-20` and the current state.
+
+Let me read:
+- `comms/inbox/` contents
+- `research_map/research_map.json` (the map)
+- `runtime/state/` for checkpoint state
+- ledger
+
+Let me look at the inbox first.
+dsh: reasoning:
+Let me read the inbox for deepseek-flash-20 (my agent id presumably). Also, let's read the research_map.json. It might be big. Let me check sizes.
+dsh: reasoning:
+I'm worker=020 → `deepseek-flash-20`. My inbox shows one assignment:
+
+```
+{"acceptance": "Harness enforces matched token+wall-clock budgets, logs per-arm metrics, runs on synthetic data end-to-end.", "actor": "astra", "artifact": "evaluation/ablation_harness.py", "assignee": "deepseek-flash-20", "budget_agent_hours": 4, "class_id": "GLOBAL", "created_at": "2026-09-11T23:19:12+08:00", "deadline": "2026-09-12T03:15+08:00", "event_id": "asg-2026-09-11-A2-deepseek-flash-20-29", "event_type": "assignment", "evidence_refs": ["HANDOFF.md:52"], "expected_information_gain": "Makes the later ablation claim honest.", "falsifier": "Harness compares arms at unequal token budget.", "gate": "G-AUDIT", "node_id": "A2", "run_id": "run-2026-09-11T23:15+08:00", "stop_rule": "Dry-run only; no model calls.", "task": "Build the ablation harness; execute with synthetic/dummy proposers only."}
+```
+
+But wait — from the deepseek-flash-19 inbox we can see that another worker (probably worker-18) already got a similar A2 task and there are already `evaluation/ablation_design.yaml` and `evaluation/ablation_harness.py` artifacts with hash 1b2a83ef670b. So there may be overlap. Also astra later re-assigned A2 review to flash-19.
+
+Also, my outbox (deepseek-flash-20.jsonl) is 44KB, so worker 020 already did work. Let me look at what deepseek-flash-20 has already done — my outbox — to avoid duplicating and to see current status. Also check the map node A2 state.
+
+The task asks: "Take one class-bound task". The inbox assignment for me is class_id "GLOBAL" (not really class-bound). Hmm. "class-bound" might mean assigned to a class_id in the map. Let me look for tasks in the map that are class-bound and unassigned... But the instructions say "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit."
+
+Actually the worker identity is 020, and the message says read handoff/map and comms, take one class-bound task. The canonical flow: worker reads its inbox assignment, does the task, emits a `claim`/`artifact` JSON event to outbox with proper fields, checkpoints, exits.
+
+But there's a complication: A2 assignment appears already done by another worker (ablation_harness.py exists). Let me check the map state for A2 and my own outbox to see what flash-20 has already done.
+
+Let me check:
+1. `comms/outbox/deepseek-flash-20.jsonl` — my prior work
+2. Map node A2
+3. Whether evaluation/ablation_harness.py exists
+
+Also note that the current time seems to be around 00:26+ (files modified). Actually the last modification times show Sep 12 00:26. The runtime context probably means we're mid-run.
+
+Let me look at the map. It's 1.4MB, so let me extract node A2 and the gates with python/jq.
+dsh: reasoning:
+So worker-020 has already done substantial work on A2 (ablation harness design-strict check), found blockers, emitted events, checkpointed. My task now: "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit."
+
+Hmm. This is a fresh bounded execution worker turn (worker=020). The instruction says "Read handoff/map and comms. Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit."
+
+So I need to pick one class-bound task (i.e., a task tied to a class_id, e.g., one of the four frozen classes AF-WCC-VAC-GEN, AF-SCC-C2-VAC-GEN, AF-SCC-C0-VAC-GEN, AF-WCC-SCALAR-SPH), do bounded work, emit JSON event(s) with proper fields (IDs, evidence refs with hashes, falsifier), checkpoint, exit.
+
+Let me understand the current state of the map more. What tasks are open that are class-bound? Let me check assignments in the map and their status, plus the gates, plus my inbox again — only 2 messages for me (assignment + notice). The outbox shows worker-020's previous rounds. It seems this session may be a continuation: "worker=020" with no specific further message.
+
+Given the swarm's state, I should:
+1. Read the map's nodes/assignments to find a class-bound task that is open and within my scope.
+2. Check what's already been done, avoid duplication.
+3. Execute one bounded piece of work.
+4. Emit JSON event(s) into comms/outbox/deepseek-flash-20.jsonl.
+5. Run the checkpoint script.
+6. Exit.
+
+The key question: which class-bound task? Let me look at the map nodes and assignment statuses. Let me dump assignments and nodes list.
+
+Also note: my last outbox event was at 00:13:41. Current time ~00:26. The checkpoint log and state are updated at 00:26. There might be new assignments for me in the inbox from after 23:22? The inbox only has 2 lines, so no.
+
+Let me examine the map: nodes by id with status, class_id, and the assignments. Also controller_findings open items. Let's do that.
+dsh: reasoning:
+Nodes live inside `groups[].nodes`. Let me dump all nodes with id, status, class_id, artifact, gates. And the assignments with status (need to map assignment event_id to node status). Let me look at group structure.
+dsh: reasoning:
+Now, my assignment A2 is GLOBAL (audit), and I've already done a chunk of A2 work as worker-020. The instruction says "Take one class-bound task". Which open class-bound tasks exist?
+
+Looking at the map:
+- F1: AF-WCC-VAC-GEN — schema af_wcc_vacuum.yaml
+- F2a: AF-SCC-C2-VAC-GEN
+- F2b: AF-SCC-C0-VAC-GEN
+- N0: AF-WCC-SCALAR-SPH (flat wave test)
+- L0/L1: literature/ledger
+
+The controller notices say F0 was demoted etc. The canonical F1/F2 artifacts are frozen in `artifacts/formulation/FROZEN.json` and need publication to canonical paths.
+
+My previous A2 work found blockers F1 (tolerance loose), F2 (two harness paths), F3 (wall-clock semantics). The blocker is awaiting decision by lead-audit/astra. So A2 is blocked.
+
+Given "Take one class-bound task", maybe better to pick something open and class-bound: e.g., N0 flat-space calibration (allowed under numerics lock, class AF-WCC-SCALAR-SPH), or a review of F1/F2a/F2b (but I may not be an eligible reviewer if I authored... I didn't author them).
+
+Let me check the current state more carefully — particularly:
+1. Which reviews exist, which classes need independent reviewers.
+2. The G-FORM gate state: what's blocking.
+3. Whether there is an unassigned class-bound task (e.g., "class separation" audit, "class binding" check).
+
+The instruction "one class-bound task" suggests the worker should pick a task tied to a class_id (one of the four frozen classes) rather than GLOBAL. My inbox A2 is GLOBAL. But there may be fresh assignments in the map addressed to flash-20 that aren't in my inbox yet? Let me check assignments for deepseek-flash-20 in the map.
+
+Let me grep the map for "deepseek-flash-20" assignments and also check controller findings + escalations and the most recent events to know what's happening. Also check `runtime/state/current_checkpoint.json` which may summarize.
+dsh: reasoning:
+Only one assignment for flash-20 (A2, GLOBAL). But the instruction says "Take one class-bound task". It could mean: pick a task from the map that is bound to a class_id, as opposed to GLOBAL. Given the swarm design, class-bound means the task's class_id is one of the four frozen classes.
+
+Let me look at the controller findings CF (open ones) and escalations, to see what class-bound work is needed and unowned. Also check the reviews index for which reviews are missing. And check the audit lead's assignment cards in the map (94 assignments) for open class-bound ones not yet claimed by another worker.
+
+Actually — the phrasing "bounded execution worker ... Take one class-bound task" may be a generic prompt for this swarm (each worker gets one assignment card). Perhaps the intended reading: read handoff/map and comms, then take ONE task that is bound to a class (class_id not GLOBAL), do it, emit JSON, checkpoint, exit.
+
+Considerations for what is most valuable and feasible in a bounded window:
+
+Options:
+1. **N0 flat-space calibration** (AF-WCC-SCALAR-SPH): numerics allowed under lock. Check `numerics/tests/flat_wave.py` and its state. This is class-bound and open (N0 active). N1-BLOCK is active too. What's needed: "N0 convergence order measured and independently replicated". Maybe replicate the convergence order measurement independently. That's a real, bounded, verifiable numeric task — class-bound. But careful: numerics lock says N0 flat-space allowed.
+
+2. **Independent review of F1/F2a/F2b** (class-bound): reviews of frozen artifacts. But lead-audit has assigned reviews to flash-19 etc. Overlap risk. Yet the gate audit says e.g. F0 has 0 distinct accept reviewers (4 revise/inconclusive). Let me check the publication_status / controller_gate_audit for F1/F2a/F2b to see what's missing.
+
+3. **Class separation / class token census** — flash-19 was assigned CF-5 census.
+
+Let me check controller_findings all 16 with status, escalations 3, and controller_gate_audit details. That tells me where the blockers are. Then pick the class-bound task that is (a) not done, (b) not actively owned by another live worker, (c) doable within budget with real evidence.
+
+Let me dump findings and gate audit.
+dsh: reasoning:
+Now let me decide. Gate states:
+- G-F0 pending: need 2 independent accepts at canonical taxonomy hash 276009f4f63d. Currently 5 reviews, 0 accepts. It's divergently published (canonical vs authoring).
+- G-FORM pending: F1 needs 1 more distinct accept (has 1: astra-lead-audit); F2a has 2, F2b has 4 → F1 is the binding gap. A class-bound review of F1 (AF-WCC-VAC-GEN) at canonical hash 9a8bd4c96800 would directly advance G-FORM. That's a class-bound task! Reviews are exactly "class-bound" (class_id = AF-WCC-VAC-GEN).
+- G-AUDIT: needs A0/A1/A2 etc.
+
+So the highest-value bounded class-bound task available: **independent review of F1 schema (AF-WCC-VAC-GEN) at the measured canonical hash 9a8bd4c96800**, which is the exact remaining gap for G-FORM. But: am I eligible (did I author it)? I'm deepseek-flash-20, worker-020 authored A2 harness checks, not F1. Let me check F1's author chain: the frozen artifact `artifacts/formulation/schemas/af_wcc_vacuum.yaml`. The canonical path is `schemas/af_wcc_vacuum.yaml`. The astra-lead-formulation nudge said the map's F1 path/hash point at worker drafts while frozen canonical artifacts are `artifacts/formulation/schemas/*.yaml` (F1 e58a373f1261). But CF-13/CF-11 measured canonical schemas/af_wcc_vacuum.yaml=9a8bd4c96800 aligned with authoring tree.
+
+Wait, the astra-lead-formulation nudge at 23:44 said frozen canonical F1 is e58a373f1261 in artifacts/formulation/... and the map points at schemas/af_wcc_vacuum.yaml#7a3e1f93. Then CF-11 at 00:24 says canonical hash 9a8bd4c96800 (measured). Hmm, these are different again. There were re-freezes (rev25). The latest gate audit (00:24:40) says F1 measured canonical hash 9a8bd4c96800 and has 1 distinct accept at that hash (astra-lead-audit).
+
+So a second independent accept review of F1 at 9a8bd4c96800 would close the F1 requirement (though F0 and the publication divergence might still block G-FORM? G-FORM's reason mentions F1/F2a/F2b and publication aligned; F1 review count is the only shortfall).
+
+However, there's a subtlety: The gate audit just measured at 00:24:40 — very recent. Reviews are being submitted by many workers. Let me check the reviews directory to see if someone is already reviewing F1 right now (avoid collision). Also check the map's `reviews` list for F1 reviews and their timestamps/verdicts.
+
+Alternatively, a class-bound task could be N0 flat-space: CF-2 says N0 replication ORDER DISAGREES and is PROVISIONAL. N0 is class AF-WCC-SCALAR-SPH and allowed under lock. A bounded independent replication of N0 convergence order could be valuable, but replicating numerics is risky/time-consuming and CF-2 says the harness invariant functional is leapfrog-specific — that needs careful thought. Also there may be other workers on it (astra-lead-numerics).
+
+Let me check what recent workers (021, 022, 030, 031, 033 etc.) are doing, to avoid duplicating. Let me grep the map reviews for "F1" and list the `reviews` entries with target/hashes. And check `reviews/` directory on disk.
+
+Let me also check `ledger/` etc. But first the reviews.
+dsh: reasoning:
+There is a lot of parallel activity. Reviews for F1 at hash 9a8bd4c96800 exist: astra-lead-audit (accept), deepseek-flash-22 (inconclusive), deepseek-flash-19 (revise), worker-090 revise (hash None), worker-059 revise at other hashes (0a3e95a039b1b585, 93e53bb24b250b89 — old). So F1 needs a second distinct accept at 9a8bd4c96800. That's a genuinely open, class-bound task (class AF-WCC-VAC-GEN).
+
+But hold on: the G-FORM gate criteria may also require F0 (and publication alignment). G-FORM reason mentions only F1/F2a/F2b. Actually G-FORM scope per gate in map... let me check gate definitions. But regardless, adding a second independent accept on F1 at the current canonical hash directly satisfies the named shortfall.
+
+Is it honest to accept F1? I need to actually review it against a checklist. That's the job: read the artifact (33KB YAML), check class binding (class_id AF-WCC-VAC-GEN), conclusion family, quantifier completeness, falsifier decidability, no class leakage (vs F2a/F2b/SCC), etc.
+
+But there's an important risk: I'm worker-020 and my prior work was A2/audit. Reviewing F1 as an independent reviewer is legitimate (I didn't author F1). The gate requires "2 independent reviewer verdicts" — distinct actors. There are already many reviewers. Fine.
+
+However — wait. The instruction says "Take one class-bound task". Maybe the more natural interpretation is to take a task from the *assignment cards* in my inbox that has a class_id... mine is GLOBAL. Hmm. But the message says read handoff/map and comms, "Take one class-bound task". Perhaps the intended behavior for this bounded worker: pick the one open class-bound item from the map/comms that fits my role, execute, emit, checkpoint.
+
+Let me check what time it is now (wall clock). The last checkpoint was 00:26:33. Let me get `date`. Also check runtime/control for any controller directives to me.
+
+Actually let me first verify: is there any new inbox message for me since 23:22? No, inbox has 2 lines. So there's no new assignment. My previous A2 blocker is pending. The A2 probe-check found the harness tolerance issue; the fix may be someone else's.
+
+Given "class-bound", F1 review is the best candidate: it's the binding constraint for G-FORM, and it's class-bound (AF-WCC-VAC-GEN).
+
+Alternatively, N0 replicate: class AF-WCC-SCALAR-SPH. CF-2 says the N0 replication returned ORDER DISAGREES, and CF-10 says N0 verdict is PROVISIONAL, N0 stays active/unverified. G-NUM needs "N0 convergence order measured and independently replicated". That's a second class-bound option, arguably higher value (a gate-blocking measurement). But it's a numerics task — need to run code. N0 is flat-space, allowed under lock. Let me check what exists in numerics/ and whether an independent replication is feasible in this session. Actually CF-12 says canonical path n0_gate_proposal.json was double-assigned; CF-2 "adjudicated".
+
+Given the bounded nature ("then exit"), a review is more tractable and less likely to collide with the heavy numerics work already underway by astra-lead-numerics and others (w026, w027, w029, w030, w033, w034, w037, w038, w041, w043, w045...). Reviews are cheap and directly gate-blocking.
+
+Let me check the map's gate definitions to see the exact F1 criteria. And look at the F1 review that accepted (astra-lead-audit) to make sure I write an *independent* review (not copying). Also look at the constructive revise verdicts to know the objections — then verify from the artifact whether they hold at the current hash.
+
+Also important: the class-separation script and evidence tools. Let me gather:
+- Gate G-FORM definition from map gates
+- `schemas/af_wcc_vacuum.yaml` (33KB) — read it
+- reviews/F1-* files: what objections exist
+- Held-out checks: `research_map/class_separation.py`, `research_map/audit_evidence.py`, maybe `schemas/semantic_contract_tests/`
+
+Let me first get the gate definitions and a list of F1 review files.
+dsh: reasoning:
+Current time: 2026-09-12T00:27:32+08:00. Note the map's gate metadata is a bit stale (mentions old hashes 7a3e1f93 etc.), while the controller_gate_audit at 00:24:40 gives current measured hashes: F1 9a8bd4c96800, F2a b6123750b37d, F2b 1bb78ce9b357, F0 276009f4f63d (and G-F0 unmet mentions 66bf917bd368 — hmm, different; revoked? The gate "unmet" says current hash 66bf917bd368 but controller_gate_audit reason says canonical taxonomy 276009f4f63d. Confusing; the map is being updated by astra frequently).
+
+For F1, the gate audit (latest, 00:24:40) says: F1 [1 distinct accept reviewer(s)] — astra-lead-audit accept at 9a8bd4c96800. So one more independent accept at that hash closes the F1 review-count requirement. Also there are fresh F1 reviews at 00:26-00:27 (F1-review-034.json, F1-quantifier-adjudication-078.json) — parallel activity. Let me check F1-review-034's verdict quickly to see if it's an accept at the current hash — if so, F1 may already have 2 accepts, and my review would be redundant. Let me check the latest F1 reviews and their verdicts/hashes.
+
+Actually, wait. The map updated_at is 00:25:10 and gate audit at 00:24:40. Files at 00:26/00:27 may not be ingested yet. Let me check:
+- reviews/F1-review-034.json (00:26)
+- reviews/F1-quantifier-adjudication-078.json (00:27)
+- Also maybe reviews/F1-review-090 (00:22, revise)
+
+Let me grep those for verdict/hash.
+
+But independently of whether F1 already has 2 accepts, there could be another gap: F0 needs 2 accepts at current hash, and there are 0 (revise/inconclusive). G-F0's "unmet" mentions current hash 66bf917bd368 — hmm! Let me reconcile. controller_gate_audit says canonical taxonomy 276009f4f63d; reviews: worker-082 revise, worker-16 revise, flash-21 inconclusive, flash-22 inconclusive, lead-audit revise. Gate def unmet says "no accept verdict exists at the current hash 66bf917bd368". These differ: 276009f4 vs 66bf917b. The taxonomy was recently republished? Let me hash research_map/formulation_taxonomy.yaml now.
+
+The most impactful class-bound review might be F0 (taxonomy, all four classes), which is blocking G-F0 and G-FORM (F0 is a cross-group edge to A1 "class-binding"). But F0 has 5 reviews with 0 accepts — meaning reviewers keep finding real issues (revise). Astro-lead-formulation said F0 should be re-derived by audit_evidence.py, and the canonical/authoring divergence issue (CF-7/CF-13).
+
+Hmm. As a bounded worker, the safest valuable deliverable: an independent, evidence-backed review of a frozen class artifact at its current on-disk hash, with verdict + hard failures + falsifier. But if I write "accept" and the artifact has real defects, that's bad. I need to actually check.
+
+Let me first look at the current state of the artifacts and reviews. Since F1 is closest to closing G-FORM and is class-bound (AF-WCC-VAC-GEN), let me consider reviewing F1 at 9a8bd4c96800.
+
+But hold on: there may be an even better class-bound task that is uniquely mine: the A2 blocker I filed is GLOBAL. The "class-bound" instruction may be intended to push workers onto class-bound nodes (F/N/L) rather than GLOBAL audit. F1 review fits.
+
+Yet careful: reviewing F1 means my verdict counts toward the gate. The audit lead has already accepted F1 at this hash. If I independently review and find issues, I file revise with hard failures. Either way it's a valid contribution. But an "accept" that isn't well-grounded would be harmful.
+
+Let me look at the reviews to see the objections (worker-090, worker-019, worker-034, 078) and then verify each against the artifact. Let me check the latest states first.
+
+Also let me check whether there's an assignment in the map for F1 review targeted at some worker that is still open (to avoid duplicating). The gate needs "2 independent accepts at one frozen hash" — currently 1. A second review from me (worker-020) is exactly what's needed if I can honestly accept.
+
+Let me look at F1 artifact structure and reviews. First the reviews' verdicts/hashes.
+dsh: reasoning:
+Interesting — the current F1 artifact at 9a8bd4c96800 has multiple revise verdicts including blocking findings:
+1. Duplicate top-level YAML keys (revised_at x7) — machine-checkable defect.
+2. Future-dated timestamps (clock discipline, CF-6/CF-14).
+3. class_contract_pointer resolves into artifacts/... (binding hygiene).
+4. Quantifier/formula issues: AF_{I+}(M_D) dangling symbol; quantifiers.formal contradictions (HF-06).
+5. conclusion.statement_formal line 251 uses AF_{I+}(M_D) not defined.
+
+So F1 at this hash is NOT acceptable. The single "accept" by astra-lead-audit is at measured hash 9a8bd4c96800? Let me verify the lead-audit accept artifact and hash. Earlier list: `reviews/F1-review-lead-audit.json` (00:07) vs `-r2` (00:25, revise). The controller gate audit says F1 has 1 distinct accept: astra-lead-audit. That may be from the old hash. Hmm, the gate audit says "Review scan at these hashes: F1 [1 distinct accept reviewer(s) ['astra-lead-audit']]" at measured hash 9a8bd4c96800. But the -r2 is revise at 9a8bd4c96800? Let me check the artifact_sha256 of F1-review-lead-audit.json (the original accept).
+
+Anyway: the honest verdict on F1 at 9a8bd4c96800 is revise (duplicate YAML keys are mechanically detectable; future timestamps; dangling symbol). So a review by me would likely also be revise. That doesn't close the gate but it's still a valid class-bound task, though possibly redundant with 4 other revise reviews already in the corpus.
+
+Hmm. What would be the *most useful* bounded contribution? Think about the swarm state: the map is full of claims/reviews; the binding constraint is that canonical artifacts have real defects (duplicate keys, hash drift, clock skew). The G-FORM gate can't pass while F1 has revise verdicts. The lead-formulation wants to re-freeze once. My review as worker-020 adds a 6th revise — low marginal value unless it finds a *new*, decisive defect or confirms a machine-detectable one with a reproducible check.
+
+Alternative class-bound tasks with higher marginal value:
+
+(a) **N0 flat-space convergence order independent replication** (AF-WCC-SCALAR-SPH): G-NUM needs "N0 convergence order measured and independently replicated"; CF-2 says the replication returned ORDER DISAGREES and the harness invariant functional is leapfrog-specific; CF-10 says verdict PROVISIONAL, N0 active/unverified. An independent measurement/analysis that resolves *why* CNFEM order -0.077 and drift 1e1 vs expected — e.g., show the "order" estimate is invalid because the invariant functional is scheme-specific, or produce a corrected convergence measurement — would be a real contribution. This is class-bound and numerically verifiable. But requires understanding the numerics code and running it; doable but heavier.
+
+(b) **Class separation / class-binding calibration** — G-AUDIT unmet: "four of five class-binding gates are uncalibrated on audited-positive fixtures". Worker-17 had a class_binding_gate fixtures dir. A bounded task: calibrate the class-binding gate on audited-positive fixtures. But flash-19 got CF-5 census and others.
+
+(c) **F0 review** at current hash: G-F0 needs 2 accepts; 0 currently. F0 is a 4-class taxonomy (all classes). If F0's current canonical has defects, a review is useful. But many reviewers are on it.
+
+(d) **A2 blocker follow-up**: my own blocker F1 (tolerance) / F2 (two harness paths). It's GLOBAL though.
+
+The instruction says "Take one class-bound task". Perhaps it's about the *assignment* structure: the controller assigns tasks with class_id; my A2 card is class_id GLOBAL. But maybe I should look at "class-bound" as "a task tied to one of the four classes" and simply pick the best.
+
+Let me check the numerics group state to evaluate option (a) — it's the one where a single worker can produce a decisive, verifiable artifact (a corrected convergence-order replication), and it's genuinely class-bound (AF-WCC-SCALAR-SPH). Let me look at numerics/ contents, the N0 tests, the CONVERGENCE_PROTOCOL, and the replication verdict.
+
+Actually wait. Let me re-read the exact user instruction: "Read handoff/map and comms. Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit. worker=020"
+
+This is likely a generic swarm-worker instruction (the "bounded execution worker" role). The phrase "class-bound task" likely means: a task bound to a class_id in the map — one of the assignments. It says emit valid JSON with IDs, evidence, hash, falsifier; checkpoint; exit. So the deliverable is one event (or artifact + event). It doesn't necessarily require a huge task.
+
+Given my inbox assignment card is A2 (GLOBAL) and my prior A2 work is blocked pending adjudication, but the instruction explicitly says "class-bound", I think the intended flow is: look at the map for an open class-bound task, do it, emit.
+
+Let me check the numerics state to see if N0 replication is tractable. Let me look at numerics/ dir and the N0 gate proposal + replication verdict.
+dsh: reasoning:
+Wow — interesting: N0's flat_wave.py candidate was authored by deepseek-flash-20 (me!) according to that blocker record ("the live file is an unassigned candidate by deepseek-flash-20 (assigned A2)"). So I authored numerics/tests/flat_wave.py. That means I cannot review N0 independently (conflict of interest), but I could do a fix/measurement. Hmm, but I'm the author of record per that note. Also CF-12 mentions path double-assignment.
+
+Let me look at the current N0 state: `numerics/tests/n0_order_4rung.json`, `numerics/results/flat_wave_replication.json`, `runtime/state/controller_verification/N0_adjudication.md`. And `numerics/protocol/fixed_replication_verdict.json`.
+
+But also note: many other workers (lead-numerics) have been working hard on N0, with 4rung addendum, three-scheme reports, etc. Current status: CF-10 says N0 replication verdict PROVISIONAL. G-NUM unmet: "N0 convergence order measured and independently replicated" is criterion C8.
+
+Let me check the most recent N0 events to see what's happening right now. `numerics/tests/n0_order_4rung.json` (00:07), `numerics/protocol/lead_4rung_replication.py`, `numerics/protocol/report_cnfem_4rung.json`, `n0_gate_proposal_leadverify.json`. Let me read the replication verdict and the 4rung summary.
+
+Actually — I need to bound my scope. The prompt: "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit." Time budget is presumably ~small. Let me decide between:
+
+Option A: F1 independent review (class AF-WCC-VAC-GEN) — but I'd likely produce another revise; the marginal value is a *machine-checkable* defect confirmation with reproducible evidence. Since several revise verdicts already exist with the same blockers, my review adds little.
+
+Option B: N0 class-bound measurement task (AF-WCC-SCALAR-SPH) — I could do an independent check of something specific, e.g., verify the 4-rung convergence order of the frozen N0 script by running it fresh and computing the observed order + a control. But as author of flat_wave.py I'm conflicted for *review*, but not for *measurement/replication* if the script is now frozen and my run is independent of the author's run. Hmm, the "independent replication" criterion means a different agent ran it. I could be that agent if I'm not the author of the *current frozen* script. Let me check who authored the current flat_wave.py and whether it's frozen.
+
+Option C: Class-binding calibration for G-AUDIT: "four of five class-binding gates are uncalibrated on audited-positive fixtures". This is class-bound and bounded: build positive/negative fixtures and run class_separation / class binding gate, show discrimination. There's already `artifacts/worker-17/class_binding_gate/fixtures/` with a bad fixture. Let me check the state: is there a calibration artifact already? `runtime/bin/classsep_regression.py` passed. CF-15 says "four of five class-binding gates are uncalibrated on audited-positive fixtures". This could be a valuable, bounded, machine-verifiable contribution. But is it class-bound? It's about class binding across the four classes — it's A1/G-AUDIT (GLOBAL-ish).
+
+Option D: F0 review — class-bound to all four classes. The taxonomy is the root of class binding. But the canonical F0 keeps changing (276009f4 vs 66bf917b in gate text). Risky.
+
+Let me look at what's *actually* open and most valuable. Let me check the very latest map updates (updated_at 00:25:10) — maybe astra has issued new assignments at 00:2x in the map (the `assignments` list has 94 entries; only one for me). Let me list the most recent assignments (by event_id / created_at not in assignments list — the list lacks created_at, but I can grep the outbox of astra-lead-* or the events.jsonl tail). Let me look at recent events to see what the controller is asking for right now, and whether any class-bound assignment is unassigned/open.
+
+Let me check `research_map/events.jsonl` tail and the astra outbox tail for the newest directives.
+dsh: reasoning:
+Let me see the most recent astra events via the map/events (astra actor) to understand the current open work. Also, `comms/outbox/` has `astra-lead-*.jsonl` but not `astra.jsonl`... wait, earlier `ls` showed `astra.jsonl` in inbox (1470 bytes) not outbox. Let me look at events by astra in the last minutes.
+
+Actually, let me focus. Since worker-020 has an existing A2 assignment and found blockers, maybe the right move now — given "take one class-bound task" — is to find a class-bound task that nobody owns and that is clearly needed. Let me check the "unmet" lists across gates again:
+
+- G-F0: needs 2 accepts at current hash; taxonomy labelled draft_unverified by author; 9 taxonomy cases open (new class vs split) never dispositioned by lead.
+- G-FORM: F1 needs accepts; F2a/F2b have revise/fix issues; "no single frozen data class (s,d,norm) shared by F1/F2a/F2b, disabling C0=>C2 transfer".
+- G-LIT: basically ready (3 accepts + 19 spot checks; ledger flag cleared).
+- G-NUM: N0 replication PROVISIONAL; C8 unmet.
+- G-AUDIT: A0 no recorded reviewer verdict even though rubric exists; A1 needs 2 verdicts per target.
+
+Hmm, "A0 has no recorded reviewer verdict even though the rubric file exists" — but the gate audit says flash-21 revise on A0 at 00:23:29. And worker-19 was assigned A0 re-review at 00:07. So maybe A0 will have 2 verdicts soon.
+
+Given the swarm's density of activity, the highest-marginal-value class-bound contribution I can make quickly and honestly:
+
+**Option A2-follow-up (GLOBAL) is blocked** — skip.
+
+**A0 review?** No, that's GLOBAL.
+
+**F1 review (class-bound)**: produce a *decisive, machine-verifiable* review at the current hash. But there are already 4+ revise verdicts; the gate is stuck because the artifact has real defects. Adding another revise won't unstick it. Unless... I find that the objections are wrong and the artifact is actually acceptable (then my accept would give the 2nd accept). Let me actually check the top objections myself:
+
+1. Duplicate top-level YAML keys `revised_at` x7 — mechanically checkable: `yaml.safe_load` silently keeps last; `ruamel` or a custom parser detects duplicates. If true → hard fail (spec ambiguity). Let me verify.
+2. Future-dated timestamps — checkable.
+3. class_contract_pointer resolves into artifacts/... — checkable (binding hygiene).
+4. `AF_{I+}(M_D)` dangling symbol — checkable.
+5. quantifiers.formal contradiction at lines ~5x — checkable.
+
+If these are real (likely, given multiple independent reviewers converged), F1 is revise-bound. So writing a 5th revise is low value... BUT the swarm protocol values independent verdicts; the gate can't pass without the artifact being fixed anyway. The most valuable thing might be to *fix* the defect — but I'm not the author and the formulation lead owns the path; changing a canonical artifact would violate ownership ("do not edit another lead's canonical artifact").
+
+So maybe the genuinely useful bounded class-bound task is one where I produce new evidence, not another duplicate review.
+
+Let me look at **the "no single frozen data class (s,delta,norm) shared by F1/F2a/F2b"** issue in G-FORM unmet. That's a cross-class consistency problem, class-bound, and nobody may be on it. But it's under formulation lead's ownership and would require a proposal/patch, not a unilateral edit. I could produce a bounded *audit artifact* demonstrating the mismatch with hashes, e.g., a cross-schema data-class consistency report: extract quantifier/topology/regularity/genericity data-class tuples from F1/F2a/F2b canonical YAMLs and show they're not shared (or find they are). That's checkable and useful to close G-FORM. Hmm.
+
+But careful about "class-bound": the census/consistency audit would span 3 classes.
+
+Alternatively: **N0 class-bound**: run the frozen flat_wave/n0_order_4rung script and produce an independent 4-rung convergence-order measurement with a scheme-appropriate invariant, addressing CF-2's "harness invariant functional is leapfrog-specific". Actually the lead has already built `lead_4rung_replication.py`, `three_scheme_r1r5_summary.json`, `fixed_replication_verdict.json`. Let me read `numerics/protocol/fixed_replication_verdict.json` and `numerics/tests/replication_triage.md` to see what remains. If the remaining requirement is "an independent reviewer runs audit_convergence_report.py on both reports", I could do that — but I may be conflicted as flat_wave.py author. Hmm, but the note said flat_wave.py live candidate was authored by deepseek-flash-20 (me) at 23:2x. However, the artifact may have been re-frozen since with a lead as author of record. Let me check the current flat_wave.py header for author/class binding.
+
+Let me gather the N0 state quickly: read replication_triage.md, fixed_replication_verdict.json, and grep flat_wave.py header.
+dsh: reasoning:
+The N0 work is quite far along: root cause fixed, 4-rung order ~2.0 for three schemes, controller-verified run exists with a FIXED json, R1-R5 criteria, etc. The remaining step per map's N0 blockers: "worker 13 re-pins and re-runs the replication at the current hash; lead-numerics applies R1-R4 to the harness invariant check and fixes G3; an independent reviewer then runs audit_convergence_report.py on both reports." Some of that has been done (fixed_replication_verdict.json at 23:40). CF-10 still says N0 replication verdict is PROVISIONAL. Gate audit G-NUM says "the recorded protocol verdict reviews/G-NUM-protocol-review.json binds unbound (stale), so criterion C8 is the exact unmet requirement."
+
+So the binding gap for G-NUM: a *bound* protocol verdict — i.e., a review of the convergence protocol at its current measured hash 1e6cdf04d7a2. There's `reviews/G-NUM-protocol-review.json` but it "binds unbound (stale)". And worker-067's review at 00:22:56 was revise at 1e6cdf04d7a2 (numerics/CONVERGENCE_PROTOCOL.md#1e6cdf04d7a2...). Hmm.
+
+This is getting deep. I need to make a decision and bound my effort.
+
+Let me reconsider the exact instruction once more: "Read handoff/map and comms. Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit. worker=020"
+
+I think the safest interpretation that satisfies the instruction and is genuinely useful: perform an independent, bounded, class-bound verification task and emit the JSON event(s) with:
+- IDs (event_id, node_id, class_id, artifact path + sha256)
+- evidence (evidence_refs with path#sha256-prefix)
+- hash (artifact sha256)
+- falsifier (decidable)
+- plus checkpoint (run `research_map/checkpoint.py` and reference it)
+
+Which class-bound task can I complete *honestly and independently* within a short window, that adds new information rather than duplicating?
+
+Candidate: **N0 class-bound, AF-WCC-SCALAR-SPH — independent re-measurement of the 4-rung convergence order** by running the frozen module `numerics/tests/flat_wave_replication.py` (sha 8ade1cdc) fresh in this environment and checking that the reported orders reproduce; plus run `numerics/protocol/audit_convergence_report.py` on the reports if that's the missing independent step. This is a *replication* (new evidence), not a review, and I'd bind it to the frozen hash. Conflict check: flat_wave.py (the canonical artifact) was originally authored by me (deepseek-flash-20), but flat_wave_replication.py is the lead's/fixed module (author?). The N0 replication is exactly what G-NUM needs ("independently replicated"). However, I need to be careful: I was described as the author of the *candidate* flat_wave.py. The gate audit says "N0 replication verdict on disk is PROVISIONAL". An independent rerun by a different worker at the frozen hash would strengthen it. But the swarm may already have worker-13 doing this. The map blocker says "worker 13 re-pins and re-runs" — flash-12/13 are on N0. Let me check if `numerics/results/flat_wave_replication.json` is already the worker-13 rerun.
+
+Hmm. Risk of duplication.
+
+Alternative candidate with clearly unmet need and no owner: **G-AUDIT unmet** says "four of five class-binding gates are uncalibrated on audited-positive fixtures". This is a bounded, machine-checkable, class-bound task: build an "audited-positive fixture" set for the class-binding gates and show the gate accepts them (calibration), plus negative controls. But there's already `runtime/bin/classsep_regression.py` (passed) and worker-17's class_binding_gate fixtures. Let me look at what exists: `artifacts/worker-17/class_binding_gate/` — maybe the calibration work is mostly done by 17 and others. Let me check.
+
+Actually, let me step back and think about what "class-bound task" most plausibly means *in this swarm's own vocabulary*. Search the repo for the phrase "class-bound".
+dsh: reasoning:
+This is very informative. Note this line from the map (a worker-094 entry):
+
+```
+"summary": "No assignment card exists in comms/inbox for worker-094 (...). Taking one bounded class-bound task: W094B-F0-INDEP-REVIEW-01 = independent full-schema review of the canonical F0 taxonomy ... bound to the measured canonical sha256 276009f4f63dbf83. G-F0 currently has 0 hash-bound accept reviewers; ... Deliverable: reviews/F0-review-094.json + artifact/review/status events. Not duplicating the in-flight F1/F2a/F2b reviews."
+```
+
+So the established pattern for workers with no assignment card: "Taking one bounded class-bound task" = independent full-schema review of a canonical artifact, bound to the measured sha256, writing `reviews/<...>.json`, emitting artifact/review/status events, checkpointing, exiting. That's exactly what worker-094 did and what worker-007 did, and what my instruction likely expects.
+
+So my best move: take one bounded class-bound review task that is *needed* and *not duplicated*. Options:
+
+1. **F0 independent review** (covers all four classes): G-F0 currently has 0 hash-bound accepts at 276009f4. Worker-094 took this at ~00:20 (summary above). Others too (worker-082 revise, worker-16 revise, flash-21 inconclusive, flash-22 inconclusive, lead-audit revise). If I also review F0, verdict likely revise (there are known defects: canonical vs authoring divergence, 9 open taxonomy cases, clock skew). Worker-094 already in flight. Duplication risk high.
+
+2. **F1 independent review**: already ~6 reviewers; the artifact has mechanical defects. Duplication.
+
+3. **F2a review**: has 2 accepts already at b6123750 (lead-audit + worker-047). G-FORM needs 2 per class at one frozen hash — F2a satisfied. F2b has 4.
+
+4. **N0/G-NUM**: the remaining unmet is a *bound protocol verdict* + N0 replication not PROVISIONAL. There's an open, concrete, class-bound gap: "an independent reviewer then runs audit_convergence_report.py on both reports" and "protocol reviewed by audit". Let me check whether `audit_convergence_report.py` has been run and whether a bound review of `numerics/CONVERGENCE_PROTOCOL.md` at current hash exists. Worker-067 reviewed it at 00:22:56 → revise. astra-lead-numerics reviewed `three_scheme_r1r5_summary.json` at 00:22:16 → accept (but that's the author?).
+
+Hmm, what exactly is "criterion C8"? Let me look at `numerics/gates.py` or the G-NUM criteria. G-NUM gate definition in map (I printed only 3 gates). Let me check the full G-NUM gate entry. Also `runtime/state/controller_verification/N0_adjudication.md`.
+
+Actually, let me reconsider. The prompt says "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit." It's a bounded execution worker; the expectation is likely modest: do one useful, self-contained, verifiable unit.
+
+Given the F1/F2 classes are heavily reviewed already, and F0 needs an accept but has real defects, what about a **targeted, novel class-bound verification that no one has done**: e.g., verify the *class-binding gates calibration* for the audited-positive fixtures? Hmm.
+
+Wait — maybe there IS an unclaimed, clearly-needed class-bound item: **G-FORM's unmet "no single frozen data class (s,delta,norm) shared by F1/F2a/F2b, which disables the licensed C0=>C2 transfer"**. Multiple reviewers flagged the D0 disjunction ("Sobolev variant ... OR smooth-with-decay default") in F1/F2a/F2b (F2b was accepted by worker-007 with a warn, but F1/F2a revise verdicts cite it as a hard failure). This is *the* cross-class blocker. A bounded worker could produce an *adjudication artifact*: a machine-checked, hash-bound cross-schema comparison of D0/data-class across F1/F2a/F2b, showing whether a single frozen data class exists, and a concrete repair proposal (freeze Sobolev variant; register smooth-with-decay as a variant) — under `artifacts/worker-020/...`. That's class-bound (all three), novel, and directly actionable for G-FORM. But it's essentially proposing a fix to artifacts owned by lead-formulation; as a breadth worker, a proposal artifact is acceptable (the swarm's pattern: worker proposals, lead applies).
+
+However, "one class-bound task" + "emit valid JSON" suggests a smaller deliverable, and proposals are welcome.
+
+Alternatively, maybe I should check whether F2a at b6123750 truly is accept-clean. G-FORM says F2a needs accepts and has 2; so fine.
+
+Let me check if there's a *missing* second accept for F1 at a *new* hash: no, the artifact is stuck at 9a8bd4c96800 with revise.
+
+Hmm, let me think about the most valuable *bounded* contribution I can make that is (i) class-bound, (ii) new, (iii) machine-verifiable, (iv) not owned by another in-flight worker, and (v) completable now:
+
+**Candidate: independent cross-schema data-class consistency audit + minimal repair specification for F1/F2a/F2b (G-FORM unmet item 4).** Deliverable: `artifacts/worker-020/f1f2_dataclass_consistency.json` with:
+- For each of the three canonical schemas at their measured hashes: extract quantifiers.domains.D0, regularity.data_regularity, topology, norm, s, delta, genericity, visibility, conclusion_type.
+- Machine-check whether they denote the *same* data class; report the exact divergent fields with line numbers and hash.
+- State the minimal one-line-per-file repair and its verification command (the structural gate + class separation regression).
+- Falsifier: "if a reader can extract a single (s, delta, norm, topology) tuple common to all three artifacts at their measured hashes such that the D0 definition is a single disjunct, the finding is falsified."
+
+This directly addresses a named G-FORM unmet item and helps lead-formulation fix F1/F2a. It is class-bound (three classes). It emits evidence with hashes (canonical file sha256 + line refs). And I can compute it deterministically with a script. That's a strong candidate.
+
+But wait: risk of duplicating worker-15's convergence leakage scans? Not the same. F2b-review-034 already identified the D0 disjunction and the class_contract_pointer defect. F1-review-034 too. So the *findings* exist; my added value would be the *cross-schema machine comparison* and repair spec. Hmm, moderate.
+
+**Alternative candidate: bind the F1 `class_contract_pointer` defect to the canonical F0.** F1/F2a/F2b all point their `class_contract_pointer` at `artifacts/formulation/formulation_taxonomy.yaml#class_contracts.<CLASS>`, which is not the declared F0 artifact and whose canonical F0 (276009f4) has no `class_contracts` key. A bounded worker could verify this mechanically and produce a *rebinding proposal* with exact edits; but again, lead owns it.
+
+**Alternative: A0 review** (GLOBAL, not class-bound) — skip.
+
+**Alternative: class-binding gate calibration** (G-AUDIT unmet: "four of five class-binding gates are uncalibrated on audited-positive fixtures"). Actually, let me check `runtime/bin/classsep_regression.py` result and `artifacts/worker-17/class_binding_gate/MANIFEST.json`: it has 4 good fixtures (one per class: good_af_wcc_vacuum, good_af_scc_c2, good_af_scc_c0, good_af_wcc_scalar_sph) + 21 bad fixtures + EXPECTED.json + selftest_report. So maybe the calibration already exists via worker-17. Let me check the map/events for whether worker-17's calibration was accepted. The G-AUDIT unmet list may be stale (updated 00:24:40 though). Let me look at worker-17's report statuses.
+
+Let me quickly check: `grep -c` events from worker-17 about class_binding_gate, and whether any review accepted it.
+
+Actually, time to be decisive. Let me weigh:
+
+The swarm seems saturated with reviewers on F1/F2/F0. The numerics N0 is the least-saturated gate-blocking item with a concrete unmet criterion (C8: bound protocol verdict / independent replication). And N0 is class-bound (AF-WCC-SCALAR-SPH) — one of the four classes. My identity as the original author of flat_wave.py candidate could be a conflict for *reviewing flat_wave.py*, but I can do the *independent acceptance re-run* of the frozen replication module (flat_wave_replication.py, authored by lead/worker?) — hmm, actually who authored flat_wave_replication.py? Its triage was written by someone (assignment astra-adj2-02). Let me check its header. If it's not mine, an independent rerun is legitimate.
+
+But the more I think, the more I lean to the cross-schema data-class audit because it's bounded, deterministic, and addresses a named unmet gate item that nobody owns.
+
+Hmm wait, let me reconsider the instruction once more: "emit valid JSON with IDs evidence hash falsifier". This maps to the PROTOCOL `claim` event requirements: class_id, statement, conclusion_type, assumptions, falsifier, evidence_refs, artifact_refs. And `artifact` events: node_id, artifact_type, path, sha256, validation_status. So the deliverable is: an artifact + a claim/status event in my outbox, with IDs (event_id, node_id, class_id), evidence_refs path#sha256, artifact hash, and a falsifier. Then checkpoint.
+
+Let me now choose. I'll do the **F1/F2a/F2b cross-schema data-class consistency audit** ONLY IF I can make it genuinely novel and machine-checkable. But honestly, the F1/F2a/F2b D0 issue is already documented in ≥3 reviews; a fourth artifact restating it adds little.
+
+Let me instead check the **N0 C8 requirement** concretely — if the missing piece is a *bound review* of the convergence protocol at its measured hash, and if the protocol is actually sound, an independent hash-bound review would directly unblock G-NUM. That's high value and class-bound. Let me read `numerics/CONVERGENCE_PROTOCOL.md` (hash 1e6cdf04) and the existing G-NUM-protocol-review (stale binding) plus worker-067's revise. If the protocol has a real defect, I report revise; if it's sound, accept. Either way, new bound evidence.
+
+Wait — but G-NUM's criterion C8... Let me read the gate and the protocol review to see what "binds unbound (stale)" means.
+
+Let me gather that info quickly (read the G-NUM gate def from map, the protocol, the stale review header, worker-067's findings).
+dsh: reasoning:
+The G-NUM gate unmet list:
+1. "independent numerical-protocol review is not recorded (nobody may self-review)" — the recorded review is bound to a stale hash (no artifact_sha256 in the accept one?) — gate audit says "the recorded protocol verdict reviews/G-NUM-protocol-review.json binds unbound (stale), so criterion C8 is the exact unmet requirement."
+2. cnfem triage not closed → actually fixed (root cause found) per triage; maybe not closed in map.
+3. harness invariant functional leapfrog-specific → addressed by fixed_replication_verdict R4 note? Needs relabelling.
+4. audit lead asks 4th resolution → done (n0_order_4rung.json 4 rungs).
+5. cnfd own-energy drift 6.6e-8 no principled threshold → addressed by R2 (own drift 1.11e-14 passes 1e-12).
+
+So the top unmet: **an independent numerical-protocol review, hash-bound**, of `numerics/CONVERGENCE_PROTOCOL.md` at sha256 1e6cdf04d7a2. That is class-bound (AF-WCC-SCALAR-SPH), concrete, bounded, gate-blocking, and *nobody may self-review* — I'm not the author of the protocol (lead-numerics authored it presumably; and I'm worker-020, originally author of flat_wave.py candidate... hmm, does that matter for protocol review? The protocol is a distinct artifact; I didn't author it. But I did author the candidate flat_wave.py, which is the N0 artifact. The protocol review concerns the convergence protocol document; my flat_wave.py authorship is not the reviewed artifact. Still, to be safe, I must disclose potential conflict: I was named as the original author of the N0 candidate `numerics/tests/flat_wave.py`, which is one of the artifacts the protocol governs. I can review the *protocol* independently since I didn't author it, but I should disclose and check that the protocol doesn't merely validate my own candidate. Actually — hmm, the protocol governs the N0 measurement; being the author of one candidate implementation could bias. But the gate audit needs an independent reviewer; the protocol's author is lead-numerics. I'll disclose the relationship in the review.
+
+Wait: is it possible worker-067 already did this? Worker-067's review at 00:22:56 was of `numerics/CONVERGENCE_PROTOCOL.md#1e6cdf04d7a2...` with verdict revise. That's an independent protocol review at the current hash! So the unmet item may now be satisfied-ish (a revise, not accept). Let me read worker-067's review findings and check if the map has ingested it. The gate audit at 00:24:40 didn't mention worker-067's review — it said "the recorded protocol verdict ... binds unbound (stale)". Maybe worker-067's was ingested after. Let me check the map reviews for G-NUM-protocol and worker-067.
+
+If worker-067's review is revise with real defects, then the protocol needs fixing — a *repair proposal* would be the useful class-bound task. If the revise findings are wrong (false positives), then a *second, independent accept* would unblock.
+
+Let me read worker-067's review now.
+dsh: reasoning:
+So at the current protocol hash 1e6cdf04d7a2:
+- worker-081: accept (00:21:40)
+- worker-067: revise (00:22:56)
+
+G-NUM needs an *independent numerical-protocol review* recorded. With one accept (worker-081) at the current hash, a second independent accept would satisfy "two independent verdicts"? The gate criteria says "protocol reviewed" (not necessarily 2). The gate audit says "the recorded protocol verdict reviews/G-NUM-protocol-review.json binds unbound (stale), so criterion C8 is the exact unmet requirement". Hmm, C8 is presumably in `numerics/gates.py` criteria list — let me check. The gate audit's statement suggests the *stale* verdict is the problem. But now worker-081 accepted at 1e6cdf04 — maybe after the audit snapshot. Let me look at worker-081's review and worker-067's findings to understand the true state.
+
+Let me read worker-067's review (revise) and worker-081's review (accept). If worker-067 found real defects (e.g., protocol numbers don't match frozen evidence), then the accept may be unsafe and I could adjudicate: check each claim. If worker-067's objections are already addressed/incorrect, a second independent review with a hash-bound verdict adds value.
+
+Let me find those files.
+dsh: reasoning:
+Now this is very interesting and current: worker-081 initially accepted the protocol (1e6cdf04d7a2), worker-067 revised it on a textual/semantic finding, and worker-081 then wrote an adjudication (adjudication.json) that *withdraws its own accept* and concludes C8 remains unmet because the protocol's section 3.4 defines spatial measurement at fixed dt=1e-4, but the filed evidence (4-rung order claim) was measured at cfl=0.5 (dt = 0.5*dr), i.e., a mixed temporal-spatial refinement. The claim "spatial order 2" is not established by the filed evidence; the order-2 conclusion is recoverable via a fixed-dt study (E2, dt=1e-3, order 2.000/1.999/2.001) but that study isn't filed as the certification. Remedy: file the fixed-dt study (E2), keep cfl=0.5 as a supporting control, amend section 3.4.
+
+So the **binding, class-bound gap** right now (G-NUM criterion C8) is: the protocol's spatial-order certification methodology is not satisfied by the filed evidence. A bounded worker could:
+- **Option 1**: Independently reproduce the fixed-dt study (E2) at dt=1e-3 (and ideally dt=1e-4) across dr=0.2/0.1/0.05/0.025 for the three schemes, using the frozen module hash 8ade1cdc, and file it as the missing order-certification evidence artifact under `artifacts/worker-020/...` (not editing canonical numerics files). Then a lead can promote it. This is genuinely new evidence that directly addresses the C8 gap, is machine-checkable, class-bound (AF-WCC-SCALAR-SPH), and re-runnable.
+
+This is a great bounded task! Let me check:
+- Does the frozen module `numerics/tests/flat_wave_replication.py` (sha 8ade1cdc) support a fixed-dt mode? Worker-081's E2/E3 evidence suggests yes: "a protocol-style fixed dt=1e-3 study at dr=0.2/0.1/0.05 does yield order 2.000/1.999/2.001". Let me look at the module's CLI/API.
+- Runtime: E2 dt=1e-3 across 3-4 rungs for 3 schemes — worker-081 says dt=1e-4 costs 60000 steps: lffd 0.6s, cnfd 17s, cnfem 16s per rung. dt=1e-3: t_end=6 → 6000 steps; that's 10x cheaper (~0.06s/1.7s/1.6s per rung). Very feasible. Even dt=1e-4 4 rungs × 3 schemes ≈ 4*(0.6+17+16) ≈ 134s. Feasible too.
+- Do I have compute? CPU only, numpy. Yes.
+
+But wait — is worker-081 or another worker already filing the E2 study? Worker-081's adjudication mentions "constructive_remedy" but let me check if artifacts exist for the fixed-dt study (maybe worker-081 filed it). Let me search for fixed-dt files: `artifacts/worker-081/`, `artifacts/worker-067/`, and grep for "fixed_dt" / "dt=1e-3" in numerics/artifacts.
+
+Also let me check the map events after 00:27 for any assignment to do exactly this. The map updated_at 00:25:10; my current time ~00:29-00:30. Let me grep recent outboxes for worker-081/067/lead-numerics for "fixed dt" / "E2".
+
+This is the key check before committing. Let me also confirm the artifact hash of the frozen module and its interface.
+dsh: reasoning:
+There's a live contest at protocol hash 1e6cdf04:
+- worker-081: accept (then withdrew in adjudication)
+- worker-067: revise (F1: protocol §3.4 bans dt∝h runs as spatial evidence; the certified order claim is cfl=0.5).
+
+Worker-081's adjudication (00:28) concludes the F1 finding is confirmed and needs a *fixed-dt study filed*. The remedy: file the fixed-dt study E2 (dt=1e-3, dr 0.2/0.1/0.05/0.025, all three schemes, order ≈2) as the order-certification evidence, keep the cfl=0.5 4-rung as a supporting control.
+
+**So the highest-value bounded class-bound task right now is exactly: produce the independent fixed-dt spatial-order certification study at the frozen module hash, under artifacts/worker-020/, with hash-pinned evidence, a falsifier, and a claim/artifact event, then checkpoint.**
+
+But check for collisions: is worker-081 filing E2 too? Worker-081's adjudication README may propose it but worker-081's task W081-N0-F1-ADJ-01 was "adjudication", read-only on canonical paths, writes only under its own dir. Its remedy list is for the lead. Did worker-081 run E2 as part of adjudication? Its adjudication.json contains E2/E3 measurements (it says "E2: a protocol-style fixed dt=1e-3 study at dr=0.2/0.1/0.05 does yield order 2.000/1.999/2.001"). Let me read worker-081's adjudication.json more fully — it may already contain the E2 study data. If worker-081 already measured E2, then filing a *certification artifact* is still a distinct deliverable (the lead needs a filed study; worker-081's is an adjudication artifact, possibly reusable). But it might be considered duplicating.
+
+Also check: `numerics/protocol/temporal_subdominance_control.py` and `error_field_orthogonality_check.py` exist — related to E1/E3. And worker-051's `n0_axis_direct` report. Let me look at those; maybe fixed-dt data already exists.
+
+Actually the cleanest, most valuable, non-duplicative contribution: **an independent fixed-dt 4-rung spatial-order study + dt-refinement control, run on the frozen module hash 8ade1cdc, filed as a hash-pinned artifact under artifacts/worker-020/, explicitly labelled "order-certification evidence candidate for G-NUM C8", together with the exact protocol §3.4 amendment needed.** If worker-081 already has E2 numbers, mine are an independent replication of those numbers (which is exactly what "independently replicated" means for G-NUM!). G-NUM criteria: "flat-space convergence order measured AND independently replicated within tolerance". So an independent replication of the fixed-dt study is precisely on-target.
+
+Let me now:
+1. Read `flat_wave_replication.py` API/CLI to see how to run fixed-dt studies (the E2/E3 claims suggest worker-081 ran it somehow — maybe via CLI options).
+2. Read worker-081's adjudication.json to see the exact commands/measurements and avoid double-claiming; and to know expected numbers for comparison.
+3. Check if `numerics/protocol/canonical_temporal_control.py` already does fixed-dt.
+
+Let me read those.
+dsh: reasoning:
+Worker-081's adjudication confirms:
+- C5: no filed fixed-dt study (none_found).
+- E2: a protocol-style fixed dt=1e-3 study at dr=0.2/0.1/0.05 does yield order 2.000/1.999/2.001 for the three schemes.
+
+So the missing filed evidence is exactly a fixed-dt spatial order study. This is the best bounded class-bound task. Let me check what E2/E3 in worker-081's adjudication contain (their raw numbers and how they ran it) so I can:
+- Replicate independently (fresh run, own script under artifacts/worker-020/) and compare to worker-081's numbers within tolerance → that's an independent replication.
+- File it as the certification evidence candidate.
+
+Let me read E1/E2/E3 and C8 fields of the adjudication. Also determine how worker-081 ran fixed dt: probably by importing `flat_wave_replication` classes and stepping manually, or the harness has a `dt` parameter. Let me check the module's API: `grid`, `PulseExact`, `CrankNicolsonFEM`, etc. The module's main runs 3-rung studies at cfl=0.5. Worker-081's adjudicate_f1.py (20KB) likely implements E1/E2/E3 by importing the module. I should write my own runner (independent code path) using the same frozen *schemes*, so it's an independent measurement. But careful: "independent replication" means an independent agent/implementation. Using the same frozen module is expected (pin 8ade1cdc), but I should not copy worker-081's script.
+
+Also check `numerics/protocol/canonical_temporal_control.py` and `artifacts/flash-12/n0/protocol_compliance.py` — the latter may already implement fixed-dt checks. Let me look before writing.
+
+Plan:
+1. Read the API of `flat_wave_replication.py` (grid, error norm, schemes, exact solution; how main computes l2 errors and order).
+2. Write `artifacts/worker-020/n0_fixed_dt_c8/run_fixed_dt_study.py`:
+   - import the frozen module by path with hash guard (assert sha256 == 8ade1cdc...).
+   - For each scheme in {lffd, cnfd, cnfem}: run fixed dt ∈ {1e-3, 1e-4} at dr ∈ {0.2, 0.1, 0.05, 0.025} (cfl varies: dt=1e-3 with dr=0.2 → cfl=0.005; dt must satisfy stability: lffd explicit leapfrog needs dt <= dr (CFL 1) → dt=1e-3 << dr; fine).
+   - Compute L2 error norm as the harness does, fit order via least squares and pairwise orders, uncertainty R5.
+   - Also run dt-refinement control at fixed dr=0.05: dt from 1e-2 down to 1e-4 or so, showing temporal contribution subdominant (<2%) at dt=1e-3/1e-4.
+   - Negative control: none? Could include a deliberately wrong-dt (cfl=0.9 for cnfd?) Hmm, keep it bounded. Maybe include a "mixed-order" control: cfl=0.5 study showing the same orders but classified mixed. Worker-081 has that.
+3. Emit JSON result artifact + sha256; event(s) to my outbox: artifact event with path+sha256+validation_status=unverified, claim? A `claim` with class_id AF-WCC-SCALAR-SPH, conclusion_type likely "numerical_evidence" (not theorem), statement, falsifier, evidence_refs with path#sha256-prefix, artifact_refs. Also a `status` event.
+4. Run checkpoint (`python3 research_map/checkpoint.py`) and include checkpoint ref.
+5. Exit.
+
+Check time budget: The task is bounded; dt=1e-4 for cnfd/cnfem at 4 rungs = 60000 steps each ≈ 17s+16s per rung (per worker-081) → 4*(17+16)=132s plus lffd 2.4s ≈ 2.5 min. dt=1e-3: 6000 steps ≈ 1.7+1.6s per rung → ~15s total. Total with both ~3 min. Fine. Maybe run dt=1e-4 only at 3 rungs to save time, or all 4 (still ~2 min). OK.
+
+But first, let me verify the API and confirm how to compute errors. Let me read the module's key parts: `PulseExact`, `grid`, scheme classes, error norm function, and main's study loop.
+
+Let me also verify the environment has numpy 2.2.6. Yes presumably.
+
+Let me read the relevant portions of flat_wave_replication.py.
+dsh: reasoning:
+Let me read the key functions: `run_case`, `l2_error`, `fit_order`, `pair_orders`, `order_study`, `make_factory`, and the scheme constructors to see how dt is set. This determines how to run fixed dt.
+
+Note: `make_factory(scheme, cfl, pulse)` probably creates a solver with dt = cfl*dr. For fixed dt, I can construct solvers directly: `SCHEMES[scheme][0](r, dt, psi0, pt0, ptt0)` then step until t_end. Let me read `run_case` and `order_study` to replicate the error definition (sample_every, reference from PulseExact at final time, l2 norm).
+dsh: reasoning:
+The module has `order_study(scheme, dr_values, cfl, ..., dt_rule=...)` with a `dt_rule` parameter — exactly for fixed-dt studies. So I can run:
+`order_study('cnfd', dr_values=[0.2,0.1,0.05,0.025], dt_rule=lambda dr: 1e-3)`.
+
+That's an independent, clean way. The error is the L2-integral norm of the final state vs exact, as the harness.
+
+I'll write my own runner under `artifacts/worker-020/n0_fixed_dt_c8/` that:
+1. Hash-guards the frozen module (8ade1cdc...) and imports it.
+2. Runs fixed-dt order studies:
+   - dt=1e-3, dr ∈ {0.2,0.1,0.05,0.025} × 3 schemes (12 runs; cnfd/cnfem at 6000 steps each → ~1.7s/1.6s per run → ~20s total).
+   - dt=1e-4, dr ∈ {0.2,0.1,0.05,0.025} × 3 schemes (12 runs; 60000 steps; ~17/16s each → ~135s total + lffd ~2.5s). Total ~3 min. Acceptable. Maybe do 3 rungs for 1e-4 to bound time (dr 0.2/0.1/0.05) — worker-081's E3 used dt=1e-4 at dr=0.05/0.1 maybe. Let me do 4 rungs; 2.5 min is fine.
+3. dt-refinement control at fixed dr=0.05: for dt ∈ {1e-2, 5e-3, 2e-3, 1e-3, 5e-4, 1e-4} measure error; compute relative change between successive and the temporal contribution at dt=1e-3 and 1e-4 vs dt=1e-4 baseline. Check subdominance (<2% per protocol's temporal subdominance rule).
+4. Compare with worker-081's E2 numbers (order 2.000/1.999/2.001 at dt=1e-3, dr 0.2/0.1/0.05) — independent reproduction within tolerance.
+5. Negative control: `FrozenSolver` (null) order ~0, and a deliberately wrong fixed-dt? Hmm — a good negative control for the harness: run fixed-dt study with a "frozen" solver (state doesn't advance) → order should be ~0 (error does not decrease). Actually error at final time for frozen solver = ||psi0 - psi_exact(t_end)||, independent of dt but depends on dr via discretization of psi0... Maybe order ~2 as well (initial data discretization is 2nd order). Not a good control.
+   Better negative control: a *first-order-in-time* run? Not available in the frozen module. 
+   Alternative: verify the fixed-dt spatial study is not accidentally measuring temporal error: the dt-refinement control at fixed dr (if refining dt from 1e-3 to 1e-4 changes error by <2%, temporal error is subdominant → the dr-refinement order is spatial). That's the key control and it's in the plan.
+   Also controls: (a) protocol R5 pairwise agreement; (b) monotonicity; (c) the null `FrozenSolver` sanity that the harness reports ~0 order (module's `controls()` may have this; check). Let me check `controls()` — line 546.
+6. Emit JSON with all raw numbers, hashes, and a `falsifier` field.
+7. Emit outbox events.
+
+Important: do NOT edit canonical numerics files. Write only under `artifacts/worker-020/`.
+
+Let me check `controls()` and `HARNESS_CONFIG` quickly, then check the tests run fine (selftest) as a baseline.
+
+Also I should double check the meaning of "fixed dt=1e-3" being protocol-compliant: protocol §3.4 says spatial order measured with fixed small dt (1e-4) so RK4 error negligible. But the schemes here are leapfrog/CN, second order in time. With dt=1e-4 and t_end=6, that's 60000 steps. Worker-081's E2 used dt=1e-3 and got clean order ~2 at 3 rungs. I'll do dt=1e-4 for 4 rungs to be closest to protocol (and dt=1e-3 for a cheaper secondary), plus the dt-refinement control at dr=0.05 showing 1e-3→1e-4 change <2%.
+
+Hmm wait: protocol says dt=1e-4 fixed. But is dt=1e-4 with dr=0.025 stable for all schemes? lffd explicit leapfrog: dt <= dr/c (c=1) → 1e-4 << 0.025, fine. CN implicit unconditionally stable, fine.
+
+Note error magnitudes: at dt=1e-4, dr=0.025, error may approach machine precision? Let's estimate: at cfl=0.5, dr=0.025 → err ~? The 4-rung study at cfl=0.5 gives ~ order 2; errors maybe 1e-4..1e-6. At dt=1e-4 fixed, spatial error dominates and should still be ~ similar magnitude. Fine.
+
+Let's also consider: "independent replication" — my run uses the same frozen module + same `order_study`, but I write my own driver. The measurement is deterministic; results should match worker-081's E2 within floating point (bitwise if same config/rungs). That's fine — it is a replication of a *specific numeric claim*, and the independence is at the level of the runner/hash-guard/controls. To add value beyond copy, I'll also:
+- extend to 4 rungs at dt=1e-4 (the protocol's exact spatial methodology at 4 rungs) — this is *new* evidence not in worker-081's adjudication (they used E2 at 3 rungs dt=1e-3, E3 dt=1e-4 "where affordable" per remedy).
+- file it as a reusable artifact with a script + JSON + README + sha256, so the lead can promote it as C8 evidence.
+
+That's a solid, bounded, class-bound deliverable.
+
+Let me check `controls()` and `HARNESS_CONFIG`, and run a quick selftest. Then write the script.
+
+Actually, one more consideration: worker-051's `n0_axis_direct` and `numerics/protocol/canonical_temporal_control.py` / `error_field_orthogonality_check.py` / `temporal_subdominance_control.json` may already contain the dt-refinement control. Let me peek at temporal_subdominance_control.json to avoid duplicating and to reference it. And artifacts/flash-12/n0/protocol_compliance.json.
+
+Let me read those quickly.
+dsh: reasoning:
+There's already `numerics/protocol/temporal_subdominance_control.json` (astra-indep-1) with a fixed-dt ladder [0.001, 0.0005], and it is *filed*. Let me read the whole thing: it has a pre-registered admissibility rule and results. If the fixed-dt ladder already exists and satisfies rule_a/rule_b, then the C8 gap may be nearly closed — worker-081's C5 said "constant_dt_le_1e-3_studies: []" — but maybe worker-081's scan only looked at `numerics/tests/n0_order_4rung.json` and `numerics/results/flat_wave_convergence.json`, not at `numerics/protocol/temporal_subdominance_control.json`. Hmm! That would be a significant finding: the fixed-dt evidence may already be filed at `numerics/protocol/temporal_subdominance_control.json`.
+
+Let me read the full temporal_subdominance_control.json. If it contains the fixed-dt spatial ladder with orders and the temporal subdominance control, then the *right bounded task* is to independently verify that artifact (hash-bound), check it satisfies protocol §3.4 and the pre-registered rules, and file a verification. That's even better: it could resolve the 081-vs-067 dispute with a decisive artifact-level check.
+
+Let me read it fully now.
+dsh: reasoning:
+Excellent. The lead-numerics has already produced (at 00:26:49) `numerics/protocol/temporal_subdominance_control.json` — a protocol-§3.4-compliant fixed-dt ladder at dt=1e-3 and 5e-4 across 4 rungs for all three schemes, plus temporal sweeps and pre-registered rules. This directly addresses worker-067's F1 and worker-081's C5 "no filed fixed-dt study".
+
+So my planned "file the fixed-dt study" is ALREADY done by the lead (as of 00:26:49, right around now). Good thing I checked. That would have been duplicate work.
+
+Now, the fresh gap: this new artifact needs **independent verification/replication** (nobody may self-review; the generator is astra-lead-numerics). The G-NUM criterion "independently replicated" and "protocol reviewed" — an independent worker can:
+1. Hash-bind the artifact (`numerics/protocol/temporal_subdominance_control.json`).
+2. Independently re-run the fixed-dt ladders (dt=1e-3 and 5e-4, 4 rungs, 3 schemes) at the frozen module hash and compare the L2 errors / fit orders to the filed numbers (bitwise or within tight tolerance).
+3. Machine-check the internal consistency of the filed artifact: recompute fit_order/pair_orders/SE/delta from the rows; verify the pre-registered rules are applied as stated (rule_a pass/fail, rule_b semantics — note rule_b is defined as "temporal excess at dr=0.2: e(dt=0.1)/e_plateau - 1 <= 0.05" in the rule text, but the checks report `dr_of_worst=0.05, worst_temporal_excess_at_cfl` — the artifact applied rule_b at dr=0.05, not dr=0.2! That's an inconsistency worth checking: the pre-registered rule says dr=0.2, but the reported rule_b uses the worst over dr values (0.05). Also for cnfd, rule_b_pass=false → admissible_as_spatial=false. Hmm, and the rule text says "temporal excess ... <= 0.05" but reported excesses are ratios like 1.258 (i.e., excess = e_cfl/e_plateau - 1, which is 1.258 = 126% — matches definition). For dr=0.2, cnfd excess = 0.014913/0.006663 - 1 = 1.2382. They reported worst = 1.258 at dr=0.05. So they applied max over temporal_dr [0.2, 0.05], not just 0.2. Fine—stricter.
+
+4. Check the *derived* claims: `admissible_as_spatial` for cnfd=false, cnfem/lffd=true; overall all_schemes_admissible=false. And note the important subtlety: for cnfem, the temporal sweep is *non-monotone* (error decreases as dt → 0 from below? e_at_cfl=0.00184 < e_plateau=0.00665, so excess is negative → temporal error cancels spatial error). The verdict says "constant-CFL ladder measures the spatial order (temporal contribution below the pre-stated tolerance)" — that's true in magnitude, but the mechanism is cancellation, and worker-081's adjudication argued the fixed-dr dt-refinement *at cfl=0.5* showed >2% changes (E1: 22.4%/41.8%/143.4% per measurement). There's a tension: lead's rule_b looks at |excess| ≤ 0.05 at dr=0.2/0.05; worker-081's E1 measured relative changes from refining dt at fixed dr=0.05 of 22-143%. Wait, those are different quantities: E1 compares cfl=0.5 error to dt=1e-4 error at the same dr (which for cnfem is 0.28x → 143% relative change... hmm, "143.4% per measurement" means the error *increased* 2.4x as dt was refined). The lead's rule_b compares e(dt=0.1) vs e_plateau at dr=0.2 → 5% threshold; for cnfem e_at_cfl is *below* plateau → excess negative. So both are consistent: at cfl=0.5 the temporal error partially cancels the spatial error; refining dt increases error toward the plateau, i.e., the constant-CFL run underestimates the true spatial error by up to 2.4x at dr=0.1 for cnfem. Is that "temporal subdominant"? No! Subdominance should mean |e_cfl - e_plateau| / e_plateau is small; for cnfem at dr=0.1: e_cfl=0.000465 vs plateau e=0.001664 → excess = -0.72 (72% below plateau). The rule was only evaluated at dr=0.2 and dr=0.05 (temporal_dr=[0.2,0.05]) → at dr=0.05 cnfem excess = -0.718, which the artifact *passes* because... wait rule_b_pass=true for cnfem with worst_temporal_excess = -0.718. Their rule as implemented apparently checks `excess <= 0.05` (one-sided: only penalizes positive excess) rather than `|excess| <= 0.05`. The stated rule text: "e(dt=0.1)/e_plateau - 1 <= 0.05" — one-sided, so negative (cancellation) passes by the *letter* of the pre-registered rule. But the *purpose* of the rule is to establish that the constant-CFL run measures spatial order; a -72% deviation means the cfl=0.5 run does NOT measure the spatial error magnitude — it measures spatial + cancellation. Yet the fit order still comes out ~2 because the cancellation factor varies slowly with dr.
+
+Hmm! This is a genuinely interesting, decisive finding candidate:
+- The filed lead artifact `temporal_subdominance_control.json` states rule_b one-sided (`<= 0.05`) and applies it, passing cnfem and lffd despite |excess| up to 0.72/0.23 at dr=0.05 — i.e., the constant-CFL ladder's per-rung errors differ from the spatial plateau by 72%/23%, not <5%. For cnfd, excess is positive 1.26 → fails. So the rule as pre-registered is asymmetric and the "subdominance" conclusion for cnfem/lffd is an artifact of one-sidedness.
+- Yet the *fix* is already in the artifact: the fixed-dt ladder (B) is protocol-compliant and yields order ≈ 2.00 for all three schemes at both dt=1e-3 and 5e-4. So the certified order claim IS recoverable from B, independent of the rule_b question.
+- The overall `all_schemes_admissible: false` and cnfd verdict "NOT admissible as spatial" would demote the cnfd constant-CFL ladder, but the fixed-dt ladder saves the order claim.
+
+So a bounded, valuable independent verification task: **independently re-run and verify the fixed-dt ladder portion of `temporal_subdominance_control.json` (B ladders) at the frozen module hash, recompute all derived statistics from rows, and check the pre-registered rule application — including the one-sided rule_b asymmetry.** Deliverable: `artifacts/worker-020/n0_temporal_control_verify/` with script+JSON, events, checkpoint.
+
+This is class-bound (AF-WCC-SCALAR-SPH), gate-relevant (G-NUM C8), non-duplicative (the lead generated the artifact; nobody has independently replicated it yet), and bounded (fixed-dt B ladders re-run: dt=1e-3 4 rungs ×3 schemes ≈ 20s; dt=5e-4 4 rungs ×3 schemes: 12000 steps → lffd ~0.5s, cnfd ~3.5s, cnfem ~3.2s per rung ≈ 30s; total < 1.5 min). Plus recompute statistics and the temporal sweeps? The temporal sweeps (C) are the expensive part (6 points × 2 dr × 3 schemes, up to 1920/7680 steps) — maybe ~30-60s more. I can replicate B fully and C selectively.
+
+Wait, but hold on: is this "reviewing" the lead's artifact? That's allowed — an independent replication/verification is exactly what G-NUM needs, and "nobody may self-review" implies others must. I'm not the author of `temporal_subdominance_control.py` (lead-numerics is). I *am* the original author of the candidate `numerics/tests/flat_wave.py`, but that's a different artifact; still, I must disclose. Actually let me check who wrote temporal_subdominance_control.py — header. If it's astra-lead-numerics, I'm clear.
+
+Hmm, one concern: my earlier A2 work and the N0 flat_wave.py candidate authorship. The map blocker said the flat_wave.py candidate was by deepseek-flash-20. This gives me a potential conflict of interest for N0 reviews. But an independent *replication* of a *different* artifact (temporal control by lead-numerics) is not self-review. And G-NUM needs a third-party replication. I'll disclose the relationship in the artifact.
+
+Decision: Go with this. Steps:
+
+1. Check the author/hash of `numerics/protocol/temporal_subdominance_control.py` and hash the JSON artifact. Verify the JSON hash.
+2. Write `artifacts/worker-020/n0_temporal_control_verify/verify_temporal_control.py`:
+   - Args: path to JSON artifact, expected hashes; import frozen module with hash guard.
+   - Recompute from the filed rows: fit_order, pair_orders, pair_half_range, least_squares_se, delta_R5 (max of SE and pair half range), monotone, within_band; compare to filed numbers (tolerance 1e-12).
+   - Independently re-run the fixed-dt B ladders (dt=1e-3 and 5e-4, 4 rungs, 3 schemes) using `order_study(scheme, dr_values, dt_rule=...)` from the frozen module; compare each row's l2_error (relative tolerance ~1e-9, or bitwise) and recomputed fit_order to filed.
+   - Re-run the temporal sweeps C for the two dr values and 6 dt points per scheme? That's the expensive part but doable: for dr=0.2 (60+120+240+480+960+1920 = 3780 steps) trivial; for dr=0.05 (240..7680 steps, sum ~15120 steps) cnfd/cnfem ~4s each per sweep → 8 runs per scheme... Actually each sweep is one run per dt point. Total steps per scheme: dr=0.2 sum=3780; dr=0.05 sum=15120. cnfd/cnfem cost ~ (steps/60000)*17s → dr=0.05: 15120/60000*17 ≈ 4.3s per diag sweep... wait each dt point is a separate run: cost ∝ steps. Sum over points = 15120 steps → 4.3s. Times 2 dr × 3 schemes ≈ 30s. Fine, do it.
+   - Recompute checks: rule_a (|p_fixed - p_cfl| <= 0.25), rule_b as *stated* (excess at dr=0.2 <= 0.05) and as *applied* (worst over temporal_dr), plus the symmetric |excess| check as an independent finding. Report both.
+   - Controls: (a) hash guard; (b) a deliberately perturbed row → the recomputation check must fail (negative control of my own verifier); (c) frozen-state null control (order ~0) maybe.
+   - Output JSON with all comparisons + verdicts + falsifier + hashes.
+3. Run it, capture output, sha256 the artifact(s).
+4. Write README.md for the artifact dir.
+5. Emit events to `comms/outbox/deepseek-flash-20.jsonl` (artifact + claim/status + checkpoint) — note: outbox currently has `deepseek-flash-20.jsonl` as a file (not a dir). Also the protocol says write one JSON object per line to `comms/outbox/<agent>.jsonl`.
+6. Run `python3 research_map/checkpoint.py` (or is it invoked differently? PROTOCOL says `python3 research_map/checkpoint.py`). Capture checkpoint id/hash.
+7. Exit.
+
+Note on "class-bound": class_id = AF-WCC-SCALAR-SPH, node N0, gate G-NUM.
+
+Also: the checkpoint script may ingest outbox first? Let me check `research_map/checkpoint.py` behavior. In PROTOCOL: `python3 research_map/comms.py ingest` pulls outbox→events.jsonl; checkpoint.py does "full 15-min checkpoint snapshot". My earlier worker-020 checkpoint event referenced `runtime/state/checkpoints/ckpt-...json`. Let me look at checkpoint.py briefly to know what it does and whether it ingests. Also note map.lock exists (a stale lock file? It's 0 bytes, modified 00:25). If another process holds it, checkpoint may block. We'll see.
+
+Let me first check the author header of temporal_subdominance_control.py and hash the artifact; also verify the artifact is not being modified concurrently (mtime). Then write my verifier.
+
+Let me also check `numerics/protocol/canonical_temporal_control.py` — maybe it's the generator of the artifact. Just to know the author.
+dsh: reasoning:
+Important: `temporal_subdominance_control.json` was generated at 00:26:49 and is NOT yet ingested into the map (0 references). The lead-numerics is still actively working (canonical_temporal_control.py at 00:28). So the artifact is *very* fresh and un-ingested. Perfect for an independent verification task — but I must be careful not to race: the file might be regenerated. I'll pin the hash 334f5b71e0d53ab6 in my verification and state that my verification binds to that hash.
+
+Also there's a second lead control, `canonical_temporal_control.py` (00:28, still being written) that asks the same question of the *canonical* flat_wave.py. It may produce another artifact shortly. My verification should bind to the file I hash, and note the generator hash ee14a3ca... (temporal_subdominance_control.py).
+
+Hmm wait, actually: `temporal_subdominance_control.py` (12714 bytes) is the generator of the JSON; `canonical_temporal_control.py` (7366) is a separate, newer control. Let me check whether temporal_subdominance_control.py imports canonical module etc. Not critical.
+
+Now, is 334f5b71... the final version? mtime 00:26, now ~00:31. The lead might still update it. I'll bind to the hash I read and note that if the file changes, my verification is void (standard falsifier). Also my event will cite both the JSON hash and the generator hash.
+
+Before writing, let me define the verification precisely and make it strong:
+
+**Deliverable**: `artifacts/worker-020/n0_fixed_dt_control_verify/` containing:
+- `verify_fixed_dt_control.py` — verifier script.
+- `verify_fixed_dt_control.json` — results.
+- `verify_fixed_dt_control.log` — run log.
+- `README.md` — summary, conflicts, falsifier, hashes.
+
+**Verifier design** (two independent layers):
+
+A. *Row recomputation* (in-algorithmic check on the filed artifact):
+   - For each scheme, each ladder A/B, recompute from the filed `rows`: fit_order (np.polyfit on log-log), pair_orders, pair_half_range, least_squares_se, delta_R5 = max(SE, pair_half_range), monotone, within_band (|p-2|<=0.3).
+   - Compare to filed values with tolerance 1e-9 relative.
+   - Recompute `overall.p_*_by_scheme` from ladders.
+   - Check `checks.rule_a` (|p_fixed − p_cfl| ≤ 0.25) and `checks.rule_b` both as literally stated (dr=0.2, excess ≤ 0.05) and as implemented (worst over temporal_dr). Report discrepancies.
+
+B. *Fresh independent re-run* on the frozen module (sha256 8ade1cdc):
+   - Re-run B ladders dt=1e-3 and 5e-4 × 4 dr × 3 schemes via `order_study(..., dt_rule=...)` in a subprocess-free way, record l2_error per row, steps, final_t, fit_order, pair orders.
+   - Compare each filed row l2_error to fresh measurement: report max relative deviation; require ≤ 1e-9 (they should be bitwise-ish identical: deterministic; but check).
+   - Re-run C temporal sweeps? The C sweeps use `run_case` with varying cfl at fixed dr. I can replicate them via `order_study`? No — C is per-point errors at fixed dr. I can call `run_case(factory, dr, eff_cfl, ...)`. I'll replicate exactly: for dr in [0.2, 0.05], dt_k = dt_cfl/2^k for k=0..5, eff_cfl=dt/dr; record l2_error; compare.
+   - This is a full independent replication of the artifact's numerics.
+
+C. *Controls / falsifiers*:
+   - FrozenSolver null control: order ~0 (from module `controls()`), confirming the harness rejects non-advancing states.
+   - Mutation control on my own verifier: perturb one filed row by +1e-6 relative and confirm the recomputation comparison detects it (proves the check has teeth).
+   - Cross-check: dt=1e-3 vs 5e-4 fixed ladders give consistent p within R5 bound 0.25 (independent of the lead's rule_a which compares to CFL ladder).
+
+D. *Findings to report honestly*:
+   - Whether the lead's `rule_b` one-sided application is a defect: rule text allows negative excess (cancellation) to pass; the physical intent is |excess| small. At dr=0.05, |excess| for cnfem = 0.718, lffd = 0.232, cnfd = 1.258. So lffd and cnfem "pass" rule_b while their per-rung errors at the finest resolution differ from the spatial plateau by 23% / 72%. This means the constant-CFL ladder's *error magnitudes* are not spatial; only the *fitted order* is claimed. But the artifact's own verdict for lffd/cnfem says "constant-CFL ladder measures the spatial order (temporal contribution below the pre-stated tolerance)" — the parenthetical is not supported for lffd/cnfem if "temporal contribution" means |excess|; it is supported only for the one-sided reading. This is a real, precise, machine-checkable finding.
+   - However, the artifact ALSO provides the protocol-compliant fixed-dt ladders B (order 1.996–2.004 at dt=1e-3, 1.999–2.001 at dt=5e-4) — so the *order-2 spatial conclusion* survives via B regardless. The correct disposition: certified claim should cite B, not A; A's rule_b one-sidedness should be fixed before the artifact is used as C8 evidence.
+   - I should NOT claim the artifact is wrong overall: state verdict "revise" (if I were reviewing) but as a verification artifact: `verification_verdict: "B_ladders_reproduced; A_ladder_admissibility_rule_one_sided"`.
+
+E. Also check the artifact's stated `admissibility_rule_stated_before_results.thresholds_movable_after_result: false` — good.
+
+Now, the one-sidedness question deserves care. Rule_b text: "temporal excess at dr=0.2: e(dt=0.1)/e_plateau - 1 <= 0.05". A pre-registered one-sided rule is not inherently invalid; it says: the constant-CFL error may not *exceed* the spatial plateau by more than 5%. If the CFL error is *below* the plateau (cancellation), the run *underestimates* error; the fitted *order* may still be contaminated (in cnfem's case, at cfl=0.5, e at dr=0.1 is 0.28x plateau → order estimate could still be ~2 if the cancellation factor is smooth in dr). Worker-081's E1 measured exactly that the error changes under dt refinement at fixed dr (up to 143%). So the honest reading: rule_b one-sided is insufficient as a *subdominance* criterion; the artifact's own `overall.all_schemes_admissible=false` already flags that at least one scheme (cnfd) fails, and its per-scheme verdicts for lffd/cnfem overstate admissibility in the cancellation direction. This is a finding, not a refutation of the order claim.
+
+Also check: does the artifact's `checks.rule_b` use `dr_of_worst: 0.05` while the rule text says dr=0.2? Yes. Applying at the worst dr is stricter — but it changes which dr is tested. For cnfd, worst is +1.258 at 0.05; at 0.2 it's +1.238. Both fail. For others both pass. So the dr choice doesn't change pass/fail here. Report it as a minor spec-vs-implementation mismatch.
+
+Also the "temporal_excess_at_cfl" sign: computed as e_at_cfl/e_plateau - 1. For cnfd at dr=0.2: 0.014913665/0.006663181 - 1 = 1.2382 ✓. Fine.
+
+One more thing: `p_cfl_by_scheme` in `overall` = 1.99535/1.98886/1.99662 matches the A ladder fit_orders in `schemes`. Good; recompute.
+
+Let me now write the verifier. I'll write it in Python with no external deps beyond numpy + the frozen module imported via importlib with a hash guard.
+
+Design specifics for the fresh re-run:
+- Use `order_study` from the frozen module with dt_rule lambda. That function itself uses `run_case` and `make_factory`. Good — same code path as the lead? The lead's generator probably did the same. My independence: I write my own driver/comparator, and I additionally recompute from raw rows. But "independent replication" ideally uses an independent implementation. Writing my own solver would be a stronger independence, but then I'd risk implementation divergence and it's much more work. Given the frozen module is the canonical measurement instrument (and the requirement is "independently replicated"), running the pinned module in a fresh process with an independently-written driver + independently recomputed statistics is a reasonable standard, which I'll state precisely (and not overclaim).
+  
+  Actually, I can add one extra independence axis cheaply: re-run in a *separate process* (subprocess) with `PYTHONHASHSEED` irrelevant; and verify determinism by running the ladders twice (bitwise equality). Also cross-check a couple of rows with a direct manual solve using the solver classes (same as run_case) — not more independent. I'll note the limitation.
+
+- Also verify `steps` and `dt` match: dt_rule=1e-3 → steps=6000 for all rows; 5e-4 → 12000.
+
+Time: B ladders = 3 schemes × (6000×4 + 12000×4) steps... wait per scheme: dt=1e-3: 4 rungs × 6000 steps = 24000 steps; dt=5e-4: 4 × 12000 = 48000 steps. cnfd ~17s/60000 steps → 72000 steps ≈ 20s; cnfem similar; lffd trivial. Twice for determinism = ~80s. C sweeps: dr=0.2: 3780 steps; dr=0.05: 15120 steps per scheme ≈ 18900 steps → cnfd/cnfem ~5s each. Total maybe 2.5 min for the full verifier. Fine. I'll include a `--quick` option? Not needed.
+
+Hmm, but there's a risk: heavy CPU while other workers run numerics. It's fine, 2-3 min.
+
+Let me now check the frozen module hash guard approach and write the script. Also, do I need `numerics/__init__.py`? The module is at numerics/tests/flat_wave_replication.py; import via importlib.util.spec_from_file_location with a unique name.
+
+Let me look at the module top (imports, REPO, CANDIDATE, HARNESS_CONFIG etc.) to make sure importing has no side effects. Lines 1-90.
+dsh: reasoning:
+The frozen module is self-contained and importable. Note: it says the replication module's author is presumably deepseek-flash-13 (assignment asg-...-deepseek-flash-13-22), i.e., NOT me. Good — I can independently verify the lead's temporal control artifact while reusing this frozen instrument.
+
+Now let me write the verifier. Plan the JSON output structure:
+
+```json
+{
+  "schema": "w020-n0-fixed-dt-control-verification/v1",
+  "task_id": "W020-N0-C8-FIXEDDT-VERIFY-01",
+  "actor": "deepseek-flash-20",
+  "class_id": "AF-WCC-SCALAR-SPH",
+  "node_id": "N0",
+  "gate": "G-NUM",
+  "conclusion_type": "numerical_evidence",
+  "created_at": "...",
+  "target": {
+     "path": "numerics/protocol/temporal_subdominance_control.json",
+     "sha256": "334f5b71...",
+     "generator": "numerics/protocol/temporal_subdominance_control.py",
+     "generator_sha256": "ee14a3ca...",
+     "frozen_module": "numerics/tests/flat_wave_replication.py",
+     "frozen_module_sha256": "8ade1cdc..."
+  },
+  "independent_rerun": {
+     "method": "fresh process; frozen module imported read-only under hash guard; driver written by worker-020 (not the generator)",
+     "determinism": {"two_runs_bitwise_equal": true},
+     "B_fixed_dt_ladders": {scheme: {dt: {"rows_max_rel_dev": ..., "fit_order_filed":..., "fit_order_fresh":..., "abs_dev":...}}},
+     "C_temporal_sweeps": {...},
+     "runtime_seconds": ...
+  },
+  "row_recomputation": {
+     "ladders_checked": 9, "max_rel_dev": ..., "mismatches": []
+  },
+  "rule_application_audit": {
+     "rule_a": {...},
+     "rule_b_as_stated": {...},
+     "rule_b_as_applied": {...},
+     "one_sided_symmetry_finding": {...}
+  },
+  "controls": {
+     "frozen_state_null": {"fit_order": ..., "rejected": true},
+     "mutation_control": {"detected": true, ...},
+     "dt_ladder_consistency_R5": {...}
+  },
+  "verdict": {
+     "fixed_dt_ladder_reproduced": true,
+     "constant_cfl_subdominance_claim": "partial / one-sided",
+     "order2_spatial_conclusion_supported_by_B": true,
+     "notes": [...]
+  },
+  "falsifier": "Re-hash ... If the B-ladder l2_errors re-run at 8ade1cdc deviate >1e-9 relative, or the recomputed fit orders from filed rows deviate >1e-9, or a filed ladder's |p-2|>0.3 at fixed dt, this verification is void.",
+  "not_claimed": [...]
+}
+```
+
+Implementation details:
+- Import frozen module via importlib.
+- Hash guard: assert sha256 == expected; record.
+- `order_study` for B ladders: `mod.order_study(scheme, dr_values=[0.2,0.1,0.05,0.025], dt_rule=lambda dr, dt=dt: dt)`.
+  Careful with closure in loop — use default arg.
+- `run_case` for C sweeps: replicate exactly: dr, dt=dt_cfl/2^k, eff_cfl=dt/dr, `factory = mod.make_factory(scheme)`, `case = mod.run_case(factory, dr, eff_cfl, r_max, t_end)`, err = mod.l2_error(case["psi"][-1], pulse.psi(case["r"], case["t"][-1]), dr).
+- Statistics: my own `fit_order` implementation (np.polyfit on logs) + SE from residuals: SE = sqrt(sum(res^2)/(n-2) / sum((x-xbar)^2)) — standard OLS slope SE. Let me verify the lead's SE numbers with this formula. For a 4-point fit: SE_slope = sqrt( RSS/(n-2) / Sxx ) where RSS=sum(residuals^2), Sxx=sum((x-xbar)^2). The filed `least_squares_se` for cnfd dt=5e-4: 0.000319. I'll compute and compare. If the lead used a slightly different SE definition, my comparison should report the deviation and whether it matters (delta_R5 = max(SE, pair_half_range)). I'll implement the standard OLS SE and note discrepancies >1e-12.
+- `delta_R5` = max(least_squares_se, pair_half_range).
+- rule_a: |p_fixed - p_cfl| <= 0.25 for each dt ladder.
+- rule_b as stated: at dr=0.2, excess = e_at_cfl/e_plateau - 1 <= 0.05. e_plateau: the lead took the last temporal sweep point (k=5) as plateau. I'll use the same.
+- rule_b as applied: worst over temporal_dr. Also compute symmetric |excess|.
+- Mutation control: take filed row l2_error * (1+1e-6) and run the recomputation comparator → must report a mismatch.
+- Determinism: run the cheapest ladder twice? cmfem/cnfd B ladders are ~40s; run twice = extra 40s. Could do determinism on one ladder only (lffd, cheap) plus dt=5e-4 cnfd? Hmm; the frozen module claims deterministic, no RNG. I'll do a determinism check on lffd dt=1e-3 (cheap) and on cnfd dt=5e-4 (moderate ~3.4s) — actually just re-run all B ladders twice would be ~80s extra; acceptable but let's be efficient: determinism check on one row per scheme (dr=0.05) at both dt values → 6 solver runs ≈ 10s. Good enough.
+
+Wait: actually there's a subtlety with `order_study` dt_rule: it computes `eff_cfl = dt/dr` and passes cfl to `run_case`, which computes `dt = cfl*dr` → dt exactly recovered (floating point close). For dt=1e-3, dr=0.05: eff_cfl=0.02, dt=0.02*0.05=0.001 exactly? 0.02*0.05 = 0.001 in binary? 0.02 is not exact, 0.001 might differ by 1 ulp. The filed rows show dt exactly 0.001 (printed). Fine — tiny differences in dt could cause tiny differences in errors (1e-16 level), so comparisons with 1e-9 relative tolerance are safe.
+
+Let me check the frozen module's `run_case` step cap: `step_cap = ceil(t_end/dt)*10+100`, fine.
+
+Also note: `run_case` while loop ends when `solver.t >= t_end - 1e-12`; with dt=1e-3 and t_end=6, exact 6000 steps.
+
+Now write the script. I'll create the directory `artifacts/worker-020/n0_fixed_dt_control_verify/`.
+
+One more check — R5 / `HARNESS_CONFIG` tolerance: `p_expected=2.0, p_tol=0.3`.
+
+Let me also record the artifact JSON hash *after* reading (it might change while I work; my script re-hashes at run time and compares with pinned value; if mismatch → abort with `stale_pin`). Good practice: pin 334f5b71e0d53ab6ed1f3b7133abca541a36dafc9a5cfb4f62f0655839dd964b.
+
+Let me write the code.
+dsh: reasoning:
+Interesting — there's already `artifacts/worker-020/f2a_independent_verdict` from 00:24. That's not in my outbox tail I saw (outbox ended at 00:13). Maybe another session of worker-020 (parallel instance) did F2a review at 00:24! Let me check that to avoid confusion about my identity/parallelism. If another worker-020 instance already reviewed F2a, then there may be duplicate instances of worker-020. My outbox shows events up to 00:13:41; the f2a_independent_verdict dir suggests a newer instance. Let me look at it quickly — it may reveal that "worker=020" is being re-dispatched. If a parallel instance is working on F2a, I must avoid touching F2a. My N0 task is distinct, fine.
+
+Let me peek at that dir (small) to understand.
+dsh: reasoning:
+There IS a parallel worker-020 instance that at 00:22-00:24 did an F2a independent verdict, and it wrote to `comms/outbox/worker-020.jsonl` (note: `worker-020.jsonl`, not `deepseek-flash-20.jsonl`). So agent id naming: my inbox is `deepseek-flash-20.jsonl`; the parallel instance uses `worker-020`. Both may be "me" in different registries. Let me check `comms/outbox/worker-020.jsonl` — does it exist? Earlier `ls comms/outbox/` showed `deepseek-flash-20.jsonl` (44875 bytes) but not `worker-020.jsonl`... Actually the earlier listing was truncated at 40 lines (alphabetical, through e08...). Let me check.
+
+This matters for:
+1. Which outbox file I should append to (my earlier events are in `deepseek-flash-20.jsonl`; the protocol's agent ids list includes `deepseek-flash-20` but not `worker-020`).
+2. Whether the F2a review counted toward the gate (G-FORM F2a has 2 accepts: lead-audit + worker-047; the worker-020 F2a verdict may be revise).
+
+Let me check `comms/outbox/worker-020.jsonl` and its ingest status. Also check whether the F2a verdict was accept/revise. This informs my "don't duplicate" decision (I'm on N0, so no conflict anyway), and it tells me the right outbox path convention. The registry of actor ids in the map `actors` may include worker-020.
+
+Let me check.
+dsh: reasoning:
+So there is a parallel worker-020 instance using `comms/outbox/worker-020.jsonl` (14KB) — and my earlier events (this session's predecessor) went to `deepseek-flash-20.jsonl`. Both are "worker=020" but with different outbox names. The actors list doesn't include either (actors are human-pi, astra, leads, deepseek-flash-01..? let me not worry).
+
+Important: the parallel instance is actively working (last event 00:24:53, dirs at 00:30). It may also be running checkpoints. To avoid collision I should:
+- Write my events to `comms/outbox/deepseek-flash-20.jsonl` (the file that already has my prior events, and matches my inbox id `deepseek-flash-20`), OR to `comms/outbox/worker-020.jsonl`? The swarm's convention for this instance seems to be `worker-020.jsonl` for fleet instances, `deepseek-flash-20.jsonl` for the named agent. My inbox assignment is addressed to `deepseek-flash-20`. My prior A2 events are in `deepseek-flash-20.jsonl`. I'll append to `deepseek-flash-20.jsonl` and include `"actor": "deepseek-flash-20"` — consistent with my assignment card. Hmm, but the fleet instance at 00:24 used actor `worker-020`. The instruction says worker=020. Ambiguous.
+
+Risk: two files → two event streams from "the same" worker. The ingest tool processes all outbox files; duplicate actor ids might be fine. To be safe and consistent with my *assignment* (`asg-2026-09-11-A2-deepseek-flash-20-29`), I'll use `deepseek-flash-20.jsonl` + actor `deepseek-flash-20`, and mention task id `W020-N0-FIXEDDT-VERIFY-01`. That keeps the same stream as my A2 work.
+
+Hmm, but the fleet worker-020 instance might also be doing N0? Let me check its recent events (tail shows F2a at 00:24:53). Its task id pattern is W020-*. Let me check the top of that file and whether it has N0/anything about temporal control. Quick grep.
+
+Also, now I realize the parallel worker-020 completed an F2a revise with a hard failure C15 (class_contract_pointer) — which is exactly the same defect class I noticed. Fine, not my lane.
+
+Let me grep worker-020.jsonl for N0/temporal to ensure no collision.
+dsh: reasoning:
+No N0 collision. Good.
+
+Now let me write the verifier script. I'll be careful and thorough. Then run it.
+
+Let me draft the code:
+
+```python
+#!/usr/bin/env python3
+"""W020-N0-FIXEDDT-VERIFY-01 ..."""
+from __future__ import annotations
+import argparse, hashlib, importlib.util, json, math, platform, sys, time
+from pathlib import Path
+import numpy as np
+
+REPO = Path(__file__).resolve().parents[3]   # artifacts/worker-020/n0_fixed_dt_control_verify/x.py -> parents[3] = repo root
+TARGET = REPO / "numerics/protocol/temporal_subdominance_control.json"
+GENERATOR = REPO / "numerics/protocol/temporal_subdominance_control.py"
+FROZEN = REPO / "numerics/tests/flat_wave_replication.py"
+PINNED = {
+  str(TARGET.relative_to(REPO)): "334f5b71e0d53ab6ed1f3b7133abca541a36dafc9a5cfb4f62f0655839dd964b",
+  str(FROZEN.relative_to(REPO)): "8ade1cdc163ea420790b9fdfdab41157b4f3d4219d6a0bcf827baafe69a6f422",
+}
+```
+
+Check parents: file at REPO/artifacts/worker-020/n0_fixed_dt_control_verify/verify_fixed_dt_control.py → parents[0]=n0_fixed_dt_control_verify, [1]=worker-020, [2]=artifacts, [3]=REPO. Yes.
+
+Functions:
+- sha256(path)
+- load_frozen(expected_hash): guard, importlib spec, return module.
+- ols_fit(drs, errs): x=log(drs), y=log(errs); slope, intercept = polyfit; residuals; RSS; Sxx; se = sqrt(RSS/(n-2)/Sxx); return.
+- recompute_ladder(rows): drs, errs from rows; fit; pair orders; pair_half_range = max(pair)-min(pair) over 2... actually pair_half_range = (max(pair_orders)-min(pair_orders))/2? For cnfd filed pair_orders [1.9903267579556414, 1.99662879146045, 1.998671634634834] → half range = (1.9986716-1.9903268)/2 = 0.0041724. Yes! pair_half_range = (max-min)/2. Check delta_R5 = max(SE, half_range): cnfd dt=5e-4: SE=0.0003191824, half=0.0009616633 → delta=0.0009616633 ✓ (matches filed). Good.
+- monotone: strictly decreasing errs.
+- within_band: |p-2|<=0.3.
+
+Layer A: for each scheme, ladders A (constant_cfl), B dt_0.001, B dt_0.0005: recompute stats, compare with filed (rel tol 1e-9).
+
+Layer B: fresh reruns.
+- B ladders: `mod.order_study(scheme, dr_values=[0.2,0.1,0.05,0.025], dt_rule=lambda dr, dt=dt: dt)` → returns rows with l2_error, steps, final_t, fit_order, pair_orders.
+  compare row-by-row l2_error filed vs fresh: rel dev.
+  compare fit_order.
+- C sweeps: reproduce with run_case. For each scheme, for each sweep in filed C_temporal_sweeps: dr, dt_cfl; points k=0..5 dt=dt_cfl/2**k; eff_cfl = dt/dr; case = mod.run_case(mod.make_factory(scheme), dr, eff_cfl, 30.0, 6.0); err = mod.l2_error(case["psi"][-1], mod.PulseExact().psi(case["r"], case["t"][-1]), dr). Compare.
+- Determinism: rerun 6 selected (scheme, dr=0.05, dt) combos twice and compare bitwise.
+
+Layer C: controls.
+- null control: module's `controls()["frozen_state"]` → fit_order ~0, rejected: abs(p)<0.5. Running `controls()` also runs the wrong-sign and dt_probe (which is a 3-rung cfl run ~ fast). Actually `controls()` runs the frozen-state ladder at 3 dr (cheap) + 200 steps bad solver + dt_probe (order_study with dt_rule dr^0.5, 3 rungs, cheap). Fine, call it.
+- mutation control: copy filed artifact, multiply one row l2_error by (1+1e-6), run recompute comparison → must flag.
+- R5 cross-ladder consistency: |p(1e-3) - p(5e-4)| <= 0.25 for each scheme, and compare vs A ladder.
+
+Rule audit:
+- rule_a per scheme per dt: |p_fixed - p_cfl| <= 0.25 → recompute; compare filed.
+- rule_b: as stated (at dr=0.2) excess = e_at_cfl/e_plateau - 1; as filed `checks.rule_b.worst_temporal_excess_at_cfl` computed over temporal_dr; symmetric |excess| check at both dr → new finding.
+- Report table of per-dr excess for all 3 schemes at k=0 vs k=5 (plateau).
+
+Verdict fields:
+- `filed_artifact_recomputation`: pass/fail, max dev.
+- `fresh_rerun_B_ladders`: pass (all rows within rel 1e-9), orders.
+- `fresh_rerun_C_sweeps`: pass.
+- `rule_b_semantics`: {"stated": ..., "applied": ..., "symmetric_magnitude_at_dr0.05": {cnfd:1.258, cnfem:0.718, lffd:0.232}, "note": "rule as pre-registered is one-sided (<=0.05); negative (cancellation) excess passes. Magnitudes show cnfem/lffd CFL errors are 72%/23% below the spatial plateau at dr=0.05; the certified order claim should cite the fixed-dt ladders B, which this run reproduces."}
+- `c8_evidence_disposition`: "B ladders independently reproduced at both dt=1e-3 and 5e-4 for all three schemes; A-ladder admissibility claim is one-sided and should not be the basis; order-2 spatial conclusion is supported by B."
+
+Falsifier text (decidable).
+
+not_claimed: no gate verdict, no node completion, no authority over canonical paths, author relationship disclosure.
+
+Also add `"conflict_disclosure": "worker-020 authored the original unassigned N0 candidate numerics/tests/flat_wave.py (sha 8b52014d) ... this verification targets the lead's temporal control artifact and the frozen replication module (not authored by worker-020); the flat_wave.py candidate is not modified or certified here."` — Actually let me verify who authored flat_wave_replication.py: assignment says deepseek-flash-13 (asg-...-deepseek-flash-13-22). Let me quickly confirm the header doesn't say flash-20. It says assignment for deepseek-flash-13. Good.
+
+Should I worry that *I* (worker-020 = deepseek-flash-20) authored flat_wave.py? The temporal control artifact uses flat_wave_replication.py, not flat_wave.py, so my conflict is limited. Disclose it.
+
+Runtime: B ladders fresh = per scheme: dt=1e-3: cnfd/cnfem ~6000 steps ×4 → 24000 steps (~7s), dt=5e-4: 48000 steps (~14s) → ~21s per implicit scheme ×2 = 42s + lffd negligible. C sweeps: per scheme sum steps 3780+15120=18900 → ~5.3s ×2 = ~11s (lffd negligible). Determinism: 6 runs at dr=0.05 mix (~6000+12000 ×2 schemes ~ 10s). Controls ~1s. Total ~70s. 
+
+Let me write it now.
+
+One caution: `order_study` uses `HARNESS_CONFIG["dr_values"]` if not provided, and `pulse=None` → PulseExact. Fine.
+
+Another caution: `run_case` signature `run_case(factory, dr, cfl, r_max, t_end, sample_every=1)`. It computes dt=cfl*dr. Good.
+
+Let me also handle float formatting for JSON (numpy floats → float()).
+
+Write the script now.
+dsh: reasoning:
+Wait — I need to double check the `mut_detected` logic: after mutation, `ladder_stats` recomputes from mutated rows, and I compare against `lad[c]` — but `lad` is the mutated dict, so `lad[c]` (fit_order etc.) is the *filed* value while `fresh` is recomputed from mutated rows → difference detected. Yes, correct, since I only mutated the row, not the filed stats. Good.
+
+Also `report["verdict"]["finding_RB1"]` uses `rule_b[s]['per_dr']` max by abs excess — a bit convoluted but works.
+
+Potential issue: `frozen.run_case(...)` has default sample_every=1 and returns states list; fine.
+
+Potential issue: `frozen.PulseExact()` — in determinism block I use `p.psi(r, s.t)`.
+
+Potential issue: `min(po)`/`max(po)` fine.
+
+Potential issue: the `quick` flag uses 3 rungs for the fresh B re-run, but then `pdev` compares to filed 4-rung fit order — for quick mode that comparison would fail. I'll not use --quick for the real run. Actually with --quick the `ok` may be false due to pdev; but I won't use quick. Fine.
+
+Potential issue: `frozen.controls()` returns `dt_probe_dt_eq_dr_pow_half` and `wrong_sign_operator`; my `controls_ok` computation: `all(v.get("ok", True) for v in report["controls"].values() if isinstance(v, dict))` — `wrong_sign_operator` dict has no "ok" → defaults True; `dt_probe_mixed_order` has no "ok" → True. Fine.
+
+Now run it. Time ~70-90s. Let me run in background? It's ~1.5 min; use foreground with timeout 600000. Actually let me run with bash directly and capture output to a log. I'll use `run_in_background: true`? The guidance says long-running commands should be background. ~90s is moderate. I'll run in background and meanwhile prepare README/events. But event emission depends on the results. I can prepare the emit script while it runs.
+
+Let me start the run in background.
+dsh: reasoning:
+While that runs, let me prepare the emit script and README. But first, let me check whether the target artifact hash is still 334f5b71 (the lead might have updated it). The verifier guards against that anyway.
+
+Let me also think about whether I should also check `numerics/protocol/canonical_temporal_control.py`'s output (the canonical flat_wave.py control) — it's a different artifact, possibly being generated right now. Not my task.
+
+Meanwhile, let me draft the README and the event emitter. The events I'll append to `comms/outbox/deepseek-flash-20.jsonl`:
+
+1. `artifact` event for the verification JSON:
+```json
+{"event_id":"w020c-<ts>-n0-fixeddt-verify-ar", "event_type":"artifact", "created_at":"...", "actor":"deepseek-flash-20", "node_id":"N0", "class_id":"AF-WCC-SCALAR-SPH", "gate":"G-NUM", "artifact_type":"verification_report", "path":"artifacts/worker-020/n0_fixed_dt_control_verify/verify_fixed_dt_control.json", "sha256":"<hash>", "validation_status":"unverified", "evidence_refs":["numerics/protocol/temporal_subdominance_control.json#334f5b71e0d5","numerics/tests/flat_wave_replication.py#8ade1cdc163e"], "target":..., "falsifier":..., "to":["astra","astra-lead-numerics","astra-lead-audit"]}
+```
+
+2. `artifact` events for the script and README (protocol says every artifact event must carry path+sha256+validation_status). Maybe combine: one artifact event for the report, one for the script, one for the log? Keep it bounded: 3-4 events.
+
+3. `claim` event with class_id, statement, conclusion_type "numerical_evidence", assumptions, falsifier, evidence_refs, artifact_refs. Wait — PROTOCOL says `claim` requires artifact_refs for conclusion_type theorem; for numerical_evidence it's optional but good to include. The claim statement: "At frozen module 8ade1cdc and target 334f5b71, the fixed-dt ladders B (dt=1e-3, 5e-4; 4 rungs; three schemes) reproduce the filed l2 errors row-by-row within 1e-9 relative and fit order 2 within band; rule_b as pre-registered is one-sided..."
+   Hmm — is it appropriate to emit a `claim`? The protocol's upward message types include claim with class_id. The task says "emit valid JSON with IDs evidence hash falsifier". A claim event fits best. But careful: claims are reviewed/promoted; conclusion_type must not be "theorem". "numerical_evidence" is honest. Actually let me check the allowed conclusion_type values in the map schema (`research_map/schemas.py` or events.schema.json). Let me check to make sure "numerical_evidence" is valid, and check what fields are required for events. The schema validation may reject events missing required fields. Let me read `research_map/events.schema.json` and `comms.py` quickly.
+
+4. `status` event summarizing the bounded task + checkpoint reference.
+
+Let me inspect the event schema and how prior worker-020 events looked (they were ingested fine: accepted=8 earlier). My prior A2 events used fields: actor, class_id, created_at, description, event_id, event_type, evidence_refs, group_id, needed_to_unblock, next_falsifier, node_id, to, summary, hours, status, etc. So my style should be compatible.
+
+Let me read the event schema for required fields.
+dsh: reasoning:
+The schema only validates the oneOf types: direction_update, claim, artifact, review, resource_request. Note `status` and `blocker` events are NOT in the schema's oneOf — yet the map accepts them (many status events are ingested). The `comms.py ingest` may handle others loosely. My prior status/blocker events were accepted (8 accepted). Fine.
+
+For the `claim` event, conclusion_type allowed values? Let me check `research_map/comms.py` and `apply_events.py` for validation of conclusion_type. The PROTOCOL says "conclusion_type: theorem without artifact_refs is auto-rejected". So "numerical_evidence" is fine.
+
+Let me check the background job status. Meanwhile, draft the emit script. Actually, I'll write a small Python emitter that:
+1. Reads the verification JSON, computes sha256 of artifact files.
+2. Appends 4 events to `comms/outbox/deepseek-flash-20.jsonl`:
+   - artifact (report JSON)
+   - artifact (script) — maybe combine script+README into one event each; keep 3 artifact events max.
+   - claim (class-bound, numerical_evidence)
+   - status (summary + completion claim of worker task + checkpoint ref)
+3. Prints the event ids.
+
+Then I'll run checkpoint.py and append a final status event? Hmm — the checkpoint reference should be in the status event. The protocol says checkpoint is a runtime command run by the controller every 15 min; my prior worker-020 event referenced an official checkpoint `ckpt-20260912-001311.json` with its own hash and emitted an artifact event for the checkpoint. I can run `python3 research_map/checkpoint.py` myself and then reference the produced checkpoint in my status event. Order: run checkpoint after emitting events (so it snapshots my events? no — checkpoint snapshots map state, and my outbox events are pending application until ingest). In my prior cycle I emitted events, then ran checkpoint, then emitted an artifact event about the checkpoint. That worked.
+
+Plan:
+1. Wait for verifier.
+2. Compute hashes; write README.md.
+3. Emit artifact + claim events (outbox).
+4. Run `research_map/checkpoint.py`; note checkpoint id + sha256.
+5. Emit status event referencing checkpoint (append to outbox).
+6. Optionally run `python3 research_map/comms.py ingest`? The PROTOCOL says ingest is a controller command ("accepted stream ... writer: research_map/comms.py ingest only"). Workers shouldn't necessarily ingest. My prior A2 increment did ingest? My event note said "Official 15-min checkpoint after ingesting this increment: accepted=8, rejected=0" — so someone (maybe my prior instance) ran ingest. The controller runs it too. Running ingest is safe (it's the controller's tool, but any agent may run it; "Controller commands" list). Hmm, to be safe and bounded, I can run `validate_map.py` and `checkpoint.py`, and *not* ingest, leaving ingestion to the controller. But then my checkpoint wouldn't include my events... My prior event explicitly said "Worker events remain pending application by the controller." So leaving them pending is acceptable and stated.
+
+Actually, to make the deliverable visible and follow the established pattern ("emit, checkpoint, exit"), I'll:
+- emit events
+- run checkpoint (which may optionally ingest? let me check checkpoint.py quickly for whether it calls ingest)
+- emit the checkpoint-status event.
+
+Let me check the job now.
+dsh: reasoning:
+Checkpoint.py *does* ingest comms ("ingest comms, validate map, audit evidence, account budgets, snapshot"). So running checkpoint will ingest my outbox events. Good — that matches my prior cycle.
+
+Let me wait for the verifier job. It's been ~1 min. Let me check again shortly. Meanwhile, draft the README content skeleton and emitter script (will fill hashes at run time).
+
+Let me write the emit script that computes hashes itself, so no manual copying.
+
+README.md content:
+- Task id, class, node, gate, assignment linkage (no inbox card; taken as bounded class-bound task per the W094/W081 pattern).
+- Why: G-NUM unmet C8 / worker-067 F1 / worker-081 adjudication; lead filed the fixed-dt control at 00:26:49; independent replication needed (nobody may self-review).
+- What was done: A recomputation, B fresh re-run (frozen module pinned), C rule audit, D controls.
+- Verdict (fill from JSON).
+- Falsifier.
+- Hashes.
+- Conflict disclosure.
+- Authority limits.
+
+Let me wait for job completion first, then generate README from actual results. Check job now.
+dsh: reasoning:
+The verification completed in 126.7s with status `VERIFIED_WITH_ONE_RULE_DEFECT`:
+- recomputation_ok: true
+- fresh_rerun_ok: true
+- fixed_dt ladder orders reproduce exactly.
+
+Let me inspect the JSON for details (rule audit numbers, controls, determinism) to write an accurate README and events. Let me pull key fields.
+dsh: reasoning:
+Excellent results:
+- All filed statistics recompute exactly (rel dev 0).
+- Fresh re-run reproduces every B row and every C row with rel dev 0.0 (bitwise).
+- Determinism bitwise.
+- Controls pass (frozen null rejected, wrong-sign blows up, mutation detected, dt-probe mixed order 1.06).
+- Finding RB1: rule_b one-sided; symmetric magnitudes cnfd 1.258, cnfem 0.723, lffd 0.236 → cnfem/lffd pass only under the one-sided reading.
+- RB2: rule text says dr=0.2 but filed check uses worst over [0.2, 0.05].
+- C8 disposition: B ladders support order-2; A should be labelled mixed-order control; rule_b should be restated symmetrically.
+
+Now write README.md, then the emit script. Let me write the README with the key numbers and hashes (script/JSON hashes computed at write time via sha256sum — I'll reference them with prefixes; README is itself an artifact so its own hash can't include itself).
+
+Let me get the file hashes first, then write README.
+dsh: reasoning:
+Wait — the JSON hash `79737c5c...` will change if I regenerate. Fine.
+
+Hmm, but the emit script will compute hashes at emit time, so no issue.
+
+Now write README.md. Then emit script. Let me write the README carefully, concise, with:
+- header table (task, class, node, gate, actor, target)
+- why (G-NUM C8; worker-067 F1; worker-081 adjudication; lead filed artifact at 00:26:49; independent replication required, no self-review)
+- method (A/B/C/D)
+- results (exact numbers)
+- findings (RB1, RB2)
+- verdict
+- falsifier
+- hashes
+- conflict disclosure & authority limits
+
+Then the emit script writes events to `comms/outbox/deepseek-flash-20.jsonl` (append). Let me design event_ids with a timestamp suffix: `w020c-<stamp>-n0-fixeddt-...`. I'll use `time.strftime("%Y%m%dT%H%M%S%z")`.
+
+Events:
+1. artifact: report JSON (path, sha256, artifact_type "verification_report", validation_status "unverified", node_id N0, class_id AF-WCC-SCALAR-SPH, gate G-NUM, evidence_refs target#334f5b71e0d5, frozen#8ade1cdc163e, generator SHA; falsifier; to [astra, astra-lead-numerics, astra-lead-audit])
+2. artifact: verifier script (artifact_type "verification_tool")
+3. artifact: log (artifact_type "run_log") — maybe skip; combine script+log? Protocol: every artifact event must carry path+sha256+validation_status. I'll emit 3 artifact events (report, script, log) — bounded and complete. Actually keep it to report + script + log = 3.
+4. claim: class_id AF-WCC-SCALAR-SPH, statement (the numerical claim), conclusion_type "numerical_evidence", assumptions (list: frozen module hash, target hash, deterministic numpy, no RNG, same instrument), falsifier, evidence_refs, artifact_refs, next_falsifier.
+5. status: task summary, hours, checkpoint ref (after running checkpoint; I'll emit this as a separate step so it can cite the checkpoint file+hash).
+
+Then run checkpoint, then append the status+checkpoint event. Actually, better: emit events 1-4, run checkpoint (which ingests + snapshots), then emit status with checkpoint citation (this final status won't be in the checkpoint, but it references it — same as my prior cycle).
+
+Hmm, my prior cycle emitted the checkpoint artifact event *after* the checkpoint and it was fine. Alternatively: run checkpoint first (to snapshot baseline), emit all events, run checkpoint again (to have them ingested and snapshotted), then emit final status citing the second checkpoint. That's cleaner: the deliverable events are ingested & snapshotted. But it means two checkpoints ~1 min apart; is that abusive? The checkpoint command is designed to run every 15 min, but it's idempotent and cheap. My prior cycle ran it once after emitting. The ingest happens during checkpoint, so events emitted *before* checkpoint get ingested and appear in that checkpoint's state. Then the final status event cites the checkpoint. That's exactly what I did before. Go with: emit 1-4 → checkpoint → emit 5 (status w/ checkpoint hash).
+
+One consideration: `checkpoint.py` ingests *all* outboxes, including other workers' pending events; it may already be running concurrently from the controller (map.lock exists). If two checkpoints run concurrently, could conflict. The map.lock file (0 bytes at 00:25) — let me check if checkpoint.py uses it. If another checkpoint is running concurrently, my run may race. Risk accepted; it's what the protocol says to run.
+
+Actually, wait: checkpoint.py starts by calling comms ingest which *applies* events to research_map.json — that's a controller action (map mutation). Worker-020's prior cycle did run it ("Official 15-min checkpoint after ingesting this increment"). OK.
+
+Let me now write README.md.
+dsh: reasoning:
+Now the emit script. It should:
+- compute sha256 of report, tool, log, README
+- append events to `comms/outbox/deepseek-flash-20.jsonl`
+- print event ids
+
+Events (with `to` field). Let me write it.
+
+Also note the outbox file `deepseek-flash-20.jsonl` currently ends with my 00:13 events, no trailing newline issue? `tail -c` output ended with `}` and the earlier listing showed lines. I'll open in append mode and ensure a newline is written before each JSON (check last byte).
+
+Fields for artifact events: event_id, event_type="artifact", created_at, actor, node_id, class_id, gate, group_id="numerics", artifact_type, path, sha256, validation_status="unverified", evidence_refs, falsifier, to, note.
+
+Claim event: event_id, event_type="claim", created_at, actor, node_id, class_id, gate, group_id, statement, conclusion_type="numerical_evidence", assumptions[], falsifier, next_falsifier, evidence_refs[], artifact_refs[], to, acceptance_tests? Let me include `acceptance_tests` describing how to re-run. Also `promotion_status` is set by controller, not me.
+
+Status event: event_id, event_type="status", created_at, actor, node_id, class_id, gate, group_id, status="active", hours, summary, evidence_refs, next_falsifier, to, claims_completion (true for the worker task, explicitly not a node completion).
+
+Also the status event references the checkpoint (will be added after checkpoint run). I'll make the emit script emit events 1-4 (3 artifacts + claim), then checkpoint, then a separate small emit for the status event with checkpoint path/hash passed as args. Simpler: one script with a `--phase pre|post` argument. Let me write `emit_events.py` with functions and a CLI:
+- `python3 emit_events.py pre` → artifact×3 + claim
+- `python3 emit_events.py post <checkpoint_path>` → status event with checkpoint hash
+
+Let me write it.
+dsh: reasoning:
+Before emitting, I should double-check that the target artifact hash hasn't changed (the lead might have regenerated it in the last few minutes). Also verify my script hashes the same target. Let me check `sha256sum` of target and frozen again. If the target changed, my verification is void per the pin — and my verifier run would have used the older/newer? The run started ~00:33 and finished ~00:35; the verifier hashed at start and used the loaded content. Let me confirm now that the on-disk target still equals 334f5b71. If it changed *during* the run, the verifier's pin check passed at start but could have loaded changed content later — no: it reads TARGET after the hash guard, so a mid-run change could mismatch. Let me re-hash now; if it differs, I must re-run.
+
+Also confirm report JSON's pins match.
+
+Then run emit pre.
+dsh: reasoning:
+Pins unchanged. Now emit the pre-phase events. Then run checkpoint, then post event.
+
+One more consideration: the README's own hash is included in the claim's evidence_refs (computed at emit time) — good.
+
+Let me run emit pre.
+dsh: reasoning:
+Now run `python3 research_map/checkpoint.py`. It ingests comms (including my events and other pending events), validates, audits, snapshots. This could take some seconds. Let me run it in the foreground with a generous timeout, capturing output.
+
+Note: checkpoint.py may print a lot. Let me run and capture to a log under my artifact dir? The checkpoint writes its own record. I'll capture stdout to my dir as `checkpoint_run.log` (another artifact — but then I'd need an artifact event; optional. I can just capture output in the shell result without saving a file, or save to /tmp. Let me save to the worker-020 artifact dir as `checkpoint_run.log` but then include it? Keep it simple: redirect to /tmp/w020_checkpoint.log and print the tail. No extra artifact needed.)
+dsh: reasoning:
+Checkpoint succeeded (exit 0). I need the checkpoint id and path plus ingest counts. Let me inspect `/tmp/w020_checkpoint.log` head and the new checkpoint file. The checkpoint JSON path is `runtime/state/checkpoints/ckpt-<stamp>.json`; also `runtime/state/current_checkpoint.json` updated. Let me find the latest checkpoint file and read its key fields (accepted/rejected counts, my events ingested).
+dsh: reasoning:
+Checkpoint ckpt-20260912-003422 ran at 00:34:22 and accepted 61 events including my 5 (4 artifacts + claim), rejected 1 (not mine presumably). Map VALID.
+
+Small bug in my inspection (events_pending_application is an int). Let me redo the key fields. Also compute the checkpoint sha256 for the post event.
+dsh: reasoning:
+Checkpoint `ckpt-20260912-003422.json`, sha256 `ef93ae4ab70e52bfceaaab71e080a5ba8e251b7edee6e164b49c5674fdc10117`, map VALID, 61 events accepted, classsep PASS. Evidence hard failures are the known CLASSSEP false positives (CF-16 adjudicated false positive) — not mine.
+
+Now emit the post status event citing the checkpoint. Use the exact path `runtime/state/checkpoints/ckpt-20260912-003422.json`.
+
+After that, my worker lifecycle is done: "emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit."
+
+Should I also verify my events landed in the accepted stream (events.jsonl) and in the map (map reviews/claims)? The checkpoint ingest accepted them. Let me verify quickly that my claim event appears in `research_map/events.jsonl` and that the map's `claims` list contains it (the checkpoint applies events to map). Actually ingest writes to events.jsonl and applies to map. Let me grep for my event ids in events.jsonl and check the map json for the claim. Good final integrity check.
+
+Let me emit post first, then verify. But note: the post status event won't be ingested (no second checkpoint). That's fine and stated. Actually, should I run a second checkpoint after the post event so everything is ingested? That would be cleaner: all 6 events accepted + snapshotted. It costs ~10s and is idempotent. My prior cycle emitted the checkpoint-referencing event *after* the checkpoint and left it pending, explicitly noting "Worker events remain pending application by the controller." I'll do one more checkpoint at the end so the status event is also ingested and the final checkpoint includes the full task — that's tidier. But then the status event cites checkpoint ckpt-003422, and a newer checkpoint exists (ckpt-...); that's fine (it cites the checkpoint taken right after its evidence events).
+
+Hmm, but two checkpoints in ~2 minutes might be seen as noise. The controller runs checkpoints every 15 min. Ingesting my status event matters for the swarm's visibility. I'll run the second checkpoint and reference both (post event will cite the first; a final tiny status isn't needed). Let me do: emit post with ckpt-003422 → run checkpoint again (ingests the status) → done. I'll note the final checkpoint in my final answer, not in another event.
+
+Let me proceed.
+dsh: reasoning:
+Hmm, the second checkpoint accepted 0 new events and shows pending 81. Wait — accepted=0 but my status event should have been new. Why 0 accepted and 2301 duplicates? Possibly because the first checkpoint already read *all* outbox files including the status event? No — the status event was emitted after the first checkpoint at 00:34:40, and the second checkpoint ran at 00:34:48. accepted=0 means it considered everything duplicate. Maybe another concurrent checkpoint ran in between and ingested my status event (the controller's checkpoint loop runs frequently — earlier ckpt files at 00:33:59, 00:33:16, 00:32:59 suggest checkpoints every ~20-30s by some loop!). Indeed, there are many checkpoints close together: 003259, 003316, 003422, 003448 — so a checkpoint loop is running autonomously (supervise_loop.sh / formulation_checkpoint_loop.pid). So my status event was likely ingested by the loop between 00:34:40 and 00:34:48.
+
+Let me verify my events are in `research_map/events.jsonl` (all 6) and in the map claims/artifacts. Also check if any were rejected (the first checkpoint rejected 1 — was it mine?). Let me grep.
+dsh: reasoning:
+All 6 events accepted, 0 rejected. The status event was ingested by the concurrent checkpoint loop (accepted=1 in events.jsonl).
+
+Now let me do a final integrity check on the map: does the claim appear in map `claims` with my class/node? And confirm the artifacts listed. Also verify the map is VALID (the latest checkpoint said VALID). This is the "emit valid JSON" verification.
+
+Then I'm done — the worker should exit.
+
+Let me also double-check that my artifact hashes cited in events match the files on disk (the README hash was computed at emit time; if README changed after, mismatch). I haven't modified README after emitting. The report/tool/log unchanged. Let me verify against the event records.
+dsh: reasoning:
+All hashes match and evidence refs exist. The claim is in `events.jsonl` (accepted) but not yet in `research_map.json`'s claims list — because the map application may lag (the ingest applies events to map... or the checkpoint applies a subset). Note events_pending_application=81 in the second checkpoint, meaning 81 accepted events are pending application to the map. The controller applies them. That's expected: "Worker events remain pending application by the controller."
+
+Wait — but the first checkpoint said accepted 61 and events_total 2441; the map claims list may include events applied by the *loop* checkpoint. Let me check if any of my events are reflected... not necessary. My event is in the accepted stream (authoritative event log); map application is the controller's job. Good.
+
+Everything is done:
+1. ✅ Read handoff/map/comms
+2. ✅ Took one class-bound task (N0 / AF-WCC-SCALAR-SPH / G-NUM): independent verification of the fixed-dt control
+3. ✅ Emitted valid JSON events with IDs (event_id, task_id, node_id, class_id, gate), evidence (path#sha256-prefix), hashes (all artifacts + target pins), falsifier (decidable)
+4. ✅ Checkpointed (ckpt-003422 referencing; second checkpoint ckpt-003448 ingested everything)
+5. Exit — final answer.
+
+Let me do one final quick check that the map validator is still VALID after everything (latest checkpoint said VALID). Yes, ckpt-003448 map_validator VALID.
+
+Also, jobs: I started bash-1, completed. No other background jobs. Let me confirm job list is clean.
+
+I'll write a concise final report.
+dsh: reasoning:
+All jobs settled. Worker-020 lifecycle complete. Final report.

@@ -1,0 +1,785 @@
+dsh: reasoning:
+I'm a bounded execution worker. I need to read handoff/map and comms, take one class-bound task, emit valid JSON with IDs, evidence, hash, falsifier, checkpoint, then exit. Let me start by exploring the workspace.
+
+Let me look at the working directory structure.
+dsh: reasoning:
+There's no `handoff` directory in the workspace root. Let me look at likely locations: ai4math-swarm.tar.gz, workdir, launch_swarm.sh, supervise_swarm.sh. Let me check the swarm-related files. The task mentions "handoff/map and comms" — this suggests a swarm setup with a handoff directory containing a map and comms.
+
+Let me search for "handoff" directories.
+dsh: reasoning:
+Now I understand the setup. The swarm is at /data3/guoshaoyang/workdir/ai4math-swarm. As worker=022 (deepseek-flash-22), I need to read:
+- handoff: `HANDOFF.md` and `research_map/ASTRA_HANDOFF.md`
+- map: `research_map/research_map.json`
+- comms: `comms/inbox` and `comms/outbox`
+
+Then take one class-bound task, emit valid JSON with IDs, evidence, hash, falsifier, checkpoint, then exit.
+
+Let me explore the swarm directory.
+dsh: reasoning:
+Let me read the handoff documents and the protocol, then check the inbox for worker-022 assignments. Note the worker prompt says worker=022. My inbox file may be `deepseek-flash-022.jsonl` or `worker-022`. Let's check.
+
+Let me read:
+1. HANDOFF.md
+2. research_map/ASTRA_HANDOFF.md
+3. comms/PROTOCOL.md
+4. Check inbox for my ID.
+dsh: reasoning:
+Now let me read the protocol and find my inbox. worker=022 → likely `deepseek-flash-22` or `worker-022`. Let me check both inbox and the assignments in the outbox. Also check `comms/PROTOCOL.md`.
+
+Note the inbox listing earlier showed no `deepseek-flash-22.jsonl`. Interesting — the inbox has up to deepseek-flash-20.jsonl. So worker 022 may not have an assignment message. The prompt says: "Read handoff/map and comms. Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit."
+
+If no assignment exists, the worker prompt from launch_swarm.sh says: "if no assignment exists, inspect the immediate queue and propose one artifact-backed task without claiming completion."
+
+But my instruction from the top-level says "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit."
+
+Let me check the map's assignments, the immediate queue, and comms/inbox. Also check whether there's a supervisor that will look at my output in comms/outbox/deepseek-flash-022.jsonl or worker-022.
+
+Let me read PROTOCOL.md first.
+dsh: reasoning:
+The assignments directory may be empty. Let me check. Also, there's no inbox for deepseek-flash-22. So I am worker 022, unassigned. I need to inspect the immediate queue and take one class-bound task.
+
+Let me check:
+1. comms/outbox/assignments/ contents
+2. map assignments in research_map.json
+3. The immediate queue in ASTRA_HANDOFF (F1, F2, L0/L1, A1, N0, A2) — but those are owned by leads.
+4. Look at other workers (deepseek-flash-01..20) to see what tasks they did and whether there's an open need.
+
+The instruction: "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit."
+
+So I should:
+- pick a class-bound task (class IDs: AF-WCC-VAC-GEN, AF-SCC-C2-VAC-GEN, AF-SCC-C0-VAC-GEN, AF-WCC-SCALAR-SPH)
+- produce an artifact (or artifact-backed check), compute its sha256
+- emit valid JSON event(s) into comms/outbox/deepseek-flash-022.jsonl with node_id/class_id, evidence refs, next_falsifier
+- write a checkpoint JSON into runtime/state (e.g., w22_checkpoint_1.json or similar)
+- exit without claiming completion
+
+Let me look at the map structure first, especially assignments, gates, and the class taxonomy. research_map.json is 826KB; let me query it with python (jq might exist). Let me check the top-level keys and assignments.
+dsh: reasoning:
+Let me now look at the assignments — which are open vs done, and what's available. Also let me search for "worker-022" or "flash-22" across the repo. And check the immediate queue/current checkpoint and recent worker outbox messages to see patterns of tasks and the expected JSON schema.
+
+Let me query assignments summary.
+dsh: reasoning:
+The map now has 89 assignments. I am worker=022, unassigned in the map. The immediate queue includes open work. Note that many workers (deepseek-flash-01..20) have assignments. Worker 022 has no assignment in the map and no inbox.
+
+The instruction says "Take one class-bound task". So I should select a class-bound task from the immediate queue that is not yet covered and within my authority (worker: cannot set done/validation/gate verdicts; can produce artifacts and emit status/claim/artifact/blocker events).
+
+What are the best candidates that are open and useful, class-bound, with an artifact, evidence, hash, falsifier? Looking at the map's unmet gate criteria and open needs:
+
+G-FORM pending: "all three schemas exist with exact quantifiers/topology/regularity/genericity/I+/visibility/conclusion_type; no C0/C2 merge; reviewers 17,18 accept with cited sha256".
+
+There's an open assignment `astra-life01-publish-frozen` (lead-formulation) — canonical path publish byte-identical.
+
+Let me check what recent outbox events from workers show, especially the newest ones (flash-13, 14, 17, 18, 19), and understand which tasks are already taken to avoid duplication (duplication is penalized). Let me inspect the audit group's recent messages and controller findings for gaps.
+
+Also, worker prompt says "Take one class-bound task, emit valid JSON with IDs, evidence, hash, falsifier, checkpoint, then exit." The class-bound tasks are F1 (AF-WCC-VAC-GEN), F2a (AF-SCC-C2-VAC-GEN), F2b (AF-SCC-C0-VAC-GEN), N0 (AF-WCC-SCALAR-SPH).
+
+Since many workers already did class-binding checks, a useful non-duplicate task might be: a **cross-class disjointness / leakage audit at the frozen canonical hash** — i.e., verify that the canonical schemas on disk (`schemas/af_wcc_vacuum.yaml`, `schemas/af_scc_c2_vacuum.yaml`, `schemas/af_scc_c0_vacuum.yaml`, `research_map/formulation_taxonomy.yaml`) are byte-identical to the authoring tree `artifacts/formulation/**` (the controller's canonical-path policy says they must be published byte-identically before review verdicts bind), AND compute measured sha256, AND test the class-separation invariants.
+
+Hmm, but that overlaps with lead-formulation's `astra-life01-publish-frozen` task (publishing frozen canonical artifacts) and lead-audit's `astra-life01-a1-rebind`. The best worker contribution: an **independent verification harness** that measures the canonical-vs-authoring byte identity and the hash binding used by the map, plus a falsifier. That's G-CLASSBIND/G-FORM supporting evidence.
+
+Let me first check the current state: does the canonical path exist? Are hashes recorded? What does `artifact_hashes.json` say? Let me look at the map's `controller_gate_audit`, `controller_findings`, and `publication_status` for the newest gaps. Also check the most recent events and counts.
+
+Let me be efficient. I'll inspect:
+1. schemas/ directory
+2. artifacts/formulation/ tree
+3. artifact_hashes.json relevant entries
+4. controller_findings (recent)
+5. latest audit outbox messages (00:15)
+
+Then decide the task.
+
+Let me also check `runtime/state/current_checkpoint.json` for recent state and `counts.tsv`.
+dsh: reasoning:
+Now I have a good picture of the current state. Key open needs:
+
+- G-FORM: F1/F2a/F2b canonical hashes measured, publication aligned, but 0 distinct accept reviewers at the current hashes. Need reviewer accepts binding to canonical hashes.
+- G-LIT: L1 has 2 spot checks binding to hash, requires ≥3. So a third independent re-fetch spot check on `ledger/citation_audit.csv` measured hash 315c19145065 would directly help G-LIT! That's a nice, bounded, class-bound task: L1 spot check is class-bound (GLOBAL for L1, but it covers AF-WCC-VAC-GEN etc.).
+- G-NUM: protocol rev2 measured 1e6cdf04d7a2 needs review binding to that hash (C8). Also N0 replication PROVISIONAL.
+- G-AUDIT: needs distinct accepts at measured hashes.
+
+Given my role: "execution worker", I cannot set gate verdicts. But producing an independent artifact that fills a gap is valuable.
+
+Options with best information gain and non-duplication:
+1. **L1 third independent spot check** — G-LIT explicitly needs ≥3 independent re-fetch spot checks at measured hash 315c19145065. There are 2 (worker-07 and worker-086). A third independent spot check (mine, worker-022) would satisfy the stated requirement. This is a well-defined, bounded, class-bound task with an artifact, evidence (citations re-fetched), hash, and falsifier. But can I actually re-fetch sources? Network may be available. Let me check what the spotcheck artifacts contain to replicate independently.
+
+2. **Review of F1/F2a/F2b at current canonical hash** — but reviewer independence matters and reviews are audit group lead's domain; a worker review may count for A1 coverage though ("distinct accepts" for gates; reviewers 17,18 named in gate criteria for G-FORM). Hmm, gate criteria say "reviewers 17,18 accept with cited sha256". So my review probably wouldn't count. Also duplication risk: flash-18/19 are doing F2a reviews.
+
+3. **N0 replication audit** — the "independently replicated N0 order" requirement. flash-13 did replication (PROVISIONAL). Could do a third independent replication of flat-wave convergence, but need to see the artifacts and whether the code runs.
+
+4. **canonical-vs-authoring byte-identity verifier** for F0 (CF-13 open). lead-formulation has PUBLISH-FROZEN-02. But an independent verifier that checks the frozen pin (FROZEN.json) against canonical + authoring and re-measures all four class artifacts could be useful evidence for G-FORM. However, that's partly the controller's job.
+
+Let me look at what the L1 spot checks look like and what ledger/citation_audit.csv is, since that's the clearest stated unmet requirement (need >=3 independent re-fetch spot checks; currently 2). A third one directly unlocks a gate criterion. Let me inspect:
+
+- ledger/citation_audit.csv
+- artifacts/worker-07/l1_spotcheck/spotcheck-l1-07.json
+- artifacts/worker-086/l1_spotcheck/spotcheck-l1-086.json
+- artifact_hashes.json entry for ledger/citation_audit.csv
+
+Let me do that.
+dsh: reasoning:
+Interesting. The gate audit says L1 has 2 independent re-fetch spot checks binding to hash 315c19145065: artifacts/worker-07/l1_spotcheck/spotcheck-l1-07.json and artifacts/worker-086/l1_spotcheck/spotcheck-l1-086.json. But I see worker-077 and worker-047 spot checks too — maybe those don't bind to the measured hash or are not ingested.
+
+Wait: gate audit at 00:17:27 says "2 independent re-fetch spot check(s) bind to this hash (artifacts/worker-07/l1_spotcheck/spotcheck-l1-07.json, artifacts/worker-086/l1_spotcheck/spotcheck-l1-086.json), required >=3."
+
+Hmm, but worker-07's spotcheck was created at 00:10:53 and references "check_number": 3, independent_of reviews/L1-spotcheck-10.json and L1-spotcheck-11.json. There might be an accounting inconsistency. Anyway, the controller counts 2 binding to the measured hash. A third independent spot check sampling disjoint rows (e.g., rows 1-40 are claimed by flash-10 (1-20) and flash-11 (21-40), rows 41-95 by flash-07 (41,49,...89), row 80; row 96-97 maybe uncovered!) would directly satisfy the >=3 requirement... but only if the controller's counting logic picks it up and if there's genuine independence.
+
+Wait — the counting may be based on reviews/L1-spotcheck-*.json paths. Let me check reviews/ to see which spotcheck review files exist and what the controller scans. But I shouldn't over-index on gaming the counter; the instruction is to take one class-bound task and provide genuine independent evidence.
+
+Actually, let me consider the most valuable, honest, verifiable task: **an independent third-party L1 spot check** re-fetching primary sources for a disjoint row sample of `ledger/citation_audit.csv` at the pinned measured hash, written as an artifact with raw fetch evidence, and emitting an `artifact` + `status` event with sha256 and next falsifier. This is:
+- class-bound: covers all four class IDs (L1 is class-bound to the three AF classes + scalar).
+- evidence: raw API bodies hashed, worked rows.
+- hash: sha256 of ledger input and of my artifact.
+- falsifier: any row whose fetched metadata contradicts the ledger (title/author/year/DOI) falsifies; or ledger hash drift during fetch.
+
+But is it "mine" as worker-022? The worker protocol allows any agent to write artifacts and outbox events. And G-LIT's unmet criterion is exactly ">=3 independent re-fetch spot checks".
+
+However, network access: let me test. worker-07 used curl to arXiv/Crossref APIs. Let me check if network is available in my sandbox. Test quickly with curl to export.arxiv.org.
+
+Also check reviews/ dir to understand how spot checks get counted and whether a review verdict file is needed. Let me look at the controller's counting code (astra_lifecycle.py) for "spot" logic.
+dsh: reasoning:
+Let me read the `l1_spotchecks` function in astra_lifecycle.py to understand exactly what makes a spot check "bind" to the measured hash and count as independent. This will let me produce a genuinely compliant third spot check rather than a counter-gaming artifact.
+dsh: reasoning:
+The spotcheck counting is simple: any file matching `reviews/L1-spotcheck-*.json` or `artifacts/*/l1_spotcheck/spotcheck-l1-*.json` whose text contains the L1 prefix (12 hex chars of the measured sha256). Currently there are matched files: worker-07 and worker-086, apparently only 2 that contain the prefix "315c19145065". worker-077 and worker-047 files probably don't contain that prefix (maybe stale hash).
+
+So a genuine third independent spot check: sample disjoint rows from `ledger/citation_audit.csv` at pinned hash 315c19145065..., re-fetch primary sources via API, record raw evidence, class coverage, and write `artifacts/worker-022/l1_spotcheck/spotcheck-l1-022.json` containing the measured hash prefix. Emit artifact/status events to `comms/outbox/deepseek-flash-022.jsonl`, and write a checkpoint to `runtime/state/`.
+
+But wait — is this the best "class-bound task"? The prompt says "Take one class-bound task". L1 is class-bound to the AF classes via the ledger's class_mapping. The task is class-bound in the sense that each sampled row maps to one of the four classes. Good.
+
+Alternatively, a more formulation-specific task: F1/F2 schema semantic contract checks. But G-FORM now needs *accept reviews* at current hashes, which worker reviews don't count for (criteria say reviewers 17,18; and coverage scan may count any reviewer as distinct accepts — actually `review_coverage` counts any review file with artifact_sha256 matching and verdict accept... but "counts_as_full_schema_verdict"). Hmm, a worker could write reviews/F1-review-022.json with verdict accept at the measured hash and that would show up as a distinct accept reviewer. But gate criteria explicitly say "reviewers 17,18 accept" for G-FORM, and CF-13/F0 shows independent reviewer requirement. Writing an accept review as an execution worker without deep independent verification would be low-value and risky (duplication, false accept). Better to do genuine evidence work.
+
+Now consider the value: G-LIT requires >=3 independent re-fetch spot checks; only 2 bind. Producing a genuine 3rd is directly on the critical path for G-LIT pass. That's high information gain, bounded, machine-checkable, and it exercises the verification layer (the project's core recommendation (b)). It's a good pick.
+
+But one concern: is the L1 ledger still being modified? `ledger/citation_audit.csv` mtime 00:08, hash 315c19145065 measured. The literature lead has an open assignment `astra-life01-l0-revise` (lead-literature, L0 revise). If the ledger changes, my spot check binds to the old hash and becomes advisory. The spotcheck JSON includes `sha256_after_fetch` check to detect drift. That's fine and honest.
+
+Another concern: network access from my sandbox. Let me test connectivity to export.arxiv.org and api.crossref.org. If no network, I could instead do a **local reproducibility check**: recompute the ledger hash, verify structural invariants. But the requirement is "independent re-fetch". Let me test.
+
+Let me also check worker-07's script to understand fetch method and make mine independent (different rows). And check the full row range: ledger has 97 data rows (row count from worker-07: data_rows 97). flash-10 sampled rows 1-20, flash-11 rows 21-40, flash-07 rows 41-95 (every 8th: 41,49,57,65,73,81,89 + 80). So rows 42-48, 50-56, ..., 88, 90-97 are not densely covered; row 96-97 uncovered entirely.
+
+For genuine independence, I should sample a disjoint set from the others: rows in 90-97 (e.g., every row 90-97 or a subset) plus maybe a targeted load-bearing source. Let me check how many data rows there are exactly and which rows are load-bearing for the current canonical schemas/theorems.
+
+Plan:
+1. Test network.
+2. Pin the ledger hash (sha256) and freeze sample rows (disjoint: e.g., rows 90-97 all, plus maybe rows 46, 54 — but must be disjoint from prior samples: flash-10 rows 1-20, flash-11 21-40, flash-07 41,49,57,65,73,80,81,89). To be maximally independent and useful, sample rows 90-97 (all 8) — completely untouched by the other three.
+3. For each sampled row: extract citation_id, bibkey, title, authors, year, doi, arxiv_id, url, class_mapping, used_by_theorems, evidence_excerpt. Re-fetch from primary APIs (arXiv API for arXiv IDs, Crossref for DOIs). Compare normalized title/author/year and quote presence in abstract when available. Record raw bodies + sha256.
+4. Write artifact JSON with schema fields, hash of ledger at start/end, class coverage, verdict per row, overall result, falsifier.
+5. Write `.sha256` for artifact.
+6. Append events to comms/outbox/deepseek-flash-022.jsonl: an `artifact` event, a `status` event (agent id deepseek-flash-022), maybe `claim`? Better: `artifact` + `status` (status active, not done) with evidence_refs and next_falsifier. Worker events cannot set done. Keep it honest: status "active" with summary, and next_falsifier.
+7. Write checkpoint JSON to runtime/state/w22_checkpoint_1.json (following convention of other workers) and append to a checkpoints jsonl maybe. The instruction says "checkpoint". Other workers wrote runtime/state/wXX_checkpoint_N.json. I'll write `runtime/state/w22_checkpoint_1.json` and append a line to `runtime/state/w22_checkpoints.jsonl`.
+8. Exit.
+
+Wait — should I also record artifact hash in `runtime/state/artifact_hashes.json`? That file holds measured hashes; the controller typically updates it via checkpoint.py. As a worker, writing there could conflict with the controller. Other workers wrote their own checkpoints; the artifact event includes sha256. I'll compute and include sha256 in my event and checkpoint, and not touch artifact_hashes.json (controller-owned). Let me check how other workers' events look (e.g., deepseek-flash-07's outbox event) to match schema exactly.
+
+Let me look at the latest outbox events from deepseek-flash-07 and the ingest schema. Also read events.schema.json and comms.py validation rules.
+dsh: reasoning:
+Network to crossref works (200). arXiv over http didn't print — likely blocked or timed out (no output because of `timeout`? Actually the first curl printed nothing, meaning it failed/timed out). Let me test https arXiv and a few other endpoints. Also flash-07's outbox is a directory (comms/outbox/deepseek-flash-07/). Let me look at that and worker-086's spotcheck script for the method.
+
+Let me run the arXiv test again with https and endpoint export.arxiv.org.
+dsh: reasoning:
+Network works for both Crossref (https) and arXiv export API (https). 
+
+Now let me design the spot check. Note: worker-07 sampled rows 41,49,57,65,73,80,81,89; flash-10 reviews/L1-spotcheck-10.json (need to check rows); flash-11 reviews/L1-spotcheck-11.json. Let me check exactly their sampled rows to guarantee disjointness. Then I'll pick rows 90-97 (8 rows, untouched). That gives full coverage of the tail and includes SRC-091 (AF-SCC-C0 + AF-WCC) and SRC-094 (AF-WCC-SCALAR-SPH), so class coverage across the four classes at least partially.
+
+Let me check the two review files' sampled rows.
+
+Also, I should consider whether my artifact should be a `review` event too (protocol review type: target_id, reviewer, verdict, score, hard_failures, findings). The gate counting for L1 uses file glob only — reviews/L1-spotcheck-*.json or artifacts/*/l1_spotcheck/spotcheck-l1-*.json containing the prefix. To be safe and maximally useful, I'll write BOTH:
+- `artifacts/worker-022/l1_spotcheck/spotcheck-l1-022.json` (matching artifacts/*/l1_spotcheck/spotcheck-l1-*.json)
+- `reviews/L1-spotcheck-022.json` — hmm, writing into reviews/ might conflict with the audit lead's tree. Protocol says reviews/ is a valid artifact target for A1. But creating a review file with verdict could be interpreted as a reviewer verdict; a spot check is a review of L1. Other workers put L1-spotcheck-10/11.json in reviews/. To match the existing pattern and be counted, I could write reviews/L1-spotcheck-022.json with proper review fields (target_id L1, reviewer deepseek-flash-022, verdict accept/revise based on results, score, hard_failures, findings, artifact_sha256 binding L1 hash). That would be the canonical place and also counts.
+
+But careful: writing an "accept" review of L1 could influence G-LIT. My spot check is only 8 rows; the appropriate verdict is "accept" if all sampled rows pass (scoped), with a note that it covers rows 90-97 only. The controller/audit lead adjudicates binding. Gate audit counts spotcheck files separately from review coverage. It's fine.
+
+Actually the gate-audit counter globs both patterns and counts each matching *file*; if I write both an artifact JSON and review JSON both containing the prefix, the count would be 4 (worker-07 has artifact + reviews? let me check: worker-07 has spotcheck-l1-07.json in artifacts; reviews/L1-spotcheck-10.json and 11 are flash-10/11). Currently counted 2: worker-07 artifact and worker-086 artifact. Wait, why aren't reviews/L1-spotcheck-10.json and 11 counted? They probably don't contain the measured prefix 315c19145065 (stale hash) — they were bound to an earlier hash. Let me verify. If they contain the current prefix they'd count. Let me check.
+
+I must not double count deceptively: writing two files that both match the glob would inflate the counter artificially. The honest approach is to write ONE artifact file in `artifacts/worker-022/l1_spotcheck/spotcheck-l1-022.json` (the pattern the counted ones use), and optionally a separate review file only if it's genuinely a distinct review product. Actually reviews/L1-spotcheck-*.json is the naming pattern for the same kind of product (flash-10/11 did it that way). Writing both the artifact and a review wrapper with the same content would be duplicate. I'll write the artifact JSON in artifacts/, plus a `.sha256`, and a small `raw/` directory with fetched bodies. I'll put a full `review` event in my outbox referencing the artifact. That's clean: one counted file, genuine evidence.
+
+Hmm, but wait: reviews/L1-spotcheck-*.json counted only if content contains prefix. If flash-10/11 are stale, they'd be superseded anyway. Let me check them to know current binding and independence claims.
+
+Also let me check the ledger columns and the update rules: the ledger may be regenerated by the literature lead at any time. I'll pin at the start, verify at end, and record drift.
+
+Now, the extraction: for each sampled row, fields to verify:
+- citation_id / bibkey
+- title, authors, year
+- doi, arxiv_id, url
+- evidence_excerpt (quoted text) — worker-07 tested "declared CSV quote letter at content-token level against the fetched abstract". I'll do a token-level check of the first N tokens of evidence_excerpt against the fetched abstract/title when available.
+- class_mapping / used_by_theorems (can't be verified externally, but we can check internal referential integrity: does used_by_theorems T-xxx exist in ledger/theorems.jsonl? and is the class_id among the frozen four?)
+- status/verdict fields (verified-api / verified-primary) — check consistency: if arxiv_id exists, arXiv API should resolve; if doi exists, Crossref should resolve.
+
+Falsifier: if any sampled row's fetched primary metadata contradicts the ledger's title/authors/year at content-token level, or the DOI/arXiv ID resolves to a different work, or evidence_excerpt's quoted tokens are absent from the fetched abstract, then the citation audit's "verified" verdict does not hold for that row (falsifies the row-level claim); a single such failure falsifies my overall accept.
+
+Let me check reviews/L1-spotcheck-10.json and 11.json for their row ranges and hashes.
+dsh: reasoning:
+Now I understand:
+- worker-07: check_number 3, rows 41-95 (41,49,57,65,73,80,81,89), hash current.
+- worker-086: check_number 4, rows 1-40 subset + terminal rows 96,97, hash current.
+- flash-10/11 reviews bind to a stale hash (not counted).
+
+So rows 90-95 are untouched, and 96-97 were done by worker-086. To be strictly disjoint from *all* prior sampled rows: avoid {1,4,9,16,17,25,33,41,49,57,65,73,80,81,89,96,97} and cover rows 42-48,50-56,58-64,66-72,74-79,82-88,90-95. My proposed rows 90-95 (6 rows) + some targeted augmentations from the untouched middle: e.g., rows 46, 54, 62, 70, 78, 86 (every 8th starting at 46). That's 12 rows — a solid sample, disjoint from all three prior checks.
+
+Actually let me think about value: A ">=3 independent spot checks" criterion is a control designed to ensure the ledger's citations are re-fetched by independent agents. The most useful third check: sizable sample, disjoint, covers all four classes, includes load-bearing sources (those used_by_theorems != "(evidence/tag only)", and the class-mapped ones). Let me identify which rows map to the four classes and which are load-bearing, to target a subset while keeping the sample frozen before fetching.
+
+Let me now inspect the ledger columns more fully and the class_mapping distribution, plus which citation_ids are used by theorems T-xxx. Then freeze the sample list in a manifest before fetching.
+
+Plan for the artifact:
+- `artifacts/worker-022/l1_spotcheck/sample_manifest.json` — frozen sample (rows, source hash, rule, timestamp) written BEFORE any fetch.
+- `artifacts/worker-022/l1_spotcheck/raw/<src>_<api>.{xml,json}` + `raw/fetch_log.tsv` + sha256 of each raw body.
+- `artifacts/worker-022/l1_spotcheck/spotcheck-l1-022.json` — results, verdict, falsifier, independence note, non-claims, class coverage.
+- `.sha256` of the artifact.
+- `artifacts/worker-022/l1_spotcheck/run_spotcheck_022.py` — the script (reproducible).
+- outbox events: `artifact` + `status` + maybe `review` (a review event pointing at L1 with verdict). Let me look at how flash-07 emitted its artifact and review events, to match schema and avoid validation rejects. Let me read one of its outbox files.
+
+Also check `apply_events.py` / `comms.py` for how artifact/review events are ingested and what fields are validated (rejects). I want my event to be accepted, not rejected. Let me look at comms.py validation rules briefly.
+dsh: reasoning:
+Let me read comms.py around lines 100-290 to understand normalization and required fields for each event type — so my events get accepted. Particularly the artifact event: required node_id, artifact_type, path, sha256, validation_status. Status event: node_id, status (one of queued|active|blocked|done|rejected|killed), hours, summary, evidence_refs, next_falsifier.
+
+Let me read that section.
+dsh: reasoning:
+I understand the schema. Now let me plan the task concretely and freeze the sample.
+
+First, verify the current state:
+- Ledger hash: compute sha256 of ledger/citation_audit.csv. Should be 315c19145065a5f9c95d64461eae760b4c296b06d1f2f09bc5847ac1a7064ce9.
+- Get all 97 rows and their fields; identify rows not yet sampled and with class mappings.
+
+Then freeze sample: I'll choose a stratified sample:
+- Terminal block rows 90-95 (6 rows, untouched; contains SRC-091 (SCC-C0 + WCC), SRC-094 (SCALAR-SPH)).
+- Every 8th row from the untouched middle: rows 46, 54, 62, 70, 78, 86 (6 rows).
+Total 12 rows. All disjoint from {1,4,9,16,17,25,33,41,49,57,65,73,80,81,89,96,97}. Let me double check: 46,54,62,70,78,86 and 90-95. Yes disjoint.
+
+Class coverage: need to check class_mapping of these rows. Let me pull them.
+
+Also, "load-bearing" sources: used_by_theorems != "(evidence/tag only)". Let me include a targeted augmentation of at most 2 rows that are load-bearing and untouched by prior checks. But every added row must be declared before fetching. Let's look at the data first.
+
+Then:
+- Write sample_manifest.json (frozen, with timestamp and ledger hash).
+- Write run_spotcheck_022.py which reads the manifest, re-verifies the ledger hash, fetches each row from arXiv and/or Crossref, saves raw bodies with sha256, compares, and writes the result JSON. Run it.
+- Verify artifact; compute sha256; write .sha256 file.
+- Emit outbox events (artifact, status, review maybe).
+- Write checkpoint.
+- Optionally run `python3 research_map/validate_map.py`? That's controller's tool; not mine. I can run comms.py ingest? No — "accepted stream: research_map/events.jsonl | comms.py ingest only" — ingest is a controller command. Protocol says controller commands; as a worker I should not run ingest (the supervisor runs run_cycle/lifecycle). Actually flash-07 wrote event files into its outbox dir; the controller ingests. I'll do the same: write events into `comms/outbox/deepseek-flash-022.jsonl` (protocol says outbox/<agent>.jsonl, one JSON object per line). Note flash-07 used a directory with individual files, which `outbox_files()` rglobs — both work. The canonical protocol path is `comms/outbox/deepseek-flash-022.jsonl`. I'll use the jsonl file per protocol.
+
+Wait: agent id. In the map actors, is "deepseek-flash-022" a known actor? The protocol says agent ids deepseek-flash-01…deepseek-flash-20. I'm worker=022. The launch script names sessions deepseek-flash-01..20, but the supervisor (launch_swarm.sh, independent_supervisor) may spawn more workers with ids 021+. Let me check what agent IDs exist in the map/actors and events for workers >20 (e.g., worker-022). Also check the supervisor scripts to see how they launch worker 022 — the prompt says worker=022. Let me look at `independent_supervisor_100.sh` (modified 00:11) and `supervise_swarm.sh`, which likely launch workers 021-100 with ids `worker-021` etc.
+
+This matters for choosing my outbox filename. Let me check.
+dsh: reasoning:
+So the supervisor launches workers with tmux session names `worker-<NN>` and prompt "worker worker=<NN>". I am worker 022. My agent id in comms should therefore probably be `worker-022` (matching the supervisor) — like existing `worker-06`, `worker-16`, `worker-01`, `worker-036`, etc. in the map. Yes: map assignments include assignee `worker-06`, `worker-16`. And `comms/inbox/worker-01.jsonl`, `worker-06.jsonl`, `worker-16.jsonl` exist. So my ID is `worker-022`, outbox at `comms/outbox/worker-022.jsonl` (or a directory). Let me check how worker-06 wrote its outbox events (comms/outbox/worker-06.jsonl? there's deepseek-flash-06.jsonl and worker-06 inbox). Let me check existing worker-0XX outbox naming and events.
+
+Also check if there's an inbox assignment for worker-022 (none found earlier; inbox only has worker-01, 06, 16). Confirmed no assignment → per worker prompt: "if no assignment exists, inspect the immediate queue and propose one artifact-backed task without claiming completion."
+
+So my plan: choose the L1 third spot-check task from the immediate queue (G-LIT criterion unmet), produce artifact, emit events as `worker-022`, checkpoint. Do not claim completion; status "active".
+
+Let me look at one existing worker-<NN> outbox to imitate. Check `comms/outbox/worker-06.jsonl`? Let me list files matching worker.
+dsh: reasoning:
+I now have a clear pattern. Note that workers 059, 065, 084, 086 (the >20 fleet) self-issued tasks from the immediate queue when no assignment card existed. My task should be similar: bounded class-bound task, artifact + evidence + hash + falsifier, checkpoint, no completion claim.
+
+Important observation: F1 canonical hash has changed again! worker-086 cites `schemas/af_wcc_vacuum.yaml` sha256 `16128b62fe08...` (not `68392dd82050` from the 00:17 audit). The lead-formulation is actively republishing. So F1/F2 tasks are in flux. The L1 ledger hash 315c19145065 is what's measured and stable since 00:08.
+
+Decision: Do the L1 independent re-fetch spot check #5 (rows disjoint from checks 3 and 4), binding to the measured ledger hash. This directly targets the G-LIT unmet criterion ("required >=3"; currently 2 binding). It's bounded, machine-checkable, class-bound (all four class ids), and genuinely useful evidence — exactly recommendation (b) verification layer.
+
+Wait — is it within a worker's rights to create a spot check? Yes: L1 protocol events, outbox artifact. worker-07 and worker-086 did exactly this.
+
+Now, should I worry that "G-LIT" pass requires exactly this and my artifact could be seen as gaming the counter with a weak sample? Make the sample real and substantial: ~12-14 rows, all disjoint from prior checks, with per-row primary-source re-fetch and raw evidence. Also include negative-control discipline: I can't include a fake row in the real ledger, but I can validate that the fetch pipeline distinguishes a wrong identifier (e.g., query a different arXiv ID for one row and show mismatch detection) — a built-in negative control that proves the comparator actually detects mismatch. That strengthens the check. Let me include one such control: take row SRC-041 (already sampled by worker-07, no harm — it's a control, clearly labelled and not counted toward the independent frame) and compare against a deliberately wrong arXiv ID; the comparator must return MISMATCH. Actually simpler: for each fetched record, run the comparator against a shuffled title from another sampled row? Hmm. Better: one declared control pair (SRC-041 vs arXiv ID of SRC-049) showing mismatch detection. Clearly labelled as negative control, excluded from the sample frame. That demonstrates the falsifier machinery works.
+
+Let me not overcomplicate. Core deliverable:
+1. `sample_manifest.json` — frozen before fetch: ledger sha256, rule, rows, class coverage, disjointness proof vs checks 3/4 and reviews 10/11.
+2. `run_spotcheck_022.py` — fail-closed on ledger hash mismatch; fetch each row; save raw; compare; write results; support `--dry-run`? Keep simple.
+3. `spotcheck-l1-022.json` — the artifact with results.
+4. `raw/` bodies + `fetch_log.tsv`.
+5. `.sha256` files.
+6. Outbox events: status (task claim) + artifact (the spotcheck) + review (verdict on L1 rows, scoped) — all with proper fields.
+7. Checkpoint `runtime/state/w22_checkpoint_1.json` + `runtime/state/w22_checkpoints.jsonl`.
+8. Maybe also `reviews/L1-spotcheck-022.json`? I decided one counted file is cleaner. But wait — the glob `artifacts/*/l1_spotcheck/spotcheck-l1-*.json` matches my artifact path exactly (`artifacts/worker-022/l1_spotcheck/spotcheck-l1-022.json`). Good, and it contains the prefix.
+
+Hmm, but should my artifact filename include the ledger prefix? The glob requires the file text to contain prefix; the JSON `inputs` will contain the full sha256. Good.
+
+Now the danger: if the literature lead rewrites `ledger/citation_audit.csv` during my run, my artifact binds to the old (superseded) hash and won't count. worker-07's approach: record hash before/after; if drift, fail closed and re-pin. I'll do the same. If it drifts before/during, I'll re-pin to the new measured hash and sample rows in the new revision (rows still by source_id), recording the drift history. That's the honest approach and keeps the artifact binding to the live measured hash.
+
+Let me first check current ledger hash and the candidate rows. Also check the theorems.jsonl referential integrity for used_by_theorems of sampled rows. Let me pull the data.
+dsh: reasoning:
+Good. Ledger hash currently matches the measured 315c19145065. My candidate rows have good class coverage:
+- SRC-046: AF-WCC-SCALAR-SPH, load-bearing (D-006;T-101;T-102;T-107)
+- SRC-054: AF-WCC-VAC-GEN, T-201
+- SRC-062: AF-SCC-C0 + AF-WCC, T-206;T-301;T-515;T-528
+- SRC-070: evidence only, T-519
+- SRC-078: all three classes, load-bearing T-401;T-515;T-528
+- SRC-086: T-514
+- SRC-090..095: terminal block; SRC-091 (SCC-C0+WCC, T-515;T-528), SRC-094 (SCALAR-SPH, T-103), SRC-095 (T-505)
+
+Note: worker-09's messages flag that SRC-090 is "unread"/provisional and SRC-092/093 are known gaps. My re-fetch will independently test those. Good — high value.
+
+Sample design (frozen, 12 rows, all untouched): 46, 54, 62, 70, 78, 86, 90, 91, 92, 93, 94, 95.
+
+Every row can be fetched from either arXiv or Crossref (all have arXiv id and/or DOI). 
+
+Some concerns:
+- arXiv IDs like 2606.28008, 2605.16235, 2606.28253 look like future/fake (2026-06). These are from simulated "2026" preprints. Does export.arxiv.org resolve them? Possibly not (arXiv IDs 2606.* don't exist in reality as of the true date). The ledger claims verified-api for them. If arXiv API returns no entry, that's a finding — but careful: this sandbox may have a proxy/mirror; the swarm environment is simulated with dates in 2026. Let me test a couple of these IDs first to see what happens. If the API can't resolve 2606.*, then "no resolution" is not necessarily falsification of the citation (it may be an artifact of the sandbox's network mirror). I must report raw outcomes and scope the verdict carefully: a non-resolution is "unresolvable from this sandbox at this time" and cannot be counted as a pass; it should go to "unverified/unresolved" rather than "mismatch". The falsifier should distinguish:
+  - MISMATCH: fetch resolves to a *different* work (title/author/year disagreement beyond normalization).
+  - UNRESOLVED: fetch fails or empty (not evidence of fabrication, but cannot count as verified; the row's status claim "verified-api" then fails closed for this check).
+  - MATCH: resolves and metadata agrees; evidence excerpt tokens present in abstract (when abstract available).
+
+Let me test the DOI/arXiv endpoints for a couple of rows first (without writing artifacts yet) to understand the environment:
+- arXiv: 2606.28008, 2605.16235, gr-qc/0512119, 0711.4620
+- Crossref: 10.1090/conm/132/1188443, 10.1007/s00023-024-01454-x
+
+Let me batch these tests.
+
+Also check whether the ledger's `verified-api` claims were made via these APIs in this environment. Let me look at a raw source dir from worker-086 for the exact URLs and methods.
+
+After testing, I'll freeze the manifest and write the script.
+
+One more consideration on time: I should be quick — the fleet is running and the ledger may change. Let me move.
+dsh: reasoning:
+Excellent. The arXiv API resolves even the 2026 IDs (this environment's mirror has them). Crossref mostly works; one 429 rate limit (need retry/backoff). 
+
+Note the arXiv results might be synthetic for this simulated environment but they resolve. Good.
+
+Now let me build the artifacts. First create the directory and freeze the manifest. I'll write:
+
+`artifacts/worker-022/l1_spotcheck/sample_manifest.json`:
+- schema_version, artifact_type: l1_spotcheck_sample_manifest
+- actor worker-022, created_at (real wall clock; use `date -Is`)
+- ledger path + sha256 (pinned)
+- data_rows 97
+- frame: "rows 46,54,62,70,78,86,90-95 (12 rows)"
+- rule: "stratified: every 8th row of untouched frame starting at 46 (46,54,62,70,78,86) + terminal block rows 90-95; frozen before any fetch"
+- disjoint_from: worker-07 rows / worker-086 rows / reviews 10/11 rows
+- class coverage expectation
+- negative_control: one declared control pair
+- falsifier
+
+Then `run_spotcheck_022.py` does the work.
+
+Comparison logic:
+For each row:
+- ledger fields: title, authors, year, venue, doi, arxiv_id, evidence_excerpt.
+- fetch arXiv (if arxiv_id) and Crossref (if doi): 
+  - arXiv entry: title, authors (names), published year, summary (abstract), doi field, journal_ref.
+  - Crossref: title, author list (given/family), issued year, container-title, DOI.
+- Normalize: lowercase, strip LaTeX-ish commands, punctuation, whitespace collapse.
+- title_match: exact normalized equality OR token containment (one contains other) OR high Jaccard (>=0.8). I'll implement: normalized ledger title vs fetched title; classify MATCH if equal or one is a prefix/substring containing >=90% of the other's tokens. Report similarity details.
+- author_match: first author surname presence + count of ledger authors found in fetched author list.
+- year_match: within ±1.
+- excerpt_token_check: take quote content tokens (words length>=4 after stripping LaTeX), require >=60% present in fetched abstract for arXiv-fetched rows. For Crossref-only rows, no abstract → skip with "not_applicable".
+- Negative control: compare SRC-041's ledger title against arXiv:0908.1803 (Christodoulou 2009, "The formation of black holes..."): expect MISMATCH. Include it as `control` with result; if the control yields MATCH, my comparator is broken → overall verdict FAIL (fail-closed).
+
+Row-level verdict:
+- MATCH if title matches and (arxiv or crossref) and (excerpt pass or N/A) and year within ±1.
+- MISMATCH if resolved but title similarity below threshold (or wrong work).
+- UNRESOLVED if all attempted fetches failed/empty.
+- REVIEW if partial (title matches but excerpt fails, or year off).
+
+Overall verdict:
+- PASS (accept-at-scope) if no MISMATCH, all rows MATCH, negative control detected, ledger hash stable.
+- REVISE if any REVIEW/UNRESOLVED.
+- FAIL if any MISMATCH or control failure.
+
+Then emit events:
+1. status (task claim, created before starting? The convention seems to be claim events written at task start. But I'm already running; I'll write one "task claim" status event with current timestamp now-ish, before running the script, then the artifact + review + final status after. Actually to keep it simple and honest, I'll write the claim event now (with created_at = actual wall clock) before running the script, then append artifact + review + checkpoint status.)
+
+Wait: real wall clock — what is the actual system date? Let me check `date -Is`. The swarm's simulated date is 2026-09-12. The workspace files show Sep 12 timestamps. Let me check. If system date is 2026-09-12, then created_at will be consistent.
+
+Let me check date and existing clock discipline (CF-14: future-dated events). I'll use actual `date -Is` from the system.
+
+Then checkpoint `runtime/state/w22_checkpoint_1.json` with fields: checkpoint, at, worker "worker-022", node L1, class_ids, gate G-LIT, hours, task, artifact sha256, ledger hash, fetch summary, drift check, next falsifier, non-claims. Append JSON line to `runtime/state/w22_checkpoints.jsonl`.
+
+Let me check the time first, then write the manifest and script.
+
+One design point: the script must be deterministic and fail-closed. It will:
+- accept `--ledger` and `--out`
+- verify sha256 == pinned in manifest; if not, abort with drift report unless `--repin` given.
+- write raw bodies to `raw/`.
+- write `spotcheck-l1-022.json` and `fetch_log.tsv`, and `.sha256`.
+
+Let me now write the files. First, check date and create the task-claim outbox event.
+
+Also — one consideration about writing to `comms/outbox/worker-022.jsonl`: the supervisor's controller ingests outbox files. Fine.
+
+Let me proceed. Step 1: `date -Is`, mkdir, write manifest via python (so hashes/timestamps accurate).
+dsh: reasoning:
+Manifest frozen at 00:19:45 with ledger hash 315c19145065 matching the measured hash.
+
+Now write the runner script. Requirements:
+- fail-closed on ledger hash mismatch (unless --repin).
+- fetch arxiv/crossref with retries for 429.
+- raw bodies saved, sha256 in log.
+- comparison.
+- write result JSON.
+- print summary.
+
+Let me check the checker/util for class separation? Not needed — this is L1 not class binding. But I should verify the referenced theorems exist in ledger/theorems.jsonl (referential integrity) — that's a cheap extra check on the ledger. Let me check theorems.jsonl structure first.
+
+Also: do rows have `used_by_theorems` pointing to theorem IDs like T-101? Verify presence.
+
+Let me read a theorems.jsonl line.
+dsh: reasoning:
+Theorems ledger has 62 entries with IDs D-xxx and T-xxx. I can check referential integrity for used_by_theorems of sampled rows.
+
+Now let me write the runner script. I'll write it carefully with Python stdlib only (urllib or subprocess curl). Using urllib is cleaner and avoids shell quoting. But the environment may require proxies... curl worked directly. Python urllib should work too (same environment). Let me use urllib with a User-Agent and retries. Raw response bodies written to disk.
+
+Comparison functions:
+- `norm(s)`: unicode NFKD, lowercase, replace LaTeX commands (`\command`), braces, `$`, punctuation to space, collapse whitespace.
+- `tokens(s)`: set of tokens len>=3 (or all tokens).
+- `jaccard(a,b)`.
+- title_match(ledger, fetched): eq or containment or jaccard>=0.85.
+- arXiv entry parsing: xml.etree.ElementTree with namespaces. Fields: title, summary, published, authors (name), doi, journal_ref, id.
+- Crossref: message.title[0], author list given/family, issued.date-parts[0][0], container-title[0], DOI, abstract (some have).
+- Year: ledger `year` column.
+- excerpt check: ledger `evidence_excerpt` — may be long and contain LaTeX. Extract alphanumeric tokens length>=5, count how many appear in fetched abstract (normalized). Threshold: >=0.6 → pass; <0.4 → fail; between → partial. Only when abstract available. Also skip when excerpt is empty.
+- Also verify locator identity: for arXiv fetch, the returned entry's `<id>` must contain the queried arxiv_id (normalize version suffix). For Crossref, returned DOI must equal queried DOI (case-insensitive). If not → MISMATCH (wrong locator).
+
+Negative control CTRL-01: ledger SRC-041 vs arXiv 0908.1803. Expect title mismatch. If title_match true → control failure.
+
+Row verdicts:
+- MISMATCH: fetched resolves but title incompatible OR locator mismatch.
+- UNRESOLVED: no fetch resolved.
+- PARTIAL: title matches but excerpt fails or year off by >1.
+- MATCH: title matches, locator matches, year within 1, excerpt pass/N/A.
+
+Overall:
+- FAIL if control failure or any MISMATCH.
+- REVISE if any UNRESOLVED/PARTIAL (and no FAIL).
+- PASS if all MATCH, control detected, no drift.
+
+Also record ledger hash after fetch; drift → mark `ledger_drifted_during_fetch: true` and overall REVISE (or FAIL? A drift invalidates the binding; I'd say REVISE with clear note. worker-07 recorded drift and re-pinned. If drift happens, I'll re-pin to the new hash, re-verify sample row source_ids, and note it. But since the run is quick (~1 min), drift is unlikely.)
+
+Output artifact JSON fields (following worker-07/086 conventions):
+schema_version, artifact_type "l1_spotcheck", node_id L1, gate G-LIT, class_ids, actor worker-022, reviewer worker-022, check_number 5, created_at, independence_note, independent_of, inputs{ledger...}, sampling_rule, method, results[], controls[], summary{rows_checked, match, partial, mismatch, unresolved, class_coverage}, hard_failures[], verdict, falsifier, falsifier_outcome, limitations, non_claims, reproduce, ledger hash before/after.
+
+Then `.sha256` file.
+
+Let me write the script now. I'll use the write tool. The script should be self-contained, deterministic, and named `run_spotcheck_022.py` in the artifact dir.
+
+I need to be careful with the artifact JSON's `created_at` being real time.
+
+Let me write it.
+dsh: reasoning:
+There's a leftover weird line:
+
+```python
+    sample = [int(x) for x in re.findall(r"\d+", man["frame"].split("(")[0])] if False else \
+        [46, 54, 62, 70, 78, 86, 90, 91, 92, 93, 94, 95]
+```
+
+That's ugly but functional. Better to fix it to parse the sample from the manifest's frozen rule properly — but hardcoding matches the frozen manifest and is fail-closed if the manifest changes? Actually hardcoding means if the manifest were edited, the script wouldn't notice. Better: store the explicit sample list in the manifest and read it. I already have `frame` but not `sampled_rows`. Let me add `sampled_rows` to the manifest (it's now after freezing... modifying the manifest after freezing would invalidate its hash and the "frozen before fetch" property; but no fetch has happened yet, and the manifest hash is recorded only inside the artifact produced after the run. Still, honest process: the sample was declared in the manifest before any fetch; adding the explicit row list is just clarification of the same frozen sample, and no fetch has occurred yet. I'll do it now, before fetching, and note that created_at stands. It's fine.)
+
+Let me update the manifest to include `sampled_rows` and clean up the script to read `man["sampled_rows"]`. Also fix the `do_fetch` unused `tag` param and `primary` selection: `a or c` — if arXiv returns an entry that's empty/None, fine.
+
+One issue in the script: `rec["fetches"]["arxiv"]` etc. — good. Another: if `a` is None but `c` is not, primary = c, and `rec["year_check"]["fetched"]` uses `(a or {}).get(...)` → "" then `or (c or {}).get("year")` → works because `""` is falsy. Good.
+
+Another issue: `if r.get("arxiv_id")` — the CSV may have empty strings. Good.
+
+Also `do_fetch(url, tag)` computes digest; fine.
+
+Potential issue: `parse_arxiv` may throw if the feed has no entry; handled.
+
+Let me update the manifest to add sampled_rows (before any fetch), then edit the script.
+dsh: reasoning:
+Now run the script. It will take ~12 rows × up to 2 fetches × maybe retries = manageable. Let me run with a generous timeout (300s). Run in foreground since I need output.
+
+Before that, write the task-claim status event to the outbox (convention: claim before doing the work). Let me do both: first append the claim event, then run.
+
+Actually the claim event should have created_at before the artifact; use current time. Let me append it to `comms/outbox/worker-022.jsonl`.
+dsh: reasoning:
+A MISMATCH was found among the 12 rows. 11 MATCH, 1 MISMATCH. Negative control detected correctly. Ledger stable.
+
+Let me inspect which row mismatched and why. This is a genuine finding — I must report it carefully and accurately (it could be a false positive of my comparator). Let me examine the artifact results.
+dsh: reasoning:
+Interesting. SRC-086 (Luk-Oh 2019 Annals, arXiv:1702.05715). The ledger title is "Strong cosmic censorship in spherical symmetry for two-ended asymptotically flat initial data I (Crossref record, published version)"; the fetched title (arXiv, and Crossref) is "Strong cosmic censorship in spherical symmetry for two-ended asymptotically flat initial data I. The interior of the black hole region".
+
+Hmm wait, the fetched record is the *same work* — the arXiv title includes the subtitle "The interior of the black hole region", while the ledger's title omits the subtitle and adds a parenthetical note "(Crossref record, published version)". Token jaccard 0.5556 because the fetched title has 9 extra tokens. This is NOT a different work — same paper, abbreviated/annotated title in the ledger.
+
+Wait, but which fetch produced the primary title? `primary=a or c` → arXiv record. The ledger title says "(Crossref record, published version)". For the published version, the Annals title is probably "Strong cosmic censorship in spherical symmetry for two-ended asymptotically flat initial data I. The interior of the black hole region" — with subtitle. The ledger dropped the subtitle and annotated the source.
+
+So my comparator's threshold (jaccard>=0.8 on tokens len>=4) flagged this as MISMATCH, but it's really a title-truncation/annotation mismatch, not a wrong-work resolution. The locator check passed (arXiv ID matches). The right classification: MATCH (title compatible — ledger title is a prefix/containment of the fetched title, modulo the parenthetical annotation). But wait: containment check failed because the ledger has the trailing annotation "(Crossref record, published version)" which isn't in the fetched title, and the fetched has the subtitle not in the ledger. So neither contains the other.
+
+I need to handle ledger title annotations: strip parentheticals like "(Crossref record, published version)" and compare the substantive title. Then ledger "strong cosmic censorship in spherical symmetry for two ended asymptotically flat initial data i" vs fetched "strong cosmic censorship in spherical symmetry for two ended asymptotically flat initial data i the interior of the black hole region" → containment → MATCH.
+
+This is an honest comparator refinement, but I must be careful not to weaken the falsifier to force a pass. The correct semantics: the ledger title is a *short title with a source annotation*; the fetched title is the full published title. A one-directional containment after removing bracketed annotations is legitimate compatibility. I'll make the refinement explicit, rerun the comparator (not re-fetch — raw bodies are already on disk; I can re-analyze from raw to keep determinism), and record both classifications in the artifact: `raw_verdict` (strict token-jaccard) and `adjudicated_verdict` with the annotation-stripping rule. Hmm, but that risks looking like I tuned the threshold until it passed.
+
+Alternative: keep the strict comparator result and report SRC-086 as a **title-scope finding (minor)** rather than a hard MISMATCH: i.e., verdict PASS-with-finding or REVISE. The project values honest reporting: "the ledger's title for SRC-086 is a truncated/annotated form; locator resolves to the same work; subtitle omitted". This is genuinely a minor ledger hygiene finding, not a fabrication. I should not claim FAIL on a wrong-work basis when it's the same work.
+
+The cleanest engineering: add a `title_compat` rule with explicit normalization of bracketed annotations and a two-sided containment test, applied to ALL rows uniformly (not just the failing one), and report:
+- `title_check.strict` (jaccard without annotation stripping)
+- `title_check.annotation_stripped_containment`
+- verdict based on the disjunction: exact OR containment OR annotation-stripped containment OR jaccard>=0.8.
+And keep a `findings` entry for SRC-086: "ledger title omits subtitle and carries source annotation; strict token-jaccard 0.556 — ledger hygiene note, not a wrong-work resolution".
+
+To avoid any appearance of post-hoc tuning, I'll document the rule in the script before rerunning and note that the change was made after the first pass in response to the SRC-086 case; both passes' outputs can be reproduced. Actually better: keep the first raw result file as `pass1_strict` evidence? That would clutter. I can note it in the artifact's `revision_note` and in the outbox event: "pass 1 strict comparator flagged SRC-086; adjudicated as same-work subtitle omission, not a locator failure; comparator revised uniformly before the final artifact (no other row's verdict changed)".
+
+Actually, the most honest approach: don't re-run the whole thing to get a nicer verdict. Instead, report the artifact with verdict `REVISE` (not FAIL) and hard_failures: [] plus a `findings` list containing the SRC-086 title-hygiene item and the strict-comparator note. Explanation: the falsifier is defined as "fetched primary record resolves to **a different work** (title-token set incompatible with the ledger title)". SRC-086's fetched record is the same work: arXiv ID and DOI resolve to the same identifier (locator ok), first author/year match, abstract supports the quote at 0.52. A subtitle-bearing full title vs a truncated ledger title is not "a different work" — the token-set incompatibility criterion (jaccard<0.8) was a *proxy* that misfired on a legitimate abbreviation. So verdict: "REVISE" with zero hard failures and one soft finding. That's defensible and doesn't require touching the comparator.
+
+But the automated script currently computes FAIL. I can add explicit adjudication fields and recompute overall with the documented rule. To keep reproducibility, I'll modify the script's title_match to include the annotation-stripped containment test (uniform rule) and rerun the *analysis only* from raw bodies (no network re-fetch needed; but rerunning the script re-fetches, which is fine and fast, ~30s). The refined rule changes only SRC-086's verdict from MISMATCH to MATCH with a `soft_finding`.
+
+Also note SRC-086's excerpt support is 0.5238 — above the 0.4 threshold, so fine.
+
+Let me check SRC-086's fetched titles from both arXiv and Crossref to confirm they're the same work and see the Crossref title. Let me read the raw bodies.
+
+Then implement:
+1. `strip_annotations(title)`: remove bracketed/parenthetical segments (both `(...)`, `[...]`), e.g. "(Crossref record, published version)".
+2. `title_match` gains: exact → containment → annotation-stripped containment → jaccard>=0.8.
+3. Record `title_check.method` used and a `note` when the match relied on annotation stripping.
+4. Add `soft_findings`: for SRC-086 the ledger title is an abbreviated form omitting the published subtitle; recommended to carry the full title or mark the abbreviation.
+5. Verdict rule: soft findings alone → overall "PASS_WITH_FINDINGS"? The protocol values are accept/revise/reject. I'll use overall verdict values PASS / PASS_WITH_FINDINGS / REVISE / FAIL. Hmm, changing the vocabulary could confuse the controller. worker-07's artifact used MATCH sets. Let me use: `"verdict": "PASS"` with `"soft_findings"` non-empty, and `summary.overall_verdict: "PASS_WITH_FINDINGS"`? Simpler: keep overall_verdict "PASS" and include soft_findings; the review event can say verdict accept with score 4 and findings.
+
+Wait — what's the right call? The G-LIT spot check's purpose: confirm rows are not fabricated/mismatched. 11/12 strict-match, 1 same-work abbreviated title. That's an accept with a minor finding. Yes: overall PASS with soft finding.
+
+Let me check the raw records for SRC-086 first to be sure about the same-work claim (compare DOI/arXiv id, authors, year).
+dsh: reasoning:
+Confirmed: SRC-086's ledger title is a truncated/annotated version of the same work (Luk–Oh 2019 Annals; DOI matches; authors match; year 2019 matches). Not a different work.
+
+Now update the script's title_match to include annotation-stripped containment as a uniform rule, and add soft findings. Let me edit the script:
+
+1. Add `strip_annotations` function.
+2. In `title_match`, after containment, add annotation-stripped containment.
+3. Add note field when stripping was needed.
+4. Add `soft_findings` computation: for each MATCH whose strict (non-stripped) jaccard < 0.8 and no containment → add soft finding "ledger title is an abbreviated/annotated form of the fetched published title".
+   Simpler: in the row record, `title_check.strict_jaccard`, `title_check.method`. Then soft finding if method in ("annotation-stripped-containment",).
+5. Summary: add `soft_findings` count; overall: FAIL if mismatch/control; REVISE if unresolved/partial/drift; PASS otherwise (soft findings don't downgrade). Artifact top-level `soft_findings` list.
+6. The artifact currently overwrites each run; rerunning is deterministic given raw bodies (same URLs). The fetch_log will be rewritten.
+
+Also, since the script re-fetches, I should confirm that the re-fetched bodies are byte-identical (sanity). Not necessary.
+
+Let me make the edits.
+dsh: reasoning:
+Now add soft_findings collection in main:
+- In the results loop, after rec["title_check"], if verdict MATCH and title_check reason == "annotation-stripped-containment", append a soft finding.
+- Add `soft_findings` list at artifact level.
+- Overall verdict unchanged logic (PASS if no mismatch/unresolved/partial/drift/control issue).
+- `falsifier_outcome`: "not triggered" if overall PASS/REVISE and no hard failures.
+
+Let me apply the edits.
+dsh: reasoning:
+Wait — the `soft.append` inside the loop happens even if the row later gets a non-MATCH verdict (e.g., excerpt failure → PARTIAL). Should only add soft finding if final verdict is MATCH. Let me restructure: record `tinfo` in rec, then after verdict determination, if verdict == MATCH and reason == annotation-stripped-containment → soft append. Let me inspect the current loop region and fix.
+
+Let me view the relevant section of the file.
+dsh: reasoning:
+Hmm, that edit did the reverse of what I wanted — it removed the soft append block. Wait no: old_string had the soft block, new_string doesn't. That's wrong direction; I intended to MOVE the block after verdict. Let me re-add it after the verdict determination (after line with `rec["verdict"] = "MATCH"`), conditioned on final verdict == "MATCH".
+
+Let me view lines 270-295 and edit.
+dsh: reasoning:
+Now add `soft_findings` to the artifact JSON and summary. Let me find the artifact construction block and add:
+- `"soft_findings": soft,` after hard_failures
+- summary: `"soft_findings": len(soft)`
+- falsifier_outcome unchanged.
+
+Also update `falsifier_outcome`: if overall PASS and no hard → "not triggered".
+
+Let me view the artifact dict part.
+dsh: reasoning:
+Now also record the revision note about the comparator change in the artifact (honesty about pass 1). Add a `revision_note` field. And the `method` string should mention annotation stripping. Let me update the method string and add revision_note.
+
+Also: the first run's output artifact (44ab4eb...) is about to be overwritten. I could preserve it as `pass1_strict_comparator/spotcheck-l1-022-pass1.json` for the audit trail. That's good practice: copy the current file before rerunning. Let me do that.
+
+Then rerun.
+
+Let me update method + revision_note.
+dsh: reasoning:
+Wait, there's an issue: the replacement added the new method + revision_note but the old_string ended with `used_by_theorems checked for existence in ledger/theorems.jsonl"),` — and the new_string ends with the revision_note. But I removed the closing of the method string? Let me check: new_string's method line ends with `...ledger/theorems.jsonl"),` then revision_note ends with `),`. That looks right.
+
+However, the pass1 artifact hasn't been saved yet, and the current artifact on disk is the pass1 result (44ab4eb). Let me copy it to pass1_strict/ before rerunning. Also copy its .sha256.
+
+Also check the hardcoded hash "44ab4eb2386dc5b0" in the revision note — the actual sha256 was 44ab4eb2386dc5b0c0d58463684d76a99f67a3761dd3a50e65a3fa465238a52f. Good.
+
+Also the `falsifier_outcome` uses `overall in ("PASS","REVISE")` — fine.
+
+Now: the summary `soft_findings` etc. Let me save pass1 and rerun.
+dsh: reasoning:
+Now the run is PASS: 12/12 MATCH, negative control detected, no drift, artifact sha256 3932a6574aded233fa064aece8da6fa4856636ebf1babac077245e60834e4f57.
+
+But wait — the re-run overwrote the raw bodies and fetch_log. Did the re-fetch produce identical raw bodies? Let me verify that at least the SRC-086 and a couple others have same hashes as pass 1. The pass1 artifact contains fetch sha256s. Let me compare pass1 vs pass2 fetch hashes across all rows to confirm determinism. If some differ (e.g., arXiv request IDs are embedded in the feed `<id>https://arxiv.org/api/...` — wait, that's the feed-level id, which changes per request!). The `<entry>` id is stable. But the raw body bytes include the feed id `<id>https://arxiv.org/api/RANDOM</id>` at the top, so raw body hashes will differ between runs. That's fine — raw hashes are recorded per run; the artifact's fetch hashes correspond to the current raw files on disk. But then "reproduce" determinism: raw hashes aren't stable across re-fetches because of the feed request id. Not a problem for the artifact's internal consistency (sha256 of raw file on disk matches logged hash).
+
+Let me verify internal consistency: for each entry in the current artifact's `fetches`, the raw file hash matches the logged sha256. Also verify artifact sha256 file matches actual.
+
+Also check soft findings list and the SRC-086 record now. Then check the artifact JSON for correctness: control, summary, warnings.
+
+Then:
+- Write a small README for the artifact dir explaining contents (good practice; worker-059 style used dirs).
+- Emit outbox events: artifact event + review event + final status/checkpoint event.
+- Write checkpoint file + jsonl.
+- Also verify the l1_spotchecks glob counts my file: check `python3 -c` import astra_lifecycle... easier: grep the prefix in my artifact and confirm the glob matches `artifacts/*/l1_spotcheck/spotcheck-l1-*.json`. Yes: `artifacts/worker-022/l1_spotcheck/spotcheck-l1-022.json` and contains 315c19145065.
+
+Let me do the verification.
+dsh: reasoning:
+Artifact is internally consistent. Now let me also verify the exact names/hashes of the two schemas referenced... no, not needed for L1.
+
+Let me also double check the `class_coverage` claim: rows 46 (SCALAR-SPH), 54 (WCC), 62 (SCC-C0 + WCC), 78 (all three), 91 (SCC-C0 + WCC), 94 (SCALAR-SPH) → all four classes covered. Good.
+
+Now write a README.md summarizing the check, then emit the outbox events.
+
+Outbox events to append (as `worker-022`):
+1. `artifact` event for the spotcheck (path, sha256, artifact_type l1_spotcheck, validation_status unverified, evidence_refs, falsifier, summary, reproduce). Also maybe include `sample_manifest` and `run_spotcheck` hashes in evidence_refs.
+2. `review` event: target_id L1 (or `ledger/citation_audit.csv`), reviewer worker-022, verdict accept, score 4, hard_failures [], findings: 12/12 rows match at pinned hash; SRC-086 soft title finding; control detected; scope limited to sampled rows. class_ids all four. evidence_refs.
+3. `status` event: task complete at worker level, status active (workers cannot set done), hours estimate, summary, next_falsifier, checkpoint path.
+
+Let me compute hashes for run script, manifest, fetch_log, README.
+
+Then the checkpoint: `runtime/state/w22_checkpoint_1.json` and append to `runtime/state/w22_checkpoints.jsonl`. Include:
+- checkpoint:1, at, worker worker-022, node L1, class_ids, gate G-LIT, task_id, hours_spent_estimate ~0.5
+- artifact sha256 + path, ledger hash, drift false, sample rows, verdict PASS, counts, soft findings
+- negative control
+- next_falsifier
+- non_claims
+- verified hash chain of my own artifacts
+- does not claim: gate verdict, node completion.
+
+Let me write README first, then events+checkpoint in one python script.
+
+Note about the review score: 4 (not 5) because abstract-level only, 12/97 rows, and one soft finding. Good.
+
+Let me also confirm the L1 measured hash prefix is still 315c19145065 at write time (ledger unchanged). I'll recompute in the script and include `ledger_sha256_at_event`.
+dsh: reasoning:
+Now emit the outbox events and write the checkpoint. Use actual system time. Let me build the events carefully.
+
+Event 1: status (task claim already written at 00:20:23). Now artifact events.
+
+Let me write the python script that:
+1. computes hashes of artifacts
+2. appends artifact + review + status events to comms/outbox/worker-022.jsonl
+3. writes runtime/state/w22_checkpoint_1.json and appends to runtime/state/w22_checkpoints.jsonl
+
+Fields for the artifact event (per comms.py normalization):
+- event_id, event_type "artifact", created_at, actor "worker-022"
+- node_id "L1", class_id all four, gate "G-LIT"
+- artifact_type "l1_spotcheck", path, sha256, validation_status "unverified"
+- evidence_refs: artifact#sha256:..., ledger#sha256:..., manifest#..., run script#..., fetch_log#...
+- falsifier, summary, reproduce, task_id
+
+Review event:
+- target_id "ledger/citation_audit.csv", reviewer "worker-022", verdict "accept", score 4
+- hard_failures []
+- findings [...]
+- class_ids, gate, evidence_refs, next_falsifier, artifact_sha256 binding
+
+Status event:
+- node_id L1, status "active" (worker cannot claim done), hours ~0.5
+- summary of completed worker-level task + checkpoint path
+- evidence_refs, next_falsifier, task_id, assignment_source (self-issued)
+
+Checkpoint JSON:
+{
+ "checkpoint": 1, "at": ..., "worker": "worker-022", "run_id": "run-2026-09-11T23:15+08:00",
+ "node_id": "L1", "class_ids": [...], "gate": "G-LIT", "hours_spent_estimate": 0.5,
+ "task_id": "W022-L1-SPOTCHECK-05",
+ "assignment_source": "self-issued (no inbox card); G-LIT unmet requirement in lifecycle_20260912-001727.json",
+ "artifact": {...hashes...},
+ "ledger": {...},
+ "fetch_summary": {...counts...},
+ "negative_control": {...},
+ "soft_findings": [...],
+ "verified_hash_chain_at_checkpoint": {...},
+ "next_falsifier": ...,
+ "does_not_claim": [...]
+}
+
+Let me get the run_id convention: runtime/state/current_checkpoint.json likely has run id. Let me check quickly within the script (not critical). I'll use "run-2026-09-11T23:15+08:00" as seen in w14 checkpoint.
+
+Note system time now ~00:24. Let me execute.
+dsh: reasoning:
+Now let me validate:
+1. All outbox JSON lines parse and required fields exist per event type (self-check against events.schema.json / comms normalize).
+2. The artifact is counted by the controller's `l1_spotchecks` function (contains prefix and matches glob).
+3. Checkpoint JSON parses.
+4. Verify the map validator? Not needed; my events aren't ingested yet.
+
+Let me run a validation:
+- json.loads each line of comms/outbox/worker-022.jsonl
+- check required keys: status: node_id, status, summary, evidence_refs, next_falsifier...; artifact: node_id, artifact_type, path, sha256, validation_status; review: target_id, reviewer, verdict, score, hard_failures, findings.
+- simulate l1_spotchecks glob: `ROOT.glob('artifacts/*/l1_spotcheck/spotcheck-l1-*.json')` + prefix in text → count.
+- check the artifact file path exists and hash matches event.
+
+Also check that `comms.py` ingest would accept my events — I can run `python3 research_map/comms.py ingest --dry-run`? Let me check whether ingest supports dry-run; the CLI subcommand `ingest` might have `--dry-run`. Let me check lines 379+ of comms.py. Using dry-run is safe (doesn't mutate). Actually the docstring says "records rejects... never mutates" for something. Let me check the CLI.
+
+Let me read the tail of comms.py.
+dsh: reasoning:
+Interesting! While I was working, many other workers (023, 026, 028, 031, 041, 056, 063, 070, 075, 077, 079, 097) also produced L1 spot checks. The early gate audit counted 2; now there are ~19 files containing the prefix. So my "third check" is no longer the unique gap-filler — the fleet is producing many. That's fine; my contribution is still genuine independent evidence, and the redundancy is expected in this swarm. But note: the gate audit at the time I claimed said 2; by now many more exist. My outbox event summary says "third binding re-fetch spot check" — at the time of the claim (00:20) that was true (2 counted at 00:17). Now it's one of many. I should perhaps update my status event? The events are already written; the artifact is fixed. The claim of "third" was accurate relative to the lifecycle count at claim time. I could add an addendum status event noting the concurrency: "fleet produced additional binding spot checks concurrently; W022 is one among N; the binding count must be re-measured by the controller." That's honest and useful (CF-12-type collision awareness). Let me do that — it's a small addendum event, not a rewrite.
+
+Also, importantly: is my spot check *independent* of the others? I used my own sampling rule and raw re-fetch — yes.
+
+Another concern: my outbox events may be ingested along with the flood from other workers. Fine.
+
+Now let me also run `python3 research_map/comms.py ingest --dry-run` to see whether my events are accepted (dry-run doesn't mutate). That's allowed? The protocol says ingest is a controller-only command; dry_run doesn't mutate. It would scan all outbox files including others, so output will be big. Let me do a targeted check instead: call normalize_event via import for my 4 events. Actually my manual validation already covers required fields. Let me run a small python import of comms.normalize_event on my events to be sure they'd be accepted (not rejected). Let me check the reject conditions in ingest: it rejects when event_id missing, or event_type not among known types, or required semantic core missing. Let me read lines 290-325 to see.
+dsh: reasoning:
+I can call `validate_event` on my events locally via import to confirm schema validity (no mutation). Let me do that, using `normalize_event` from comms.py.
+
+Then append the addendum status event noting concurrent spot checks and asking the controller to re-measure the binding count (the lifecycle gate audit must count them; my file is one).
+
+Also: since many spot checks now exist, maybe the more useful thing is not an addendum but ensuring my artifact remains honest. I'll add a short addendum event with the observed concurrency (list of binding files at my write time is huge; I'll summarize count). Let me count files by prefix more carefully (the list included rev1/rev2 variants from worker-023, which are extra files that also count in the naive glob — that's a controller accounting issue, not mine). I'll note that the naive glob counts revision variants separately and the controller's >=3 criterion should use distinct checks, not files.
+
+That's a genuinely useful audit observation: `l1_spotchecks()` counts *files*, and worker-023 wrote three variants (`rev1-instrument-bug`, `rev2-partial-fetch`, final) — all three contain the prefix and would count as 3 binding spot checks by themselves, even though two are self-declared buggy/partial superseded revisions. That's a real methodological flaw in the counting function (CF-type finding). I should report it as an observation/blocker-ish status to the controller (not a gate verdict). This is valuable verification-layer work: the counter can be gamed by revision variants; the criterion should count *distinct independent checks*, excluding superseded/instrument-bug revisions.
+
+Let me verify that claim: worker-023's rev1 and rev2 files contain the prefix and are declared buggy/partial. Let me quickly inspect their verdicts/summaries to confirm before reporting. Also worker-026 has `spotcheck-l1-026.literal-preregistered.json` plus final; worker-028 etc.
+
+This is a nice finding for my addendum: the G-LIT ">=3 binding spot checks" criterion is satisfied by file count, but the counter includes superseded revisions and preregistration variants. Independent *agents* are the real control. Recommend the controller dedupe by actor and exclude self-declared superseded revisions.
+
+Let me check worker-023's files briefly.
+dsh: reasoning:
+Confirmed: the naive file-count counter inflates by revision variants. 19 files from 16 distinct worker IDs, including worker-023's self-declared instrument-bug revision and worker-026's preregistration variant. The controller's gate criterion ("required >=3") is now trivially exceeded on file count even before considering check quality. This is a useful audit observation.
+
+Now let me:
+1. Validate my events with comms.validate_event (no mutation).
+2. Append the addendum status event: concurrency observation + counter caveat + request that the controller re-measure using distinct actors and exclude superseded revisions.
+
+Then final verification and exit summary.
+
+Let me write the addendum event with evidence refs (comms paths, astra_lifecycle.py line 201-211 for the glob, worker-023 rev1/rev2 files). Note: I should cite exact evidence:
+- `research_map/astra_lifecycle.py:201` (l1_spotchecks glob counts files)
+- `artifacts/worker-023/l1_spotcheck/spotcheck-l1-023.rev1-instrument-bug.json` and `.rev2-partial-fetch.json` (self-declared superseded)
+- `artifacts/worker-026/l1_spotcheck/spotcheck-l1-026.literal-preregistered.json`
+
+Let me validate events and append the addendum.
+dsh: reasoning:
+Now final checks:
+1. Verify all files exist and hashes in checkpoint match on-disk.
+2. Ensure no canonical files were modified by me (I only wrote artifacts/worker-022, comms/outbox/worker-022.jsonl, runtime/state/w22_*). Confirm.
+3. Re-verify the L1 artifact hash is still recorded in the checkpoint and outbox event.
+4. Also ensure `git status`? The repo has .git; the controller may commit. Not needed.
+
+One thing: the checkpoint's `fetch_summary.soft_findings` etc. is fine. The checkpoint's `ledger.sample_rows` fallback — `a['sampling_rule']` doesn't have `sampled_rows` (that's in the manifest), so it used the fallback list. Fine, but let me check the checkpoint content for correctness.
+
+Also, should I add my artifact to `runtime/state/artifact_hashes.json`? That file has per-node hashes (L1 → ledger). The controller updates it via checkpoint.py. As a worker, writing my artifact hash there might be appropriate but could conflict with the controller's measurement. The protocol says "A node is done only when its declared artifact exists on disk, carries a sha256 in runtime/state/artifact_hashes.json, and has a reviewer verdict." That's for node completion, which I don't claim. The controller's lifecycle scans outbox events for artifact events with sha256. I'll leave artifact_hashes.json to the controller.
+
+Let me view the checkpoint and do final verification, then produce a final summary for the user (the runtime will exit). Also check job list — no background jobs were started.
+
+Let me do a final integrity check script.
+dsh: reasoning:
+The hash chain check failed because `cp['verified_hash_chain_at_checkpoint']` includes the key `'artifact'`? Wait no — it printed a FileNotFoundError for path 'artifact'. Hmm, looking at my checkpoint creation script: `cp["artifact"]={"path":art,...}` and `"verified_hash_chain_at_checkpoint":hashes` where hashes keys are 'artifact','manifest','runner','fetch_log','readme','pass1','ledger','theorems'. Oops! The hash-chain dict keys are labels, not paths. So the loop tried to open key 'artifact' as a path and failed on the first key.
+
+So the checkpoint's `verified_hash_chain_at_checkpoint` is malformed: labels instead of paths. Compare to w14's checkpoint which used full relative paths as keys. I need to fix the checkpoint to use paths as keys, and re-verify. Let me rewrite the checkpoint file properly (checkpoint_1) — it's my own file; fixing it is fine. Also the jsonl summary line doesn't include the hash chain, so no issue there.
+
+Let me rebuild the checkpoint with correct path keys and re-verify. Also print the whole checkpoint to confirm.
+
+`git status` shows lots of pre-existing changes, not just mine. Fine.
+
+Let me fix the checkpoint.
+dsh: reasoning:
+Wait — the jsonl rewrite: `lines=[l for l in open(...)]` and then wrote back only lines[-1]. If the file had only 1 line, fine. It printed 1, so fine (I created it with one line).
+
+Now, everything is in place:
+- Artifact: `artifacts/worker-022/l1_spotcheck/spotcheck-l1-022.json` sha256 3932a6574aded233... PASS, 12/12 MATCH, control detected, no drift.
+- README, manifest, runner, raw bodies, fetch log, pass1 retained.
+- Outbox: `comms/outbox/worker-022.jsonl` with 5 events (claim status, artifact, review, status, counter-caveat addendum), all schema-valid.
+- Checkpoint: `runtime/state/w22_checkpoint_1.json` + `runtime/state/w22_checkpoints.jsonl`.
+
+One more sanity check: the checkpoint note says the initial write used labels; that's honest.
+
+Should I add the artifact to `runtime/state/artifact_hashes.json`? Let me check whether other workers did that... The map's per-node `artifact_sha256_measured` is controller-measured. The controller's lifecycle will measure my artifact from the outbox event. Leave it.
+
+Also, is there a risk the controller's `apply_events.py` will choke on my addendum status event lacking `assignment_id`? Other worker status events lack it too. Fine.
+
+One consideration: my claim and addendum status events have `class_id` as a semicolon string; other workers used `class_ids` list. `normalize_event` handles `class_id` str; validate passed. Fine.
+
+Also the events use `gate: G-LIT` — fine.
+
+Final: I should double-check the artifact `verdict` semantics one more time: PASS with soft finding; review event says accept score 4. Good.
+
+I was asked: "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit." Done. Let me provide the final summary with the key IDs, hashes, evidence, falsifier.
+
+Let me get the final tail of the outbox for citation in my summary, and confirm the artifact path. Also quickly get the event ids. Then write the final answer and stop (no background jobs running; check job_list? I didn't start any background jobs. Not needed but cheap: skip).
+
+Final answer structure:
+- Task taken (self-issued, class-bound, L1/G-LIT)
+- Why (G-LIT unmet: ≥3 binding spot checks, 2 at 00:17)
+- Artifact + sha256
+- Method + evidence
+- Result: 12/12 MATCH, control detected, no drift, soft finding
+- Falsifier
+- Events (IDs) and checkpoint
+- Addendum finding (counter caveat)
+- Non-claims: no gate verdict/node done.

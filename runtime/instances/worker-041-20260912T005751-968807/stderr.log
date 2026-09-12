@@ -1,0 +1,713 @@
+dsh: reasoning:
+Let me start by understanding the task. I'm worker=041, a bounded execution worker. I need to read handoff/map and comms, take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit.
+
+Let me explore the workspace first.
+dsh: reasoning:
+No handoff or comms at root. Let me look for them. The task mentions "handoff/map and comms". Maybe in a specific project dir. Let me search.
+dsh: reasoning:
+Let me read the HANDOFF.md, README.md, PROTOCOL.md, and check comms inbox. Also look at the research_map.
+dsh: reasoning:
+Now let's look at the research_map.json and comms inbox, and the current state. Also worker=041 — I need to find what class-bound task is available. Let's look at the inbox for worker 041 or deepseek-flash-41. Agent ids listed as `deepseek-flash-01` … `deepseek-flash-20` but there may be more now. Let me check comms/inbox and outbox.
+dsh: reasoning:
+I am worker-041. There are files `worker-041_F0_checkpoint.json` and `worker-041_F0_redispatch_checkpoint.json` recently modified at 00:52 and 00:57. Also `comms/inbox/worker-041.jsonl` at 00:44. Let me read the inbox file for worker-041, and the checkpoint files, and the ASTRA_HANDOFF.md.
+
+Let me focus. Read inbox/worker-041.jsonl and the two recent checkpoints.
+dsh: reasoning:
+So worker-041 already completed assignment `audit-r2-F0-a` and there was a re-dispatch closure. But the current runtime may have new assignments. The task says "Take one class-bound task". Let me re-read the full inbox line (it was truncated). Also I should check what the current situation is — is there a new assignment in inbox/worker-041.jsonl beyond the first line? The file is 2740 bytes, 1 line. Let me read the full content via bash/python to see the whole JSON.
+
+Also there is an important question: has the previous work actually been done properly? The instruction now says: "You are a bounded execution worker. Read handoff/map and comms. Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit. worker=041"
+
+Hmm, but the previous instance already did the F0 review. However, I should verify the current state: maybe there's a newer assignment. Let me check the supervisor log and the inbox assignment timestamps. The inbox file was modified at 00:44. The previous checkpoint at 00:57 says a re-dispatch happened. So there may be a new dispatch at 00:57+ for slot worker-041 with a new instance. Let me check runtime/instances for worker-041 instances, and the supervisor log tail.
+
+Let me also read the full inbox line.
+dsh: reasoning:
+I'm instance worker-041-20260912T005751-968807. The F0 review assignment was already completed by worker-041-20260912T004822-968807. But my job as a bounded execution worker is to "Take one class-bound task". There may be a new assignment for me. Let me check the inbox again - maybe there's a fresh assignment message. The inbox only had the audit-r2-F0-a line at 00:44. But the supervisor launched a new instance at 00:57:51. What is the current dispatch for worker-041? Let me check the runtime/instances/worker-041-20260912T005751-968807 dir and the supervisor's dispatch mechanism.
+
+Let me look at supervise_swarm.sh / launch_swarm.sh / supervise_loop.sh to understand what task the worker is supposed to take. Also check `runtime/control` and the newest `worker-041` entries in the map.
+
+Also, check `comms/outbox/worker-041.jsonl` to see what's been emitted.
+
+Also the task says "emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit" — this sounds like the task pattern: take one class-bound task (with class_id), emit a claim JSON with node_id/class_id, evidence refs, hash, falsifier. Let me look at ASTRA_HANDOFF.md for guidance and the launch scripts.
+dsh: reasoning:
+Interesting — the instance dir contains my own reasoning log (this session). So I am the live instance.
+
+Now: The F0 review assignment is complete per the previous checkpoint. But the supervisor re-dispatched worker-041. Let me check what new work is available. The task is: "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit."
+
+I should check the current map state to find an unassigned/assigned-to-me class-bound task. Let me look at:
+1. `comms/outbox/worker-041.jsonl` — what I've emitted.
+2. The map's assignments/reviews — what's open.
+3. Recent inbox messages across leads mentioning worker-041.
+
+Let me also check the supervisor's dispatch logic in supervise_loop.sh — maybe there's a queue of tasks (task cards) and worker-041 needs a new task.
+
+Actually, the recent ASTRA_HANDOFF says open assignments: `astra-life05-verify-gform-r3` (lead-audit), `astra-life05-verify-l0-final`, etc. Those are lead assignments, not worker ones. The dispatcher likely assigns per-worker tasks via the inbox.
+
+Wait — maybe the intent for re-dispatch is idempotent: since the slot is re-launched, the worker should detect the assignment is complete and emit a closure (which was already done at 00:57:06 by the previous instance). But my run must still produce something useful. The right move: check if there's a *new* inbox assignment for worker-041 (there isn't — only one line). Check if the map has any task with assignee worker-041 that is not yet done.
+
+Let me grep the map for worker-041.
+
+Also let me check `runtime/control` — maybe there's a control queue.
+
+Let me be efficient: grep research_map.json for "worker-041" occurrences.
+dsh: reasoning:
+My assignments list doesn't show statuses because the key is different. Let me inspect one assignment's keys and the most recent assignments. Also there are newer assignments for worker-041 (F0) — possibly the `astra-life05-verify-gform-r3` re-review with a new artifact/revision. Let me look at the last assignments for worker-041 sorted by dispatch time.
+
+Actually the map assignments list may use "state" or "status" keys. Let me inspect keys.
+dsh: reasoning:
+Now I understand the situation. I am a re-dispatched worker-041 (new instance at 00:57:51). My inbox assignment `audit-r2-F0-a` is already complete; the previous instance emitted a closure. But the task prompt for this slot says: "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit."
+
+So what's the right behavior? Two options:
+1. Emit another idempotency closure (would be a third duplicate — undesirable).
+2. Take a NEW bounded class-bound task that is useful to the critical path and not duplicative, with a fresh artifact + evidence + hash + falsifier + checkpoint.
+
+Given "Take one class-bound task", the expectation is likely that workers find work themselves if no assignment card exists (as the earlier worker-041 instances did: they took self-declared bounded tasks like W041-L1-SPOTCHECK-05, W041-F0-MIRROR-INDEP-01, W041-F2A-PIN-RCA-01, W041-XSCHEMA-DATACLASS-01).
+
+The critical path per ASTRA_HANDOFF: G-FORM (F1/F2a/F2b rev12) has evidence-binding defects being repaired; `astra-life05-verify-gform-r3` is the lead-audit card. F0 passed. L0 final review, G-NUM protocol adjudication, classsep calibration, A0 detector scope.
+
+Also important: CF-21 residual non-blocking finding: "scalar axes.genericity_kind stale against its explicit comeager conclusion". That's a concrete, bounded, class-bound task: verify/measure whether `axes.genericity_kind` for AF-WCC-SCALAR-SPH is stale relative to the explicit comeager conclusion. But F0 is passed and done; any write voids G-F0. A measurement (read-only) is fine.
+
+Another good candidate: the open item from my own earlier task — the F0 review noted F-041-F0-01 major/binding: F0 WCC conclusion binds (s,delta) while F1 at f0_binding 0abb9ed8 freezes statement_formal over tagged r in D0 = smooth | (sobolev,s,delta). Hmm, that's a real cross-artifact consistency issue on the critical path (G-FORM). But careful: is it already being handled? Let me check recent events for that finding.
+
+Also, the newly launched instance at 00:57:51 — what does the dispatcher expect? Let me check the supervisor/dispatch script. Perhaps each slot is re-launched with the same standing prompt and workers self-assign. Given the "Take one class-bound task" instruction and the ledger of previous self-assigned tasks, I'll do the same but need to avoid duplicating existing work.
+
+Best approach: pick a bounded, high-value, class-bound verification task on the live critical path (G-FORM repair / r3 review), do a real measurement with hash pins and a falsifier, write an artifact + claim/status/review events + checkpoint, then exit.
+
+Let me first check the current live state: hashes of F1/F2a/F2b/F0, FROZEN manifest, and what repairs have landed. Check the newest formulation events (outbox/astra-lead-formulation.jsonl tail) and the newest reviews to see what's currently open. Also check if there's a "rev13" now.
+
+Let me look at latest files and hashes. Also check `runtime/state/current_checkpoint.json` maybe. And check recent outbox events from the lead-formulation (last ~10) to see the state of the repair.
+
+Let me be efficient and gather:
+1. Latest formulation events (tail of outbox/astra-lead-formulation.jsonl) — parse last few JSON lines with key fields.
+2. Current hashes: sha256 of research_map/formulation_taxonomy.yaml, artifacts/formulation/formulation_taxonomy.yaml, schemas/*.yaml, artifacts/formulation/FROZEN.json.
+3. Any F0/F1 events since 00:52.
+
+Then decide the task.
+
+Also, I should be careful about time budget: 1.0 agent-hour, but practically I should complete within a reasonable number of steps.
+
+Let me gather data.
+dsh: reasoning:
+Important: schemas were re-written at 00:53 — new hashes! F1 is now d9cebb9404b2... (was cce9c60146d6), F2a e9a27996dfd3... (was 5476a3f2c6bc), F2b b2ab6acb2bbe... (was 55d0a1ea9bda). FROZEN.json now 815e08079aef... (rev29). So the evidence-binding repair landed with rev13 schemas at 00:53, and FROZEN rev29 at 00:57.
+
+So the live critical path is: G-FORM verification at the NEW rev13 hashes. The lead-audit has a card `astra-life05-verify-gform-r3` (deadline 02:45). The newly launched worker instances at 00:57:51 include worker-041 (me), worker-014, worker-015, worker-037.
+
+Given the mandate "Take one class-bound task", the highest-value bounded task for me is an independent, blind verification of the *rev13* F1/F2a/F2b schemas at the new hashes — specifically checking whether the evidence-binding repair actually closed the two hard failures (stale consistency_evidence_sha256 pin + case corpus rebound) and whether the class-boundary properties still hold (no C0/C2 merge, exactly four class ids, decidable falsifier).
+
+But careful about duplication: other workers/leads may already be doing exactly this (astra-life05-verify-gform-r3 is lead-audit's card; workers 014/015/037 just launched). Let me check what these other newly launched workers have in their inboxes, to avoid duplicating. Their inbox files are public. Let me check worker-014, worker-015, worker-037 inbox assignments (or their meta/prompt).
+
+Actually, the supervisor may dispatch individual assignment cards to specific workers as they launch. Let me check the newest entries in comms/inbox for worker-014/015/037 and also whether any newer assignment exists in the inbox dir (by mtime). Let me list inbox sorted by mtime.
+dsh: reasoning:
+Excellent. Now I have a clear picture. The live critical path after the rev13 repair:
+
+- F1 = schemas/af_wcc_vacuum.yaml d9cebb9404b2 (rev13)
+- F2a = schemas/af_scc_c2_vacuum.yaml e9a27996dfd3 (rev13)
+- F2b = schemas/af_scc_c0_vacuum.yaml b2ab6acb2bbe (rev13)
+- FROZEN.json = 815e08079aef (rev29)
+- F0 canonical = 0abb9ed8a961 (rev5), companion d7419b4e8963
+
+Open blockers: L-FORM-04 (f1_falsifier_tests.jsonl still binds F1 rev12 cce9c60146d6) and L-FORM-05 (heldout invalid + moving target; stage-B tool defect).
+
+A concrete, bounded, class-bound task that's high-value and not duplicative: **Independent measurement of whether the rev13 repair actually closed the two G-FORM hard failures at the new hashes** — i.e., verify that the new declared `f0_binding` hashes inside F1/F2a/F2b rev13 resolve to the live bytes, and that the schemas' `consistency_evidence_sha256` now matches the live evidence file. Plus verify the L-FORM-04 staleness claim (f1_falsifier_tests.jsonl binds cce9c60146d6, a superseded hash) — that's read-only and decidable.
+
+Wait — but I should be careful about "blind review" conflicts. The G-FORM r3 review card is lead-audit's. But as a worker I can take a bounded *bind-chain measurement* task: for each of F1/F2a/F2b rev13, enumerate every declared hash in f0_binding (or all hash-like fields) and resolve it against disk, reporting resolved|mismatch. That's exactly the sort of bind-chain addendum being done for F2b by worker-015 (`audit-r2-F2b-bindchain-worker-015`) but no worker holds a card for F1/F2a rev13 bind-chain (the audit-r2-*-bindchain cards were superseded by astra-life05-verify-gform-r3).
+
+Actually wait — I should check whether the previously assigned `audit-r2-F1-bindchain-*` and F2a ones exist and who has them. The handoff says the eight audit-r2-*-bindchain cards were superseded by astra-life05-verify-gform-r3. Let me check the inbox of worker-071/085 (F1) and 046/091 (F2a): they got assignments at 00:47. Let me check them quickly.
+
+Also, importantly, L-FORM-04's falsifier is decidable: "a reviewer shows the rev13 edits change a field any of the 25 tests exercises, or the corpus is re-bound and the staleness disappears." That's a perfect bounded class-bound verification task for me: determine whether the rev13 (F1 d9cebb9404b2 vs rev12 cce9c60146d6) edits touch any field exercised by the 25 rows of schemas/f1_falsifier_tests.jsonl. This is a well-defined diff analysis, class-bound to AF-WCC-VAC-GEN, with a hash-pinned artifact and a decidable falsifier. It directly unblocks the L-FORM-04 controller ruling, which feeds G-FORM r3. This is high value and non-duplicative (no one appears to be doing it — the lead explicitly asked for a controller/audit ruling, and lead-audit is busy with r3).
+
+Actually, even better: combine both into one bounded task? The instruction says "Take one class-bound task". Keep it focused: 
+
+Task W041-F1-REV13-BIND-01: "L-FORM-04 adjudication input: does the rev13 repair (F1 d9cebb9404b2) change any field exercised by the 25 rows of schemas/f1_falsifier_tests.jsonl (pinned 56bcb4b3234b, rows still binding rev12 cce9c60146d6)?"
+
+Deliverable: a JSON report with:
+- hash pins before/after read (F1 rev13, F1 rev12? — rev12 bytes may no longer exist... maybe in git or in a backup. Let me check git history: repo is a git repo. The rev12 F1 might be in git history. Or `artifacts/formulation/schemas/` may have a copy. Let me check.)
+- diff of rev12 vs rev13 F1 content
+- mapping each of the 25 test rows' question/deciding fields to the diff — "touched" or "not touched"
+- verdict: semantics unchanged / changed; whether rebinding required.
+
+For comparing rev12 vs rev13 I need the rev12 bytes. Check git: `git log --oneline -- schemas/af_wcc_vacuum.yaml`; or `artifacts/formulation/schemas/` copies; or checkpoints. Let me look.
+
+Also note: worker-015's F2b bindchain and others were in flight at rev12 and may now be stale. But I shouldn't worry about them.
+
+Let me quickly check git availability and whether rev12 bytes are recoverable. Also check the f1_falsifier_tests.jsonl structure.
+
+Let me do this now.
+dsh: reasoning:
+I need the rev12 F1 bytes (cce9c60146d6). Candidates:
+- `artifacts/worker-080/rev29_f1_verify/pinned/af_wcc_vacuum.yaml` (rev29 verify, likely rev13)
+- `artifacts/worker-061/f2a_rev12_bind/pinned/af_wcc_vacuum.yaml` (rev12? from worker-061 at ~00:38)
+- `artifacts/worker-032/f1amb25/pinned/af_wcc_vacuum.yaml`
+- tmp sandboxes
+
+Let me hash all candidate copies and find one with sha cce9c60146d6... Also find rev13 copies to confirm. Let me hash them.
+
+Note the pinned file might be a copy made at rev12. Let me check.
+dsh: reasoning:
+I have rev12 bytes (cce9c60146d6) available in many pinned copies, e.g. `artifacts/heldout/heldout-09/bases/af_wcc_vacuum.yaml`, and rev13 live at `schemas/af_wcc_vacuum.yaml` (d9cebb9404b2).
+
+Now, what does L-FORM-04 actually require? "schemas/f1_falsifier_tests.jsonl (25 rows, now pinned in FROZEN rev29) still declares binding_ref/binding_sha256 = F1 rev12 cce9c60146d6, superseded by the rev13 repair. The rows' question/deciding-field semantics were not changed by item 3 (prose-direction only), so whether the corpus must be re-bound is a controller/audit ruling, not a formulation-lead edit."
+
+Falsifier: "a reviewer shows the rev13 edits change a field any of the 25 tests exercises, or the corpus is re-bound and the staleness disappears."
+
+So the bounded task: **independent diff of F1 rev12 → rev13, and for each of the 25 corpus rows, determine whether any field the row exercises (deciding_field, deciding_field_alternates, deciding_field_contract, question text fields) changed.** If yes → falsifier triggered, rebind required. If no → adjudication input supporting "no rebind required" (but the ruling is the controller's).
+
+This is a genuine, useful, bounded, class-bound (AF-WCC-VAC-GEN) task with a decidable falsifier, and it feeds the G-FORM r3 critical path. It's independent: I'm not the author of F1 or the corpus. It's non-duplicative: L-FORM-04 was just emitted at 00:57:43, and the lead asked for a controller/audit ruling.
+
+However, I should double check whether some other worker is already doing it (e.g., worker-015's F2b bindchain, worker-037 new launch, worker-014). Also check the newest reviews for the rev13 hashes. Let me check briefly what the newest worker instances are assigned. Actually, the simplest: grep events/outbox for "d9cebb9404b2" and "L-FORM-04" to see who is on it.
+
+Also, I should consider making the task broader but still bounded: F1 rev13→rev12 diff + the 25 corpus rows + maybe F2a/F2b? Keep it focused on F1 since L-FORM-04 is F1-specific.
+
+Let me check for duplication via grep in comms/outbox and reviews.
+dsh: reasoning:
+There are already workers on rev13 binding: worker-100 (`w100-rev13-bindint`), worker-096 (`w096-rev13`), worker-079 (claim-fieldanchor), worker-087 (rev29 announce + blockers), worker-084 (calibration). Let me check what worker-100 and worker-096 did — maybe L-FORM-04 is already being addressed. Let me look at those outbox events (they're recent: 00:58–01:10). Note timestamps in the future? "2026-09-12T01:10:00+08:00" — that's ahead of wall clock maybe. Anyway.
+
+Let me look at worker-100's and worker-096's events to see if they cover the f1_falsifier_tests.jsonl rebind question.
+dsh: reasoning:
+There's already substantial coverage of rev13 binding integrity (worker-100, worker-096). L-FORM-04 specifically — the f1_falsifier_tests.jsonl staleness — does not appear covered yet by anyone. worker-096's delta verification covered "structural YAML delta 0 undeclared changed paths" for the schemas, but not the corpus-field exercise analysis.
+
+So my task: **L-FORM-04 adjudication input — independent field-level analysis of whether F1 rev12→rev13 edits change any field exercised by the 25 rows of schemas/f1_falsifier_tests.jsonl.**
+
+This is:
+- class-bound: AF-WCC-VAC-GEN (all 25 rows are F1/WCC)
+- bounded: diff two YAML revisions + analyze 25 rows
+- decidable falsifier: a rev13 change to a field any row exercises; or corpus re-bound
+- evidence with hashes
+- feeds the open G-FORM blocker L-FORM-04 (controller ruling)
+
+I need to do it rigorously:
+1. Pin live hashes: schemas/af_wcc_vacuum.yaml (rev13 d9cebb9404b2...), schemas/f1_falsifier_tests.jsonl (56bcb4b3...), and the rev12 snapshot bytes cce9c60146d6 (from a pinned copy — I should choose a copy and verify its sha).
+2. Structural diff rev12 → rev13: list changed paths (YAML-level deep diff).
+3. For each of 25 rows: extract the fields it exercises. Which fields? `deciding_field` (and alternates/contract), plus potentially the row's `question` references schema paths, plus fields in `delta_vs_*`, `schema_snapshot`, `known_properties`, `probe_results`. The rigorous approach: for each row, find all schema path expressions mentioned anywhere in the row JSON (e.g., dotted tokens like `non_vacuity.condition`, `genericity.excluded_set`, `f0_binding.declared_f0_sha256`, etc.), resolve them against both rev12 and rev13, and check whether the resolved value differs.
+4. Additionally, the corpus's own binding fields: `binding_ref`/`binding_sha256` = rev12 (cce9c60146d6), `binding_at_authoring`, `prior_binding_*`, `rebind_note`, `rebound_at`, `schema_snapshot`. See which row already has `rebound_at` (maybe some rows were already rebound). Let me inspect a full row to understand.
+
+Actually wait. Let me reconsider: is this the best use of my slot? The alternative high-value task is verifying the *rev13* repair closed the specific two hard failures (already done by worker-100). Or checking L-FORM-05 stage-B defect (already analyzed by lead). L-FORM-04 is genuinely uncovered and is a blocker for G-FORM r3. Good.
+
+Let me also check whether `astra-lead-audit` already produced a ruling in the last minutes (r3 review dispatch). Quick grep of outbox/astra-lead-audit.jsonl for L-FORM-04. The earlier grep for files containing "L-FORM-04" listed many outbox files, but that's because "d9cebb9404b2" also matched. Let me grep specifically "L-FORM-04".
+
+Let me now build the task properly.
+
+Step 1: grep for L-FORM-04 coverage.
+Step 2: Inspect full first row + one row that has been rebound if any.
+Step 3: Write instrument script under artifacts/worker-041/f1_corpus_rebind/.
+Step 4: Run it, produce report.json with pins, diff, per-row verdict, controls.
+Step 5: Write claim/artifact/status/review events to outbox.
+Step 6: Checkpoint under runtime/state/worker-041_F1_CORPUS_REBIND_checkpoint.json.
+Step 7: Exit.
+
+Important: worker events must use valid schema (events.schema.json). Let me read the schema to make sure my JSON is valid: required fields for claim: event_id, event_type, created_at, actor, class_id, statement, conclusion_type, assumptions, falsifier, evidence_refs. conclusion_type must be one of the allowed values (not "diagnosis" — that got rejected). Let me check schemas.py / events.schema.json for allowed conclusion types.
+
+Also the artifact must be registered in runtime/state/artifact_hashes.json? Protocol says "A node is done only when its declared artifact exists on disk, carries a sha256 in runtime/state/artifact_hashes.json, and has a reviewer verdict." I can't set node done anyway. But I can register my artifact hash maybe via the checkpoint tool. Let me check checkpoint.py and whether workers register their own artifacts. Previous worker-041 checkpoints exist; let me look at one to copy the format (worker-041_F0_checkpoint.json).
+
+Let me read the checkpoint file and the event schema + a claim event example (valid one) for the exact expected fields.
+dsh: reasoning:
+Good. conclusion_type allowed: theorem, conditional_theorem, stability_result, counterexample, numerical_evidence, formal_model, open_problem. I'll use `formal_model` (like previous worker-041 claims) since this is a structural/schema analysis.
+
+Now let me look at the first checkpoint format and a sample row in full. Then design the analysis.
+
+Let me read worker-041_F0_checkpoint.json (small) and one corpus row fully.
+dsh: reasoning:
+Now I fully understand the structure. Many corpus rows have `probe_results` entries with `path` — those are the fields exercised! This makes the analysis concrete and mechanical: for each row, collect all schema paths from:
+- `deciding_field`, `deciding_field_alternates`, `deciding_field_contract` (parse dotted paths)
+- `probe_results[*].path`
+- possibly `delta_vs_*` (no paths, just excerpts)
+- evidence_refs are artifact refs, not fields.
+
+Then resolve each path in rev12 (cce9c60146d6) and rev13 (d9cebb9404b2), and compare the values. If a row exercises a path whose value changed → that row is "touched" → the corpus must be re-bound (falsifier fires). If no row exercises a changed path → the staleness is hash-only (the binding pins rev12 but the exercised semantics are unchanged) → adjudication input.
+
+Also compute the structural diff (changed paths) between rev12 and rev13 to show exactly which paths changed.
+
+Additionally check `binding_ref` staleness: all 25 rows bind cce9c60146d6 (rev12). And whether rev12 (the bound hash) is still resolvable at the canonical path — it is NOT (live is d9cebb9404b2). That's the staleness. But the question is whether the row semantics depend on changed fields.
+
+An important nuance: some rows probe `f0_binding.declared_f0_sha256` or `f0_binding.consistency_evidence_sha256` — those DID change in rev13 (worker-096 says changed paths include `f0_binding.checked_at/consistency_evidence_sha256/binding_note`). Which rows exercise those? Row F1-AMB-25 deciding_field `f0_binding.declared_f0_sha256`; row F1-AMB-21 also `f0_binding.declared_f0_sha256`. Those values didn't change (still 0abb9ed8a961). `f0_binding.consistency_evidence_sha256` may not be a `deciding_field` for any row. Let me check.
+
+So the rigorous approach:
+1. Deep-diff rev12 vs rev13 → changed leaf paths.
+2. Extract exercised paths per row (probe_results[].path + deciding_field* tokens).
+3. For each exercised path: compare values rev12 vs rev13 (normalized).
+4. Verdict per row: UNCHANGED / TOUCHED(+falsifier).
+5. Also check corpus-wide binding fields (binding_ref/binding_sha256) which point to rev12.
+6. Controls: 
+   - negative control: inject a semantic mutation into a copy of rev12 and confirm the differ detects it;
+   - positive control: confirm the live rev13 differs from rev12 at ≥1 path (so the differ is not trivially "all unchanged");
+   - confirm rev12 copy's sha equals cce9c60146d6 (the pinned binding) — otherwise the baseline would be wrong.
+   - confirm rev13 sha d9cebb9404b2 before and after.
+7. Also detect whether any row's `probe_results` expected/observed excerpts reference changed values (e.g. if a probe records an observed value of a changed path). The probe result comparison already covers value comparison; but the excerpt comparison is a good extra: if excerpt text for a changed path differs.
+
+Actually let me keep the analysis tight but rigorous. Deliverable: report with all data.
+
+Note: I must also consider whether the corpus rows already carry `rebound_at`/`rebind_note` fields — some rows do (union keys include rebound_at, rebind_note). Let me check which rows have those; maybe some were already re-bound to rev12 (from an earlier rev). If a row says rebound_at something, it might be relevant.
+
+Let me write the instrument now. Steps:
+- Choose rev12 baseline source: `artifacts/worker-033/gform_r12_ledger/pinned/canonical/af_wcc_vacuum.yaml` (pinned canonical at rev12) or `artifacts/heldout/heldout-09/bases/af_wcc_vacuum.yaml`. I'll verify sha equals cce9c60146d6a907082ade91c67c8ac658bd796d1241f9bb8965c3d2aa69daa3, and also cross-check against a second independent copy with the same hash (so the baseline isn't a single possibly-tampered copy). Let me use two copies and require both to hash to the pin.
+- Load YAML for both (need pyyaml — check availability).
+- Flatten to leaf paths.
+- Diff.
+- Extract exercised paths per row.
+- Report.
+
+Let me check pyyaml availability and the exact rev13 changed paths quickly (exploratory first, then formalize into the script).
+
+Let me do the exploration now.
+dsh: reasoning:
+The diff is exactly as worker-096 described: changed paths are revision, revised_at, revision_history[10].*, f0_binding.checked_at, f0_binding.consistency_evidence_sha256, f0_binding.binding_note, class_identity_variants[0].relation, quantifiers.domains.D5.definition, visibility.definition.
+
+Note: F1 has `class_identity_variants`, `quantifiers.domains.D5.definition`, `visibility.definition` changed — these are semantic! Whether any of the 25 corpus rows exercises those paths is the key question. Rows with deciding_field `visibility.definition` (rows 10, 16) and `class_identity_variants` (row 22). Those may be "touched". But careful: the changed values might be *stricter* descriptions (e.g. D5: "Whole-curve containment ... is EQU..." added); the row's probes may only check substrings that are unchanged. The falsifier says: "a reviewer shows the rev13 edits change a field any of the 25 tests exercises". So if a row exercises `visibility.definition`, then the field changed → the falsifier for the lead's "no rebind required" position fires. But wait — semantic reading: the field *did* change, but does the change alter what the test decides? The falsifier is literal: "change a field any of the 25 tests exercises". Hmm, but this is the falsifier of the *blocker* (L-FORM-04). The blocker says "whether the corpus must be re-bound is a controller/audit ruling". The falsifier: "a reviewer shows the rev13 edits change a field any of the 25 tests exercises, or the corpus is re-bound and the staleness disappears."
+
+So if rows exercise visibility.definition, D5.definition, class_identity_variants[0].relation, then the lead's implicit claim ("the rows' question/deciding-field semantics were not changed") is falsified — meaning rebinding IS required. This is a genuinely decisive result either way. Let me measure precisely.
+
+For rigor, I need to define "exercises":
+- direct: `deciding_field`, `deciding_field_alternates`, `deciding_field_contract` (parse the dotted path tokens)
+- probe-level: `probe_results[*].path`
+- Also rows may reference paths in `question`, `why`, `satisfies_*`, `schema_finding`, `unresolved_keywords`, `known_properties`. Textual mentions are weaker; I'll do a separate textual scan for changed-path tokens and changed-field names (e.g. "visibility.definition", "D5", "class_identity_variants") to make sure nothing is missed. But the decisive classification should be based on structured fields (deciding_field*/probe paths) — with a second tier for textual mentions.
+
+Also compare probe observed excerpts at changed paths: for each row probe with path in changed set, compare the rev12 vs rev13 value and the probe's `observed_excerpt` substring relation. E.g., if probe's expected/observed no longer holds at rev13 → row semantically invalidated. That's the strongest form: re-run each probe against rev13 and rev12 and compare pass results. Actually, I can go further: re-execute all `probe_results` (kind contains/equals/regex?) against both revisions and check whether the pass vector changes. That's a real semantic test of the corpus rows at both revisions. Let me check what `kind` values exist and whether all needed data is in the row (expected + path + kind).
+
+If for some row the probe pass-vector differs between rev12 and rev13 → the row is exercised-and-changed. If the row's exercised paths are changed but probe outcomes unchanged, classify as "field changed, probe outcome stable" (still technically falsifier-firing for "field any test exercises" — I must report both readings explicitly).
+
+Let me now check probe kinds and compute per-row path sets. Let me do a quick exploratory pass, then write the final instrument.
+
+Also note there may be textual path mentions in `question` etc. I'll handle.
+
+Let me write the analysis script directly as the deliverable instrument (under artifacts/worker-041/f1_corpus_rebind/), with pre-registered classification rules in the script, and run it. But first quick exploration to design correctly.
+dsh: reasoning:
+Crucial: probe paths include `visibility.definition` (4 probes across rows 10/16), `class_identity_variants` (5 probes, row 22), and possibly `quantifiers.domains.D5.definition`? Not in the list — no probe path for D5.definition. So the changed fields exercised by rows:
+- `visibility.definition` — CHANGED in rev13 → rows that exercise it are touched.
+- `class_identity_variants` — the probe path is the list; rev13 changed `class_identity_variants[0].relation` → the list value changed → touched.
+- `f0_binding.consistency_evidence_sha256` — is it a probe path? No. But `f0_binding.binding_note` is (row 25) and it CHANGED (text changed: "rev12: refreshed..." maybe appended). Wait the changed list includes f0_binding.binding_note. Its excerpt printed truncated at 200 chars; both look same prefix. It did change somewhere.
+- `f0_binding.declared_f0_sha256` — unchanged (0abb9ed8).
+- `revision`, `revised_at`, `revision_history[10].*` — metadata; not probe paths.
+- `quantifiers.domains.D5.definition` — changed but not directly in probe paths; however, row 15 (F1-AMB-16 conclusion_type) or others may *textually* reference D5.
+
+So the literal falsifier ("rev13 edits change a field any of the 25 tests exercises") most likely FIRES for rows exercising visibility.definition and class_identity_variants and possibly f0_binding.binding_note. That means re-binding IS required — contradicting the lead's parenthetical "The rows' question/deciding-field semantics were not changed by item 3 (prose-direction only)". This is a genuinely valuable finding: the rev13 repair included semantic edits (visibility.definition, D5.definition, class_identity_variants[0].relation) that ARE exercised by corpus rows, so the corpus must be re-bound (rev14) and possibly the rows re-derived.
+
+But hold on — I must be careful: what changed in `visibility.definition` and `class_identity_variants[0].relation`? The truncated print showed:
+- class_identity_variants[0].relation: rev12 "strictly STRONGER than..." → rev13 "strictly WEAKER than...". That's a directional inversion fix (worker-096 mentioned "the corrected directions were re-derived from scratch"; also F2b:246 inverted premise). So the semantics DID change.
+- visibility.definition: prefix same; need full diff.
+- D5.definition: rev12 "...Whole-curve containment ... is str..." → rev13 "...is EQU..." — changed wording.
+
+So my measurement should:
+1. Confirm the exercised-path overlap precisely.
+2. Re-run every probe (62 contains + 17 equals + others) against BOTH revisions and report which rows change probe outcomes (pass→fail or expected value changes).
+3. Classify each row: TOUCHED_AND_OUTCOME_CHANGED / TOUCHED_OUTCOME_STABLE / UNTOUCHED.
+4. Report the decisive verdict: falsifier F-LFORM04-A (field exercised by a test changed) fires or not.
+
+The probe re-execution is a strong independent test. For `contains`: check expected string is a substring of str(value) — but the `expected` fields may be long excerpts; exact contains may not evaluate identically to how the corpus author intended (their kind semantics version 0.4.0). I'll implement the natural semantics:
+- contains: expected in str(value)
+- equals: expected == value
+- is_none: value is None
+- is_true: value is True
+- path_exists: path resolves (any value)
+- nonnull: value is not None
+and record pass/fail at each revision, plus whether the corpus-recorded `pass` matches at rev12 (a calibration check — if my re-execution doesn't reproduce the recorded pass at the bound revision, my probe semantics are wrong and must be reported, not used as evidence).
+
+That's a nice control: at rev12 (the bound revision), my re-run should reproduce the recorded `pass` values. If it doesn't for some probes, I flag those probes as "semantics not reproduced" and exclude them from the decisive count (or report separately).
+
+Let me now write the instrument. Design:
+
+`artifacts/worker-041/f1_corpus_rebind/run_f1_corpus_rebind.py`:
+- PINS: rev12 sha cce9c60146d6a907..., rev12 sources (two independent copies), rev13 path schemas/af_wcc_vacuum.yaml sha d9cebb9404b2e79e..., corpus path schemas/f1_falsifier_tests.jsonl sha 56bcb4b3...
+- Load, verify hashes before/after.
+- Flatten leaves (`leaf_paths`), produce changed_leaf set.
+- Per row: exercised = sorted union of probe paths + deciding_field tokens.
+  - deciding_field tokens: split on non-path chars? Simpler: take the raw string and regex `[A-Za-z_][A-Za-z0-9_]*(\[[0-9]+\])?(\.[A-Za-z_][A-Za-z0-9_]*(\[[0-9]+\])?)*`. But "f0_binding.declared_f0_sha256 plus f0_binding.rule" → two tokens. Use regex findall of dotted-identifier patterns.
+  - map each path to the leaf(s): exact if it's a leaf; if it's a container, all leaves under it.
+- touched(row) = any exercised path whose leaf set intersects changed leaves.
+- probe re-run: for each probe, resolve path at rev12/rev13, apply kind, compare to recorded pass.
+- Controls:
+  C1 rev12 copies hash to pin (both copies).
+  C2 rev13 hash to pin before/after.
+  C3 corpus hash to pin before/after.
+  C4 negative control: mutate a value in a copy (deepcopy) of rev12 at a path exercised by a row and confirm touched() detects that row (and probe outcome can change).
+  C5 positive control: confirm at least one changed leaf exists (differ non-vacuous).
+  C6 probe-semantics calibration: count probes reproducing recorded pass at rev12; require high reproduction; report exclusions.
+  C7 decision-field textual scan: scan every string field of each row for changed path tokens and names of changed leaf segments (e.g. "visibility.definition", "class_identity_variants", "D5") — report mentions as tier-2 evidence.
+- Output report.json with all details + verdict + falsifier + hashes.
+
+Then write the artifact, claim, status, review events; checkpoint.
+
+Where to put artifact? `artifacts/worker-041/f1_corpus_rebind/`. Existing worker-041 dirs exist. Fine.
+
+One concern: "BLIND" requirements don't apply here since I'm not reviewing F1 itself; I'm measuring corpus binding. I'm not the author of F1 or the corpus (author is deepseek-flash-04). Good.
+
+Also should I read other reviewers' verdicts? Not needed.
+
+Time: ~1 hour budget; fine.
+
+Let me first look at the full changed values for visibility.definition and binding_note to understand, then write the script.
+
+Actually the script will capture full values. Let me just write it.
+
+One more check: is `schemas/f1_falsifier_tests.jsonl` currently exactly 56bcb4b3? Yes, per lead event pin `schemas/f1_falsifier_tests.jsonl#56bcb4b3234b` and I should hash it myself.
+
+Also I should confirm which rev12 copy to use. Two independent copies with the same sha:
+- artifacts/worker-033/gform_r12_ledger/pinned/canonical/af_wcc_vacuum.yaml
+- artifacts/heldout/heldout-09/bases/af_wcc_vacuum.yaml
+Let me verify both hash to cce9c60146d6. The earlier scan showed worker-033's path at cce9c60146d6 and heldout-09 bases at cce9c60146d6. Good.
+
+Note: artifacts/heldout/heldout-09/bases might be inside a directory that could move; but read-only is fine.
+
+Let me write the script now. I'll pre-register the classification rules in a docstring/README written BEFORE running (to avoid post-hoc rule changes). I'll write the script and a small README, then run.
+
+Actually — important nuance about the falsifier: L-FORM-04's blocker text says the lead's position is "The rows' question/deciding-field semantics were not changed by item 3 (prose-direction only)". The falsifier is "a reviewer shows the rev13 edits change a field any of the 25 tests exercises, or the corpus is re-bound and the staleness disappears."
+
+So my verdict should be binary on that falsifier: FIRES (rebind required) if any exercised field changed. I'll also give the nuance: probe outcomes stable vs changed. Both reported.
+
+Let me write the files.
+
+First, create directory and write run script. I'll use write tool.
+dsh: reasoning:
+All pins confirmed. Now write the instrument. I'll write:
+1. `artifacts/worker-041/f1_corpus_rebind/PREREGISTRATION.md` — rules fixed before running.
+2. `artifacts/worker-041/f1_corpus_rebind/run_f1_corpus_rebind.py` — deterministic instrument.
+
+Then run it, capture stdout/stderr to raw/, write report.
+
+Let me write the script carefully.
+
+Key implementation details:
+- leaf flatten: dict→key; list→[i]; but treating lists as leaves vs recursing matters for `class_identity_variants` probe path. If I recurse into lists, the probe path `class_identity_variants` maps to all leaves under it, including `[0].relation`. Good. But for `equals` probes on lists, I need the actual value at path, not flattened. So keep two structures: `value_at(obj, path)` using parsed path segments, and `leaves_under(obj, path)` = set of flattened leaf paths with the prefix.
+
+Path parsing: `a.b[0].c` → segments ['a','b',0,'c'].
+
+- exercised paths per row:
+  * probe_results[*].path (exact)
+  * deciding_field, deciding_field_alternates[*], deciding_field_contract: regex findall r'[A-Za-z_][A-Za-z0-9_]*(?:\[[0-9]+\])?(?:\.[A-Za-z_][A-Za-z0-9_]*(?:\[[0-9]+\])?)*' — but this will also match words like "plus" and "UNVERIFIED"? In `deciding_field_contract` strings like "f0_binding.declared_f0_sha256 plus f0_binding.rule" → tokens f0_binding.declared_f0_sha256, plus, f0_binding.rule. The bare word "plus" isn't a valid top-level key; resolution check will drop unresolvable tokens. Also alternates are explicit.
+  * Keep only tokens that resolve (or prefix-resolve) in rev12.
+
+- changed leaves set: keys where values differ or key only in one side. Both sides here have same keys except revision_history[10].*.
+
+- touched(row): any exercised path p such that leaves_under(p) ∩ changed_leaves ≠ ∅. Note: for a probe path that is an exact leaf (e.g. visibility.definition), leaves_under = {visibility.definition} (if it's a leaf). Good.
+
+- probe re-execution:
+  * record_pass12/13 using natural semantics.
+  * calibration: rec_pass12 == recorded pass (bool).
+  * outcomes_changed = rec_pass12 != rec_pass13 (only meaningful where calibration holds).
+  * Also compare resolved values rev12 vs rev13 for the probe path (value_changed flag) — this catches `equals` probes where expected changed.
+  * A `contains` probe whose substring is in both old and new value → value_changed=True (if value differs) but outcome stable. That's exactly the nuance.
+
+- Decision rule (pre-registered):
+  * FALSIFIER_FIRES if any row has ≥1 exercised field whose value differs between rev12 and rev13 (tier-1: probe paths + deciding fields).
+  * SEVERITY: "semantic" if a probe outcome/probe-resolved value changes, or if the changed exercised field is a non-metadata field (not revision/revised_at/revision_history/f0_binding.checked_at).
+  * Report both literal (field changed) and outcome-level.
+
+- Tier-2 textual scan: for each row, scan all string leaves (excluding the ones already tier-1) for: exact changed-path strings, and for the changed leaf basenames when meaningful (D5, visibility.definition, class_identity_variants, binding_note). Regex for `visibility\.definition`, `class_identity_variants`, `quantifiers\.domains\.D5`, `f0_binding\.binding_note`.
+
+- Controls:
+  C1: both rev12 copies sha == pin (fail-closed exit 3).
+  C2: rev13 sha == pin before and after; C3 corpus sha == pin before and after.
+  C4: positive control (differ non-vacuous): changed leaf count ≥ 8 and includes expected set; verify the 3 semantic fields flagged.
+  C5: negative control — deepcopy rev12, set value at `visibility.definition` to a sentinel, confirm touched-row detection picks the same rows as live diff for that path; and mutate a non-exercised path (`genericity.kind`? need a path not exercised) → confirm it does NOT touch any row... Actually `genericity.kind` IS exercised (row 9). Pick a clearly unexercised leaf, e.g. `revision_history[0].notes[0]` or `conclusion.text` if not exercised. Let me pick dynamically: find a leaf not under any exercised path; mutate it; confirm touched set unchanged. 
+  C6: probe-semantics calibration rate at rev12 (report; require ≥90% to use outcome-level claims — else exit 4? Better: report and don't fail the run; but for the decisiveness I only rely on tier-1 field-change, which is mechanical. Still, high calibration strengthens outcome-level claims).
+  C7: instrument determinism: run the whole analysis twice → identical report (minus timestamps). I'll implement a `--check-determinism` flag that runs twice in-process and compares structural output. Simpler: compute report twice and compare JSON with created_at fields removed.
+
+- Exit codes: 0 = analysis completed regardless of falsifier outcome; 3 = pin drift; 4 = control failure. Report `falsifier_status`.
+
+Let me write the script. Keep it clean and reasonably sized.
+
+I also want to record the full old/new values for the changed exercised fields in the report.
+
+Let me write PREREGISTRATION.md first (rules fixed before run), then the script.
+dsh: reasoning:
+Now write the instrument script.
+dsh: reasoning:
+Wait, ROOT computation: file is at `/data3/guoshaoyang/workdir/ai4math-swarm/artifacts/worker-041/f1_corpus_rebind/run_f1_corpus_rebind.py`. parents[0]=f1_corpus_rebind, [1]=worker-041, [2]=artifacts, [3]=ai4math-swarm. Correct.
+
+Run it.
+dsh: reasoning:
+The instrument ran cleanly:
+- FALSIFIER_FIRES, severity semantic
+- 4 touched rows: 10, 16, 22, 24
+- No probe outcomes changed (but field values changed)
+- Calibration 81/84
+
+Note changed_leaf_count=12 (my earlier quick diff said 8; the script counts all changed leaves including absent/added ones — revision_history[10].* = 4 added + 8 changed = 12. Yes consistent).
+
+Now, before finalizing, I must scrutinize:
+1. Which exercised fields overlap for rows 10, 16, 22, 24? Let me inspect the report.
+2. 81/84 calibration — which 3 probes uncalibrated? Verify they don't affect tier-1 (tier-1 is mechanical; independent of calibration).
+3. Sanity check row 24: exercises `f0_binding.binding_note` — that leaf changed. Let me look at the actual old/new text to confirm it's a real content change (not just appended "rev13" note). And rows 10/16 exercise `visibility.definition`; row 22 exercises `class_identity_variants` (list containing changed relation).
+
+Also an important subtlety: my `leaves_under` maps probe path `class_identity_variants` → all leaves under it including `[0].relation` → changed. Good. But is `class_identity_variants` genuinely "exercised" by row 22's probe? The probe path is exactly `class_identity_variants` (kind contains, expected "registered_variant_not_written") → the list content changed at [0].relation, and `contains` over `str(list)` — since expected substring may still be present, outcome stable, but the field IS exercised and DID change. Literal falsifier fires.
+
+Now the crucial adjudication nuance I must report honestly: the falsifier's literal reading fires (field exercised changed), but no calibrated probe outcome changed — i.e., the rows' pass/fail vector at rev13 is identical to rev12. This means:
+- A strict reading of L-FORM-04's falsifier → rebind required (the lead's parenthetical claim "not changed" is false).
+- A semantic reading (does the corpus still decide the same way?) → outcomes stable; the changes are directional/strengthening clarifications; corpus remains valid in outcome but its declared binding hash is stale and its exercised fields changed, so re-binding (rev14) is required to keep binding honest. That's a decisive input to the controller ruling.
+
+Let me inspect the report details for those rows and the 3 uncalibrated probes, then verify by an independent second look at the raw values.
+
+Also, one more check worth doing for robustness: is my baseline rev12 copy truly the revision the corpus was authored against? binding_sha256 = cce9c60146d6a907... = matches both copies. Yes.
+
+Let me examine the report.
+dsh: reasoning:
+Good analysis. Some uncalibrated probes: for row 22 the `contains` probe on `class_identity_variants` has expected "registered_variant_not_written" which is a value of a nested field (`status`), not a raw substring of `str(list)`? Actually str(list) should contain "registered_variant_not_written" since it's a value. Let me check why it failed. Maybe the expected string is longer. Similarly for row 24's `equals` on declared_f0_sha256 — recorded expected maybe "0abb9ed8..." while actual might be "0abb9ed8a961..." full hash; my equals compares against `expected` field — but wait, maybe the probe's `expected` is a truncated prefix. Let me check the raw probes for rows 22 and 24. This matters for reporting accuracy.
+
+Also note row 24's probe on binding_note expected "astra-classscope-02" and both fail — likely the binding_note no longer contains that (it was rewritten). Hmm, but the recorded pass is True at rev12 while rev12 binding_note may contain "astra-classscope-02"? Earlier printout of row 24's probe on binding_note expected "astra-classscope-02" with observed excerpt mentioning it. Let me check the actual rev12 binding_note value.
+
+Wait, the row 24's binding_note probe was in the earlier print: path f0_binding.binding_note, expected "astra-classscope-02", observed_excerpt "...refreshed to the rev4 declared-F0 hash after the astra-classscope-02 amendment...". If rev12's binding_note contains "astra-classscope-02", then my contains should pass... unless the probe's `path` in the row is "f0_binding.binding_note" and I resolved it against the YAML — should work. Unless the row used for this probe has a different `expected`. Let me look at the raw probe entries precisely.
+
+Also, rows 0-24 all `rebound_at` = astra-life03-repin-claims from rev11 9a8bd4c9 → rev12. So the corpus was already rebound once (rev11→rev12) at 00:32; the same class of event. So this is a pattern: each schema revision forces a corpus rebind. Good context.
+
+Let me inspect rows 22 and 24 raw probe entries to explain the calibration misses honestly.
+dsh: reasoning:
+Now I see why calibration failed for 3 probes:
+
+1. Row 22 probe 1: expected `'"is_this_class": false'`. My `contains` over `str(list)` — Python's str of a list of dicts uses single quotes: `'is_this_class': False`. So the expected literal with double quotes and lowercase `false` doesn't match Python's repr. The corpus author intended JSON serialization. So my natural `str()` semantics is wrong for those; JSON `json.dumps()` would match. This is an instrument-semantics artifact, not corpus invalidity.
+
+2. Row 24 probe 0: `equals` expected `276009f4...` but rev12's declared value is `0abb9ed8...`. Wait — that's interesting! The row's recorded pass=True with observed excerpt `"276009f4..."`, but the current rev12 schema has declared_f0_sha256 = 0abb9ed8a961. So the corpus row was authored against an older revision (276009f4), rebound to rev12 by the `astra-life03-repin-claims` at 00:32:31, and its probe records were NOT updated — the row is internally inconsistent with its own bound revision! Hmm wait, when they rebound binding_ref/binding_sha256 (rev11 9a8bd4c9 → rev12 cce9c60146d6), they apparently did not update `probe_results` expected values. So this row's probe would fail at rev12. That's a genuine corpus defect: F1-AMB-25's `deciding_field` probe expects a superseded F0 hash 276009f4 while rev12 declares 0abb9ed8. Actually hold on — maybe the row's `rebind_note` says the delta_vs_* keys were untouched, but probe expected values weren't refreshed.
+
+Similarly row 24 probe 3: expected "astra-classscope-02", but rev12 binding_note doesn't contain it (it was replaced by the rev12 note). Recorded observed_excerpt shows the old text. So both these probes are stale relative to rev12.
+
+3. Row 22 probe 1 and row 24... same JSON-quoting artifact.
+
+So there are two classes of calibration failures:
+- (a) JSON-quoting representation (row 22 index 1: `"is_this_class": false`) — instrument semantics; fix by also trying `json.dumps(value)`.
+- (b) genuinely stale probe expectations from the rev11→rev12 rebind (row 24 index 0 and 3) — the row's recorded `pass=true` cannot be reproduced at the row's own declared binding_sha256 rev12. That's an *additional independent finding*: the corpus was already stale-by-content at rev12 for row F1-AMB-25, before rev13. This strongly supports that the rebind procedure only rewrote binding metadata, not probe expectations.
+
+Wait, but row 24 probe 4 (`class_identity_variants`, expected "registered_variant_not_written") recorded pass=True, and my re-exec failed only because of... no, for row 24 index 4 the run says index 4 wasn't listed as uncalibrated; only indices 0,3 for row 24. Let me re-check: uncalibrated for row 24 were index 0 and 3. Index 4 (class_identity_variants contains 'registered_variant_not_written') should pass via str(list) since `registered_variant_not_written` appears as a plain string value (no quotes/booleans issue). Yes.
+
+So only row 22 index 1 is the JSON-quoting artifact, and row 24 indices 0,3 are genuine stale expectations.
+
+Let me improve the instrument to handle the JSON representation variant (a fair "natural reading" of the corpus's observed_excerpt style, which is JSON), and re-run. Pre-registration rule 6 said contains = substring of str(value). I should be honest: I'll add a *secondary* contains check against `json.dumps(value)` (compact-ish default separators) and report both; calibration uses `str()` OR json form (documented as an instrument-semantics extension in the report, with the raw evidence visible). Hmm — changing rules post-hoc is what preregistration is meant to prevent. Better approach: keep the pre-registered primary rule as-is, and report the json-form as an explicitly labelled *diagnostic* that explains the discrepancy. The tier-1 falsifier verdict doesn't depend on calibration at all. The report will state: 81/84 calibrated under the pre-registered `str()` semantics; the 3 misses decompose into 1 JSON-representation artifact and 2 genuinely stale expectations; none of them changes the tier-1 verdict.
+
+Actually, I think it's worth making the instrument emit the decomposition mechanically rather than by hand, so the report is self-contained. I can add a "calibration_misses" analysis block computed from the data: for each uncalibrated probe, test whether `json.dumps(value)` contains expected (representation artifact) — and record `stale_at_bound_revision: recorded_pass=True and reexec_pass_rev12=False (non-representation)`. That's an analysis annotation, not a change of the primary rule. I'll add it as `uncalibrated_diagnosis` with explicit labels.
+
+Also worth adding: a direct check that the corpus's `probe_results[*].observed_excerpt` no longer matches the bound revision for rows where values changed. E.g., row 24's observed excerpts quote values not present at rev12. That's the strongest evidence of content staleness. Let me add a check: for each probe with an `observed_excerpt`, test whether the excerpt's core content (strip quotes) is a substring of the *current* value at the bound revision (rev12) using the probe's own kind; I already do that via reexec. Fine.
+
+Another good addition: compare the row's declared `binding_sha256` to the live canonical (rev13) → stale by definition for all 25 rows. And to rev12 → matches. That's already known.
+
+Let me also consider: should I *also* re-run the row-level outcome at rev13 with the corrected json representation? The outcome_changed count remains 0 either way, since it doesn't change between rev12 and rev13. The representation issue is revision-independent, so it doesn't affect `outcome_changed`. Good.
+
+Now, one more important consideration for the verdict narrative: the changed `visibility.definition` [rev12→rev13] removes a misclassification claim and replaces it with an equivalence claim; the predicate itself is unchanged. The changed `class_identity_variants[0].relation` inverts STRONGER→WEAKER (direction fix). These are semantic text changes in fields exercised by 4 rows. Row 24's `f0_binding.binding_note` change is an append of the rev13 note (new content mentions the new evidence hash). So:
+- Literal falsifier FIRES (fields exercised by tests changed).
+- Probe outcomes unchanged at both revisions under both representations → the corpus's pass/fail decisions remain valid, except the pre-existing stale expectations in row F1-AMB-25 for `f0_binding.declared_f0_sha256` (expects 276009f4, rev12/13 declare 0abb9ed8) and `f0_binding.binding_note` (expects "astra-classscope-02", current note is the rev12/13 text). Those are stale since the life03 repin and would need updating in any rebind.
+
+This is a strong, useful result for the controller ruling. It says: rebind IS required (rev14), and the rebind must not be purely mechanical — the two F1-AMB-25 probe expectations are already stale at rev12.
+
+Hmm, wait. Let me double check the row 24 stale expectation claim. Could it be that `f0_binding.declared_f0_sha256` in rev12 is 0abb9ed8, but the row's `cross_artifact[0].sha256` = 276009f4 (an older F0 revision). The row's probe expected 276009f4. The row was rebound (binding_ref→cce9c60146d6) at 00:32:31 but its probe expectations were not refreshed. Confirmed by the numbers. This means at rev12 the row's own probe "pass" field is false-by-current-content. That's a real corpus integrity defect worth reporting as a finding (F-041-CR-01).
+
+Let me also verify that this isn't an artifact of my using the wrong rev12 copy. Both copies hash to cce9c60146d6. And the corpus binding_sha256 = cce9c60146d6. So yes.
+
+Let me also check how many other rows have `binding_at_authoring`/`prior_binding` hashes and whether any other probe expectations reference values not in rev12 (my calibration found only these two, across 84 probes). Good.
+
+Now update the script to add the diagnosis block and re-run (idempotent). Since the pre-registration fixed the rules, I'll implement the diagnosis as an annotation computed by explicit, labelled rules and note it in the report. I'll also add a `calibration_diagnosis` field per probe.
+
+Let me edit the script.
+dsh: reasoning:
+Also add to the report verdict a summary of uncalibrated diagnoses. Let me add to `verdict`:
+- `uncalibrated_probes`: list of {row, test_id, path, diagnosis, expected, recorded_pass}
+
+And a `findings` section with F-041-CR-01 (stale expectations at rev12 in row F1-AMB-25) — but I'll write findings into the report manually after run? Better to compute mechanically. Let me add:
+
+```
+uncal = [{"row_index":r["row_index"],"test_id":r["test_id"],"path":p["path"],"kind":p["kind"],"recorded_pass":p["recorded_pass"],"reexec_pass_rev12":p["reexec_pass_rev12"],"diagnosis":p["uncalibrated_diagnosis"]} for r in row_reports for p in r["probes"] if not p["calibrated"]]
+stale = [u for u in uncal if u["diagnosis"]=="stale_expectation_at_bound_revision"]
+verdict["uncalibrated_probes"]=uncal
+verdict["stale_at_bound_revision_count"]=len(stale)
+```
+
+Let me edit the verdict block.
+dsh: reasoning:
+Excellent. Everything is consistent. Now let me do a final independent sanity verification of the key claims before emitting events (protocol rule 5: reject your own output first).
+
+Sanity checks to run:
+1. Re-confirm the 4 touched rows' exercised field overlaps by an independent one-liner (different method: direct string search of changed paths in row JSON). 
+2. Confirm no other row's exercised fields overlap (my instrument says 4). Quick cross-check: for each row, check whether `visibility.definition`, `class_identity_variants`, or `f0_binding.binding_note` appears in any structured field (deciding_field*, probe paths). Independent grep.
+3. Confirm the falsifier reading: yes.
+4. Confirm report has no absolute path leakage problems — fine.
+
+Also, I should double check the "C4 negative control path" mutation logic: I mutated a leaf under no exercised path → no rows touched. But wait — `adjudication_queue.adjudication_ref` is a leaf not exercised. However, mutating it changes the changed-leaf set, and rows exercising `adjudication_queue.open_rows` (3 probes) don't include adjudication_ref → no touch. Correct.
+
+One more sanity: does `leaves_under` accidentally mark a row touched because of `revision_history` etc.? No — touched rows all had nonmetadata overlap, so severity semantic is well-grounded (visibility.definition, class_identity_variants[0].relation, f0_binding.binding_note).
+
+Let me run the independent cross-check quickly, then write README, emit events, checkpoint.
+
+Cross-check method: load rows; for each row, collect structured path tokens from deciding fields and probe paths; check membership/prefix against a hand-list of changed semantic paths {visibility.definition, quantifiers.domains.D5.definition, class_identity_variants[0].relation, f0_binding.binding_note, f0_binding.consistency_evidence_sha256, revision, revised_at}. Print rows with hits. Expect exactly {10,16,22,24}. Also check whether D5/consistency_evidence appear in any row (should be none).
+
+Actually `f0_binding.consistency_evidence_sha256` — is it exercised? Not in probe paths. Row 24's deciding_field_alternates: declared_f0_artifact, rule. No. So no.
+
+Let me do that cross-check via an independent tiny script (not the instrument).
+dsh: reasoning:
+The independent cross-check with a hand-written method reproduces touched rows [10,16,22,24] exactly.
+
+Note: the independent method's `under()` for `class_identity_variants[0].relation` with path `class_identity_variants` — my `under` checks p==c or p.startswith(c+'.') or p.startswith(c+'[') where c is the changed leaf `class_identity_variants[0].relation` and p is `class_identity_variants` → that's the reverse containment, so it didn't flag. That's why row 22 only lists visibility.definition. My instrument checks leaves_under(exercised path) ∩ changed, which is the correct direction (exercised container contains changed leaf). The cross-check should use the same direction: changed leaf under exercised path. Let me not worry — the important part (row set) matches; but I want to be precise in reporting. The instrument's direction is the correct one per pre-registration rule 4 ("some exercised path of that row has at least one changed leaf at or below it").
+
+Fine. The verdict is solid: rows 10, 16, 22, 24.
+
+Now write the README for the artifact directory (summary), then emit:
+1. artifact event (report.json)
+2. artifact event (instrument)
+3. claim event with conclusion_type=formal_model
+4. status event marking worker-level completion
+5. review event? The task instruction says "emit valid JSON with IDs evidence hash falsifier, checkpoint". For a measurement task, an artifact + claim + status is enough. Previous worker-041 patterns emitted review only when reviewing a target. Here the target is the blocker's falsifier, not a gate artifact. I'll emit status + artifact(s) + claim, and maybe a `blocker`-resolution? No — L-FORM-04 is the lead's blocker; I provide adjudication input. I could emit a `review` on `schemas/f1_falsifier_tests.jsonl` with verdict `revise` (stale binding + 2 stale expectations) — that's a legitimate review of the corpus at its pinned hash, and it's decisive input for the controller's ruling. Previous worker-041 emitted reviews with `counts_as_full_...=false` scope notes. That fits. But careful: a worker `review` event of the corpus might be interpreted as an audit verdict; I'll scope it clearly: reviewer=worker-041, target_id=schemas/f1_falsifier_tests.jsonl, verdict=revise, score, hard_failures=[], findings=[...], reviewed_sha256=56bcb4b3..., with scope note "binding-adjudication input; not a gate verdict".
+
+Hmm, but the review event schema requires target_id, reviewer, verdict, score, hard_failures, findings. Fine.
+
+Should I emit a `blocker`? No, the opposite — I'm supplying evidence against the L-FORM-04 assumption.
+
+Also note the events must be ingested by the controller to count. The controller runs `comms.py ingest` every 15 min. I just write to outbox.
+
+Also: register artifact hash in runtime/state/artifact_hashes.json? That file is controller-managed. The protocol says done-node needs artifact sha in artifact_hashes.json. Workers might append via checkpoint.py. Let me check checkpoint.py usage — `python3 research_map/checkpoint.py` is the full 15-min controller snapshot, not for workers. Previous worker-041 artifacts (e.g. f0_mirror_report.json) — are they in artifact_hashes.json? Let me check. If workers register their own, I should too. Let me grep.
+
+Let me check `runtime/state/artifact_hashes.json` for worker-041 entries.
+dsh: reasoning:
+The artifact_hashes.json has 'hashes' and 'registry' — worker-041 has 0 entries by that key format, but my artifacts might be under a different key. Let me look at samples. Actually the previous worker-041 artifacts (artifacts/worker-041/...) may not be registered. The controller sweeps them. I won't modify controller state — workers shouldn't write that file (it's written by checkpoint.py). I'll reference my artifacts via sha256 in events; the controller can register them.
+
+Let me quickly glance at the registry structure to be sure nothing is expected from me. Not necessary.
+
+Now write README.md for the artifact package (documents task, pins, verdict, artifacts, reproduction command), then hash everything, then emit events.
+
+README content:
+- task, blocker, pins
+- verdict: FALSIFIER_FIRES / semantic; 4 rows touched; 0 probe outcomes changed; 81/84 calibration; 2 stale expectations at bound revision (pre-existing from rev11→rev12 repin); 1 JSON representation artifact
+- controls
+- falsifier/next falsifier
+- reproduction command
+- authority note
+
+Then the events. Event timestamps: use current time +08:00. Let me get the current time. Also I should use event_ids with worker-041 prefix. Task id: W041-F1-CORPUS-REBIND-01.
+
+Events (5):
+1. artifact → report.json, artifact_type=measurement_report, validation_status=unverified, node_id F1, gate G-FORM, class_id AF-WCC-VAC-GEN.
+2. artifact → instrument script, artifact_type=verifier.
+3. artifact → preregistration doc? Could include as evidence ref instead. I'll include PREREGISTRATION.md in evidence_refs.
+4. claim → conclusion_type=formal_model, statement.
+5. review → target schemas/f1_falsifier_tests.jsonl, verdict revise, score 3, findings.
+6. status → worker-level complete.
+
+Write them via a python script to a temp file, then append to comms/outbox/worker-041.jsonl. Must ensure valid JSON and required fields. Let me construct carefully with the write tool? A python heredoc appending is fine, but the instructions say use write tool for creating files; appending to an existing jsonl via bash python is a data operation, acceptable. But to be safe and reviewable, I'll generate the events with a script into `artifacts/worker-041/f1_corpus_rebind/events.jsonl` (write tool), validate them locally against research_map/schemas.py, then append to the outbox with python (after backing up? The outbox is append-only; appending is the protocol action).
+
+Actually simpler and safer: write `emit_events.py` that constructs the events, validates each with research_map.schemas.validate_event, writes events.jsonl, and appends to comms/outbox/worker-041.jsonl if not already present (idempotent by event_id). Then run it. That keeps the emission reproducible too.
+
+Let me first check the validator function name in schemas.py.
+dsh: reasoning:
+Now write the README and the emit script.
+
+First get current time for event timestamps. Then write README with final verdict.
+
+Let me get time.
+dsh: reasoning:
+Now write the emit script. Events to emit (one claim, artifacts, review, status). Let me define:
+
+TASK = W041-F1-CORPUS-REBIND-01
+EV base = "w041-f1corpus-20260912T0102" (use actual time)
+class_id = AF-WCC-VAC-GEN
+node_id = F1
+gate = G-FORM
+evidence_refs:
+- artifacts/worker-041/f1_corpus_rebind/report.json#3f5563c2e027
+- artifacts/worker-041/f1_corpus_rebind/PREREGISTRATION.md#62f329fa753b
+- schemas/f1_falsifier_tests.jsonl#56bcb4b3234b
+- schemas/af_wcc_vacuum.yaml#d9cebb9404b2
+- artifacts/worker-033/gform_r12_ledger/pinned/canonical/af_wcc_vacuum.yaml#cce9c60146d6
+- artifacts/heldout/heldout-09/bases/af_wcc_vacuum.yaml#cce9c60146d6
+- artifacts/formulation/FROZEN.json#815e08079aef
+- comms/outbox/astra-lead-formulation.jsonl#lead-form-20260912T005743-93
+
+Claim:
+statement: "At F1 rev12 cce9c60146d6 vs rev13 d9cebb9404b2 ... L-FORM-04 falsifier FIRES (semantic): 4/25 rows (indices 10,16,22,24) exercise ≥1 changed field... no calibrated probe outcome changes; 2 pre-existing stale expectations in row 24 at rev12."
+conclusion_type: formal_model
+assumptions: list
+falsifier: "Re-run ...; falsified if no exercised path changes; or negative control fires; or rev12 baseline copies don't hash to pin."
+artifact_refs: report.json, README, prereg
+
+Review:
+target_id: schemas/f1_falsifier_tests.jsonl
+reviewer: worker-041
+verdict: revise
+score: 3.0
+hard_failures: [] (I'll keep empty; the stale binding is the blocker itself, not my hard failure; but I could add hard failures for the two stale expectations. Hmm. The corpus row F1-AMB-25 has recorded pass=true on probes that fail at its own declared binding. That's arguably a hard failure of the corpus. I'll include one hard failure HF-041-CR-1 for the stale expectations at the bound revision, and note the binding staleness is L-FORM-04 itself.)
+findings: [...]
+reviewed_sha256: 56bcb4b3234bc86c324bec6e38f142c5ef39517f20d823b6a333f578b7d0851e
+scope: binding adjudication input; not a gate verdict.
+
+Status:
+status: active
+hours: 0.5
+summary
+evidence_refs
+next_falsifier
+completion_claim: true? The instruction "emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit". Status event requires node_id,status,hours,summary,evidence_refs,next_falsifier. Set status=active with completion_scope note (like previous worker-041). 
+
+Artifacts:
+1. report.json artifact_type=measurement_report
+2. run script artifact_type=verifier
+3. README perhaps artifact_type=report_doc. Not necessary but fine. I'll include report + verifier + prereg doc.
+
+Also add "to": ["astra","astra-lead-formulation","astra-lead-audit"].
+
+The emit script should validate with research_map.schemas.validate_event, check sha256 of referenced files, ensure idempotency (skip event_ids already present in outbox), write events.jsonl, and append to outbox. Then print result.
+
+Let me write it.
+dsh: reasoning:
+Wait — there's an issue: the report.json and README.md hashes in the emit script are computed at runtime, so the event's `sha256` fields will be correct. But I hardcoded hashes in README? No, README lists the hashes as of the run. Fine.
+
+However: the `EV_REFS` uses `H['report'][:12]` computed at emission time — good.
+
+But note the report.json I hashed earlier (3f5563c2...) — unchanged since. README is written after; the emit script hashes it. Good.
+
+One concern: event `status` requires `hours` (present). `claim` requires assumptions/falsifier/evidence_refs — present. `review` requires findings etc. — present.
+
+Also validate_event for claim checks conclusion_type in allowed set; formal_model is fine.
+
+Run the emit script.
+dsh: reasoning:
+All 6 events validated and appended. Now write the checkpoint under `runtime/state/worker-041_F1_CORPUS_REBIND_checkpoint.json` (one checkpoint as instructed), plus a jsonl checkpoint log maybe. Previous worker-041 wrote `runtime/state/worker-041_F0_checkpoint.json` (single) and `w041_checkpoints.jsonl` (log). I'll write a single checkpoint file and append to `w041_checkpoints.jsonl` if it exists (it was 13651 bytes at 00:47 — probably other worker's file? Let me check: `runtime/state/w041_checkpoints.jsonl` — that's likely worker-041's own log from a previous instance). Appending one line is consistent.
+
+Checkpoint content: pins, verdict, outputs, evidence, falsifier, rollback, authority.
+
+Let me also re-verify hashes of the emitted artifacts at checkpoint time to detect any drift. Then write with the write tool.
+
+Let me first check the existing w041_checkpoints.jsonl tail to match style.
+dsh: reasoning:
+All hashes stable. Now write the checkpoint file. I'll write `runtime/state/worker-041_F1_CORPUS_REBIND_checkpoint.json` and append a compact line to `runtime/state/w041_checkpoints.jsonl` (the existing per-worker log).
+
+Content per style, with schema_version, checkpoint_id, task_id, actor, agent_id, measured_at, node_id, gate, class_id, authority_note, pins, verdict, measurements, outputs, controls, map_observed (hash research_map.json at checkpoint time), falsifier/next_falsifier, rollback, budget.
+
+Let me get the map hash now (and current_checkpoint timestamp). Then write the checkpoint file.
+dsh: reasoning:
+Now append a compact line to runtime/state/w041_checkpoints.jsonl (per-worker log) and validate the checkpoint JSON. Also verify final pins once more (nothing moved) and that the checkpoint's referenced hashes are correct.
+
+Let me append via python (read existing, append). Then final verification:
+- json.load checkpoint OK
+- all sha256 in checkpoint match disk
+- events in outbox validate
+- run instrument once more to confirm exit 0 (idempotent re-run, proves reproducibility one more time) — I already ran twice; maybe skip a third. Actually a third run would overwrite report.json with a new created_at → hash would change! The checkpoint pins report.json sha 3f5563c2. Re-running would produce a different created_at (timestamp) → different hash → invalidate my checkpoint. So do NOT re-run. Important: my report.json includes created_at, so it's not deterministic byte-wise. The determinism control compared payloads excluding created_at... Actually C6 compares `changed/rows/touched` JSON, not created_at. Fine. But note: re-running the instrument changes report.json hash. My "next_falsifier" says re-run and expect exit 0 — that would regenerate report.json with a new timestamp, so the checkpoint's report sha would no longer match. I should note that in the checkpoint? The checkpoint falsifier says "a report.json whose sha256 is not recorded here" falsifies the checkpoint. Hmm — but that's about the report at checkpoint time. If someone re-runs, the report changes. To be safe, better: make the instrument write report.json deterministically by excluding wall-clock created_at, or accept that re-running regenerates. The pre-registered README says "Reproduce: python3 ...". Reproduction should not invalidate. Let me fix the instrument to allow a deterministic report: derive `created_at` from an env var or omit? Simplest: keep created_at but note in README that a fresh run regenerates the report with a new timestamp and new sha; the measurement content is deterministic. Actually the cleanest: add `SOURCE_DATE_EPOCH`-style support: if env W041_FIXED_TS is set, use it. And document. Then anyone can reproduce the exact bytes with `W041_FIXED_TS=2026-09-12T01:01:00+08:00 python3 ...`.
+
+Let me add that small feature: `now = os.environ.get("W041_FIXED_TS") or datetime.now(...)`. Then the "reproduce exact bytes" command includes the env var. I need to re-run to regenerate report.json with the fixed timestamp... but then the sha changes again (from 3f5563c2 to something else) and I'd have to update all events/checkpoint. That's a lot of churn.
+
+Alternative: keep as is, and clarify. Honestly, the current setup is fine: report.json is a point-in-time measurement artifact, hash-pinned; re-running produces an equivalent-content new artifact. The protocol is hash-based, and my next_falsifier refers to measurement semantics. But the checkpoint's own falsifier statement "a report.json whose sha256 is not recorded here" could be misread as "any re-run falsifies". Let me soften by explicitly documenting the timestamp behavior in the README ("re-running regenerates report.json with a new created_at; compare the verdict block, not the byte hash, unless W041_FIXED_TS is used"). And add the env override to the instrument for exact reproduction — without re-running now? But then the committed report.json wouldn't have been produced by the current instrument version... Hmm, that's worse (instrument hash would change after report was produced).
+
+Cleanest minimal approach: leave instrument and report as-is, and add to README a "Reproduction semantics" note: byte-identical reproduction requires deleting/ignoring created_at; the measurement payload is deterministic (C6). Also update the checkpoint? The checkpoint is already written. Let me just append a small clarification to README and update the checkpoint + events? Updating events means emitting a corrected artifact hash for README — the README isn't cited in events with a hash (EV_REFS only cites report+prereg). The checkpoint cites readme sha af9cf7f6. If I edit README, I must update the checkpoint.
+
+Simplest: add the reproduction note to README now, then patch the checkpoint's readme hash and re-verify. The events don't reference README. Fine.
+
+Actually, is this necessary? It's a small clarity improvement. Given the emphasis on rigor in this project, yes — a concise note prevents a false falsification. Let me do it, then patch checkpoint, append log line.
+
+Also, one more consideration: should I append to w041_checkpoints.jsonl? It's a log of worker-041 checkpoints; yes, one compact line. Let me do that after patching.
+
+Let me edit README first.
+dsh: reasoning:
+Now append a compact line to runtime/state/w041_checkpoints.jsonl, and do a final verification pass:
+1. All hashes in the checkpoint match disk.
+2. All 6 events in the outbox parse and validate.
+3. Pins unchanged.
+4. Event JSONL file hash matches checkpoint.
+
+Then finish with a summary.
+
+Let me write the log line append + verification in one python script. Be careful: appending a line to the existing jsonl (which has prior worker-041 entries).
+dsh: reasoning:
+Everything verified. One last thing: the task says "checkpoint, then exit". I've done:
+- Read handoff (HANDOFF.md), map (research_map.json / ASTRA_HANDOFF.md), comms (PROTOCOL.md, inbox).
+- Took one class-bound task (W041-F1-CORPUS-REBIND-01, class AF-WCC-VAC-GEN, node F1, gate G-FORM) — my inbox card was already closed, so like earlier worker-041 instances I self-assigned a bounded task from the live critical path (L-FORM-04).
+- Emitted valid JSON with IDs (event_ids, task_id, class_id, node_id), evidence (hash-pinned refs), hash (sha256 of artifacts verified), falsifier (explicit falsifier + next_falsifier).
+- Wrote checkpoint under runtime/state/.
+- Now exit.
+
+Should I also produce a final summary file in the instance trajectory? The instance's stdout.log is captured by the supervisor from my output presumably. The handoff mentions "Every completed lifecycle must leave meta.json, prompt.txt, stdout.log, stderr.log, trajectory.log, exit_code". Those are managed by the supervisor. I don't need to write them.
+
+One consideration: should I emit anything else, like a blocker resolution? No.
+
+Also, should I check whether the map ingest picks it up? The controller ingests periodically; not my job. But maybe I should run `python3 research_map/comms.py ingest`? That's a controller command; running it could conflict with the controller. The PROTOCOL lists it under "Controller commands". I should NOT run it. My job is to write to my outbox, which I did.
+
+Let me give a concise final summary. Keep it tight.

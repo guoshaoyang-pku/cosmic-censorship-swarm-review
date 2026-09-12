@@ -1,0 +1,562 @@
+dsh: reasoning:
+Let me start by understanding the workspace, the handoff/map, and comms. Let me look at the directory.
+dsh: reasoning:
+No handoff/ or comms/ directory at the top level of /data3/guoshaoyang. Let me look for them. There's a `workdir` directory, and `launch_swarm.sh`, `supervise_swarm.sh` which likely reference handoff/map and comms. Let me check.
+dsh: reasoning:
+Now let me explore the ai4math-swarm directory, the research_map, HANDOFF.md, comms.
+dsh: reasoning:
+Now I need to read the HANDOFF.md, ASTRA_HANDOFF.md, PROTOCOL.md, README.md, and check the map/state. Also look at how worker N is supposed to emit JSON. The task: "Read handoff/map and comms. Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit. worker=021"
+
+Wait, the launch script creates workers 01-20 named deepseek-flash-XX. My worker is 021. This seems like an external supervisor launching worker 021. Let me look at the independent_supervisor scripts that were recently modified (Sep 12 00:11) — they might define worker numbering.
+
+Let me read key files.
+dsh: reasoning:
+Now I understand the setup better. Worker 021 presumably has no inbox file yet since workers only go to 20. Let me check the comms PROTOCOL.md, and the recent supervisor scripts (independent_supervisor_100.sh, independent_supervisor.sh, independent_supervisor_v2.sh, supervise_swarm.sh, supervise_loop.sh) which were recently modified — these may define the worker task template for workers 021+.
+
+Let me also check `runtime/instances` (241 dirs), and `runtime/logs` (deepseek-flash-09.log has activity up to 00:14). Also look for a template prompt / task assignment for worker 021.
+
+Let me read the supervisor scripts.
+dsh: reasoning:
+Now, worker 021. In the supervisor scripts, workers go 1..20 (`deepseek-flash-01`...`deepseek-flash-20`). Worker 021 is not in the protocol agent id list. The independent_supervisor_100.sh includes workers 1..100, so worker-021 would be a valid slot there. Let me check whether worker-021 tmux session exists / whether there's an instance dir for it, and whether there's an inbox file for worker-021 or deepseek-flash-21.
+
+Note the tmux key naming: `worker-$n` where n is zero-padded %02g from seq -w (seq -w 1 100 gives 001..100, actually seq -w 1 100 pads to width 3 → 001, 002, ... 100). Hmm, `seq -w 1 20` gives 01..20. So supervisor_100 would use worker-001..worker-100. And instance id = worker-021-<stamp>-<pid>.
+
+But my task says worker=021. Let me check runtime/instances for worker-021, and comms/inbox for any 21 file. Also check runtime/control.
+
+Also the swarm may have a "swarm-research" git repo. The map is huge (826KB). Let me check the map's assignments and gates, and see what tasks are currently open, and which are class-bound and assignable to a generic worker.
+
+Key constraints:
+- Read handoff/map and comms ✓ (in progress)
+- Take ONE class-bound task
+- emit valid JSON with IDs evidence hash falsifier
+- checkpoint
+- then exit
+
+So I need to:
+1. Find an open class-bound task assigned to workers (or pick one from the immediate queue / assignments).
+2. Produce an artifact (evidence), compute sha256.
+3. Emit valid JSON event(s) in comms/outbox/<my agent id>.jsonl with event_id, event_type, created_at, actor, node_id, class_id, evidence_refs, next_falsifier.
+4. Write a checkpoint (runtime/state/w21_checkpoint_*.json or use checkpoint.py?).
+5. Exit.
+
+Let me first check my identity: which agent id? worker=021. In outbox I saw names like deepseek-flash-01 etc. Maybe worker-021 maps to deepseek-flash-21? Protocol says agent IDs are deepseek-flash-01..20. But supervisor_100 launches worker-001..100. Hmm. The task says "worker=021" — most likely tmux/session slot 21, agent id maybe worker-021 or deepseek-flash-21. Let me inspect runtime/instances for entries with 21, and check supervisor.log/counts.tsv.
+
+Let me look.
+dsh: reasoning:
+I'm worker-021, launched by independent_supervisor_100.sh (tmux key worker-021). My agent id in the protocol for outbox naming — workers use `deepseek-flash-XX` in the older protocol, but the new supervisor uses `worker-NNN`. Let me check what outbox files existing workers (001..) are writing under. Let me check comms/outbox for worker-0xx files and their content. Some workers have already written.
+
+Let me check recently modified outbox files and what agent ids they used. Also check the current_checkpoint.json and research_map assignments to find a class-bound task for me.
+
+Let me look at the outbox dir for files matching worker-.
+dsh: reasoning:
+Now let me look at the assignments. I need one class-bound task. Let me list assignments with their status and assignee. The map has 88 assignments. Let's look at which ones are open/queued and class-bound (class_id present), and which are suitable for a generic worker.
+
+Also note the design: workers are supposed to take tasks assigned by group leads. There may be assignments targeted at workers. Let me dump assignments summary.
+dsh: reasoning:
+Now I need to pick ONE class-bound task. Given worker=021, I should pick an assignment that's class-bound and not yet done, ideally something that adds new evidence (novel, not duplicate). The swarm has 100+ workers; duplication is penalized. Duplication is a metric ("duplication", "novel accepted coverage"). So I should pick a task that is genuinely open and not already covered by other workers' artifacts.
+
+Important: worker events cannot set status=done, validation_status=passed, or gate verdicts. So my event should be an `artifact` event (node_id, artifact_type, path, sha256, validation_status) and/or `claim` with falsifier, plus a checkpoint.
+
+Let me look at what artifacts already exist and what gaps exist. In particular, there may be a clear unclaimed class-bound work item: e.g., G-CLASSBIND gap — "no held-out class-separation test for AF-SCC-C0-VAC-GEN" or "WCC vs SCC-SCALAR boundary". Let me inventory artifacts/ dirs to see what exists.
+
+Also let me check the "proposals" / "proposed" directories and the immediate queue in the map. Maybe there's a `queue` key. Let me check map keys: `gates`, `numerics_lock`, `assignments`, `claims`, `reviews`, `publication_status`, `controller_gate_audit`, `controller_findings`. No explicit queue. The controller_gate_audit has unmet criteria — those are the real open work.
+
+Priority: The controller_gate_audit lists unmet criteria for 5 gates. A worker's best contribution = produce an artifact that closes one specific unmet criterion for a class-bound gate. But worker authority is limited; I can produce evidence, and the lead can accept.
+
+Let me read the controller_gate_audit in full to find a concrete, class-bound, worker-actionable gap.
+dsh: reasoning:
+This gives me concrete open gaps. G-LIT: "required >=3 independent re-fetch spot checks; currently 2 (worker-07, worker-086)". That is a concrete, class-bound, worker-actionable task: an independent re-fetch spot check of the L1 citation audit at hash 315c19145065. This appears to be exactly what workers 07 and 086 did (artifacts/worker-*/l1_spotcheck/spotcheck-l1-*.json). A third independent spot check would close the >=3 requirement. But duplication risk: other workers may be doing the same thing right now (100 workers). Also G-AUDIT needs >=2 distinct accepts per class but that's reviewer role, not worker.
+
+Which task is least likely to duplicate? Let me check artifacts for what's already been produced. Also "class-separation soft flags" need disposition but those are for leads/auditors.
+
+The L1 spot check is attractive: it's class-bound (classes AF-WCC-VAC-GEN, AF-SCC-C2/C0), it has a clear acceptance criterion (independent re-fetch of the cited primary sources, verify citation accuracy), and needs >=3; 2 exist, so a 3rd genuinely closes a gate criterion. Evidence = artifact JSON with sha256; falsifier = any citation that fails re-fetch / mismatched claim.
+
+Let me look at the existing spot check artifacts (worker-07, worker-086) and the L1 artifact (ledger/citation_audit.csv) to build a genuinely independent third check that isn't a duplicate. Let me read them.
+
+Also, let me check the map's assignments for worker-021 specifically — maybe the controller assigned something to worker-021 in map.assignments. Search for "worker-021" or "021".
+dsh: reasoning:
+Very useful. Worker-07 check_number=3, worker-086 check_number=4. Interesting: the gate audit said 2 spot checks required >=3, but there's actually a 4th now (from worker-086 at 00:16, un-ingested). So the "third independent spot check" is taken. Since I must not duplicate, I should find a different gap. But wait: worker-07's spotcheck is at check_number 3, worker-086 check_number 4. Both sample different frames? worker-07 sampled rows 41-95. worker-086 — let me see its sampling frame. It found hard failures on SRC-004, SRC-025, SRC-033. Actually the controller audit at 00:17:27 recognized worker-07 and worker-086 as 2 independent re-fetch spot checks ("required >=3"), meaning worker-07's was maybe check #3 but there were earlier reviews/L1-spotcheck-10.json and -11.json that were not re-fetch checks. So they count 2 re-fetch checks now.
+
+Hmm. Also worker-086 found hard failures — that's actually an important finding: the L1 citation audit has mismatches. The gate reason may change.
+
+Given 100 workers running, most obvious tasks may be claimed. I need to choose a task that is (a) class-bound, (b) not yet done, (c) cheap and verifiable in this session, (d) produces new evidence, (e) has a real falsifier.
+
+Options from gate audit:
+1. G-F0: 9 taxonomy cases open (new class vs split) never dispositioned by lead — worker can produce a disposition analysis artifact for a class-bound subset. But that's lead authority; a worker can provide evidence/recommendation. Class-bound: F0 classes.
+2. G-FORM: class-separation soft flag on F1 awaiting disposition; F1 also 0 accepts.
+3. G-LIT: need >=3 re-fetch spot checks; 2 exist (checks 3 and 4). A 5th would add coverage on unsampled rows. Actually the requirement is >=3 independent. There are 2 recorded in map (worker-07, worker-086). Worker-086's is un-ingested (as of 00:17). A third independent check sampling a disjoint frame (e.g., rows 96+ or rows 1-20 with re-fetch) would directly satisfy it. But is it duplicate? Flash-10 and flash-11 did non-refetch spotchecks on rows 1-20 and 21-40; worker-07 did 41-95 re-fetch; worker-086 did ...? Let me read the rest of worker-086's artifact to see its frame. If worker-086 covered rows 1-40ish, then rows 96-97 remain. Let me check.
+
+Actually, the strongest independent contribution might be to run my own re-fetch spot check on a disjoint sample and see whether the SRC-004/SRC-025/SRC-033 mismatches replicate (independent verification of a hard failure!). That's high value: worker-086 claims hard failures; independent replication of those findings is exactly the epistemic discipline in HANDOFF (run the null first, replicates). And it's class-bound (L1 is AF-WCC-VAC-GEN; AF-SCC-C2/C0 per assignment).
+
+4. G-NUM: C8 protocol review at latest hash — requires a reviewer, lead-audit role. Any worker could produce an independent protocol check but it's not really worker-appropriate; and numerics locked.
+5. G-AUDIT: accepts are reviewer role.
+
+Also there's a strong candidate from the tree: the "class-separation soft flags" (4 annotation flags). E.g., F1 soft flag. Workers produced class separation matrices (worker-06, worker-08, flash-13, flash-11, worker-16, flash-15, worker-17).
+
+Given the instruction "Take one class-bound task", I should pick the L1 re-fetch spot check because:
+- It's class-bound (class_ids listed, L1 node, G-LIT gate).
+- It has explicit acceptance (>=3 independent re-fetch spot checks).
+- It has a real falsifier: a citation whose fetched record contradicts the ledger claim; and my check can also falsify worker-086's hard failures (replication).
+- I can do it with curl/python in this session quickly.
+
+But careful about network access. Do we have network? The sandbox may deny network. Let me test with a quick curl to arXiv API. Also note worker-086 did fetches at 00:16, so network works from these sessions.
+
+However — check the "comms/rejected.jsonl": many worker events get rejected. I must emit valid JSON per schema. Let me read the events schema and comms.py to know required fields and how validation works. Also look at checkpoint.py for checkpoint format.
+
+Also important: the map lock file runtime/state/map.lock exists; controllers own map writes. I must not write map; only outbox + artifact + checkpoint state.
+
+Let me now:
+1. Read events.schema.json and comms.py validation to craft valid events.
+2. Read checkpoint.py to craft the checkpoint.
+3. Read ledger/citation_audit.csv header + rows to plan the spot check.
+4. Test network.
+
+Let me also read one recent successful outbox event from worker-086 to model my JSON.
+dsh: reasoning:
+Interesting: `oneOf` and `base` has `additionalProperties: true`. Note the schema's `oneOf` requires exactly one match; since `baseClaim` etc. all have `additionalProperties: true` at the outer allOf level but the `properties.event_type.const` differentiates.
+
+Note: status events aren't in the schema! The schema has direction_update, claim, artifact, review, resource_request. `status` and `blocker` are in PROTOCOL.md but not in the JSON schema — likely validated by comms.py separately. Let me read comms.py to understand validation and ingest, plus look at rejected.jsonl for typical rejection reasons (important to avoid).
+
+Let me also check the worker-086 outbox (the python printed nothing? The first command printed only worker-059 — because worker-086.jsonl has permissions -rw------- owned by guoshaoyang; we are guoshaoyang, so readable... but maybe the file had different naming, i.e., the loop over 'comms/outbox/worker-086.jsonl' doesn't exist; the file list showed worker-086 only under artifacts. Let me check: outbox listing earlier showed worker-059, worker-03, worker-06, worker-09*, worker-16. No worker-086.jsonl. So worker-086 wrote its artifact but maybe the event is ingested from a markdown or the artifact was referenced from outbox of worker-086 elsewhere. Let me search.
+
+Actually gate audit said "artifacts/worker-086/l1_spotcheck/spotcheck-l1-086.json" is one of the 2 independent re-fetch spot checks. So controller found it in artifacts directly.
+
+Now let me read comms.py (15KB) to know ingestion rules and rejection reasons.
+dsh: reasoning:
+Now let me read schemas.py validate_event to know exactly what's accepted for status/blocker/artifact.
+dsh: reasoning:
+Now I know the exact schema requirements:
+- status: node_id, status (queued|active|blocked|done|rejected|killed), hours, summary, evidence_refs, next_falsifier
+- artifact: node_id, artifact_type, path, sha256, validation_status (unverified|passed|failed|retracted)
+- claim: class_id, statement, conclusion_type, assumptions, falsifier, evidence_refs
+- blocker: node_id, description, needed_to_unblock, evidence_refs
+
+Now decide the task. Let me look at what the L1 ledger contains and whether the citation spot check has gaps. Let me read the citation_audit.csv header and a few rows, plus worker-086's full findings and coverage. Then test network connectivity.
+
+Actually, an important consideration: duplication. With 100 workers, many will attempt the top gaps. The supervisor launched at 00:12:29 and 00:16:56. Currently it's ~00:17-00:18. Other workers are writing. I should choose something valuable and distinctive.
+
+Let me think about what genuinely closes a gate criterion:
+- G-LIT criterion: ">=3 independent re-fetch spot checks at L1 hash 315c19145065". Currently 2 recognized (worker-07 check 3; worker-086 check 4). A 5th check that is independent AND, better, replicates/refutes worker-086's hard failures would be high-value. But is it "independent"? Yes if I use my own script and my own sample.
+- However, worker-086's artifact is already a 4th check; the controller will likely count it, satisfying >=3. So my check adds marginal value = independent replication of the hard failures (SRC-004/-025/-033). That IS valuable: worker-086 reports MISMATCHes that, if true, falsify L1 rows and block G-LIT. A second independent measurement of the same rows (not a duplicate — a replication, the project's stated methodology: "add seeds before believing a max-statistic", "run the null first") is exactly the right epistemic move.
+
+Alternatively, I could do a check on rows not yet covered by any refetch check (73 rows still uncovered: worker-07 covered 41,49,57,65,73,80,81,89; worker-086's frame unknown). But worker-10/11 did non-refetch on rows 1-20/21-40; flash-19 census. Hmm.
+
+Actually let me reconsider: my worker prompt says "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit." Budget is one bounded task. Doing a handful of re-fetches (5-8 rows) with replication of worker-086's three hard failures is bounded and feasible.
+
+But wait — network access from my sandbox. Let me test curl to arXiv API and Crossref. Sandbox is workspace-write; network might be blocked by the harness? The bash tool has no network restrictions per se, but the environment might. Let me test.
+
+Let me first read worker-086's artifact fully and the CSV.
+dsh: reasoning:
+Network works. Now, the coverage picture:
+- worker-07 (check #3): rows 41-95 (revised), sampled every 8th: 41,49,57,65,73,80,81,89. Re-fetch via arXiv/Crossref API.
+- worker-086 (check #4): rows 1-40 at frozen sha + rows 96-97. Found 3 MISMATCHes at rows 4, 25, 33.
+
+So the entire 1-97 frame has now had refetch checks (worker-07: 41-95; worker-086: 1-40 + 96-97). The most valuable new contribution: independent replication of worker-086's three hard failures (rows 4, 25, 33) at the frozen sha, using a different fetch endpoint/method (e.g., arXiv API export vs arxiv.org/abs HTML page; Crossref API vs whatever). Distinguishing "agent misread" from "real ledger defect" is exactly a falsifier-grade check.
+
+But hold on. Let me think about whether these "MISMATCH" verdicts are real or artifacts of worker-086's method. Let me look at rows 4, 25, 33 in the CSV and check them myself by fetching. Quick.
+
+Also I should consider a different task with arguably higher value and less duplication risk: the class-separation soft flags ("checker cannot see candidate annotations"), or the F1 soft flag awaiting disposition. But those need the checker tooling; let me look at `class_separation.py` and the soft flags. Hmm, but the controller said "2 class-separation soft flag(s) on F0 await disposition (checker cannot see candidate annotations)" — this is a tooling limitation that a worker could fix by producing the missing annotation file. That's a concrete class-bound software task: e.g., produce candidate annotation mapping for F0/F1 so the checker can see it. But which annotations? Let me look at class_separation.py quickly to understand what "candidate annotations" means. It might be that the schemas need `class_id:` annotations in comments/sections and the checker greps for them. If a worker can add annotations... but schemas are canonical and owned by lead-formulation; a worker shouldn't edit canonical files (canonical path policy; and worker-059 produced a review artifact instead).
+
+Given my role ("bounded execution worker... emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit"), the L1 replication task is clean, bounded, verifiable, and directly targets a gate criterion. I'll do that.
+
+Plan:
+1. Confirm L1 ledger hash unchanged (315c1914...).
+2. Write a self-contained script under artifacts/worker-021/l1_refetch_replication/ that:
+   - pins the CSV sha256 (fail-closed if drift),
+   - extracts rows 4, 25, 33 (and maybe a small independent control sample of 2-3 additional rows not covered before, if cheap; but keep bounded),
+   - re-fetches primary records using a DIFFERENT method than worker-086 where possible (arXiv API export vs abs page; Crossref vs whatever), hashes raw responses,
+   - compares ledger title/authors/year/venue/excerpt against fetched record,
+   - reports PASS/FAIL per field and a replication verdict for each of worker-086's three findings,
+   - includes a negative control: verify that its own comparison detects a deliberately corrupted row (in-memory mutation) — proves the checker can fail. This is exactly the "control" discipline in HANDOFF.
+3. Run it, save raw fetch evidence + JSON report.
+4. sha256 the report; write checkpoint JSON in runtime/state/w21_*.json (and log line to checkpoint_log? No — checkpoint.py handles logs; but I can write my own checkpoint file. Let me read checkpoint.py to see the standard format).
+5. Emit outbox events: one `status` (active→then done? Only controller can mark done... status "done" is allowed as a status value but the controller won't accept as authority. Better: emit `status` with status "active" at start? Since I exit immediately after, I can emit a single `artifact` event + a `status` event with status "active" describing the bounded task completion and NOT claiming done; plus maybe a `claim` with conclusion_type "open_problem"? Hmm.
+
+Look at worker-059's example: status active + artifact path. Good model: emit status (active, with summary of what was done) and artifact (path, sha256, validation_status "unverified"). The artifact event is the JSON with IDs evidence hash falsifier. Also maybe a `claim` event with class_id, statement, conclusion_type (conditional? no) — the claim would be "SRC-004 ledger row is a metadata mismatch (fetched record is Dafermos–Luk 2017, ledger says 2025) — replicated independently". conclusion_type... "counterexample"? Not a math counterexample. The allowed conclusion types: theorem, conditional_theorem, stability_result, counterexample, numerical_evidence, formal_model, open_problem. For a citation-audit finding, "open_problem" is wrong; "counterexample" is roughly "a citation mismatch counterexample to the ledger's verified status". Hmm, that risks over-claiming. Safer: emit `artifact` + `status`, and put the falsifier in both. The task says "emit valid JSON with IDs evidence hash falsifier" — status and artifact both carry evidence_refs and (status carries) next_falsifier. I can also include a `review` event? A review verdict on worker-086's artifact would be a genuine independent review: target_id = the spotcheck artifact path, verdict = accept/revise, score, hard_failures, findings. That's legitimate: I'm independently reviewing worker-086's claims. But "reviewer" authority: reviews by workers are just events; the lead-audit/controller decides. I think a review event is valuable and valid: target_id "artifacts/worker-086/l1_spotcheck/spotcheck-l1-086.json", reviewer "worker-021", verdict accept/revise, score, hard_failures, findings. If my replication confirms the mismatches, verdict "accept" on the finding level. Hmm, but the review event has a single verdict for the target. If I confirm the hard failures and disagree with worker-086's method details, I'd say "accept" with findings noting the replication.
+
+Let's be careful: too many events could be seen as inflating. One well-formed artifact event + one status event + one review event = reasonable.
+
+6. Checkpoint: write runtime/state/w21_checkpoint_1.json with measured hashes, and append to a local checkpoints jsonl. Then exit.
+
+Let me first verify rows 4, 25, 33 manually, then decide the final scope. Let me read those rows.
+
+Note on cost/time: bounded. Let's go.
+
+Let me read rows 4, 25, 33 from CSV via python (printing selected fields), and also worker-086's method + results for those rows.
+dsh: reasoning:
+Now I understand worker-086's "MISMATCH" verdicts. Looking closely, they're mostly methodological artifacts of its own comparator:
+
+- SRC-004: ledger year 2025 = Annals journal publication year (Ann. of Math. 202(2), 2025); arXiv v1 2017. The ledger title says "The interior of dynamical vacuum black holes I: The C^0-stability..." and arXiv fetched title is the same with $C^0$ (LaTeX). So the "year mismatch" is a convention issue (journal year vs arXiv submission year) — the ledger's venue explicitly says "arXiv v1 2017". Actually not a mismatch. Also excerpt similarity 0.022 — worker-086's excerpt similarity metric is broken (probably comparing ledger excerpt with source-label prefixes / LaTeX to plain abstract). Hmm, but the abstract of arXiv v1 might differ from ledger excerpt? Ledger excerpt: "We prove that for all such data, the maximal Cauchy evolution can be extended across a non-trivial piece of Cauchy horizon..." Fetched abstract head: "We initiate a series of works where we study the interior of dynamical rotating vacuum black holes without symmetry. In the present paper, we take up the problem starting from appropriate Cauchy data... We prove that for all such data, the maximal Cauchy evolution can be extended across a non-trivial piece of Cauchy horizon as a Lorentzian manifold with continuous metric." Wait — the fetched abstract HEAD does contain "We prove that for all such data..." So excerpt IS present in the fetched abstract; worker-086's similarity metric (0.022) is broken for math-heavy text (LaTeX/unicode differences). So SRC-004 excerpt mismatch is likely a false positive from a bad similarity metric.
+
+- SRC-033: fetched abstract head mentions "The strength of the blue-shift instability..." and ledger excerpt is a substring "...by slightly relaxing the smoothness assumption on initial data, we are able to prove the analogue..." The fetched Crossref abstract presumably contains that sentence too. So again false positive likely.
+
+- SRC-025: ledger excerpt vs fetched abstract — ledger excerpt says "We establish a 'mass inflation/ridigity' dichotomy. More precisely, we prove assuming (sufficiently slow) decay ... CH_{i+} = D union S ...". Fetched abstract head says exactly "we obtain a \"mass inflation/ridigity\" dichotomy. More precisely, we prove assuming (sufficiently slow) decay of the charged scalar field on the event horizon, that the Cauchy horizon emanating from time-like infinity is $CH_{i^+}= D \cup S$". So the excerpt IS in the fetched abstract; again false positive due to LaTeX/unicode normalization (CH_{i^+} vs $\mathcal{CH}_{i^+}$, "union" vs \cup).
+
+So worker-086's three hard-failure MISMATCHes are likely artifacts of a fragile string-similarity comparator, not real ledger defects. This is EXACTLY the kind of thing a bounded independent worker should check and report: an independent replication with a better comparison method (token-level containment of the excerpt in the fetched abstract after normalization, plus year-convention handling). The HANDOFF explicitly says: "almost all of it was caught by a control rather than by thinking harder" and "run the null first".
+
+So my task: "W021-L1-REPLICATION-01: independent re-fetch replication of worker-086's three MISMATCH findings at frozen L1 hash 315c1914, using a different fetch path (arXiv API export for arXiv rows; Crossref for DOI rows) and an excerpt-containment test with explicit normalization; include a negative control (synthetic corruption must be detected) and a positive control (the same test applied to a known-good row)."
+
+This is class-bound (classes AF-SCC-C0/C2 for SRC-004/025/033, and L1's class list). It's high value: it either (a) refutes worker-086's hard failures → unblocks G-LIT criterion (the controller would otherwise treat them as findings), or (b) confirms them with better evidence. Either outcome is progress. Falsifier: if the normalized excerpt-containment test finds the excerpt absent from the primary record AND field values disagree beyond convention, the ledger defect is confirmed (i.e., my null hypothesis is "no defect").
+
+Deliverables:
+- artifacts/worker-021/l1_refetch_replication/run_l1_replication.py (self-contained, fail-closed on CSV hash drift)
+- raw/ responses (arXiv API XML for 1710.01722 and 2001.11156; Crossref JSON for 10.1088/1361-6382/aadbcf) saved with sha256
+- report.json with per-row replication verdicts, controls, method, limitations
+- README.md short
+- checkpoint runtime/state/w21_checkpoint_1.json
+- outbox events in comms/outbox/worker-021.jsonl: status (active, summary, evidence_refs, next_falsifier), artifact (path, sha256, validation_status unverified), review (target = worker-086 artifact, verdict revise/accept, score, hard_failures, findings) — maybe. Let me decide after results.
+
+Wait: my "independent" fetch should be different from worker-086's. Worker-086 used https://arxiv.org/abs/<id> (HTML page) and Crossref for DOI rows. I'll use export.arxiv.org API (Atom XML) for arXiv rows, and for SRC-033 (no arXiv id, DOI 10.1088/1361-6382/aadbcf) — Crossref is the only registry; but I can use a different representation: Crossref API with `mailto` or the `application/vnd.citationstyles.csl+json`? Or use the IOP page? Actually the ledger's SRC-033 evidence_url is inspirehep; I could use INSPIRE API (https://inspirehep.net/api/doi/10.1088/1361-6382/aadbcf) which is a genuinely different registry than Crossref. Good: INSPIRE for SRC-033. But INSPIRE abstracts may or may not include the full abstract. Let me test. Alternatively, use Semantic Scholar API (api.semanticscholar.org/graph/v1/paper/DOI:...?fields=title,abstract,authors,year,venue) — a third-party aggregator, different from Crossref. Let me test both and use whichever returns the abstract.
+
+Also negative control: create an in-memory corrupted copy of a fetched abstract (delete a sentence / change a number) and confirm the test reports "not contained". Positive control: ledger excerpt should be contained after normalization for at least the control row(s).
+
+Normalization: strip LaTeX-ish commands, unify unicode (NFKC), remove source-label prefixes like "arXiv abstract (exact excerpt):", "IOP abstract: '...'", strip quotes, collapse whitespace and punctuation. Then test if a sufficiently long token n-gram (e.g., 12-gram) of the ledger excerpt appears in the fetched abstract. Report the longest common normalized token run and its location. This is robust and explainable.
+
+Careful: excerpt matching should be against the primary record's abstract; for arXiv API, `<summary>` gives abstract. For INSPIRE/Crossref, abstract field.
+
+Let me now verify by hand with quick fetches before writing the script: fetch arXiv API for 1710.01722 and 2001.11156; fetch Crossref + Semantic Scholar for 10.1088/1361-6382/aadbcf. Check whether ledger excerpts appear.
+
+Actually, I'll write the script directly with the controls, since I can inspect output. But quick manual test first to validate endpoint behavior (avoids wasted script iterations). Let me do it with python inline.
+
+Plan for the script(s):
+1. `fetch_raw.py` or single `run_l1_replication.py` doing everything: reads CSV, pins hash, fetches, saves raw evidence, compares, writes report.json.
+
+Let me create the directory and write the script. First quick endpoint tests.
+dsh: reasoning:
+All three endpoints work. Now write the replication script. Key design:
+
+- Pin CSV sha256 = 315c19145065a5f9c95d64461eae760b4c296b06d1f2f09bc5847ac1a7064ce9; fail-closed if mismatch.
+- Rows to replicate: 4 (SRC-004, arXiv 1710.01722), 25 (SRC-025, arXiv 2001.11156), 33 (SRC-033, DOI 10.1088/1361-6382/aadbcf).
+- Fetch path (different from worker-086):
+  - arXiv rows: `https://export.arxiv.org/api/query?id_list=<id>` → Atom XML; parse title, authors, published date, summary.
+  - SRC-033: Semantic Scholar Graph API (DOI) primary; INSPIRE API (DOI) as second independent registry.
+- Save raw bytes + sha256 for each fetch under raw/.
+- Comparison:
+  - title: normalized (lowercase, strip LaTeX $, punctuation, unicode NFKC) equality or containment.
+  - authors: normalized token sets.
+  - year: compare against all plausible years (arxiv v1 published year, journal issue year from venue); note convention.
+  - excerpt: normalize both, then longest common token run (LCS-ish via difflib SequenceMatcher find_longest_match) and containment test at thresholds (e.g., >= 12 consecutive tokens = contained; or find longest match length / excerpt length).
+- Controls:
+  - negative control: mutate the fetched abstract (drop the longest matched region / append random tokens?) Actually stronger: remove the matched sentence from the fetched abstract, then the containment test must fail. Implement: take fetched abstract, delete the matched token span, re-run, expect not-contained.
+  - positive control: run same test on a known-good row (the ledger's SRC-002 or SRC-001 which worker-086 rated MATCH) — but that requires fetching more rows and could drift. Simpler and cleaner: positive control = the same normalization+containment pipeline must find the excerpt in the unmodified fetched record for at least one of the rows; and the negative control must fail. Even better: also apply the test to an independent "shuffled" abstract: shuffle tokens of the fetched abstract and confirm failure. That gives both detection controls on identical data.
+  - Also add a synthetic false-positive control: ensure a short generic phrase (e.g., 6 tokens of boilerplate) is NOT counted as containment with the 12-token threshold.
+- Verdict per row: `REPLICATED_MISMATCH`, `REPLICATED_MATCH` (i.e., no defect, worker-086's MISMATCH not reproduced), `INCONCLUSIVE`.
+- Report JSON with fields: schema_version, artifact_type, node_id L1, gate G-LIT, class_ids, actor worker-021, created_at, inputs (ledger sha, data_rows), frame, independent_of [worker-086, worker-07, flash-10, flash-11], method, fetch_paths, results per row (with fetch sha256, comparison), controls, summary, non_claims, falsifier (next falsifier), replication_of.
+- The report must be honest: it should state that worker-086's own similarity metric (0.022 etc.) is not reproducible under a token-containment test because of LaTeX/unicode differences, and that the year differences are convention (arXiv v1 vs journal year) — while noting the ledger venue explicitly declares "arXiv v1 2017", so the ledger appears internally consistent.
+
+Note: I must be careful not to overstate. The right conclusion: at the frozen hash, using independent endpoints and a robust containment test, the three MISMATCH findings are NOT reproduced as metadata errors; the title/author/venue agree, the excerpt is present verbatim modulo LaTeX/unicode normalization. Year: ledger declares journal year 2025/2021 with arXiv v1 years noted for SRC-004; for SRC-025 it declares "Communications in Mathematical Physics 382, 1263-1341 (2021); arXiv:2001.11156" — the arXiv submission is 2020, journal issue 2021; convention. Not a hard failure. So findings: worker-086's 3 hard failures are refuted as ledger defects; they are comparator artifacts — except the *locator-quality* note on SRC-025/SRC-033 (exact_locator is a search query, not an exact locator) which is a legitimate separate finding (worker-086 classified it as a finding, not a hard failure — and it's true: exact_locator for SRC-025 is a search query URL, SRC-033 too).
+
+So the review event: verdict "revise" on worker-086's artifact, score maybe 3, hard_failures = [] (none in my replication), findings = the three MISMATCHes are not reproduced; locator-quality notes are confirmed; recommend reclassifying MISMATCH → PARTIAL for SRC-004 (year-convention only), SRC-025, SRC-033 (excerpt-normalization artifact). Also for SRC-004, evidence_excerpt matches the fetched abstract (need to verify by containment).
+
+Let me now write the script. I'll write it to artifacts/worker-021/l1_refetch_replication/run_l1_replication.py.
+
+Implementation details:
+- Use urllib with UA and timeout, retries (2), save raw bytes.
+- Parse arXiv Atom with xml.etree.ElementTree.
+- Parse Semantic Scholar JSON and INSPIRE JSON.
+- Normalization function: NFKC, remove $...$ math delimiters but keep inner text, strip LaTeX commands like \mathcal, \cup, \ldots, \textit, \emph; replace \cup→union etc. Simpler: remove backslash-commands (\\[a-zA-Z]+), remove braces, remove punctuation except alnum/space, lowercase, collapse whitespace, map unicode quotes/dashes to ascii.
+- Longest common contiguous token run via difflib.SequenceMatcher(None, excerpt_tokens, fetched_tokens).find_longest_match → size. Also "coverage" = matched length / excerpt length.
+- Threshold: contained if longest run >= 15 tokens OR coverage >= 0.6. Report both.
+- Negative control: remove tokens in the matched span from fetched abstract, re-run → expect longest run < threshold.
+- Token-shuffle control: deterministic shuffle (seeded) of fetched abstract tokens → expect not contained.
+- Short-generic-phrase control: "we prove that for all" (6 tokens, threshold 15) → expect not contained.
+
+Fetch list and raw hashing. Report writes itself.
+
+Then checkpoint. Let me look at checkpoint.py briefly to align format.
+dsh: reasoning:
+The full checkpoint.py is the controller's tool (it ingests comms and rewrites current_checkpoint.json — too invasive for a worker; "Astra checkpoint"). Workers wrote their own checkpoint files like `runtime/state/w06_checkpoint_7.json`, `w21` doesn't exist. So I'll write `runtime/state/w21_checkpoint_1.json` and append to `runtime/state/w21_checkpoints.jsonl`, following the existing worker pattern. Let me look at w21... none. Look at w13_checkpoint_3.json for a worker checkpoint format, and also worker-09's checkpoint pattern maybe. Let me check one quickly.
+
+Also, the local artifacts tree: check `artifacts/worker-07/...` structure. I'll create `artifacts/worker-021/l1_refetch_replication/`.
+
+Note the naming convention: worker dirs use `artifacts/worker-07/...` and `artifacts/worker-086/...`. Good.
+
+Let me view a worker checkpoint for format.
+dsh: reasoning:
+Good. Now let me write the script. I'll create the directory and write the Python file with the `write` tool.
+
+Design the script carefully so it runs in one go and emits:
+- raw/*.bin/xml/json files with sha256 recorded
+- report.json
+- stdout summary
+
+Let me define the normalization and matching.
+
+Normalization steps for abstract text and excerpt:
+1. NFKC.
+2. Strip known ledger prefixes: "arXiv abstract (exact excerpt):", "IOP abstract:", leading quotes, trailing quotes, "..." ellipses.
+3. Replace LaTeX commands: remove `\mathcal`, `\text`, `\textit`, `\cup` → " union ", `\ldots`→" ", `\subsetneq`... Generic: replace `\cup` with ' union ', `\cap` with ' intersection ', then remove remaining backslash commands `\\[a-zA-Z]+` (keeping any braced content), remove `$`, `{`, `}`, `\`.
+4. Unicode: replace non-ascii letters with ascii fold (unicodedata.normalize('NFKD') and drop combining), keep alnum + spaces.
+5. Lowercase, collapse whitespace, remove standalone punctuation.
+
+Tokenize on whitespace.
+
+Containment: longest common contiguous run via difflib.SequenceMatcher.find_longest_match — but that's O(n*m) worst case; abstracts ~300 tokens, excerpt ~120 tokens; fine.
+
+Thresholds:
+- `contained` if longest_run >= 12 tokens and coverage >= 0.30; or longest_run >= 25.
+- Report `longest_run`, `longest_run_excerpt_fraction`, `coverage` (total matched tokens from get_matching_blocks), `first_match_preview`.
+
+Also compute worker-086-style char similarity (SequenceMatcher ratio on raw first-400) to reproduce their 0.022/0.005/0.013 numbers — demonstrating the fragility. Good evidence: "same metric reproduces the low values, but the token-containment test finds 20+ token verbatim runs". Actually careful: their metric was `excerpt_similarity_first400`; I don't know exactly (char ratio of first 400 chars of each?). Let me reproduce approximately with difflib ratio(first400(excerpt), first400(abstract)) normalized vs raw, and report both. That will explain the discrepancy.
+
+Year comparison:
+- Extract candidate years: from fetched record (arXiv published date year; Crossref issued year; S2 year).
+- Compare ledger `year` and any year in `venue` string. Verdict: match if ledger year ∈ plausible set (ledger fields), else check convention note.
+- Also check the ledger venue explicitly contains "arXiv v1 2017" for SRC-004 — evidence of internal consistency.
+
+Verdict per row: 
+- `fields`: title/author/year/excerpt states: match | convention | mismatch.
+- Overall: `REPLICATED_MISMATCH` if any core field (title/authors/excerpt) truly mismatches; `NOT_REPLICATED` (finding refuted as a metadata defect) otherwise; `INCONCLUSIVE` if fetch failed.
+- For year: SRC-004 ledger 2025 vs arXiv 2017 → classify `convention`: ledger venue names the 2025 Annals issue and the 2017 arXiv v1; worker-086's own state said "no_year_within_1". I'll classify year state as "convention (journal year vs arXiv v1; both declared in ledger venue)".
+- SRC-025: ledger 2021 (CMP volume year) vs arXiv 2020 v1/v2 → convention; venue declares both.
+- SRC-033: year match.
+
+Controls:
+- positive: raw token containment for at least 1 row must be True.
+- negative_span_deletion: for each row with contained excerpt, delete the matched span from abstract tokens; expect contained==False.
+- negative_shuffle: token shuffle of abstract (seed 21021); expect contained==False.
+- negative_short_phrase: a 6-token generic phrase "we prove that for all such" must NOT be contained under threshold.
+- drift check: CSV sha before and after fetches must both equal pin.
+
+Output report with `next_falsifier`: e.g., "A second independent fetch through a third registry (INSPIRE for arXiv rows) returning an abstract in which the ledger excerpt is absent after normalization, or any drift of ledger/citation_audit.csv from sha256 315c1914...; also a re-run of worker-086's char-similarity metric showing >=0.9 ratio would falsify the comparator-artifact explanation."
+
+Also the report should list class_mapping read from ledger rows and `class_ids` = the four class ids as worker-086 did? Better: class_ids from the specific rows I check: AF-SCC-C0-VAC-GEN;AF-SCC-C2-VAC-GEN for SRC-004; AF-SCC-C2-VAC-GEN for SRC-025/033. The event's class_id field must be a string (normalize takes class_ids list → class_id = first). For status event use class_id "AF-SCC-C2-VAC-GEN" (present in all three rows) and maybe class_ids list. For artifact event schema doesn't require class_id but normalize will map; extra fields allowed (additionalProperties true). I'll include class_ids array.
+
+Let me write the script now. Keep it robust: retries, timeouts, deterministic.
+
+One more consideration: while I fetch, the ledger could drift (lead-literature is active, rebuilding citation_audit.csv). Fail-closed: if sha differs after fetches, report drift and mark results inconclusive/void. Fine.
+
+Let me write the file.
+dsh: reasoning:
+I wrote the script but it has some leftover messy code (the first loop over fetches that writes raw files twice, with dead code `fetches_done`, `rec["_index"]`, weird `fetches.index(...)` line). This is buggy and ugly. Let me clean it up before running: remove the first duplicated loop entirely. Also the weird line:
+
+```python
+if not report["controls"]["controls_all_passed"] if False else not report["summary"]["controls_all_passed"]:
+```
+is confusing; simplify.
+
+Let me rewrite the file cleanly rather than patch. I'll rewrite the whole script with the duplicate loop removed.
+
+Also note: the `year_state` for SRC-004: ledger year "2025", fetched years from arXiv = [2017]. ledger venue "Annals of Mathematics (2) 202(2), 309-630 (September 2025); arXiv v1 2017" → declared = {2025, 2017}. Condition: ly in declared → returns "convention (...)". Good.
+
+For SRC-025: venue "Communications in Mathematical Physics 382, 1263-1341 (2021); arXiv:2001.11156" → declared = {2021}. ly=2021 in declared → "convention". Good. Hmm, but "match" would be more accurate? Fetched arXiv year 2020, ledger 2021 = journal year declared in venue. So convention is honest.
+
+Hmm, `year_state` returns "convention" whenever ledger year is found in venue but not fetched years, even if venue simply repeats ledger year. That's fine and honest.
+
+Title state for SRC-033: ledger title "Rough initial data and the strength of the blue-shift instability on cosmological black holes with Lambda > 0"; fetched "Rough initial data and the strength of the blue-shift instability on cosmological black holes with Λ > 0" → normalized both: "lambda" vs " " ... NFKD of Λ doesn't decompose to Lambda. So normalized ledger has "lambda" and fetched has "" (Λ removed as non-ascii non-alnum). Then a in b fails; b in a fails; contained(a_tokens, b_tokens)? a tokens [... "with", "lambda", "0"], b tokens [... "with", "0"]. Longest run might be the full b minus "lambda" → could be > 12 but containment runs on the excerpt direction (a=ledger tokens). The longest common run: b (fetched, shorter) entirely contained in a except "lambda" breaks it... Actually a has "lambda" between "with" and "0"; b has "0" right after "with". Common prefix "rough initial data and the strength of the blue shift instability on cosmological black holes with" (~15 tokens) then diverges → run 15 ≥ 12 → "match (long verbatim run)". Good. But to be safer, map "Λ" → "lambda" and "λ" → "lambda" in norm_text. Let me add that.
+
+Also careful: `author_state` splits ledger authors on `[;,]| and ` — fine.
+
+Let me rewrite the script cleanly.
+dsh: reasoning:
+Now run it. Also note `HERE.parents[2]`: HERE = .../ai4math-swarm/artifacts/worker-021/l1_refetch_replication; parents[0]=worker-021, parents[1]=artifacts, parents[2]=ai4math-swarm. Correct.
+
+Run with python3.
+dsh: reasoning:
+Results:
+- All 3 rows: NO_DEFECT_FOUND. Longest verbatim runs 67, 82, 54 tokens — strongly refutes worker-086's excerpt MISMATCH. Worker-086 style char similarity reproduces low values (0.085 / 0.335 / 0.305) — well, worker-086 reported 0.022/0.005/0.013 for first400; mine gives 0.085/0.335/0.305 (different because I likely normalized? No — repro_char_similarity uses raw text; their number is lower, maybe they compared normalized-abstract vs raw-excerpt or something else). Still low relative to the token-containment evidence.
+
+- C-1 control failed for rows 4 and 33: deleting the *single longest matched span* still leaves another run ≥12 tokens (because excerpt matches the abstract in multiple disjoint blocks, e.g., the abstract's head and the excerpt overlap in several places; or because the ledger excerpt is a concatenation of two abstract sentences?). Actually, if total matched tokens is large and spread over multiple blocks, deleting only the single longest block can leave another block ≥12. So my C-1 design is too weak — it should delete ALL matched blocks (or mask all matched tokens) and then confirm containment fails. Let me fix the control: delete the union of all matching blocks above some size, then containment must fail. That's a legitimate stronger control.
+
+Let me check: for row 4, longest run 67 tokens, coverage? Let me inspect report.json for the matched blocks. If after deleting the longest block there's still a run ≥12, that means there are multiple matching regions. Then "deleting all matched blocks" is the right control. Let me fix and re-run. The fix: mask all matching blocks (size>=4) from the abstract tokens, then contained() must be False.
+
+Note this is a genuine control improvement, exactly what the check is for. Re-run after fix; network refetch is cheap.
+
+Also adjust `char_sim_086_style`: to better reproduce worker-086's numbers maybe they compared with the normalized/cleaned? Not important; report as "same family of metric (char ratio) is low; the token test resolves it". I'll keep it but label it clearly as "worker-086-style metric (raw char ratio on first 400 chars), reproduced by this worker" — it's lower than my values in their run but same order; fine.
+
+Let me update the control function.
+dsh: reasoning:
+All controls pass now, all three rows NO_DEFECT_FOUND. Verdict: MISMATCH_FINDINGS_NOT_REPLICATED.
+
+Now let me:
+1. Verify raw files exist and hashes are recorded; verify report.json validity; check the ledger hash still matches.
+2. Write a short README.md for the artifact dir.
+3. Hash the artifacts.
+4. Write checkpoint runtime/state/w21_checkpoint_1.json + w21_checkpoints.jsonl.
+5. Emit outbox events to comms/outbox/worker-021.jsonl (status + artifact + review). Then optionally dry-run ingest to verify they validate (careful: `comms.py ingest --dry-run` doesn't write; good way to validate. But a real ingest would write to events.jsonl — only controller should? The protocol says accepted stream written by `comms.py ingest` only; any agent may run ingest; it's idempotent. But to be safe, use --dry-run to validate only.)
+6. Exit.
+
+Wait — one important design consideration about "who am I" in the outbox. Worker-021 tmux session; agent id conventions in this repo: `worker-021` for the new fleet (worker-03, worker-059, worker-086 outbox/artifacts). The protocol's AGENT list says deepseek-flash-01..20, but the new supervisor uses worker-NNN and the artifacts are named `artifacts/worker-086/`, so `worker-021` is right.
+
+Also: the note "Read handoff/map and comms" — done. "Take one class-bound task" — done (L1 rows, classes AF-SCC-C2/C0). "emit valid JSON with IDs evidence hash falsifier" — will do. "checkpoint, then exit" — will do.
+
+Let me check the report.json now for full content correctness, then create README and checkpoint. Also, the report references `raw/*.raw`. Let me list.
+
+Also, should I be worried that `report.json` has `"reviewer": "worker-021"` (self-review) — that's fine for a machine artifact.
+
+Let me inspect the generated report briefly and the raw file hashes.
+dsh: reasoning:
+All good. Note the run_l1_replication.py is mode 600; fine.
+
+Now write the README.md summarizing the finding, then compute sha256 of report.json, script, README.
+
+Then checkpoint and outbox events.
+
+Checkpoint format: I'll write runtime/state/w21_checkpoint_1.json with:
+{
+  "worker": "worker-021",
+  "instance": "worker-021-20260912T001656-968807" (my tmux session? Actually I don't know which instance id corresponds to this session. Let me check the instance dir prompt to confirm worker=021: runtime/instances/worker-021-20260912T001656-968807/prompt.txt and the earlier one 001230. I can check trajectory/stdout to see which one is me. My session was spawned by supervisor at 00:16:56 presumably (tmux worker-021 created 00:16:56). Check the instance dir timestamps/meta.
+  "checkpoint_at", "task_id", "task", "classes", "gate", "verdict", "inputs", "artifacts", "events_emitted", "controls", "selftest", "next_falsifier", "authority", "numerics_lock"
+}
+
+Let me check my instance dir to confirm identity and start time.
+dsh: reasoning:
+Two instances of worker-021: one started 00:12:30 and one 00:16:56. Both may still be running (the supervisor would skip relaunch only if tmux session exists; session worker-021 was created at 00:12:29 then apparently died, and relaunched at 00:16:56). The 00:12:30 instance's stderr stopped at 00:15 — it likely exited. The 00:16:56 one is active (stderr updated 00:21). I am the second one, most likely — but the first could be another process writing too. Let me check which one is still running: ps for the bash -c line with worker-021.
+
+Anyway, for the checkpoint I'm the current one; I'll cite instance worker-021-20260912T001656-968807 and also note the earlier instance in the checkpoint? Simpler: use the latest instance, note "instance_launch" field. Duplication risk: the other worker-021 instance may also have picked a task (its stderr log would show). Let me check its recent output to see if it did the same replication (avoid collision on the same outbox file!). Two processes appending to comms/outbox/worker-021.jsonl could conflict. Let me check ps and the first instance's stderr tail.
+dsh: reasoning:
+Only the 00:16:56 instance is running (pid 969078). That's me. The first instance (00:12:30) exited (no process). Its stderr shows it was working on a *different* task: class-token suppression in class_separation.py — it may have written artifacts under artifacts/worker-021/... Let me check whether artifacts/worker-021 contains anything else besides my l1_refetch_replication. Earlier `ls -la artifacts/worker-021` (implicitly) — the listing showed only l1_refetch_replication. Let me check for other dirs, and check if the first instance left an outbox file `comms/outbox/worker-021.jsonl`. If it did, my events will append to the same file (that's OK, but I should be aware; the other instance's events might be there).
+
+Let me check: ls artifacts/worker-021; ls -la comms/outbox/worker-021.jsonl.
+dsh: reasoning:
+No prior outbox file, no other artifacts. The first instance was killed/timed out before writing (not my concern).
+
+Now:
+1. Write README.md in the artifact dir.
+2. Compute hashes.
+3. Write checkpoint.
+4. Write outbox events.
+5. Validate events via comms.py ingest --dry-run (dry run won't write; but note dry-run still reads all outbox files including other workers' new files — that's fine, and it doesn't save seen or write events; let me check: ingest(dry_run=True) — it builds accepted/rejected but `if not dry_run:` guards writes to EVENTS and REJECTS and _save_seen. Good. However it prints a big summary; fine.)
+
+Careful: dry-run ingest will include all outbox files (many), and might be slowish but OK.
+
+Let me write the README. Keep concise but complete: task, scope, method, result, controls, limitations, reproduction command.
+
+Then compute sha256sums.
+
+Then events. Design the events:
+
+Event 1 (status, active — bounded task complete, no completion claim):
+{
+ "event_id": "w021-20260912T0022-l1-replication-status",
+ "event_type": "status",
+ "created_at": "...",
+ "actor": "worker-021",
+ "node_id": "L1",
+ "class_id": "AF-SCC-C2-VAC-GEN;AF-SCC-C0-VAC-GEN",
+ "class_ids": [...],
+ "status": "active",
+ "hours": 0.3,
+ "summary": "W021-L1-REPLICATION-01 done: independent re-fetch of the three rows worker-086 reported MISMATCH (SRC-004/025/033) at frozen ledger sha 315c19145065. Different transport (arXiv Atom API; Semantic Scholar+INSPIRE) and a normalised token-containment test with 4 controls: all three MISMATCH findings NOT REPLICATED (longest verbatim excerpt runs 67/82/54 tokens; title/author agree; year differences are declared journal-vs-arXiv convention). Two locator-quality observations (SRC-025, SRC-033 exact_locator is a search query) confirmed. No gate verdict / node completion claimed.",
+ "evidence_refs": ["artifacts/worker-021/l1_refetch_replication/report.json#<sha12>", "ledger/citation_audit.csv#315c19145065", "artifacts/worker-086/l1_spotcheck/spotcheck-l1-086.json"],
+ "next_falsifier": "...",
+ "reviewed_sha256": "..."
+}
+
+Event 2 (artifact):
+{
+ "event_id": "...-artifact",
+ "event_type": "artifact",
+ "created_at": ..., "actor": "worker-021",
+ "node_id": "L1",
+ "artifact_type": "l1_refetch_replication",
+ "path": "artifacts/worker-021/l1_refetch_replication/report.json",
+ "sha256": "<full>",
+ "validation_status": "unverified",
+ "class_ids": [...],
+ "gate": "G-LIT",
+ "evidence_refs": [...],
+ "next_falsifier": "...",
+ "supersedes": null
+}
+
+Event 3 (review of worker-086 artifact):
+{
+ "event_id": "...-review-086",
+ "event_type": "review",
+ "created_at": ..., "actor": "worker-021",
+ "target_id": "artifacts/worker-086/l1_spotcheck/spotcheck-l1-086.json",
+ "reviewer": "worker-021",
+ "verdict": "revise",
+ "score": 3,
+ "hard_failures": [],  # none — I could not confirm the three hard failures
+ "findings": "Independent re-fetch at frozen ledger sha 315c1914...: the three MISMATCH hard failures (SRC-004, SRC-025, SRC-033) are not reproduced. The excerpt-present tests find 67/82/54-token verbatim runs... The MISMATCH class is an artifact of a raw character-similarity metric on LaTeX/unicode-bearing text (char ratio 0.085/0.335/0.305 vs token runs) and of comparing arXiv v1 year against a declared journal year. Locator-quality notes on SRC-025/SRC-033 are confirmed (search-query locators). Recommend reclassifying these three as PARTIAL/locator-quality and re-running the metric with normalisation before any ledger edit.",
+ "evidence_refs": [...],
+}
+
+Note: review event schema requires target_id, reviewer, verdict, score, hard_failures, findings. Verdict must be accept|revise|reject|inconclusive. "revise" is right.
+
+Hmm — should I also emit a claim? The task prompt says "emit valid JSON with IDs evidence hash falsifier". Status + artifact + review cover it. Adding a claim risks conclusion inflation; skip. Actually, the "IDs" likely means event_id/node_id/class_id — all present.
+
+Event IDs must be unique and stable. Use timestamp-stamped ids.
+
+Hours: I've spent maybe 0.3h. Fine.
+
+Then checkpoint: runtime/state/w21_checkpoint_1.json + append runtime/state/w21_checkpoints.jsonl. Checkpoint should include artifact hashes, ledger pin, controls, verdict, authority statement, next.
+
+Let me also double-check that the report's `gate` field says G-LIT and `artifact_type` etc. — yes.
+
+One more thing: should I run `python3 research_map/comms.py ingest` for real? The protocol says accepted stream is written by `comms.py ingest` only, and Astra runs it. Workers just write outbox. The controller/lead will ingest. I'll only dry-run validate my own events... but dry-run ingests everything and prints a lot. I could validate just my events with a tiny Python snippet calling schemas.validate_event on my parsed outbox lines — cleaner and scoped. Let me do that instead. Even better: replicate comms.normalize_event + validate_event. My events will be written already normalized, so validate_event suffices.
+
+Now write README, then hashes.
+dsh: reasoning:
+Now write the checkpoint file runtime/state/w21_checkpoint_1.json and append w21_checkpoints.jsonl. Then outbox events.
+
+Checkpoint content:
+
+{
+ "worker": "worker-021",
+ "instance": "worker-021-20260912T001656-968807",
+ "checkpoint": 1,
+ "checkpoint_at": "<now>",
+ "task_id": "W021-L1-REPLICATION-01",
+ "task": "independent re-fetch replication of worker-086's three L1 citation MISMATCH findings at the frozen ledger hash",
+ "node_id": "L1",
+ "gate": "G-LIT",
+ "classes": ["AF-SCC-C2-VAC-GEN","AF-SCC-C0-VAC-GEN"],
+ "verdict": "MISMATCH_FINDINGS_NOT_REPLICATED",
+ "ledger_input": {"ledger/citation_audit.csv": "315c1914..."},
+ "artifacts": {path: sha},
+ "controls": {...},
+ "events_emitted": [ids],
+ "hours_spent_estimate": 0.4,
+ "authority": "no gate verdict, no node completion, no ledger edit; controller/leads own those",
+ "numerics_lock": "respected: no N1 work, no numerics/spherical_solver/",
+ "next_falsifier": "...",
+ "next": [...]
+}
+
+Then outbox JSONL. Need created_at now.
+
+Let me generate these files with a python script so timestamps and hashes are consistent and JSON validates. I'll write the events with the `write` tool? Better to generate via Python heredoc using the actual hashes. But careful: the `write` tool is preferred for creating files, and heredoc python writes are fine too (bash). However, the fs policy says use write tool to create files. I can use `write` with explicit content including hashes and a chosen created_at time. But timestamps should be accurate; I can get `date -Is` first. Let me just use the write tool with content; I know the hashes. For created_at, use current time. Let me get the time now.
+
+Actually let me use a small python script via bash to compute and embed, ensuring JSON validity and atomic append. Given "Use the write tool to create files" guidance, I'll use write for the checkpoint JSON and outbox jsonl with explicit timestamps. But two files need consistent timestamps; minor. Let me get date.
+dsh: reasoning:
+Now write the outbox events file comms/outbox/worker-021.jsonl (3 events). Must satisfy validate_event:
+- status: node_id, status in STATUSES, hours, summary, evidence_refs, next_falsifier ✓
+- artifact: node_id, artifact_type, path, sha256, validation_status in {unverified,passed,failed,retracted} ✓
+- review: target_id, reviewer, verdict in {accept,revise,reject,inconclusive}, score 0..5, hard_failures, findings ✓
+
+All events need event_id, event_type, created_at, actor.
+
+Then append the same checkpoint summary line to w21_checkpoints.jsonl.
+
+Let me write the JSONL with correct escaping. The review findings text is long; keep it one line JSON. I'll write carefully. Also include class_ids and class_id. `normalize_event` will map class_ids→class_id if class_id missing; I'll include class_id directly as the primary class and class_ids list as extra.
+
+Evidence refs format per PROTOCOL: `path#sha256-prefix`. Use report.json#09d2548f647e and ledger/citation_audit.csv#315c19145065.
+
+Note about the status event "status": "active" — correct since I can't claim done. Summary says task complete, no completion claim.
+
+Write the file.
+dsh: reasoning:
+Now:
+1. Validate my 3 events with schemas.validate_event (and through normalize_event to be exact).
+2. Append checkpoint line to w21_checkpoints.jsonl.
+3. Verify ledger hash one last time, and that the report hash is unchanged.
+
+Let me run a validation script. I'll use comms.normalize_event + validate_event on just my file to be precise. Also confirm no duplicate event_id in ingested_ids.json.
+dsh: reasoning:
+"duplicate: True" — my event IDs are already in `ingested_ids.json`?! That means the controller already ingested my outbox file between when I wrote it and now (the controller lifecycle runs continuously). Let me check: grep the ids in ingested_ids.json and events.jsonl. If they're already ingested, great — they're accepted. Let me verify they were accepted (in events.jsonl) and not rejected (comms/rejected.jsonl).
+dsh: reasoning:
+All three events were already ingested into `research_map/events.jsonl` (accepted), zero rejects. The "duplicate: True" check was just because the controller had already ingested them — that's the desired outcome, not a problem.
+
+Everything is done:
+1. ✅ Read handoff (HANDOFF.md, ASTRA_HANDOFF.md, PROTOCOL.md), map (research_map.json gates/assignments/controller_gate_audit), and comms (inbox/outbox/rejected).
+2. ✅ Took one class-bound task: L1 (G-LIT), classes AF-SCC-C2-VAC-GEN/AF-SCC-C0-VAC-GEN.
+3. ✅ Emitted valid JSON with IDs (event_id, node_id L1, class_id/class_ids), evidence refs with hashes, artifact sha256, and falsifier.
+4. ✅ Checkpoint written (runtime/state/w21_checkpoint_1.json + w21_checkpoints.jsonl).
+5. Exit now.
+
+Let me do a final quick sanity summary of files and give the final answer. I don't need to do anything else. Let me also double check the report was not modified after hashing (verified above). Good.
+
+Final answer: concise report of what was done, the identity, task, result, artifacts/hashes, events, checkpoint, falsifier, and note authority limits. Keep it tight.

@@ -1,0 +1,748 @@
+dsh: reasoning:
+There's no `handoff/` directory in the workspace root. Let me look for it. The task mentions "group=audit". There's a workdir/ directory and an ai4math-swarm.tar.gz. Let me look for the swarm structure.
+
+Let me search for handoff and comms directories.
+dsh: reasoning:
+The swarm is at `/data3/guoshaoyang/workdir/ai4math-swarm`. I am the audit group lead. Let me read the HANDOFF.md, research_map, comms.
+
+Let me explore the swarm directory.
+dsh: reasoning:
+Now let me read the HANDOFF.md, ASTRA_HANDOFF.md, PROTOCOL.md, and understand the task. My task: "You are a group lead. Read handoff/map and comms. Review artifacts, consume queue, emit structured events and checkpoints, report blockers. One independent lifecycle then exit. group=audit"
+
+Let me read the handoff docs. Also there's `runtime/instances/lead-audit-01-20260912T000917-843521` — that's a newer instance for me perhaps. Let me check.
+
+Let me read the key docs.
+dsh: reasoning:
+Now let me read the PROTOCOL.md, my inbox, and the audit instance directory. Also check the runtime state (current_checkpoint, my newest instance).
+
+My assignment likely in `comms/inbox/astra-lead-audit.jsonl`. Let me read that and the PROTOCOL.
+
+Let me also check the `runtime/instances/lead-audit-01-20260912T000917-843521` dir — that's probably the newest lifecycle instance for me, created at 00:09:17.
+
+Time is ~00:10 now. Let me get moving.
+
+Key task: "One independent lifecycle then exit." So I should run one lifecycle — the independent lifecycle script `runtime/bin/astra_lifecycle_independent.py` probably. Let me investigate.
+
+Let's read the protocol, my inbox, and the instance dir.
+dsh: reasoning:
+There's a supervisor running an "independent lifecycle". The newest lead-audit instance at 00:09:17 has a stash meta.json, prompt.txt. Let me read those to understand what lifecycle I'm supposed to run.
+
+Let me read:
+- runtime/instances/lead-audit-01-20260912T000917-843521/meta.json, prompt.txt, stderr.log, trajectory.log
+- the previous audit instance stdout.log (which shows what it did)
+- comms/inbox/astra-lead-audit.jsonl (my inbox)
+- runtime/bin/astra_lifecycle_independent.py (the lifecycle)
+
+Let me start with the smaller ones.
+dsh: reasoning:
+I am the second audit lifecycle instance (00:09:17). The prior one (00:03:56 → exit 0 at 00:09) already completed a full audit lifecycle. I'm now the fresh instance `lead-audit-01-20260912T000917-843521` and I must do "one independent lifecycle then exit".
+
+So my job: run one independent audit lifecycle. Let's see if there's a supervisor script that launches me and expects a specific lifecycle protocol. Let me read `independent_supervisor_v2.sh` and `runtime/bin/astra_lifecycle_independent.py`.
+
+Actually wait — I'm being run as a harness subprocess? The stderr.log in my instance dir would show. Let me check my own instance's stderr.log, and the supervisor script.
+
+Let me read:
+- /data3/guoshaoyang/independent_supervisor_v2.sh
+- /data3/guoshaoyang/workdir/ai4math-swarm/runtime/bin/astra_lifecycle_independent.py
+- my instance stderr.log
+
+The key question: what does "one independent lifecycle" mean concretely? The supervisor may launch a lifecycle script per instance. Let me look.
+dsh: reasoning:
+I now understand the setup. The supervisor v2 relaunches roles every 20 seconds once their tmux session dies. Each launch is a "lifecycle" — a fresh dsh agent with the prompt. My job is to do one audit lifecycle then exit.
+
+Time budget: a lifecycle is apparently ~5 minutes (00:03:56 → 00:09). I should be efficient. Note there's a map.lock file created at 00:09 — need to be careful of concurrent writers. There's also a controller lifecycle and worker lifecycles running concurrently.
+
+Let me plan the audit lifecycle:
+
+1. Read handoff/map/comms ✓ (partially)
+2. Consume queue: read `comms/inbox/astra-lead-audit.jsonl` — get assignments
+3. Review artifacts: audit the current artifacts (A0 rubric, A1 reviews, A2 ablation, F0, F2a/F2b, L0, N0, checker calibration)
+4. Emit structured events to `comms/outbox/astra-lead-audit.jsonl`
+5. Checkpoint: run `python3 research_map/checkpoint.py`
+6. Report blockers
+7. Ingest events, validate
+
+Important: the prior lifecycle finished ~00:09 with a full report. What NEW independent value can I add? The instruction says "One independent lifecycle" — meaning I should independently verify, not just copy. The key prior findings:
+
+- A0: no independent verdict on current d748a9e3574e
+- F0: accept at 00:07:29 is lead-audit self-assessment; F0 moved again
+- F2a/F2b: revise verdicts
+- L0: zero verdicts on current hash
+- A2: zero verdicts
+- CF-5 recurrence: unknown class tokens
+- 70 ingested events pending Astra application
+
+Since the prior lead-audit lifecycle is a *different process* but *same identity*, I should:
+1. Independently re-verify the key measurements (don't trust fluent text)
+2. Check whether any of it changed since 00:09 (artifacts move fast — F0 moved at 00:07:07)
+3. Produce genuinely new audit value: e.g., a freeze-first enforcement, a hash-pinned review coverage matrix computed from the actual current state, checker calibration re-run.
+
+Let me first read my inbox and check the current state of the map. Time matters. Let me be efficient but thorough.
+
+Key: I must not create stale-hash churn myself. The best independent contribution: build a *hash-pinned* audit snapshot at a single instant, compute review coverage against live hashes, and emit that + blockers. And run the independent lifecycle script if it exists (`runtime/bin/astra_lifecycle_independent.py`) — let me check what that does; it might be the canonical "independent lifecycle" tool.
+
+Let me read my inbox and the lifecycle script. Also check `research_map/comms.py` usage.
+
+Let me do parallel reads.
+dsh: reasoning:
+Now I have a clear picture. The newest assignment `astra-life01-a1-rebind` (00:08:59) is exactly my queue: after PUBLISH-FROZEN-01 lands, provide for each target F0, F1, F2a, F2b, L0 at least two verdicts from distinct reviewers who did not author the artifact, each citing the measured canonical sha256. Re-check A0 conformance at the rubric hash. Dispose of the two class-separation soft flags on F2b.
+
+So my audit lifecycle should:
+1. Consume queue — read the assignment cards, especially `astra-life01-a1-rebind`.
+2. Check whether PUBLISH-FROZEN-01 landed (frozen hashes).
+3. Compute a hash-pinned review coverage matrix from the live map: for each target (F0, F1, F2a, F2b, L0, A0), the canonical sha256 and the verdicts citing that exact hash, with reviewer distinctness.
+4. Dispose of the F2b soft flags via checker calibration.
+5. Emit structured events (status, claim/artifact, review, blocker, direction_update).
+6. Checkpoint.
+7. Report blockers and exit.
+
+Time: ~00:10 now. Prior lifecycle took ~5 min. Let me be efficient and use parallel calls.
+
+Let me set up a todo list first since this is multi-step.
+
+Then:
+- Check if PUBLISH-FROZEN-01 landed: grep events.jsonl / map for "PUBLISH-FROZEN-01".
+- Read the map's gates, nodes, artifact hashes for the targets.
+- Check reviews/ dir and INDEX.md.
+- Check the audit tooling: `research_map/audit_evidence.py`, `runtime/bin/classsep_regression.py`, `artifacts/audit/build_checker_calibration.py`.
+
+Let me be efficient. First, todos, then a batch of commands.
+
+Important: There may be concurrent processes writing to the map (controller lifecycle at 00:09:17, workers). map.lock exists. I must use `flock` for any map writes, or better — use the provided scripts (comms.py ingest, checkpoint.py, audit_evidence.py) which handle locking.
+
+Let me now inspect the map state for my targets. I'll write a Python one-liner using the map JSON to extract: gates, nodes F0/F1/F2a/F2b/L0/A0, canonical artifact paths, measured hashes, and review verdicts. Also read reviews/INDEX.md.
+
+Let me do that.
+dsh: reasoning:
+Now let me find PUBLISH-FROZEN-01 events and the current live hashes + verdicts. Let me write a compact Python script to give the current state at one instant: canonical hashes per target, measured hashes, verdicts in map with cited hashes, reviewer identities.
+
+Let me grep events.jsonl for PUBLISH-FROZEN.
+dsh: reasoning:
+Very important new information: the events show timestamps up to 01:25! So the clock has advanced. The events I read earlier are from my "future"? Wait — no. Let me check the current time. Events include `2026-09-12T01:25:00+08:00`. So the current time may be later than 00:09. The supervisor log showed the last launch at 00:09:17 but the events show later timestamps... Actually those events are from *other* agents (worker-06 etc.) writing events. Hmm, but 01:25 is later than now presumably.
+
+Wait, let me check the actual current time. `date`. The map's updated_at is 2026-09-12T00:09:29. But events.jsonl has entries at 01:25. That's odd. Unless the timestamps in those events are *created_at* fields authored by agents with wrong clocks, OR the current time is actually past 01:25.
+
+Actually, the prior lead-audit lifecycle ran 00:03:56 → 00:09 and its stdout mentions "00:05–00:11". And runtime/state/current_checkpoint.json was written at 00:09. Let me just check `date` now.
+
+Critical: many events in events.jsonl appear to be from the FUTURE relative to the filesystem. Actually more likely: the current wall-clock is ~01:30 and the files I saw at 00:09 are... no, `ls -la` showed mtimes at 00:03-00:09 for the swarm dirs. The `date` command will settle it.
+
+Hmm, wait. Look at the supervisor log line and the counts.tsv. The last `ls -la` of `runtime/state` showed `metrics.jsonl` modified 00:09. So the current time is probably ~00:10-00:12. But events.jsonl contains created_at 01:25 events. That means agents wrote events with fabricated/wrong future timestamps! That's itself an audit finding — event timestamp integrity.
+
+Actually wait, more likely: the events with 01:15, 01:25 timestamps were written by worker-06 which is running on a different timezone or a skewed clock. Look: `w06-20260912T0045-...` has created_at 00:45:02, and `w06-20260912T0115-f2b-rev6` created_at 01:15:00. Both claim times ahead of the file mtime. Hmm, but they're `deepseek-flash-06` / `worker-06` events. And `lit-20260912-047` created_at 00:12:20.
+
+Let me just check the current date. This matters a lot for the audit — clock skew / future-dated events is a genuine finding.
+
+Let me check the time and the tail of events.jsonl (the most recently ingested).
+
+Also important: the map `updated_at` = 00:09:29 and gates are all pending. The current canonical hashes on disk have moved a lot. The key audit task `astra-life01-a1-rebind` requires verdicts citing *measured canonical sha256*.
+
+So my lifecycle plan:
+1. Get current time.
+2. Measure the canonical hashes NOW for F0 (research_map/formulation_taxonomy.yaml), F1 (schemas/af_wcc_vacuum.yaml), F2a (schemas/af_scc_c2_vacuum.yaml), F2b (schemas/af_scc_c0_vacuum.yaml), L0 (ledger/theorems.jsonl), A0 (evaluation_rubric.yaml).
+3. Build the review coverage matrix: for each target, which review verdicts cite exactly that sha256, with distinct non-author reviewers.
+4. Determine freeze status: FROZEN.json revision, whether it matches disk.
+5. Emit events + checkpoint + blockers.
+
+Let me check FROZEN.json and time. Also, I should look at whether the map has `frozen_artifacts` — yes it does! Let me query that.
+
+Let me batch:
+- date
+- tail of events.jsonl (last 5 created_at)
+- cat artifacts/formulation/FROZEN.json (or schemas/FROZEN.json)
+- map frozen_artifacts + controller_findings + gate_proposals + reviews summary
+
+Let me do it.
+dsh: reasoning:
+Now I have the key audit finding: **event timestamps are future-dated relative to wall clock**. Current time is 00:10:10, but worker-06 events are dated up to 02:00:00. That's an event-integrity defect — a real audit finding.
+
+Also FROZEN.json rev19 is at `artifacts/formulation/FROZEN.json` and pins `artifacts/formulation/schemas/...` paths — but the canonical published paths are `schemas/af_wcc_vacuum.yaml`, etc. So there are two trees: authoring tree (`artifacts/formulation/schemas/...`) and canonical published tree (`schemas/...`). The "PUBLISH-FROZEN-01" assignment is to publish the frozen revision to the canonical paths.
+
+The map says node artifacts are: F0 → `research_map/formulation_taxonomy.yaml`, F1 → `schemas/af_wcc_vacuum.yaml`, F2a → `schemas/af_scc_c2_vacuum.yaml`, F2b → `schemas/af_scc_c0_vacuum.yaml`, L0 → `ledger/theorems.jsonl`, A0 → `evaluation_rubric.yaml`.
+
+So my job as audit lead: measure both trees NOW, check mirror-equality, and determine which verdicts bind.
+
+Let me now write a rigorous audit script that computes:
+1. For each target: canonical path, measured sha256 now (+bytes, mtime), FROZEN rev19 pinned hash of the authoring-tree counterpart, mirror equality.
+2. Review coverage: for each target, scan `reviews/*.json` + map `review_verdicts` + events for verdicts and the sha256 they cite; count distinct non-author reviewers citing the *measured canonical* hash.
+3. Future-dated event detection: count events with created_at > now + tolerance.
+4. A0 conformance check at the rubric hash.
+5. F2b soft flags disposal: the two class-separation soft flags at schemas/af_scc_c0_vacuum.yaml:316-317.
+
+This is a substantial independent audit. Let me build it as an artifact `artifacts/audit/a1_rebind_coverage.py` + `reviews/A1-rebind-coverage.json`.
+
+But first, quickly measure the hashes. Let me do it in one go.
+
+Also note the `frozen_artifacts` key in map. Let me inspect it and `controller_findings` for CF-5/CF-7..9.
+
+Let me be efficient — one Python script that prints everything I need.
+dsh: reasoning:
+Critical findings emerging:
+
+1. **F0 mirror divergence**: canonical `565a6e505188` vs authoring-tree `a7ccffa882eb` (frozen rev19 pin). F0 canonical is NOT published from the frozen revision. Status "divergent".
+
+2. **F1/F2a/F2b mirror-equal at 00:10:15** but NOT matching the frozen rev19 pins (f962c117/e9fcefe6/bdb23f76). Wait — mirror_eq=True means canonical == authoring. But frozen_pin for F1 is f962c117 while both trees are now b65fcc0f. And the files were modified at 00:10:15 — that's DURING my lifecycle (now 00:10:10... hmm, mtime 00:10:15 is 5 seconds in the future relative to my `date` at 00:10:10?). Hmm, the timestamp granularity; my date call was at 00:10:10 and the python ran a bit later. Actually `date` was run at 00:10:10, then the script ran ~00:10:15. Fine.
+
+So the formulation lead just rewrote all three schemas at 00:10:15 — AFTER FROZEN rev19 (00:04:48). So the freeze is stale again.
+
+3. **L0** `ce42d205e761` — wait, earlier checkpoint said L0 = ce42d205e761 (from artifact_hashes). But the prior audit lifecycle said "L0: zero verdicts on current 7d78d285". So L0 has changed again to ce42d205.
+
+4. **A0** `d748a9e3574e` unchanged since 23:28.
+
+So the state is: everything is moving. That's the core audit finding — and my assignment explicitly anticipates it: "After PUBLISH-FROZEN-01 lands, provide for each target ... two verdicts ... each citing the measured canonical sha256".
+
+The right audit deliverable: a **frozen-instant hash-pinned coverage matrix** that says exactly which targets can and cannot reach 2 independent verdicts, and emits blockers. Plus the future-dated-event finding. Plus F2b soft-flag disposal.
+
+But I must be careful: another lead-audit lifecycle already did similar. My value-add as an *independent* lifecycle:
+- Re-measure at a single timestamp (00:10:15) with a recorded manifest.
+- Detect the freeze-drift and future-dated events.
+- Produce the per-target coverage matrix against measured hashes.
+- Dispose of the F2b class-separation soft flags — check if they still exist at schemas/af_scc_c0_vacuum.yaml:316-317.
+- Emit events + checkpoint.
+
+Let me look at the F2b soft flags. The assignment says: "Dispose of the two class-separation soft flags on F2b (candidate-variant tokens at schemas/af_scc_c0_vacuum.yaml:316-317) by checker calibration or a documented blind spot."
+
+Let me read those lines and run the class separation checker on F2b.
+
+Also let me quickly build the review-coverage matrix properly. I need to scan reviews/*.json for target + cited sha256. Let me look at the schema of a review file first.
+
+Let me check:
+- schemas/af_scc_c0_vacuum.yaml lines 310-320
+- research_map/class_separation.py usage
+- a review file structure (e.g., reviews/F2b-review-16-r3.json)
+
+Let me batch these.
+dsh: reasoning:
+Now I have what I need for the F2b soft flags. Lines 316-317 in the *old* revision were candidate-variant tokens. In the current revision (a8d899d2941f, rev9 stated in header), the "candidate-variant tokens" at 316-317 — let me check what's exactly at 316-317 now. My sed printed 305-325; line 316 is `source: ledger/theorems.jsonl`? Let me count: 305 = "status: open_problem...", so:
+305 status
+306 refutation_candidate
+307 antecedent_status
+308 why_this_class_is_not_recorded_as_refuted
+309 consequence
+310 source
+311 f0_binding
+312 (blank)
+313 provenance:
+314 citation_status
+315 sources:
+316 "    - {concept: Choquet-Bruhat-Geroch...
+317 "    - {concept: C0-inextendibility results...
+318 "    - {concept: Kerr family...
+319 "    - {concept: H2_loc-inextendibility...
+320 unresolved_citations:
+
+Hmm so 316-317 are provenance `sources` with `identifier: null, status: unresolved`. The "two class-separation soft flags ... candidate-variant tokens at schemas/af_scc_c0_vacuum.yaml:316-317" was about the *previous* revision (the assignment cited lines from the then-current hash). The current revision has moved; I need to re-run the class separation checker on the current canonical hash to see if the flags persist.
+
+Let me run `research_map/class_separation.py` on the current F2b canonical. Let me check its interface.
+
+Given my time budget, let me now focus. I'll build one audit artifact that does everything reproducibly:
+
+`artifacts/audit/a1_rebind_audit.py` — measures canonical hashes at one instant, builds review-coverage matrix against measured hashes, runs class-separation checker on F2b current, detects future-dated events, outputs `reviews/A1-rebind-coverage.json` + `reviews/F2b-softflag-disposition.json` (or a combined artifact).
+
+Actually, let me keep artifacts aligned to canonical assigned paths: my assignment's artifact is `reviews/`. So deliverables go in `reviews/`.
+
+Deliverables:
+1. `reviews/A1-rebind-coverage.json` — the hash-pinned coverage matrix (status/claim/artifact evidence).
+2. `reviews/F2b-softflag-disposition.json` — the disposal of the two soft flags.
+3. Emitted events: `artifact`×2, `review`×1, `blocker`×N, `status`×1, `direction_update`×1.
+4. Checkpoint.
+
+Let me first check the class_separation.py interface and run it. And check what the map's controller_findings CF-5/CF-7..9 are, and gates criteria for G-AUDIT. Also check `runtime/state/controller_verification` for existing artifacts.
+
+Let me look at class_separation.py quickly.
+dsh: reasoning:
+Now the situation is clear. Note the map gates say F0 current hash is `66bf917b` but the actual F0 canonical hash is now `565a6e505188`. Gate unmet criteria are stale too.
+
+Wait, actually G-F0's unmet says "no accept verdict exists at the current hash 66bf917bd368". But the map `frozen_artifacts` lists `research_map/formulation_taxonomy.yaml` superseded at 23:27:20. And F0 canonical measured at 00:10 is 565a6e505188 — the same hash the prior lead-audit accepted at 00:07:29 per its report ("F0 moved again at 00:07:07 (565a6e505188), after its 00:07:29 accept").
+
+Hmm wait, prior audit lifecycle said F0's accept at 00:07:29 was on 565a6e505188? Let me verify: F0-review-lead-audit.json says artifact_sha256 = 565a6e505188... and created_at 23:27:56 (file mtime 00:07). Actually the file says `"created_at": "2026-09-11T23:27:56+08:00"` but it cites 565a6e50. It was rewritten. That's the "accept admitted self-assessment" issue.
+
+OK. Now I need to be decisive and produce my lifecycle. Time check: started 00:09:17, now ~00:11. Prior lifecycle took ~5-6 min. I should target finishing by ~00:20.
+
+Plan for the audit lifecycle — the highest-value independent contribution:
+
+**Core measurement (single instant, recorded):**
+1. Measured canonical hashes for F0/F1/F2a/F2b/L0/A0 at a pinned timestamp.
+2. Freeze state: FROZEN rev19 pins vs canonical (mirror equality) → F0 divergent, F1/F2a/F2b mirror-equal but unfrozen-beyond-pin (all three rewritten at 00:10:15 after rev19 at 00:04:48).
+3. Verdict coverage: for each target, list verdicts citing the measured sha256 with distinct non-author reviewers.
+4. Future-dated event detection (created_at > now + 60s): count and identify. This is a genuine integrity finding: worker-06 has events dated up to 02:00 while wall clock is 00:10. Those future events are already ingested into events.jsonl and can confuse ordering/"no-change window" falsifiers.
+5. F2b soft flags: run class_separation checker against the current canonical.
+
+Let me run the class_separation checker now and check the F2b flags. Let me look at how to invoke findings_for_text.
+
+Let me write the audit script. First, a quick test of class_separation on the current F2b.
+
+Actually let me just write the full audit script and run it. It should be reproducible and saved as an artifact.
+
+Design of `artifacts/audit/a1_rebind_coverage.py`:
+- reads canonical target map from research_map.json (node artifact paths for F0,F1,F2a,F2b,L0,A0)
+- measures sha256 + bytes + mtime for each
+- loads artifacts/formulation/FROZEN.json files map, computes mirror equality for F1/F2a/F2b and F0
+- scans reviews/*.json for review records: extract (target, sha256 fields, verdict, reviewer). Hash fields vary: `reviewed_sha256`, `artifact_sha256`, `sha256`, `reviewed_sha256`. Also `target_subnode`, `target_id`, `target_path`.
+- counts distinct reviewers per (target, measured_hash) excluding authors (author = lead-formulation for F*, lead-literature for L0, lead-audit for A0)
+- scans events.jsonl for future-dated events
+- runs class_separation.findings_for_text on each schema text → soft flags
+- writes reviews/A1-rebind-coverage.json
+
+Then emit events.
+
+Let me be careful about not over-engineering. Let me write it.
+
+First, quick check on class_separation API signature: `findings_for_text(text, where)` and `findings(obj, where, mode)`. Let me just use it on the YAML text.
+
+Let me test quickly then write the artifact.
+dsh: reasoning:
+The class-separation checker reports **0 findings** on the current F2b canonical `a8d899d2941f`. So the two soft flags are disposed: no longer present in the current revision. But I must verify this is not a checker blind spot — the assignment says "dispose ... by checker calibration or a documented blind spot". So I should test the checker's sensitivity: does it catch the historical tokens? Let me construct a positive control from the *old* revision tokens. The old F2b revision referenced candidate-variant tokens. Let me find a known-positive fixture: `runtime/state/classsep_regression` corpus, and `runtime/bin/classsep_regression.py` which reported 17TP/10TN.
+
+Let me run the regression to confirm the checker still has TP>0, then apply it to current F2b → 0 findings, which means the flags are genuinely absent (given checker sensitivity measured at 17TP/0FN).
+
+Let me run `python3 runtime/bin/classsep_regression.py`.
+
+Also, I need to confirm what the two soft flags were. Let me grep the previous revision's content. The assignment said "candidate-variant tokens at schemas/af_scc_c0_vacuum.yaml:316-317". Current line 316-317 are provenance sources. In the previous revision (bdb23f76 or 6f121a82), lines 316-317 might have had e.g. `class_id: AF-SCC-C0-CH-VAC-GEN`. Let me check the git history or a backup. Let me check if git has the file.
+
+Let's run the regression + check git log for the F2b file.
+dsh: reasoning:
+The regression passes: leaks detected 17/17, controls clean 10/10, FP 0 FN 0. So the checker has measured sensitivity (TP=17, FP=0, FN=0) on the regression corpus. Applying it to current F2b → 0 findings means the two soft flags are genuinely disposed at sha `a8d899d2941f` (within the checker's measured sensitivity).
+
+The file isn't in git (schemas/ probably gitignored or untracked). Fine.
+
+Now — one caveat: the regression corpus is 17 leaks/10 controls which is the *same* corpus the checker was tuned on possibly. Still, it's the available calibration. I should note the limitation: the corpus is not independent of the checker's author (worker-07). That's an honest caveat — I'll record the blind-spot scope: the checker's sensitivity is measured only on its own author's corpus; absence of findings is evidence of conformance *relative to that rule set*, not proof.
+
+But wait — I should verify the historical flags directly. The assignment's claim was that at the *then-current* revision, lines 316-317 held candidate-variant tokens. Let me look at the prior revision content if a copy exists. There might be a published copy with .sha256 or backups. Let me search for the old hash bdb23f76 / 6f121a82 / e6b1af2b copies on disk. Actually, an easier check: the current F2b has `class_identity_variants` with `parent_class + variant_id` structure (lines 285-295) and grep showed no standalone class-id tokens like `AF-SCC-C0-CH-VAC-GEN`. The checker confirms 0.
+
+Let me do a direct lexical check: grep for `AF-SCC-C0-CH-VAC-GEN` and `AF-SCC-C0-H2LOC...` in current F2b.
+
+Now let me write the audit script and artifact. I'll make it comprehensive but compact.
+
+Key measurements to include:
+1. `measured_at`, `measured`: per-target canonical path, sha256, bytes, mtime.
+2. `freeze`: FROZEN rev, frozen_at, pin per target, mirror_equal, frozen_match.
+3. `verdict_coverage`: per target — verdicts whose cited sha256 == measured canonical sha256, distinct reviewers, authors excluded, count; `two_independent` boolean.
+4. `future_dated_events`: count + examples.
+5. `f2b_softflags`: checker findings at current sha + regression TP/FP/FN.
+6. `blockers`.
+
+Let me write this to `artifacts/audit/a1_rebind_coverage.py` and run it, writing `reviews/A1-rebind-coverage.json`.
+
+For verdict scanning, I need to handle review files with varying schemas. Let me write robust extraction:
+- reviewer: d.get('reviewer') or d.get('actor') or from filename
+- target: d.get('target_subnode') or d.get('target_id') or from field 'artifact'/'target_path'
+- cited hash: d.get('reviewed_sha256') or d.get('artifact_sha256') or d.get('sha256') or d.get('cited_sha256') or d.get('frozen_sha256')
+- verdict: d.get('verdict')
+
+Also scan events.jsonl for `review` events with node_id in targets and any sha256 field.
+
+Let me write it now. I'll write the file with the write tool.
+
+Let me first check what review files exist and their target fields to get the extraction right. Let me do a quick scan.
+dsh: reasoning:
+Now I have a clear picture of the verdict coverage. Measured canonical hashes (as of ~00:10:15):
+- F0: 565a6e505188 → F0-review-lead-audit accept (lead-audit = same identity as me, self-assessment; not independent). No other verdict at this hash. → **0 independent verdicts**.
+- F1: b65fcc0f0118 → NO verdicts cite b65fcc0f. Verdicts cite 7a3e1f93 (16-r2, lead-audit), f55722a7 (16). → **0 verdicts at current hash**.
+- F2a: 8dae50da1ab5 → NO verdicts cite 8dae50da. Verdicts cite 23fec0e9 (17,18,19, lead-audit), 21df6f7f (15). → **0 at current hash**.
+- F2b: a8d899d2941f → NO verdicts cite a8d899d2. Verdicts cite 6f121a82 (16-r3 accept, same-reviewer delta, explicitly not independent), e6b1af2b (18 revise, lead-audit accept), 0a4ceac5, 0150bfdf. → **0 at current hash**.
+- L0: ce42d205e761 → verdicts cite 5fb8bf3a (17, lead-audit). → **0 at current hash**.
+- A0: d748a9e3574e → verdicts: deepseek-flash-19 revise 0.0 (23:19:57 — reviewed the *absence* of the artifact, before it existed at 23:28), lead-audit accept 4.0 (self-assessment). → **0 independent verdicts**.
+
+So: **ZERO of six targets has a single verdict at its current measured canonical hash.** The prior audit lifecycle said the same for A0/F0/L0/A2, and now F1/F2a/F2b have also moved (rewritten 00:10:15, after FROZEN rev19 at 00:04:48).
+
+This is the core blocker: the formulation lead keeps rewriting artifacts, so no review verdict can bind. My contribution: quantify it with a single-instant, reproducible measurement, and emit the freeze-first direction with a concrete stop rule.
+
+Additional findings:
+1. **Future-dated events**: events up to 02:00:00 while wall clock is 00:10 → 110 minutes ahead. Need to count.
+2. **FROZEN.json rev19 self-consistency**: pins `artifacts/formulation/schemas/*` at f962c117/e9fcefe6/bdb23f76, but F1/F2a/F2b canonical+authoring both now b65fcc0f/8dae50da/a8d899d2 (mtime 00:10:15) → FROZEN rev19 is stale by one revision. F0 authoring is a7ccffa8 (FROZEN pin) vs canonical 565a6e50 → **F0 mirror divergence persists** (this is the P5 breach the workers flagged).
+3. **F2b soft flags disposed**: checker 0 findings at a8d899d2941f with regression 17TP/10TN/0FP/0FN. Caveat: regression corpus authored by the checker author.
+4. **A0 conformance**: need to check the rubric at d748a9e3574e against G-AUDIT criteria (no universal scalar score). Let me verify quickly — grep for a universal scalar. The prior lifecycle verified criteria met. I'll re-verify cheaply.
+
+Now let me write the audit script + artifact. Let me be efficient and produce:
+
+`artifacts/audit/a1_rebind_coverage.py` (reproducible instrument)
+`reviews/A1-rebind-coverage.json` (the artifact, assigned path reviews/)
+
+Then emit events, ingest, checkpoint.
+
+Let me write the script now. I'll compute everything and emit the JSON.
+
+Note: the reviews/ dir is my assigned canonical artifact path (A1 → `reviews/`). Good.
+
+Let me write the instrument.
+dsh: reasoning:
+Excellent. The matrix is produced:
+- All 6 targets: 0 independent verdicts at the measured canonical hash.
+- 67 future-dated events (max 02:00 vs measured 00:11 → 109 minutes ahead).
+- 7 blockers.
+
+Let me verify the artifact and its hash, then update todos and emit events.
+
+Let me quickly check the output JSON for the clock discipline + f2b disposition details to include accurate numbers in my report.
+dsh: reasoning:
+The instrument works. Note: F1/F2a/F2b mirror_equal=True and frozen_match=False → my blocker loop added "canonical_beyond_frozen_pin" for those... but the blockers list shows only 7 and doesn't include them. Let me check: the loop `for t in ("F1","F2a","F2b"): if meas[t]["mirror_equal"] and not meas[t]["frozen_match"]`. Measured: F1 mirror_equal=True, frozen_match=False → should have added. But blockers=7 and list shows only 6 "no_independent_verdict" + 1 F0 divergence = 7. So the canonical_beyond_frozen_pin blockers were NOT added.
+
+Why? Because `frozen_match` — let me check: `pin = fz_files.get(apath, {}).get("sha256")`. apath = "artifacts/formulation/schemas/af_wcc_vacuum.yaml". FROZEN.json's files keys were "artifacts/formulation/schemas/af_wcc_vacuum.yaml" — yes it was in the printout. And canonical b65fcc0f != pin f962c117 → frozen_match=False. mirror_equal=True. So condition should be true...
+
+Unless `frozen_match` is None because pin is None. Let me check the actual output JSON for F1. Hmm — maybe the FROZEN.json re-read at 00:11 differs? No.
+
+Wait, let me re-read my code:
+
+```python
+for t in ("F1", "F2a", "F2b"):
+    if meas[t]["mirror_equal"] and not meas[t]["frozen_match"]:
+```
+
+Hmm, that looks right. But the blocker list printed 7 items with none of those. Let me check the actual output for meas["F1"]. Let me verify. Maybe mirror_equal is True and frozen_match is True because the FROZEN.json was updated between my measurement and now? No — the audit script reads FROZEN.json itself at run time.
+
+Actually wait: maybe FROZEN.json was rewritten at ~00:10:30 to rev20 pinning b65fcc0f! The formulation lead is rewriting things constantly. My earlier check at 00:10:15 showed rev19 pinning f962c117. But my audit ran at 00:11:07. If FROZEN.json was bumped to rev20 with the new hashes in between, then frozen_match would be True.
+
+Let me check FROZEN.json now. This is exactly the churn problem. Let me verify.
+
+This matters for accuracy of my report. Let me check.
+dsh: reasoning:
+Important: FROZEN rev20 was written at 00:11:04 — three seconds before my measurement at 00:11:07. Its `frozen_at` field claims 00:15:00, which is 4 minutes in the FUTURE relative to its own mtime (00:11:04) and my measurement (00:11:07). That's another clock-discipline finding: FROZEN.json rev20's `frozen_at` is future-dated.
+
+And now: F1/F2a/F2b canonical == authoring == rev20 pin. F0 canonical (565a6e50) != authoring (01e7f841), but rev20 also pins `research_map/formulation_taxonomy.yaml -> 565a6e505188`! So FROZEN rev20 lists both:
+- artifacts/formulation/formulation_taxonomy.yaml -> 01e7f841
+- research_map/formulation_taxonomy.yaml -> 565a6e50
+
+So the F0 divergence is now acknowledged in the manifest (both copies pinned separately). So F0's "mirror divergence" is real but the manifest now records both hashes — the divergence between the two *copies* remains (authoring vs canonical are different bytes). That's the P5 policy breach: the authoring tree must be published byte-identically to the canonical path. Actually the policy is "canonical path is authoritative; the authoring tree must be published byte-identically to it before review verdicts bind". So F0 has two different byte copies — still a divergence, so the manifest pins both but the tree is not mirror-equal.
+
+So my report should state:
+- FROZEN rev20 (written 00:11:04, claims frozen_at 00:15:00 — itself future-dated) now pins F1/F2a/F2b canonical hashes, so those three are frozen-beyond-pin resolved.
+- F0 remains divergent: canonical 565a6e50 vs authoring 01e7f841; rev20 pins both separately rather than making them equal.
+- The binding blocker is unchanged: 0/6 targets have an independent verdict at the measured hash.
+
+I should make the audit artifact self-describing about the manifest state *at measurement*. My script reads FROZEN.json at run time, so it recorded rev20 (correct). Good. The `frozen_rev19_pin` key name is now a misnomer — let me rename it to `frozen_pin` for accuracy. That's a small edit; worth doing since the artifact must be trustworthy.
+
+Also I should add the FROZEN.json self-clock check (frozen_at vs mtime) to the clock_discipline section — that's a strong independent finding.
+
+Let me make those two improvements and re-run, then hash the final artifact.
+
+Also: the F0 blocker detail in my artifact says "canonical 565a6e50 != authoring 01e7f841 (FROZEN rev19 pin); mirror-equality policy breached" — accurate enough but let me rename.
+
+Let me edit the script:
+1. Rename `frozen_rev19_pin` → `frozen_pin`.
+2. Add `freeze_manifest_clock`: mtime vs frozen_at claimed.
+3. Add F0 to the beyond-pin logic properly (F0: mirror False → divergence blocker stays).
+
+Let me do the edits and re-run. Time is ~00:12; I'm within budget.
+
+Actually, note the `frozen_at` 00:15:00 vs mtime 00:11:04 — the audit script computed revision 20 at 00:11:07 but `frozen_at` claims 00:15:00. Let me add this check.
+
+Let me apply the edits.
+dsh: reasoning:
+The audit artifact is complete: 8 blockers, 0/6 coverage. Let me now:
+1. Update todos.
+2. Write a short human-readable report `reviews/A1-rebind-coverage.md` (optional but useful — actually keep artifacts focused; the JSON + events suffice. But the assignment's deliverable is `reviews/`. A markdown summary is good for the Human PI. Let me add a concise one.)
+3. Emit structured events to `comms/outbox/astra-lead-audit.jsonl`.
+4. Ingest events.
+5. Run validate_map + audit_evidence + checkpoint.
+6. Report.
+
+Let me compute the final artifact hash and write the events. Event schema per PROTOCOL: every event needs event_id, event_type, created_at, actor. For `artifact`: node_id, artifact_type, path, sha256, validation_status. For `blocker`: node_id, description, needed_to_unblock, evidence_refs. For `review`: target_id, reviewer, verdict, score, hard_failures, findings. For `status`: node_id, status, hours, summary, evidence_refs, next_falsifier. For `direction_update`: group_id, old_direction, new_direction, reason, evidence_refs, budget_delta_agent_hours.
+
+Let me check comms.py to see the accepted schema (it may be strict). Let me check what fields are required and how it validates. From `research_map/comms.py` — let me look at the schema quickly.
+
+Let me check the event schema file: research_map/events.schema.json.
+dsh: reasoning:
+Good. `blocker` and `status` aren't in the schema's oneOf, but they're accepted (the schema oneOf only lists 5 types; status/blocker pass because... hmm, oneOf would fail for status). Let me check how comms.py validates — probably it doesn't strictly enforce the schema for status/blocker, or it has additional handling. The prior events `audit-status-...` and `audit-blocker-...` were accepted into events.jsonl. So status/blocker pass ingestion.
+
+Let me now write my events. I'll emit:
+1. `artifact` — reviews/A1-rebind-coverage.json (node A1, artifact_type "review_coverage_matrix", sha256 d585d22c..., validation_status "unverified")
+2. `artifact` — artifacts/audit/a1_rebind_coverage.py (node A1, artifact_type "audit_instrument", sha256 3dd3881f..., validation_status "unverified")
+3. `review` — F2b soft-flag disposition verdict on the measured hash (target_id F2b, reviewer astra-lead-audit, verdict "accept"? Careful: I am the audit lead and F2b is authored by lead-formulation — so I *can* be an independent reviewer of F2b. But my own lifecycle's F2b verdict at a8d899d2941f would count as 1 independent verdict (audit is not the author). That's legitimate! The assignment wants 2 independent verdicts per target. As audit lead I can provide one of them for F2b (the soft-flag disposition is exactly an F2b review). Let me emit a review for F2b: verdict accept for the class-separation dimension only, score 4.0, hard_failures [], with findings noting the scope (only the soft-flag dimension was audited, not the full schema). Hmm — but an "accept" review must be honest: I only audited the class-separation dimension, not the full F2b schema content. I should scope it explicitly. Given the assignment asked me to "dispose of the two class-separation soft flags", a scoped verdict is the right artifact. I'll mark `scope: class_separation_softflags_only` and note that it does not substitute for a full review.
+
+Actually, be careful about inflating the independent verdict count. My matrix counts `reviews/*.json` files, not events. If I emit a review event it goes to the event stream but not to reviews/. To make it count, I'd need a review file. I could write `reviews/F2b-softflag-disposition-review.json`. That's within my assigned artifact path `reviews/`. But then my own matrix would need re-running to include it, and it would show F2b: 1 independent verdict (astra-lead-audit). Good — that's honest progress: F2b moves 0 → 1.
+
+Hmm, but is that a genuine independent verdict? The reviewer (astra-lead-audit) is not the author (lead-formulation). Yes. But it's scoped to the soft flags only. I'll record `scope` and `counts_as_full_verdict: false` so nobody misreads it as a full accept.
+
+4. `blocker` events — one per target blocker. That'd be 8 blocker events; maybe consolidate to a few: one per target (6) + clock/FROZEN. That's a lot of events but the protocol wants specific blockers. Prior lifecycle emitted 4 blockers. Let me emit 4 consolidated blockers:
+   - B1: no target has an independent verdict at its measured canonical hash (6 targets listed) → node A1.
+   - B2: F0 canonical/authoring divergence → node F0.
+   - B3: clock discipline: 69 future-dated events + FROZEN rev20 frozen_at future → node GLOBAL.
+   - B4: A0 has no independent verdict (special case: flash-19's revise predates the artifact; lead-audit accept is self-assessment) → node A0.
+5. `status` — node A1 lifecycle summary.
+6. `direction_update` — freeze-first with a stronger protocol: declare sha256 at freeze instant, then dispatch two blind reviewers; add stop rule that no verdict counts if the artifact changes before both verdicts land; clock discipline required (created_at must not exceed wall clock).
+
+Let me write the events file via a Python script appending JSON lines to `comms/outbox/astra-lead-audit.jsonl`. Then run `python3 research_map/comms.py ingest`.
+
+Let me first write the markdown + the scoped F2b review file, then emit.
+
+Let me create:
+- `reviews/A1-rebind-coverage.md` — human-readable summary
+- `reviews/F2b-softflag-disposition-review.json` — scoped review
+
+Then the events.
+
+Let me write the F2b review JSON carefully with the schema fields used by other reviews (reviewer, target_subnode, artifact, reviewed_sha256, verdict, score, hard_failures, findings, scope).
+
+Wait — if I write `reviews/F2b-softflag-disposition-review.json` with verdict "accept", then re-run my matrix → F2b gets 1 independent verdict. But the matrix's `all_recorded_verdicts` will include it. Good. But note: my matrix counts a verdict only if `cited_sha256_12 == measured[:12]`. Good.
+
+Actually, careful with review file parsing: my extractor reads `d.get("reviewed_sha256")`. I'll set that field.
+
+Let me also double-check: does `verdict: accept` on a scoped review risk being counted as a full accept by gate tooling? I'll add `"scope": "class_separation_softflags_only"` and `"counts_as_full_schema_verdict": false` and `"conditions": [...]`. That's honest.
+
+Let me write these now.
+
+Time: ~00:13. Good.
+
+Let me now write the review file and markdown, then emit events, ingest, checkpoint.
+
+For the markdown, keep it concise.
+
+Then events. Let me write a python script to append events (safer than heredoc quoting).
+
+Event list:
+1. artifact: A1 coverage matrix
+2. artifact: audit instrument
+3. review: F2b scoped
+4. blocker: A1 no-verdict-at-hash
+5. blocker: F0 divergence
+6. blocker: clock discipline
+7. blocker: A0 gap
+8. status: lifecycle
+9. direction_update: freeze-first-02
+
+Let me write.
+dsh: reasoning:
+Now let me re-run the matrix to pick up the new review file, then emit events.
+
+Wait — re-running the matrix will change its hash and measured_at. That's fine; but then the review file's `evidence` field cites reviews/A1-rebind-coverage.json (no hash) — fine. But the md cites the hash d585d22c. If I re-run, the hash changes. Options:
+- Re-run once to include the F2b review file → new hash → then update md hash reference.
+- Or keep the matrix as measured at 00:11:39 and emit the F2b review separately.
+
+Cleaner: re-run the matrix now (it will include the F2b scoped review as 1 independent verdict at hash, which is the honest current coverage), record the final hash, and update the md.
+
+Let me re-run and get the final hash.
+dsh: reasoning:
+Interesting: F2b shows `recorded=6` but `indep_at_hash=0`. Why didn't my scoped review count? Because the reviewer is `astra-lead-audit` which is in `SELF` set, and `AUTHORS["F2b"]` = {"astra-lead-formulation"}. My `indep` filter excludes `SELF` = {"astra-lead-audit","lead-audit"} — because for A0 the audit group is the author. But for F2b, astra-lead-audit IS an independent reviewer (not the author).
+
+That's a bug in my instrument: I conflated "audit group is author of A0" with "audit group is never independent". Independence should be evaluated per-target: a reviewer is independent if they are not in AUTHORS[target]. The `SELF` exclusion should apply only to A0 (already covered by AUTHORS["A0"]).
+
+Let me fix: remove SELF from the independence filter (AUTHORS already includes lead-audit for A0). Then F2b gets 1 independent verdict (astra-lead-audit, scoped).
+
+Also the `future_dated_events` count changed from 69 to 56 — because measured_at moved later (00:12:26), so fewer events are "future". Fine, it's relative to measured_at.
+
+Let me fix the SELF issue and re-run. Then update the md hash + wording (F2b: 1 scoped independent verdict).
+
+This is an important correctness fix — otherwise my own artifact under-reports. Let me apply.
+dsh: reasoning:
+Also I should handle the scoped verdict: `counts_as_full_schema_verdict: false`. It is still a legitimate independent verdict for the soft-flag dimension. My `two_independent_verdicts` should not be true anyway (only 1). But to be precise, I should distinguish full-schema verdicts from scoped ones. Let me add a `full_schema_verdict_count` field and keep `independent_verdict_count` as all independent verdicts. And the blocker logic: for F2b, 1 independent (scoped) → blocker becomes "only_one_independent_verdict". That's honest.
+
+Actually, let me add to the coverage record: `scoped_verdicts` (list of reviews with scope != full), and `independent_full_schema_verdict_count`. Let me keep it simple but accurate:
+
+- `independent_reviewers_at_measured_hash`: distinct reviewers
+- `independent_verdict_count`
+- `two_independent_verdicts`
+- `full_schema_independent_verdict_count`: count of distinct reviewers whose review lacks `scope` or has counts_as_full_schema_verdict != False.
+
+And blocker detail should reflect scoped-only.
+
+Let me implement minimally: add `full_schema_independent_verdict_count`.
+
+The raw record needs the scope field. Let me add to raw: `"scope": d.get("scope")`, `"counts_as_full": d.get("counts_as_full_schema_verdict")`.
+
+Then compute full = [r for r in indep if r.get("counts_as_full") is not False and r.get("scope") in (None,'full_schema')].
+
+Let me edit.
+dsh: reasoning:
+Now the matrix is accurate:
+- F0: 1 independent verdict (lead-audit accept at 565a6e505188) — but wait, the F0-review-lead-audit.json is authored by "lead-audit" which is the *audit* identity. Is it independent of F0's author (lead-formulation)? Yes — lead-audit is not the author of F0. So it counts as 1 independent verdict. The prior lifecycle called it "admitted self-assessment" — hmm, that was about A0 (audit owns A0). For F0, lead-audit is independent. But hold on: the concern was "the accept at 00:07:29 is lead-audit (same reviewer identity → Kish ESS 1, not a second independent)". Hmm, the prior lifecycle considered lead-audit as *me*, so from my perspective now, the F0 verdict by lead-audit is an independent verdict from a reviewer distinct from the author. It's legitimate as 1 of 2 needed. But it's the same identity as my current lifecycle — "astra-lead-audit" vs "lead-audit" are the same group. For gate purposes, F0 needs 2 independent verdicts; having lead-audit as one is fine as long as a second reviewer from a different identity gives one.
+
+Wait, but my AUTHORS map treats "lead-audit" and "astra-lead-audit" as the same actor for A0. For F0, lead-audit counts. Fine.
+
+- F2b: 1 independent scoped verdict (astra-lead-audit).
+- F1/F2a/L0/A0: 0.
+
+So the honest headline is: 4 of 6 targets have zero independent verdicts at the measured hash; F0 has 1, F2b has 1 scoped. No target has 2.
+
+I need to update the md report to reflect the corrected numbers. Let me rewrite the relevant sections. The md currently says "no target has even one" — that's now wrong for F0/F2b. Let me fix the md carefully.
+
+Also note the blocker detail for F0 divergence says "(FROZEN rev19 pin)" — but FROZEN is rev20 now. Let me fix that text to reference the manifest revision generically. The pin for F0's authoring is 01e7f841 which is still rev20's pin. Let me change the wording to "(FROZEN rev{fz revision} pin)". Let me edit and re-run once more, then freeze.
+
+Let me do both edits (script wording + md) and re-run, then take final hashes.
+
+Actually, to avoid re-running repeatedly, let me finalize the script now:
+
+In the blocker for F0 divergence, change to f"...(FROZEN rev{fz.get('revision')} pin)". Since fz is in scope. Yes.
+
+Also `frozen_rev19_pin` references in md — none.
+
+Let me edit.
+dsh: reasoning:
+Also update section 2: "Rev20 pins both hashes rather than making the copies equal" — fine. And section 4 F2b scoped verdict is now counted as 1 independent (scoped). Let me check the md's F2b section wording: "Recorded at reviews/F2b-softflag-disposition-review.json (accept, score 4.0, counts_as_full_schema_verdict: false)." That's fine.
+
+Also section 3 says "69 of 1001" but now it's 55 of 1024. Let me update to use approximate/relative language to avoid staleness: "Dozens of ingested events (55 at this measurement) carry created_at after the measurement instant; the latest is ... 02:00:00". Let me fix.
+
+And the artifact hashes at the top of the md: I need to update after the final re-run. Let me re-run the script first, get the final hash, then update the md header, then hash the md and emit.
+
+Let me re-run now.
+dsh: reasoning:
+Now update the md header hashes and the clock section. Then emit events.
+
+MD header:
+- Instrument: `8748b0a930b0c0ef83f859913e466cf4c33e22f908c95c2b71e725edfcdaaebe`
+- Artifact: `96b5ca47db7a5b22b5aef3959cd4981f7b4bb77893f6546d6714dd9b5fe20ef3`
+- measured at 00:13:10
+
+Section 3: "55 of 1033 ingested events".
+
+Let me edit the md.
+dsh: reasoning:
+Now let me emit the structured events. I'll write a Python script that appends events to `comms/outbox/astra-lead-audit.jsonl`.
+
+Events:
+1. artifact — reviews/A1-rebind-coverage.json (A1)
+2. artifact — artifacts/audit/a1_rebind_coverage.py (A1)
+3. artifact — reviews/A1-rebind-coverage.md (A1)
+4. review — F2b scoped (target_id F2b, reviewer astra-lead-audit, verdict accept, score 4.0, hard_failures [], findings [...])
+5. blocker — A1 no-two-verdicts (6 targets)
+6. blocker — F0 divergence
+7. blocker — clock discipline
+8. blocker — A0 independent verdict gap
+9. status — lifecycle
+10. direction_update — freeze-first enforcement
+
+Let me write these with proper hashes. Need md hash. Let me compute in the script.
+
+For evidence_refs use `path#sha256-prefix` format per protocol.
+
+Let me write and run the emitter. Then ingest.
+
+Careful: `review` event requires target_id, reviewer, verdict, score, hard_failures, findings — all present.
+
+`artifact` requires node_id, artifact_type, path, sha256, validation_status.
+
+Let me write it.
+dsh: reasoning:
+Now update todos and run the controller commands: ingest, validate_map, audit_evidence, checkpoint.
+
+Let me run them. Note: concurrent processes may be writing. `comms.py ingest` reads outbox files and applies to events.jsonl. Let me run it.
+
+Let me batch: ingest, then validate_map, audit_evidence, checkpoint.
+
+Note: the map.lock file exists (created 00:09); the controller lifecycle uses flock. `apply_events` might need the lock. `comms.py ingest` — let me check if it handles locking. The protocol says use `python3 research_map/comms.py ingest`. Let me just run it.
+
+Let me run ingest first and check output.
+dsh: reasoning:
+Hmm, "accepted: 0, duplicates: 948". My 10 new events were not ingested? Let me check whether my events appear in events.jsonl. The ingest may have already run between my append and my ingest — no. Let me check `ingested_ids.json` and whether my event ids are in events.jsonl.
+
+The `duplicates: 948` means it saw 948 already-ingested. `accepted: 0` — my events weren't picked up? Possibly because another process ingested them already (the supervisor/controller lifecycle runs ingest frequently — it may have run in the ~seconds between my append and my ingest). Let me verify my event ids are in events.jsonl.
+
+Let me check.
+dsh: reasoning:
+All 10 events accepted into the stream (a concurrent process ingested them — `_received_at 00:13:41`). Good.
+
+Now run validate_map.py, audit_evidence.py, checkpoint.py.
+
+Let me run them.
+dsh: reasoning:
+- validate_map: **VALID**
+- audit_evidence: **0 hard, 4 soft** — and my F0 divergence finding is independently corroborated by the controller's own audit_evidence (dual-tree divergence line). Also 3 unknown-class-token soft flags (CF-5 recurrence: AF-WCC-VAC-GEN-SET in F0 and F1, AF-SCC-C0-CH-VAC in F0).
+
+Those class-token soft flags are relevant to my audit — the disposition said F2b is clean, but F0/F1 have unknown tokens. Note: `AF-WCC-VAC-GEN-SET` and `AF-SCC-C0-CH-VAC` are variant tokens (SET and CH variants). The audit_evidence flags them as unknown class tokens. This is exactly the CF-5 issue and worth adding as a finding — but let me check: are these legitimate variant references (parent_class+variant_id) or genuine leaks? The F2b pattern we disposed used variant_id. F0 says `AF-WCC-VAC-GEN-SET` — this is a composite token that looks like a class id, not a variant_id.
+
+I should record this: the checker `class_separation.findings_for_text` returned 0 for F2b, but `audit_evidence` finds unknown tokens in F0/F1. Let me quickly test class_separation on F0/F1 to see if it catches them — that's the checker-blind-spot question.
+
+Let me run class_separation findings on F0 and F1 to compare with audit_evidence. This is a valuable calibration datapoint: does the class-separation checker miss tokens that audit_evidence catches?
+
+Let me do that and then run checkpoint. This is a genuine additional audit finding, and it strengthens the F2b disposition caveat.
+
+Let me run.
+dsh: reasoning:
+Important calibration result:
+
+- `class_separation.findings_for_text` DOES catch the unknown tokens in F0 (2) and F1 (1) — matching audit_evidence exactly.
+- F2b: 0 findings in both. So the F2b disposition is **corroborated by two independent checkers** (class_separation and audit_evidence).
+
+This strengthens the F2b disposal: two independent checkers agree. And it disposes the "checker blind spot" concern for F2b specifically, since audit_evidence (a different implementation, controller-side) also returns nothing for F2b.
+
+But now there's a NEW finding: F0 and F1 carry unknown class tokens (AF-WCC-VAC-GEN-SET, AF-SCC-C0-CH-VAC). These are variant labels written as class-id-shaped tokens. F0's `class_id` field declares 4 valid ids, but the artifact text contains these composite tokens. Per CF-5 (unknown class tokens) this is a recurrence in F0 and F1, not just L0. This is worth adding as a blocker/finding.
+
+However — I already emitted events. I can add an addendum. Given "one lifecycle", an addendum event is fine (the prior lifecycle did the same). Let me add:
+- `review` or `blocker` for F0/F1 unknown class tokens (CF-5 recurrence at the measured hashes).
+- Update the F2b disposition to note the two-checker corroboration.
+
+Best: emit one `blocker` event `audit-blocker-20260912T0014-cf5` covering F0/F1 unknown class tokens, plus one `status` addendum. And update the coverage JSON artifact? Changing the JSON changes its hash, invalidating the artifact event I already emitted. Hmm.
+
+Better approach: leave `reviews/A1-rebind-coverage.json` as-is (it's hash-registered in the event), and add a small addendum artifact `reviews/A1-rebind-coverage-addendum.json` with the two-checker calibration. Then emit artifact + blocker events for it. That keeps hashes coherent.
+
+Actually — simpler and cleaner: the addendum contains the checker cross-calibration. Let me write it with the F0/F1 token findings and the F2b two-checker corroboration. Then emit 1 artifact + 1 blocker event, ingest.
+
+Time: 00:14. I have time. Let me do it — it's genuinely valuable and closes the loop on "dispose by checker calibration or documented blind spot".
+
+Let me write the addendum JSON.
+
+Note the measured hashes at 00:13:10: F0 565a6e505188, F1 b65fcc0f0118, F2b a8d899d2941f. But files may have moved again. My addendum should re-measure at its own instant to be honest. Let me write a tiny script that measures F0/F1/F2b hashes now, runs both checkers, and writes the addendum. Then the hashes are honest for the addendum instant.
+
+Let me do that.
+dsh: reasoning:
+The addendum shows:
+- F0 `565a6e505188` (unchanged — still the measured hash), tokens `AF-SCC-C0-CH-VAC-GEN` and `AF-WCC-VAC-GEN-SET`, 2 findings.
+- F1 `b65fcc0f0118` (unchanged), token `AF-WCC-VAC-GEN-SET`, 1 finding.
+- F2b `a8d899d2941f` (unchanged), 0 tokens, 0 findings.
+
+All three hashes are still at the values from my 00:13:10 measurement — so the freeze is holding for now (good news worth reporting).
+
+Now emit 2 more events (artifact addendum + blocker CF-5) and ingest. Then run checkpoint.
+
+Let me emit them.
+dsh: reasoning:
+Both accepted. Now run the checkpoint. `python3 research_map/checkpoint.py`.
+
+Let me run it and then verify.
+dsh: reasoning:
+Checkpoint `ckpt-20260912-001429` created at 00:14:29. All gates pending (correct — no self-pass). 
+
+Note: the md hash e879406a3ba4 differs from what I wrote in the events? Let me check: earlier I emitted the md artifact event with `sha256=sha(MD)` computed at emit time — that was after my edits, so should be e879406a. Good. And the coverage JSON 96b5ca47 matches what I registered. Good.
+
+Wait — the md I edited after the final run? Timeline:
+1. Ran script → COV hash 96b5ca47 at 00:13:10
+2. Edited md header hashes + clock text (before emitting events)
+3. Emitted events at ~00:13:30 with sha(MD) = e879406a (post-edit)
+4. No further md edits. Good.
+
+Everything coherent.
+
+Now, one final verification pass: re-run my matrix to double-check nothing regressed and the artifacts are stable, and verify my events are in events.jsonl. Actually I already verified 10 accepted; plus 2 more. Let me do a final consolidated verification:
+- my 12 events in events.jsonl
+- validate_map VALID (already)
+- artifact_hashes.json includes my new artifacts? Let me check whether checkpoint.py registered them.
+
+Let me check runtime/state/artifact_hashes.json for my artifacts.
+
+Also I should double check the "0 hard / 4 soft" evidence audit result and that my F2b review file is picked up.
+
+Let me do a final verification batch, then write the final report.
+
+Also: the task says "emit structured events and checkpoints, report blockers. One independent lifecycle then exit." I've done all. Let me do a final check and then report.
+
+One more consideration: should I emit a final status event noting the checkpoint id? The prior lifecycle did an addendum. I'll fold it into my final answer rather than churning more events. Actually, a status event pinning the checkpoint is useful evidence for the ledger. But I already emitted a lifecycle status. Adding one more small status event is cheap and completes the "checkpoints" requirement traceably. Let me emit one final status event with checkpoint id + verification results (VALID, 0 hard/4 soft). That's the closure event.
+
+Let me do that + ingest, then final verification and report.
+dsh: reasoning:
+Closure event accepted. Now final verification and report.
+
+Let me do one consolidated final check:
+1. My 13 events in events.jsonl
+2. validate_map VALID (already done, but let me re-run quickly since new events ingested — a new event could break the DAG; let me re-run validate_map to be safe)
+3. Confirm no gate moved to pass
+4. Confirm numerics_lock still locked, N1 untouched
+
+Let me run this final verification.
+dsh: reasoning:
+All verified:
+- validate_map: VALID
+- All 24 outbox events (including my 13 from this lifecycle) accepted into the stream
+- All gates pending (no self-pass)
+- numerics_lock: locked, N1 queued, no spherical_solver dir
+- map updated_at 00:12:11
+
+Wait — my outbox has 24 events total including the prior lifecycle's. The prior lifecycle emitted 11; I emitted 13. 11+13=24. Good, all accepted.
+
+Now let me update the todo list to complete and write the final report.
+
+Let me also verify the final instant state of the canonical hashes one more time to make sure my reported hashes are still accurate at exit (they may have moved). Let me do a last quick measurement to report honestly whether the freeze held.
+
+Let me check.
+dsh: reasoning:
+All six hashes are unchanged from my 00:13:10 measurement through 00:14:53. The freeze held for ~4.5 minutes — good news, and it means my verdicts/matrix are still current.
+
+Let me finalize the todos and write the report.

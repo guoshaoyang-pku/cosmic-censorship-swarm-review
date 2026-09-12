@@ -1,0 +1,766 @@
+dsh: reasoning:
+I need to understand the context. I'm worker=04, a bounded execution worker. I need to read handoff/map and comms, take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit.
+
+Let me explore the workspace first.
+dsh: reasoning:
+No `handoff/` directory found by glob at workspace root. Let me look for handoff directories. Maybe in `workdir/` or `tmp/`. There's a suspicious `${I}` directory. Let me search.
+dsh: reasoning:
+Found `/data3/guoshaoyang/workdir/ai4math-swarm/comms`. Let me look at the ai4math-swarm structure, especially handoff and comms.
+dsh: reasoning:
+This is an ai4math-swarm setup. I'm worker=04. Let me read the HANDOFF.md, README.md, PROTOCOL.md, and the comms inbox/outbox. Also check schemas and runtime directories. Let me read in parallel.
+dsh: reasoning:
+Now I need to understand the task. I'm worker=04, likely agent id `deepseek-flash-04`. I need to:
+1. Read handoff/map and comms.
+2. Take one class-bound task (a task bound to a class_id in the research map).
+3. Emit valid JSON event with IDs, evidence, hash, falsifier.
+4. Checkpoint.
+5. Exit.
+
+Let me look at the research_map, comms/inbox for deepseek-flash-04, outbox, runtime, schemas.
+dsh: reasoning:
+I have my assignment card. It's from astra at 23:19, but there was also a followup at 23:33 from astra-lead-formulation. My task:
+
+- node_id: F1, class_id: AF-WCC-VAC-GEN
+- artifact: `schemas/f1_falsifier_tests.jsonl`
+- task: Attack worker 03's schema. Try to construct a spacetime where WCC-hypothesis fields are ambiguous.
+- acceptance: >=10 ambiguity tests: spacetime description + does it satisfy F1? + which field decides.
+- gate: G-FORM
+- falsifier: A test that no schema field can decide.
+- stop_rule: Submit with sha256.
+
+Followup: F1 frozen at revision 3, sha256 17873b9d09fe..., pinned in artifacts/formulation/FROZEN.json; cite the sha, not the revision label. Re-run suite against that hash and report deltas only.
+
+Interesting — the outbox already has a `deepseek-flash-04.jsonl` of 42KB, so some previous worker-04 instance already did work. I need to check what's already there, since I'm the current worker=04 and should continue/emit deltas. Let me look at my outbox file tail and check the state. Also need to see `runtime/control` and `research_map/ASTRA_HANDOFF.md`, FROZEN.json, the f1_falsifier_tests.jsonl (which already exists at schemas/, 105KB!), and the schema.
+
+Note the schemas directory contains `f1_falsifier_tests.jsonl` (105KB modified 00:07) — likely created by a prior worker with same assignment. Also `taxonomy_cases.jsonl`. So the artifact may already exist. The instruction says "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit."
+
+My job: verify/validate the existing artifact against the frozen schema hash, emit deltas, checkpoint. Let me look at the situation carefully.
+
+Let me read:
+1. `research_map/ASTRA_HANDOFF.md`
+2. `artifacts/formulation/FROZEN.json`
+3. tail of my outbox `comms/outbox/deepseek-flash-04.jsonl`
+4. `schemas/f1_falsifier_tests.jsonl` head
+5. research_map.json for F1 node and class AF-WCC-VAC-GEN
+
+Let me be efficient. First the handoff and FROZEN.
+dsh: reasoning:
+Now I see. The FROZEN.json is at revision 19 with hashes for `artifacts/formulation/schemas/af_wcc_vacuum.yaml` (sha f962c117...). But note the "canonical path policy" says canonical path is `schemas/*.yaml` (workspace root `schemas/`), and `artifacts/formulation/**` is the authoring tree. The canonical `schemas/af_wcc_vacuum.yaml` — wait, actually looking at the `schemas/` directory listing: it contains `af_scc_c0_vacuum.yaml`, `af_scc_c2_vacuum.yaml`, `af_scc_regularities.yaml`, `af_wcc_vacuum.yaml`, `f1_falsifier_tests.jsonl`, `taxonomy_cases.jsonl`. Hmm wait no, that listing was of `/data3/guoshaoyang/workdir/ai4math-swarm/schemas` — it showed `af_scc_c0_vacuum.yaml`, etc. Wait, let me re-read.
+
+Earlier: `/data3/guoshaoyang/workdir/ai4math-swarm/schemas:` showed:
+- af_scc_c0_vacuum.yaml (30710 bytes, 23:42)
+- af_scc_c2_vacuum.yaml (30122, 23:38)
+- af_scc_regularities.yaml (5482)
+- af_wcc_vacuum.yaml (35173, 23:28)
+- f1_falsifier_tests.jsonl (105433, 00:07)
+- taxonomy_cases.jsonl (58595, 00:08)
+
+And sha256 files. So the canonical schemas live at repo-root `schemas/`. The authoring tree is `artifacts/formulation/schemas/` with different sizes (30904 vs 35173 canonical). Hmm, interesting: canonical `schemas/af_wcc_vacuum.yaml` is 35173 bytes, authoring is 30904. The FROZEN.json hash f962c117... is for the authoring copy. The policy says canonical is authoritative and authoring must be published byte-identically before review verdicts bind. So there is a divergence.
+
+Now, what has worker-04 already done? The outbox `deepseek-flash-04.jsonl` is 42KB. There's an ADJUDICATION_flash04_ambiguity.md — that's my earlier work (worker-04 = flash-04). My assignment: attack worker 03's schema, produce >=10 ambiguity tests into `schemas/f1_falsifier_tests.jsonl`. That file already exists (105KB, modified 00:07). So a previous instance of this worker session already did the work? The outbox has 42KB of events. Let me examine the current state: hashes, acceptance, whether my artifact is registered/aligned with the frozen schema.
+
+My task now: "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit." The task is assigned and largely executed. I need to:
+1. Verify the frozen artifact hash matches my artifact's target schema.
+2. Re-run my suite against the frozen hash and report deltas only (per lead-formulation followup).
+3. Emit the artifact event with path + sha256 + validation_status + evidence_refs as path#sha256-prefix, with class_id binding, falsifier.
+4. Checkpoint (run `python3 research_map/checkpoint.py`? That's a controller tool — maybe. Or write to my own checkpoints. The instruction says "checkpoint, then exit" — likely run the checkpoint command or emit a status event).
+5. Exit.
+
+Let me first read the tail of my outbox to see what previous worker-04 did, and check the schemas/f1_falsifier_tests.jsonl. Also check the class separation script and the runtime/control.
+
+Let me look at the last ~40 lines of my outbox.
+dsh: reasoning:
+The prior worker-04 session did a lot of work already, including a rebind to f962c117 (which was FROZEN rev19's pin), and then noted post-run drift: canonical F1 file changed on disk (internal revision 9, sha b65fcc0f, mtime 00:08:37) after the rebind run, while FROZEN.json rev19 still pins f962c117.
+
+But wait: `schemas/af_wcc_vacuum.yaml` currently hashes 7a3e1f93... which is the r3 hash! That's odd. The canonical `schemas/af_wcc_vacuum.yaml` currently at 7a3e1f93 (the old rev3 worker draft!), while FROZEN rev19 pins `artifacts/formulation/schemas/af_wcc_vacuum.yaml` at f962c117. Hmm. The drift note said the canonical file changed to internal revision 9 sha b65fcc0f at mtime 00:08:37. But now sha is 7a3e1f93, so it changed again after that! Let me check mtimes and all current hashes.
+
+Also note: FROZEN.json in the read shows revision 19 with hash for the authoring tree file. But the last drift event's evidence says FROZEN.json#sha256:da6a0ee9f2f6a5f6 — FROZEN.json's own content hash. The current FROZEN.json may have changed since (file mtime 00:04, size 14256 — matches the read). Let me compute current hashes of everything relevant:
+
+- schemas/af_wcc_vacuum.yaml = 7a3e1f93 (mtime 23:28 based on listing?) Wait earlier listing: `af_wcc_vacuum.yaml` 35173 bytes Sep 11 23:28. Hmm, but the drift note said mtime 00:08:37 for internal rev9 b65fcc0f. But now the file at schemas/af_wcc_vacuum.yaml is 35173 bytes with mtime 23:28 and sha 7a3e1f93? That contradicts... unless the listing I did was at a moment when the file had been restored to old content. Actually wait — I read the schemas dir listing earlier at the very start (the ls -la output showing af_wcc_vacuum.yaml 35173 Sep 11 23:28). Let me re-check now: files may be changing under me (the swarm is live — other workers are running! runtime is active with supervisor processes).
+
+Hmm, important: this is a live multi-agent workspace where other worker sessions are concurrently running and writing. I'm worker=04, presumably one of the deepseek-flash workers. My job is bounded: take one class-bound task, emit valid JSON with IDs/evidence/hash/falsifier, checkpoint, exit.
+
+Given prior worker-04 work is complete through 00:09:10, what should the current worker=04 instance do? The handoff at top of my task says: "Read handoff/map and comms. Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit." The previous instance already did the task through the rebind and drift note. But the current state may have moved: FROZEN could be bumped again, the canonical file may be at a new hash. The right bounded action: re-verify the current binding, re-run the delta if the frozen hash moved, emit the artifact/claim/status events with fresh hashes, checkpoint, exit.
+
+Let me check current state precisely:
+1. Current FROZEN.json content hash and revision (need to re-read; it may have been bumped since).
+2. Current sha of artifacts/formulation/schemas/af_wcc_vacuum.yaml (the pinned file) vs schemas/af_wcc_vacuum.yaml (canonical).
+3. The map's F1 node state and gates.
+4. runtime/state/artifact_hashes.json.
+5. Whether my rebind script `artifacts/flash-04/f1_ambiguity/rebind_f962c117.py` exists and can be re-run with a new sha.
+
+The canonical path policy says canonical `schemas/*.yaml` is authoritative; authoring tree must be published byte-identically before review verdicts bind. There's an open assignment "astra-life01-publish-frozen" (lead-formulation) issued 00:09 deadline 01:30 to publish. So the authoring file will be published to schemas/. My suite binds to the authoring frozen file f962c117 per FROZEN rev19.
+
+Let me gather current facts quickly. I'll also look at my artifacts/flash-04/f1_ambiguity directory.
+dsh: reasoning:
+Interesting! The current authoring tree F1 schema is now b65fcc0f (33012 bytes, mtime 00:08:37) — this is the "internal revision 9" the previous worker noted. FROZEN.json rev19 (content hash da6a0ee9, mtime 00:04:48) still pins f962c117 (30904 bytes). So the frozen pin is stale relative to the authoring tree.
+
+The canonical schemas/af_wcc_vacuum.yaml is at 7a3e1f93 (35173 bytes, mtime 23:28) — the old r3 worker draft, way behind. The canonical-path policy says canonical is authoritative and the authoring tree must be published byte-identically before review verdicts bind. So the actual authoritative artifact right now is... messy. The lead-formulation has assignment astra-life01-publish-frozen to publish the frozen set to canonical paths.
+
+My bounded task: bind ambiguity probes to a hash. Which hash? The latest FROZEN pin is f962c117 (rev19). The previous worker already ran the rebind and documented the drift. The FROZEN manifest has since not changed (mtime 00:04:48, still rev19). The authoring file moved to b65fcc0f at 00:08:37 — that's after FROZEN rev19 was written, i.e., an in-flight edit not yet frozen.
+
+So what's left for me to do? The prior worker-04 session ended with the drift note at 00:09:10. My current job per the top-level instruction: "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit."
+
+I think the cleanest bounded execution: re-run the rebind suite against the current live-authoring hash b65fcc0f (the newest content) to report deltas vs the frozen pin f962c117, and then emit:
+- an artifact event for the re-bound suite (with new sha256, path, validation_status),
+- a claim (conclusion_type formal_model, class_id, statement, assumptions, falsifier, evidence_refs),
+- a status event with next_falsifier,
+- maybe a blocker if the pin/drift is unresolved,
+- checkpoint (run checkpoint.py or write a checkpoints file + status).
+
+But wait: the instruction says "Take one class-bound task". The assignment is F1/AF-WCC-VAC-GEN. The task's acceptance is ">=10 ambiguity tests: spacetime description + does it satisfy F1? + which field decides." The artifact `schemas/f1_falsifier_tests.jsonl` has 22 tests. Delivered already. The follow-up asked: "Re-run your suite against that hash and report deltas only."
+
+The previous instance's rebind already did that against f962c117. But the current live state has a newer hash b65fcc0f that is unfrozen. Options:
+(a) Re-run rebind against b65fcc0f (live authoring head), report deltas f962c117 -> b65fcc0f, emit as a drift/delta artifact, and keep suite bound to the frozen f962c117 (per protocol: reviewers bind to sha in FROZEN).
+(b) Just re-verify frozen pin f962c117 unchanged, re-run suite, and emit a no-delta confirmation + checkpoint.
+
+Hmm. The important protocol rule: "reviewers bind to the sha256 below, never to the path alone". The frozen binding f962c117 is what counts. My suite already binds to it. However, the working suite file `schemas/f1_falsifier_tests.jsonl` currently has sha 6e8e7f44 bound to f962c117, and it includes a note. The drift note event was already emitted at 00:09:10.
+
+But there's a risk that FROZEN gets bumped again soon (lead-formulation is actively working on publish-frozen assignment with deadline 01:30). Since I'm a bounded worker, I should do the most useful concrete action now: re-run the rebind against the current live authoring head b65fcc0f to produce a *pre-computed delta* for the next freeze, and emit that as a delta report artifact + claim + status. That directly addresses the "post-run drift" note's required action ("script re-run (NEW_SHA update) after the next FROZEN bump") — better, ahead of the bump.
+
+Actually, let me think about what the strongest bounded deliverable is given "emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit":
+
+1. Verify the current live head hash b65fcc0f, confirm it's not in FROZEN (rev19 pins f962c117).
+2. Run the existing rebind script with NEW_SHA=b65fcc0f (need to check how it parameterizes; it probably has a constant). It's named `rebind_f962c117.py`. Let me check its interface — maybe it accepts --schema/--sha args. If it has a hard-coded hash, I can copy/parameterize it or invoke with env var. I must not modify frozen canonical artifacts; writing a new script under my own dir is fine.
+3. Produce delta report f962c117 -> b65fcc0f: counts of probes resolving, changed deciding fields, new blocks.
+4. Write suite version for b65fcc0f? Careful: the protocol says reviewers bind to frozen sha. I should keep the *canonical* suite bound to f962c117 and put the b65fcc0f-bound variant in my own artifacts dir (not overwrite schemas/f1_falsifier_tests.jsonl with an unfrozen binding, which would break the frozen binding). Hmm — but the previous pattern wrote the suite to canonical `schemas/f1_falsifier_tests.jsonl` for the frozen sha. For an unfrozen sha, writing a second suite file like `schemas/f1_falsifier_tests.b65fcc0f.jsonl` might be acceptable, but "solitary global state" and canonical policy... Safer: keep the canonical suite as is (bound to frozen f962c117), and store the b65fcc0f pre-run in `artifacts/flash-04/f1_ambiguity/`.
+
+Actually, wait. Let me reconsider: maybe the truly correct bounded task right now is exactly what the assignment and follow-up demand, and the previous instance already delivered. The current instance might then simply need to (1) re-verify hashes evidence, (2) emit a compact status/artifact/claim event summarizing the current binding + deliverable, (3) checkpoint, (4) exit. Emitting duplicate work would create churn and possibly pollute the events stream with redundant claims. But the runtime spawned me (worker=04) fresh; the instruction explicitly wants me to take a task and emit JSON. If I do nothing new, that's not useful. A re-run against the current head with a fresh delta report is genuinely new information (the head moved to b65fcc0f after the last run) and directly serves the next freeze.
+
+Let me check:
+- Does `rebind_f962c117.py` exist and what's its interface?
+- What does the current canonical suite contain (22 rows, binding f962c117)?
+- Is there a newer FROZEN.json arriving? Check runtime/control and supervisor.
+- Check `runtime/state/artifact_hashes.json` for F1 entries.
+- Check whether an event ingest/apply cycle would happen (comms.py ingest is controller-only; I just write to outbox).
+
+Also "checkpoint" likely = `python3 research_map/checkpoint.py` which is the controller's tool. Running it as a worker might be wrong (it may write runtime/state/current_checkpoint.json). But the instruction says "checkpoint, then exit" — in this swarm, workers are told to checkpoint their progress; maybe I should run the checkpoint tool since it's the documented mechanism. Let me read checkpoint.py first to see what it does and whether it's safe/idempotent. Also check runtime/control for busy locks. There might be a lock file that prevents concurrent checkpointing.
+
+Let me look.
+dsh: reasoning:
+The rebind script has NEW_SHA hardcoded and is idempotent-ish. It rewrites `schemas/f1_falsifier_tests.jsonl` (canonical) and fails if on-disk hash != NEW_SHA. To rebind to b65fcc0f, I'd need a parameterized version. I can create `rebind_live.py` in my dir that imports/reuses or does a small probe run. Better: write a compact script that:
+- loads current authoring schema b65fcc0f,
+- loads the canonical suite (22 probes bound to f962c117),
+- re-evaluates each probe's deciding-field presence/content against b65fcc0f,
+- reports deltas (unchanged/changed/absent),
+- writes a delta report to my artifacts dir,
+- optionally snapshots the b65fcc0f schema.
+
+But careful — I must not overwrite the canonical suite with an unfrozen binding. Keep the canonical suite bound to the FROZEN pin f962c117. The b65fcc0f analysis goes to `artifacts/flash-04/f1_ambiguity/rebind_<newsha>_prefreeze_report.json` plus a suite variant in my dir.
+
+Wait, actually — is b65fcc0f likely to be the next frozen head? The lead-formulation is publishing; FROZEN rev19 pins f962c117 (30904 bytes) but the on-disk authoring file is 33012 bytes b65fcc0f. The lead may bump FROZEN to b65fcc0f soon. So pre-computing the delta is genuinely valuable and exactly "report deltas only".
+
+Let me check the current F1 node info in the map. Earlier, `nodes` key was empty — the map uses `claims`, `frozen_artifacts`, `assignments`, etc. Let me find F1 references in the map: `frozen_artifacts` and `assignments` for F1, plus `controller_gate_audit` for G-FORM. Also check the canonical suite's structure to understand probe evaluation.
+
+Let me look at the suite rows (keys), and the script's probe functions to understand how to re-evaluate. The rebind script is 33KB; it has probe definitions. Let me inspect its main and probe functions.
+
+Also: time budget. I'm a bounded worker; aim for efficient, high-value, ~10-20 minutes. Plan:
+
+1. Snapshot current authoring schema b65fcc0f → `artifacts/flash-04/f1_ambiguity/schema_snapshots/af_wcc_vacuum.b65fcc0f.yaml`.
+2. Write a compact `rebind_prefreeze.py` that:
+   - verifies b65fcc0f hash,
+   - loads the 22-row suite,
+   - for each row, checks `deciding_field` presence in the new schema and whether the content changed vs the f962c117 snapshot,
+   - classifies delta: unchanged / content_changed / absent / new_block_available.
+   - writes `artifacts/flash-04/f1_ambiguity/rebind_b65fcc0f_prefreeze_report.json` + `schemas/f1_falsifier_tests.b65fcc0f.prefreeze.jsonl`? Hmm, canonical dir writes of non-frozen variant could confuse. Put suite variant in my artifacts dir: `artifacts/flash-04/f1_ambiguity/versions/f1_falsifier_tests.b65fcc0f.prefreeze.jsonl`.
+3. Emit JSON events to outbox: artifact (delta report + prefreeze suite), claim (formal_model) with IDs/evidence hash/falsifier, status with next_falsifier, and blocker if the freeze/publish drift persists.
+4. Checkpoint: run `python3 research_map/checkpoint.py --label worker04-f1-prefreeze`? But checkpoint ingests comms and validates the map — the map.lock exists and a formulation checkpoint loop is running. Running the controller checkpoint tool as a worker might collide with the lock. Let me check if checkpoint.py uses a lock. It says "Writes (never mutates research_map.json)". `comms.ingest` might take the lock. Since `map.lock` exists right now (0 bytes, 00:09), a concurrent checkpoint could conflict. Better approach: the worker-level "checkpoint" convention in this swarm seems to be writing a worker checkpoint file (like w06_checkpoint_*.json, w13_checkpoint_*.json under runtime/state/) — those were written by workers, and worker-04's dir has CHECKPOINTS.md. So I'll write my own checkpoint record: `runtime/state/worker-04_checkpoint_f1_prefreeze.json` (or follow existing naming: w04_checkpoint_*.json?). Let me check what worker-04 did before: CHECKPOINTS.md in my artifact dir. Let me read it.
+
+Let me look at those to match convention. Also check whether checkpoint.py safely skips when lock present. Actually the "checkpoint" in my instruction likely means: checkpoint my work (write the state so a fresh agent can resume) — the CHECKPOINTS.md pattern. I'll do both: write a checkpoint record under my artifacts dir and runtime/state (append to runtime/state/w04_checkpoints.jsonl maybe), and optionally run the global checkpoint if the lock is free... Safer not to run controller tooling; the controller runs it every 15 min anyway. I'll write a worker checkpoint.
+
+Let me first read CHECKPOINTS.md and inspect suite structure + rebind script probe logic.
+dsh: reasoning:
+Now I understand the suite. The binding is f962c117 (FROZEN rev19), superseding f512af5f. The canonical suite file is bound to f962c117.
+
+The current live authoring file is b65fcc0f (mtime 00:08:37, internal revision 9). FROZEN rev19 pins f962c117. The next freeze bump will likely pin b65fcc0f.
+
+My bounded task: re-run the 22 probes against b65fcc0f (pre-freeze) and report deltas only. Then emit JSON events + checkpoint.
+
+To re-run probes, I need the probe evaluation logic. The rebind script has it. Rather than rewriting logic (error-prone), I can create a derived script from `rebind_f962c117.py` with NEW_SHA/PRIOR_SHA/REPORT_PATH/SUITE_PATH changed and the FROZEN check adapted (pre-freeze mode: FROZEN may not list the new hash yet). But the script asserts the FROZEN entry equals NEW_SHA. For prefreeze, I need to relax that to: FROZEN pins PRIOR_SHA (f962c117) while disk is NEW (b65fcc0f), and record that as the drift context.
+
+Cleanest: copy the script to `rebind_live_prefreeze.py` and patch:
+- NEW_SHA = b65fcc0f...
+- PRIOR_SHA = f962c117...
+- SUITE_PATH = artifacts/flash-04/f1_ambiguity/versions/f1_falsifier_tests.b65fcc0f.prefreeze.jsonl (do NOT overwrite canonical suite, since the frozen binding must stay f962c117)
+- REPORT_PATH = ...rebind_b65fcc0f_prefreeze_report.json
+- FROZEN check: verify on-disk schema == NEW_SHA; verify FROZEN entry == PRIOR_SHA (i.e., new head not yet frozen) and record mode.
+- Snapshot new schema.
+- PRIOR_SNAPSHOT should point at the snapshot of f962c117 — does it exist? The script had PRIOR_SNAPSHOT = f512af5f snapshot. For f962c117, is there a snapshot? Let me check schema_snapshots dir. The previous rebind wrote suite but the snapshot for f962c117 may not exist. Let me check. If missing, I can reconstruct f962c117 from... it's not on disk anymore (authoring file is b65fcc0f; canonical is 7a3e1f93). Hmm. But the report only needs deltas vs the suite's binding (f962c117). The per-field content comparisons against f962c117 can use the f962c117 snapshot if present; otherwise fall back to suite rows' recorded probe_results (they contain evidence of what resolved). Let me check snapshots dir.
+
+Also I need to see how the script's probe functions work to know whether running it requires the prior snapshot (it might fail without it). Simplest approach may be to extract just the probe evaluation from the script.
+
+Let me inspect the script more thoroughly: the probe definitions and main(). It's 33KB, ~550 lines. Let me read key sections.
+dsh: reasoning:
+The f962c117 snapshot is missing. Prior snapshots: 7a3e1f93, f512af5f, f55722a7. The rebind script didn't snapshot f962c117. Hmm, but for the delta run at 00:07 the script read f962c117 from disk (the authoring file) and compared against the f512af5f snapshot. Fine.
+
+For my pre-freeze run against b65fcc0f, the prior is f962c117 which is no longer on disk. But the suite rows contain the per-test `probe_results` and `delta_vs_f512af5f` from the f962c117 run. Since the b65fcc0f run needs to compare deciding-field content changes f962c117→b65fcc0f, I need the f962c117 content. Options:
+- Check git: the repo has .git — maybe f962c117 content is committed or in git objects. `git log`/`git show`. Let me check if the repo tracks artifacts.
+- Check runtime/state artifact hashes and checkpoints (checkpoint snapshots may embed hashes only).
+- Reconstruct from FROZEN? No.
+
+Wait — maybe the authoring file moved from f962c117 to b65fcc0f by a *later* edit by lead-formulation (internal rev 9). The delta f962c117→b65fcc0f might be documented in some changelog/revision note inside the YAML (revision history). The YAML likely has `revision_history` or `change_log`. Let me inspect the top of current authoring schema for revision info.
+
+Actually — since the previous worker ran at 00:07-00:09 and the current time is ~00:10, b65fcc0f appeared at 00:08:37 during their run. So the delta is tiny/fresh. Let me diff the suite's f962c117-based content understanding versus the live file directly: for each probe, evaluate the deciding field against b65fcc0f and compare with what the suite recorded (`probe_results` holds the f962c117 result). That works without the f962c117 file itself: the suite row says what resolved at f962c117, and re-running the same probe predicate on b65fcc0f tells me if it still resolves/changed.
+
+So I can write a compact re-probe script that reuses `probe()` and `carried_probes()` from the rebind module (import it) but points at the live file b65fcc0f. But `carried_probes` returns specs; `new_tests` builds new tests. I can import the module (it has module-level constants and functions, and `main()` guarded by `if __name__ == "__main__"` presumably). Let me check the bottom of the script. If importable, I can:
+
+```python
+import importlib.util
+spec = importlib.util.spec_from_file_location("rb", ".../rebind_f962c117.py")
+mod = ...; spec.loader.exec_module(mod)
+doc = yaml.safe_load(open(authoring))
+for t in mod.carried_probes(...):
+    res = mod.probe(doc, t['probe'])  # need to see structure
+```
+
+Let me read the probe() and carried_probes() and new_tests() code, plus main() to see the structure, then write the prefreeze script. Let me read lines 60-260 and 425-560.
+dsh: reasoning:
+Good. The script is importable and has the probe definitions. Now let me see main() to understand how the suite rows are assembled and what checks happen; lines 425-602.
+dsh: reasoning:
+I now understand fully. The prior run bound the suite to f962c117 and wrote the canonical suite with sha 6e8e7f44 (22 rows). Note that the script also required `FROZEN.json` entry == NEW_SHA.
+
+Current state: authoring file is b65fcc0f (33012 bytes, rev 9, mtime 00:08:37). FROZEN rev19 still pins f962c117. So a pre-freeze rebind against b65fcc0f is the right bounded delta work.
+
+Plan for the prefreeze rebind script (`artifacts/flash-04/f1_ambiguity/rebind_prefreeze_b65fcc0f.py`):
+- Import `rebind_f962c117` as a module to reuse `probe`, `carried_probes`, `new_tests`? `new_tests` hardcodes binding_sha256 = f962c117 via module constant. I can monkeypatch module constants (`mod.NEW_SHA = b65fcc0f`, etc.) before calling `new_tests(anchors)` — new_tests reads NEW_SHA/PRIOR_SHA globals at call time. Also `probe` is pure. `carried_probes` is pure.
+- Alternatively, write my own compact re-probe of the existing 22 suite rows using `mod.probe(schema, spec)`. The existing suite rows do NOT contain their probe specs (probe_results contain path/kind/expected/role/pass). Wait — `probe_results` has `path`, `kind`, `expected`, `role`, `pass`, `observed_excerpt`. That's enough to reconstruct a spec: kind + expected value... but not always: `expected` for non-needle kinds is the kind string; for `contains`, expected is the needle. `contains_any` expected is a list — reconstructible. So I can reconstruct probes from probe_results: path, kind, expected. For `path_exists`/`nonnull`/`is_none`/`is_true` expected is kind string — fine. For "equals" expected is the value. For "contains" value. For "length_ge" needle int. Good. But `carried_probes()` gives the authoritative specs for tests 1-17; new tests 18-22 have probe_results reconstructible too. Simpler and more robust: use `carried_probes` for 01-17 (authoritative) and reconstruct from probe_results for 18-22. Or just reconstruct all from probe_results and sanity-check against the recorded `pass` on the f962c117 run... but we don't have the f962c117 file. Hmm, but the recorded pass values are from f962c117; my re-probe on b65fcc0f gives pass/fail now. Delta = change in pass status (per probe) plus content changes in deciding fields.
+
+For content-change detection on deciding fields (f962c117 -> b65fcc0f), I don't have the f962c117 file. But `observed_excerpt` in probe_results holds the f962c117 observed value excerpt (280 chars) for the deciding path (when it was the probe path). For row 0, `non_vacuity.condition` probe observed excerpt. For rows where the deciding field wasn't directly probed... most have a probe on the deciding field. Let me check: every carried test's first probe is typically on the deciding field, and new tests too. I can compare current `flat(value)[:280]` against the recorded excerpt: equal → unchanged, different → changed (with the caveat that excerpt truncation can mask changes beyond 280 chars). That's a legitimate, documented limitation: excerpt-level comparison.
+
+Even better: reconstruct an f962c117 draft by applying reverse of... no. Excerpt comparison is fine, plus I can additionally detect full-value change by comparing what the current live file has vs content described in the delta notes. But the honest approach: report "excerpt_unchanged / excerpt_changed / absent".
+
+Actually, maybe I can find f962c117 content somewhere: check the git repo. `git log --oneline -5`, `git ls-files | grep wcc`. If the file is tracked and committed at f962c117, `git cat-file` could give it. Let me check quickly. Also check checkpoints: `runtime/state/checkpoints/ckpt-*.json` might embed file contents? Unlikely (they embed hashes).
+
+Let me check git and also whether any copy of f962c117 exists on disk (grep for the hash in files, or find files with size 30904).
+
+Then write the script. Time to be decisive.
+
+Also the "map.lock" file exists — that's the controller's lock; I should avoid writing to research_map/. I won't.
+
+Emit targets:
+- Outbox: `comms/outbox/deepseek-flash-04.jsonl` — append lines.
+- Event schema: let me check `research_map/events.schema.json` for required fields and allowed event types. Also check `comms.py` ingest to ensure my events would be accepted (it may validate). Let me read events.schema.json and part of comms.py validation.
+
+Let me do these checks now.
+dsh: reasoning:
+Good news:
+1. `./artifacts/worker-16/heldout2/bases/af_wcc_vacuum.yaml` and `./artifacts/flash-11/f1_aux_class_binding/corpus/canonical/af_wcc_vacuum.yaml` are 30904 bytes — likely the f962c117 content! Let me verify their sha256.
+2. The event schema: artifact requires node_id, artifact_type, path, sha256, validation_status. claim requires class_id, statement, conclusion_type, assumptions, falsifier, evidence_refs. Note: the global events.schema.json only covers direction_update/claim/artifact/review/resource_request — status/blocker aren't in the oneOf, but many prior outbox events include status/blocker and get ingested (the map has status handling). The schema at research_map/events.schema.json seems to be a subset used by validate_events maybe. comms.py line 126 `t = doc.get("event_type")` — let me check what it validates for status/blocker. Prior status/blocker events were accepted (in the map/events.jsonl), so they're fine.
+
+Let me verify the 30904-byte copies' hashes. If one is f962c117, I can do an exact full-content diff f962c117 -> b65fcc0f. Also, my prior rebind used the on-disk file at that time; the copies may be inputs from worker-16/flash-11 corpora — same content.
+
+Let me check.
+dsh: reasoning:
+Excellent. Both copies are exactly f962c117 — so I have the prior binding content. Also note: the live authoring file now shows `rev9 delta ... revised_at 2026-09-12T00:15:00` — the file mtime was 00:08:37 when I checked, but its content says revised_at 00:15:00 (future-dated or just edited again?). Let me re-check the live hash right now — the file may be changing as lead-formulation works. b65fcc0f was at mtime 00:08:37. Current time? Let me check `date`. It's likely ~00:11-00:12. The rev9 comment mentions "astra-classscope-02" and a future timestamp 00:15:00.
+
+Given the live file is actively changing, my pre-freeze delta must be bound to a specific snapshot hash and record that. I'll snapshot b65fcc0f (if it's still the hash) and if it changed, use the current head. Actually the pattern in this swarm: snapshot + hash binding is the discipline. So: take the current live hash H, snapshot to my dir, run the probe suite against it, report delta f962c117→H.
+
+Wait — I should double check that b65fcc0f is still current. Let me re-hash now and also check with `stat`. If it changed to something new (e.g., c1d2...), use the new one. Also check FROZEN hasn't been bumped (rev19 pin f962c117 → maybe now rev20 pin b65fcc0f). Let me look at FROZEN.json's current revision via jq on the file (read fresh) and the live schema hash.
+
+Then build the prefreeze rebind script.
+
+Plan for script (compact, self-contained, reusing the rebind module's probe/carried_probes/new_tests):
+- `LIVE_PATH = artifacts/formulation/schemas/af_wcc_vacuum.yaml`
+- `PRIOR_SNAPSHOT = artifacts/worker-16/heldout2/bases/af_wcc_vacuum.yaml` (f962c117) — but better copy into my schema_snapshots as `af_wcc_vacuum.f962c117.yaml` for provenance.
+- Capture live hash H; verify it != f962c117 (else no delta).
+- Snapshot live to `schema_snapshots/af_wcc_vacuum.<H12>.yaml`.
+- Load prior doc from the f962c117 copy, live doc.
+- Rows: for carried 01-17 use `mod.carried_probes`; for 18-22 use `mod.new_tests(anchors_with_live_schema)` but need binding to H. `new_tests` uses module-level NEW_SHA/PRIOR_SHA/"CLASS_ID" globals; I can monkeypatch `mod.NEW_SHA=H`, `mod.PRIOR_SHA=PRIOR`, and provide anchors dict including "schema_ref" (path#sha256:H), "prior_schema_ref", "frozen_revision" (from FROZEN.json — still 19), "_schema": live doc. Then `mod.new_tests(anchors)` returns rows with binding_sha256=H.
+- For carried rows, rebuild record: copy old row, update binding fields to H, prior to f962c117, rerun probes, compute delta vs prior by full content comparison of deciding field (now I have both docs! So `flat(prior_val) != flat(live_val)` exactly, no excerpt limit).
+- Classify statuses: unchanged / field_content_changed / field_removed (absent) / field_added. Keep the existing `delta_vs_f512af5f` key? Better to add a new key `delta_vs_f962c117` and keep the old one for history. But for canonical suite integrity, I'm writing the prefreeze suite to my own dir. The rows should say `binding_sha256=H` and `delta_vs_f962c117`.
+- Compute probe failures (any probe that fails on live) — these are findings.
+- Report: tests_total, probe_failures, delta_counts, field changes, added/removed top-level blocks, open obligations retained, prior/live internal revisions, FROZEN pin status (pin == f962c117, live == H => "unfrozen head; next freeze expected to pin H"), suite sha, evidence refs, falsifier.
+- Write report `artifacts/flash-04/f1_ambiguity/rebind_<H12>_prefreeze_report.json` and suite `artifacts/flash-04/f1_ambiguity/versions/f1_falsifier_tests.<H12>.prefreeze.jsonl`.
+- Exit 0/2/3.
+
+Then emit events to outbox:
+1. `artifact` — delta report, node F1, class, path + sha256 + validation_status unverified, evidence refs with hashes, falsifier, gate G-FORM.
+2. `artifact` — prefreeze suite (variant path), same.
+3. `claim` — conclusion_type `formal_model`, class_id, statement of delta results, assumptions, falsifier, evidence_refs, artifact_refs.
+4. `status` — node F1, status active, hours, summary, evidence_refs, next_falsifier.
+5. maybe `blocker` — if live head unfrozen and canonical path still 7a3e1f93 (three-way divergence!). Indeed: canonical schemas/af_wcc_vacuum.yaml=7a3e1f93 (r3), FROZEN pin=f962c117, authoring head=H. That's a real, concrete blocker for G-FORM: no single hash is authoritative on disk. The publish-frozen assignment is meant to fix it. I can emit a blocker noting the three-way divergence with hashes. But careful: the blocker must be actionable and not duplicate noise. There's already a drift note at 00:09:10 (transient). A blocker with the three-way hash table + falsifier seems justified for a bounded worker's exit. Hmm, but the prior instance already emitted a blocker at 23:37 (FROZEN self-hash + queue gap). The new facts: (a) live head H != frozen pin; (b) canonical path = 7a3e1f93 stale (r3) — this is a policy violation of the 00:09 canonical-path decision and blocks byte-identical publication. Actually, wait: is canonical-path policy "canonical is authoritative"? ASTRA_HANDOFF says canonical path is authoritative and artifacts/formulation/** is the authoring tree that must be published byte-identically before verdicts bind. So the map's frozen pin points at the authoring tree (f962c117), the canonical path is an old draft (7a3e1f93) — any G-FORM verdict citing canonical path would review r3; any citing FROZEN pin reviews f962c117. That's a genuine ambiguity worth reporting, but it may already be known (publish-frozen assignment). I'll report it in status + a concise blocker.
+
+Then checkpoint:
+- Write `runtime/state/w04_checkpoint_prefreeze.json` (worker checkpoint, matching w06/w13 convention) containing: checkpoint id/time, assignment, actions, hashes, report path, state, next falsifier.
+- Append to `runtime/state/w04_checkpoints.jsonl` (if I create it; better match convention: w06_checkpoints.jsonl exists). I'll create `runtime/state/w04_checkpoints.jsonl` (append).
+- Update `artifacts/flash-04/f1_ambiguity/CHECKPOINTS.md` with new rows (CP14/CP15) — but I need to read/edit it; I already read it. Actually appending rows is a nice-to-have; the checkpoint JSON is the main artifact.
+- Optionally run `python3 research_map/checkpoint.py --label ...` — but it takes a global lock and ingests; the controller runs every 15 min. My instruction says "checkpoint, then exit". The worker-level checkpoint record is the safe interpretation. But hmm, maybe the harness expects me to run the global checkpoint tool. Given `map.lock` exists and a formulation checkpoint loop is running (`formulation_checkpoint_loop.pid`), invoking the global checkpoint concurrently could race. I'll do the worker checkpoint, and note in status that global checkpoint is controller-owned. Actually, let me check checkpoint.py for locking: it does `comms.ingest(dry_run=False)` which may acquire `map.lock`. Risky. I'll skip global checkpoint and do the documented worker-level checkpoint. Hmm, but "checkpoint, then exit" — let me look at what other deepseek-flash workers did for checkpoint: w13_checkpoint_*.json, w06_checkpoint_*.json in runtime/state. Yes! Workers write their own checkpoint JSONs. Good — that's the convention.
+
+Also: validate events before writing. There's `research_map/validate_map.py validate_events`. Let me see how to validate a single event. `comms.py ingest` validates when ingesting outbox. To be safe, I can self-validate using the schema rules: required fields per event type. Let me read comms.py lines ~110-160 to see validation for status/blocker (which aren't in events.schema.json oneOf).
+
+Let me read that section.
+dsh: reasoning:
+Important update: FROZEN.json just got bumped to revision 20, pinning b65fcc0f! Its hash changed from da6a0ee9 to 855e7cba (mtime presumably 00:10-00:11). So now the frozen pin IS b65fcc0f (33012 bytes) — the exact live head. That supersedes the drift situation. The previous worker's rebind bound to f962c117 (rev19); now FROZEN rev20 pins b65fcc0f.
+
+So my bounded task is now crystal clear and valuable: **re-run the ambiguity suite against the NEW frozen hash b65fcc0f (FROZEN rev20) and report deltas only**, binding the canonical suite to b65fcc0f (superseding the f962c117 binding). This matches exactly what the lead-formulation follow-up asked ("Re-run your suite against that hash and report deltas only") applied to the current freeze, and eliminates the drift note.
+
+I have the prior f962c117 content (verified copies) for a full exact content diff. 
+
+Steps:
+1. Verify FROZEN rev20 entry pin == b65fcc0f and on-disk authoring hash == b65fcc0f. ✓ (just measured; re-verify in script)
+2. Snapshot live b65fcc0f to my schema_snapshots (and copy f962c117 prior snapshot into my snapshots for reproducibility).
+3. Run rebind logic: carried 17 probes + 5 new probes, comparing deciding fields f962c117→b65fcc0f exactly.
+4. Write canonical suite `schemas/f1_falsifier_tests.jsonl` bound to b65fcc0f (following prior pattern), plus delta report.
+   - Note: the canonical suite is my assigned artifact path, so writing it is correct. It currently binds f962c117 (rev19) and will now bind b65fcc0f (rev20). Good.
+5. Check whether the canonical-path copy `schemas/af_wcc_vacuum.yaml` is still 7a3e1f93 (r3). It is (measured). The canonical-path policy says canonical is authoritative — so the published copy is stale. Wait, but the assignment says canonical artifact path for my suite is `schemas/f1_falsifier_tests.jsonl`; the F1 schema itself canonical path `schemas/af_wcc_vacuum.yaml` is lead-formulation's responsibility (publish-frozen assignment). I should note the divergence in my status/blocker.
+6. Emit events + checkpoint + exit.
+
+Let me now write the rebind script. I'll reuse `rebind_f962c117.py` by importing it and monkeypatching. But cleaner to write a fresh script that imports the module functions. Details:
+
+```python
+import importlib.util, sys, json, hashlib, yaml
+from pathlib import Path
+ROOT = Path("/data3/guoshaoyang/workdir/ai4math-swarm")  # derive from __file__ parents[3]
+rb = load module from artifacts/flash-04/f1_ambiguity/rebind_f962c117.py
+NEW = b65fcc0f...; PRIOR = f962c117...
+prior_doc = yaml.safe_load(open(PRIOR_SNAPSHOT))
+live_doc = yaml.safe_load(open(SCHEMA_PATH))
+anchors = {schema_ref: f"artifacts/formulation/schemas/af_wcc_vacuum.yaml#sha256:{NEW}", prior_schema_ref: ...PRIOR, frozen_ref, frozen_revision: 20, _schema: live_doc}
+```
+
+For carried rows, reuse `rb.carried_probes(test_id)` and `rb.probe`. For new tests 18-22, `rb.new_tests(anchors)` — but it references module globals NEW_SHA/PRIOR_SHA; monkeypatch `rb.NEW_SHA = NEW; rb.PRIOR_SHA = PRIOR`. The common dict uses `anchors["frozen_revision"]`, `anchors["schema_ref"]`, `anchors["prior_schema_ref"]`, `anchors["_schema"]`. Also inside new_tests rows there are `delta_vs_f512af5f` hardcoded keys? Let me check — lines 260-423 contain the rest of new_tests. It probably sets `delta_vs_f512af5f` status. Let me check quickly for "delta_vs" in the script.
+
+Also the new_tests rows' `deciding_field_status` etc. are static text ("decided_explicit_wellformedness_slot"). Fine.
+
+For the delta computation: for each of 22 rows, compare deciding field content prior vs live (full flat). Also rerun probes and compare per-probe pass vs recorded pass from the f962c117 suite (row's probe_results) — this catches probe-level flips.
+
+Also compare the *schema revision* internals: prior revision 8? Wait, the f962c117 file header — let me check its internal revision; the live is revision 9. Note the live file has weird duplicated `revised_at` keys and a `revised_at_unused`. YAML duplicate keys: PyYAML keeps the last occurrence. So `revised_at` = "2026-09-11T23:34:10+08:00" (last among revised_at keys before revised_at_unused? order: 23:34:10, 23:37:51, 23:42:45, 23:46:17, 23:51:53, 00:15:00 → last revised_at = 00:15:00). Fine.
+
+Let me check the f962 internal revision and the rest of new_tests quickly. Then write the script.
+
+Actually, to keep it robust and simple, I'll write my own row builder that handles all 22 tests: reuse `rb.carried_probes(t)` for 01-17, and reuse `rb.new_tests(anchors)` for 18-22 then patch binding fields to NEW/PRIOR and set `delta_vs_f962c117`. Since new_tests rows already have full text, just adjust binding keys.
+
+One more consideration: writing the canonical suite changes its hash; the events should reference the new suite hash. Also the suite row `evidence_refs` should use the rev20 frozen ref and the b65fcc0f schema ref. I'll regenerate evidence_refs lists.
+
+Let me check the remaining part of the script for hardcoded "delta_vs_f512af5f" in new tests and any other globals.
+dsh: reasoning:
+f962c117 = internal rev8 (35 top-level keys), b65fcc0f = internal rev9 (36 keys). Delta rev8→rev9 per the file comment: "ONE canonical visibility predicate (single-q tail) made explicit as the class's only predicate; set-based reading recorded as a variant pointer (parent_class + variant_id SET) under class_identity_variants, not as a class. No new class ids."
+
+So the key change is around visibility predicate and class_identity_variants. This will change deciding fields for tests involving visibility (AMB-11, AMB-17) and add a top-level block (class_identity_variants). Possibly also changes to genericity etc.
+
+Now write the prefreeze→(actually now frozen rev20) rebind script. Let me name it `rebind_b65fcc0f.py` (rev20 rebind). Steps in script:
+
+1. Constants: NEW_SHA=b65fcc0f..., PRIOR_SHA=f962c117..., FROZEN rev expected 20 (read from FROZEN.json), SUITE_PATH=schemas/f1_falsifier_tests.jsonl, REPORT_PATH=artifacts/flash-04/f1_ambiguity/rebind_b65fcc0f_delta_report.json, snapshots: prior copy from worker-16 copy? Better: first copy the f962c117 file into `schema_snapshots/af_wcc_vacuum.f962c117.yaml`; snapshot live to `schema_snapshots/af_wcc_vacuum.b65fcc0f.yaml`.
+2. Verify on-disk live sha == NEW and FROZEN entry sha == NEW.
+3. Load prior/live docs.
+4. Build rows:
+   - carried 01-17: copy from current suite (which is f962c117-bound; expect 22 rows with binding f962c117). For rows 1-17, rerun probes via rb.carried_probes; compute delta_vs_f962c117 by exact full-value comparison; update binding fields.
+   - new 18-22: rebuild via rb.new_tests(anchors) with rb.NEW_SHA/PRIOR_SHA monkeypatched; then replace their `delta_vs_f512af5f` key with `delta_vs_f962c117` computed the same way (deciding field prior vs live).
+   - For all rows: evidence_refs updated to rev20 anchors; retain their `falsifier` (and maybe add `next_falsifier`).
+5. Detect probe failures (probe outcome pass=False) and probe flips vs old recorded pass.
+6. Write suite + report.
+7. Report includes: binding (rev20, internal rev9), prior (rev19, internal rev8), delta_counts, deciding_field_changes with prior/live excerpts, added/removed top-level blocks, probe_flips, open obligations retained, three-way path state (canonical path sha 7a3e1f93 != binding), falsifier, verification command.
+
+Also, per protocol rule 7: evidence_refs as path#sha256-prefix. I'll use full-ish 16-char prefixes.
+
+Then emit outbox events (artifact x2, claim, status, blocker) with a small emitter script that validates required keys and appends. I could reuse the prior `emit_events.py` but simpler to write fresh and carefully.
+
+Event IDs: unique, e.g. `flash-04-art-F1-rev20-suite-20260912T001500`, etc. Use current time. Keep actor `deepseek-flash-04`, node_id F1, class_id AF-WCC-VAC-GEN, gate G-FORM, group_id formulation.
+
+Checkpoint: write `runtime/state/w04_checkpoint_f1_rev20.json` and append to `runtime/state/w04_checkpoints.jsonl`. Also append CP14 row to my CHECKPOINTS.md.
+
+One question: should I write the canonical suite `schemas/f1_falsifier_tests.jsonl` to bind rev20? Yes — it's my assigned canonical artifact path, and the FROZEN manifest bumped to rev20; protocol says reviewers bind to the frozen sha, so the suite must reference b65fcc0f. This supersedes 6e8e7f44. The old suite version is archived in my versions dir? The current canonical suite (6e8e7f44) is not yet archived in versions/ (versions has 106cf329, 18102c20 only). I'll archive 6e8e7f44 to versions/ as well.
+
+Let me write the script now. I'll be careful with YAML parsing of the live file (duplicate keys — PyYAML default allows duplicates, last wins; safe_load handles it).
+
+Let me also compute the diff f962→b65fcc0f to understand content changes first (quick python diff of flattened keys) so the report notes are accurate. Actually the script will compute it. But I want to ensure probe failures are handled with accurate interpretation. Let me first do a quick reconnaissance diff between the two docs on the probe paths and deciding fields, so I can see what changed before writing the report. That informs the delta notes.
+
+Let me run a quick analysis.
+dsh: reasoning:
+The diff shows only two changed paths among probe paths: `anti_scope.not_this_class` (new entry added for AF-WCC-SCALAR-SPH) and `class_identity_variants` (new top-level block). Note the `visibility.definition` did NOT change between rev8 and rev9 (the rev9 comment says the single-q tail predicate "made explicit" — apparently already explicit in rev8).
+
+Wait: the rev9 comment says ONE canonical visibility predicate made explicit. But full-value diff of visibility.definition shows unchanged. Maybe the change is elsewhere (e.g., visibility block gained a key). Let me diff the visibility block fully. Also the suite's deciding fields: AMB-11/17 use visibility.definition → unchanged. So delta counts will probably be: 20 unchanged, 2 deciding-field-changed? The deciding fields for tests: AMB-01 non_vacuity.condition; 02/03 genericity.excluded_set; 04 data_class.adm_mass; 05/06 data_class.matter; 07 genericity.membership_ruling; 08 topology.slice_topology; 09 genericity.ambient_space_is_data_space; 10 genericity.kind; 11 visibility.definition; 12 i_plus.completeness_definition; 13 regularity.solution_regularity; 14 data_class.matter; 15 conclusion.equivalent_standard_formulation; 16 conclusion.conclusion_type; 17 visibility.definition; 18 conclusion.wellformedness_conditions; 19 regularity.extension_regularity; 20 known_status.counterexample_status; 21 f0_binding.declared_f0_sha256; 22 l1_ledger_refs.
+
+Hmm — none of those deciding fields are `anti_scope.not_this_class` or `class_identity_variants`. So all 22 deciding fields unchanged?! Then the delta is: 22 unchanged, 0 changed, 1 new top-level block, 1 changed non-deciding field (anti_scope).
+
+But wait — the probes might flip: e.g. a probe that checks `class_identity_variants` existence — no test probes it currently. The 5 new probes (18-22) probe existing fields/blocks. All should still pass. The old suite has 0 probe failures.
+
+Hmm, so is there real value? Yes:
+- Confirms the rev20 freeze rebind (22/22 resolving, 0 failures, 0 deciding-field changes) eliminating the drift note.
+- Detects the new `class_identity_variants` block and checks whether it introduces ambiguity: the variant is registered under `class_identity_variants` with `is_this_class: false`; the set-based reading is now a variant pointer. This is a *new surface* that no probe currently covers. The bounded worker should add a probe for it: e.g., F1-AMB-23: does `class_identity_variants` ambiguity leak into the class? Check `class_identity_variants[0].is_this_class == false`, `status == registered_variant_not_written`, and that the class's canonical predicate is not set-based. Also check the new `anti_scope.not_this_class` entry for AF-WCC-SCALAR-SPH — is the scalar class correctly excluded? A probe: `anti_scope.not_this_class` contains AF-WCC-SCALAR-SPH (it does).
+
+Given acceptance requires >=10 tests (we have 22), adding 1-2 probes for the new block is a genuine increment consistent with "attack the schema; try to construct a spacetime where WCC-hypothesis fields are ambiguous". The set-based vs single-geodesic visibility reading is exactly an ambiguity surface: rev9 makes the set-based reading a registered variant, not the class. A test could ask: a spacetime where the single-geodesic tail predicate and the set-based predicate disagree — which field decides membership? The schema now says `visibility.definition` (single tail) + `class_identity_variants` variant pointer. Probe: `class_identity_variants` has is_this_class=false and the variant's statement is explicitly not the class. That's decidable.
+
+Careful about scope creep: my assignment says >=10 ambiguity tests, which is exceeded; the follow-up says "report deltas only". The highest-value action: rebind + report deltas, plus one new probe covering the new rev9 block (since the new block is precisely the delta). I'll add F1-AMB-23 ("set-based visibility reading is a registered variant, not the class") and F1-AMB-24 ("scalar-matter class excluded from the WCC anti-scope")? The anti_scope change is also part of rev9 delta... wait, was it? The rev9 comment doesn't mention anti_scope; it mentions visibility + class_identity_variants. The anti_scope addition of AF-WCC-SCALAR-SPH could be from another edit. Actually rev8 grew to rev9 with 36 keys; anti_scope changed too. The comment mentions only visibility/variant. Whatever — the delta report will note both changed paths.
+
+I'll add two probes (23, 24) for the two delta surfaces. That keeps the ">=10" and "delta-only" requirements, and each new probe has spacetime description, does_it_satisfy_f1, deciding_field (acceptance criteria).
+
+Now, one important check: the class_identity_variants block content — let me look at it fully to design the probe and to check for leakage. Also the visibility block. Let me print them.
+
+Also check `anti_scope.not_this_class` full content.
+
+Then write the script. Let me also confirm FROZEN rev20 file now: hash 855e7cba, revision 20, entry pin b65fcc0f — yes. But FROZEN may keep changing (lead is active). My script will verify at run time and fail with exit 3 if it drifts. If it drifts mid-work, I'll adapt.
+
+Let me view the relevant blocks.
+dsh: reasoning:
+Now I understand the rev9 delta fully:
+1. `class_identity_variants` added: registered variant SET (set-based visibility reading), is_this_class false, status registered_variant_not_written — decidable.
+2. `anti_scope.not_this_class` gained AF-WCC-SCALAR-SPH and the H2_loc variant entry.
+3. `visibility` block unchanged (single-q tail predicate already there in rev8).
+
+Wait — but the deciding fields listed in the suite for AMB-11/17 is `visibility.definition`, unchanged. The old suite's `delta_vs_f512af5f` said field_content_changed for visibility.definition between f512af5f and f962c117 — consistent.
+
+Now let me write the rebind script. I'll create:
+- `artifacts/flash-04/f1_ambiguity/rebind_b65fcc0f.py`
+
+Design:
+
+```python
+#!/usr/bin/env python3
+"""Worker-04 rebind of the F1 ambiguity suite: FROZEN rev19 f962c117 -> rev20 b65fcc0f."""
+...imports...
+ROOT = Path(__file__).resolve().parents[3]
+SCHEMA_PATH = ROOT/"artifacts/formulation/schemas/af_wcc_vacuum.yaml"
+SUITE_PATH = ROOT/"schemas/f1_falsifier_tests.jsonl"
+FROZEN_PATH = ROOT/"artifacts/formulation/FROZEN.json"
+...
+PRIOR_SHA = "f962c117..."
+NEW_SHA = "b65fcc0f..."
+PRIOR_SNAPSHOT = ROOT/"artifacts/flash-04/f1_ambiguity/schema_snapshots/af_wcc_vacuum.f962c117.yaml"
+NEW_SNAPSHOT = ROOT/"artifacts/flash-04/f1_ambiguity/schema_snapshots/af_wcc_vacuum.b65fcc0f.yaml"
+REPORT_PATH = ROOT/"artifacts/flash-04/f1_ambiguity/rebind_b65fcc0f_delta_report.json"
+SUITE_VERSION_PATH = ROOT/"artifacts/flash-04/f1_ambiguity/versions/f1_falsifier_tests.<newsha12>.jsonl"
+```
+
+Load rb module via importlib.
+
+New tests 23/24 hardcoded in my script (with probe specs):
+- F1-AMB-23: "Set-based visibility variant is registered as not-this-class"
+  - spacetime_description: "A spacetime whose incomplete geodesic lies in J^-(I+) as a set but has no tail inside J^-(q) for any single q in I+. Single-q predicate: not visible (no visible singularity). Set-based predicate: visible (contained in the union). The two readings give opposite verdicts on the same datum — exactly the D1 divergence."
+  - question: "Which field decides whether this datum is in AF-WCC-VAC-GEN, and does the schema forbid binding the set-based verdict to the class?"
+  - does_it_satisfy_f1: "no (the datum has no single-q visible singularity; the class's statement_formal is satisfied in the visibility slot; the set-based reading would classify it as a violation)"
+  - satisfies_in_class: "yes under the class predicate (no single-q visible singularity); no under variant SET"
+  - satisfies_conclusion: "the class's conclusion holds for this datum; variant SET would report a counterexample"
+  - deciding_field: "class_identity_variants"
+  - deciding_field_alternates: ["visibility.definition", "visibility.predicate_name"]
+  - deciding_field_status: "decided_variant_registry_not_this_class"
+  - probes:
+    - path class_identity_variants kind contains "set_based_visibility_reading"
+    - path class_identity_variants kind contains "is_this_class": false? The flat text contains '"is_this_class": false'. Use contains value 'false'? Hmm, `contains` checks needle in flat(value): needle `'"is_this_class": false'`.
+    - path class_identity_variants kind contains "registered_variant_not_written"
+    - path class_identity_variants kind contains "not as a class" (string present in why_separate: "not as a class, pending Human PI")
+    - path visibility.definition kind contains "TAIL" (class predicate is the tail/single-q one)
+  - falsifier: "An accepted reading in which class_identity_variants.SET.is_this_class is true or the set-based predicate is bound to AF-WCC-VAC-GEN without a registry entry."
+- F1-AMB-24: "Scalar/spherical class is in the anti-scope, not a WCC instance"
+  - description: "A static spherically symmetric Einstein-scalar field configuration with a visible singularity. It satisfies a WCC-shaped statement for the scalar class but is matter content outside the vacuum WCC class; the anti-scope must exclude it."
+  - deciding_field: "anti_scope.not_this_class"
+  - probes: contains "AF-WCC-SCALAR-SPH"; contains "different matter content and symmetry"; and classification probe class_id equals AF-WCC-VAC-GEN; also `data_class.matter` equals none? Careful: AMB-05/06/14 probe data_class.matter equals "none". Is that right? Let me check `data_class.matter` value in the live schema — if it's "none", the probe passes. The prior suite had these passing, so yes.
+  - falsifier: "A gate-accepted binding in which AF-WCC-SCALAR-SPH data are scored under AF-WCC-VAC-GEN, or the anti-scope entry is dropped while the class contract still claims vacuum matter."
+
+Both new tests have probe_results from `probe(live_doc, spec)`.
+
+Row bookkeeping:
+- carried 01-17: old rows from current canonical suite (binding f962c117). For each: update binding_sha256=NEW, binding_ref, prior_binding=...; binding_frozen_revision=20; rerun probes; compute delta_vs_f962c117 (exact flat compare). Keep `delta_vs_f512af5f` as historical? I'd rather set `delta_vs_prior_frozen` = new and keep `delta_vs_f512af5f` untouched for history, plus add `delta_vs_f962c117`. Hmm, simpler: add `delta_vs_f962c117` computed; keep old key unchanged. Report counts from the new key.
+- new 18-22: rebuild via rb.new_tests(anchors) (monkeypatched) → they'll have binding NEW. Add delta_vs_f962c117 computed exact. Their `delta_vs_f512af5f` remains as is (historical).
+- new 23-24: appended.
+
+For evidence_refs, rebuild common list:
+```
+[schema_ref(NEW), frozen_ref(rev20 FROZEN sha), adjudication_ref, rule_spec_ref, aliases_ref, prior_suite_ref (current suite sha 6e8e7f44), prior_snapshot_ref (f962 snapshot ref), "research_map/formulation_taxonomy.yaml#sha256:66bf917bd368ebd9", "comms/inbox/deepseek-flash-04.jsonl:1-3"]
+```
+Wait — rule_spec/VOCAB/ADJUDICATION may have changed too. I'll hash them at runtime.
+
+Canonical-path state: `schemas/af_wcc_vacuum.yaml` sha 7a3e1f93 (stale r3). Include in report as `canonical_path_state`.
+
+Report falsifier: "A carried probe failing to resolve in b65fcc0f, a deciding-field verdict flipping without a FROZEN revision entry, or a class_identity_variants binding that leaks variant SET into AF-WCC-VAC-GEN."
+
+Now the suite write: sort by test_id, write JSONL with sort_keys=True. New suite sha.
+
+Then events. Let me draft them with a Python emitter that:
+- writes to `comms/outbox/deepseek-flash-04.jsonl` (append),
+- self-checks required keys per event type against research_map/events.schema.json for the types covered, and the normalize_event defaults for status/blocker,
+- refuses to write if any event lacks required fields.
+
+Note the outbox may be ingested concurrently by the controller (checkpoint every 15 min). Appending lines atomically-ish with a single write is fine.
+
+Event set:
+1. artifact: suite rev20 — path schemas/f1_falsifier_tests.jsonl, sha256 NEW_SUITE, validation_status unverified, node F1, class, artifact_type falsifier_test_suite, evidence_refs, falsifier/next_falsifier, gate G-FORM, group formulation, supersedes [6e8e7f44 event].
+2. artifact: delta report — path artifacts/flash-04/f1_ambiguity/rebind_b65fcc0f_delta_report.json, sha256, validation_status unverified.
+3. claim: statement summarizing 24/24 probes resolving in rev20, 0 deciding-field changes vs rev19, +1 variant registry block, +anti_scope entry, 2 added probes, 4 obligations retained; conclusion_type formal_model; assumptions; falsifier; artifact_refs.
+4. status: node F1 active, hours, summary, evidence_refs, next_falsifier.
+5. blocker: canonical-path divergence: schemas/af_wcc_vacuum.yaml (7a3e1f93, r3) != FROZEN rev20 pin b65fcc0f; plus publish-frozen pending; needed_to_unblock.
+
+Checkpoint JSON: `runtime/state/w04_checkpoint_rev20.json` + append `runtime/state/w04_checkpoints.jsonl`. Include report/suite hashes, binding, next falsifier.
+
+Also append CP14/CP15 to CHECKPOINTS.md via edit.
+
+Time to write the script. Keep it focused.
+
+One concern: `rb.new_tests(anchors)` uses module global `RUN_ID`, `CLASS_ID`, etc. Fine. It also uses `anchors["_schema"]`. And `ref()` uses ROOT globals but with explicit paths — fine. Monkeypatch `rb.NEW_SHA`, `rb.PRIOR_SHA` before calling.
+
+Let me write the script now.
+dsh: reasoning:
+Before running: copy the f962c117 prior snapshot into my schema_snapshots (and the new head snapshot is written by... wait, I referenced NEW_SNAPSHOT but never write it in main()! I need to copy the live file to NEW_SNAPSHOT. Let me add that at the start of main (after hash verification). Also archive the current canonical suite 6e8e7f44 to versions before overwriting. Let me patch the script.
+
+Also, I should verify `rb.new_tests(anchors)` works with the monkeypatched module: inside new_tests it uses `CLASS_ID`, `NODE_ID`, `GATE`, `RUN_ID` module globals — those remain from the prior module (fine: same class/node/gate; RUN_ID same). It uses `anchors["frozen_revision"]` = 20. Good.
+
+One issue: in `rb.new_tests`, rows contain key `"artifact_kind": "f1_ambiguity_probe"` in common. Fine.
+
+Another issue: for the 18-22 rebuild, `delta_vs_f512af5f` stays in the record (historical) plus I add `delta_vs_f962c117`. Fine.
+
+Also `probe_flips` for the new_tests 18-22: I set `old_pass` from rec's probe_results (which are freshly computed on the live schema, since rb.new_tests computes probes on anchors["_schema"] = live schema). So old_pass == new pass always — flips only relevant for carried. That's fine, though it's computed against itself. OK.
+
+Let me patch: snapshot files + archive old suite version. Add after verification of prior snapshot in main:
+
+```python
+    PRIOR_SNAPSHOT.parent.mkdir(parents=True, exist_ok=True)
+    if not NEW_SNAPSHOT.exists() or sha256_file(NEW_SNAPSHOT) != NEW_SHA:
+        NEW_SNAPSHOT.write_bytes(SCHEMA_PATH.read_bytes())
+    old_suite_sha = sha256_file(SUITE_PATH)
+    arch = ROOT / f"artifacts/flash-04/f1_ambiguity/versions/f1_falsifier_tests.{old_suite_sha[:8]}.jsonl"
+    if not arch.exists():
+        arch.write_text(SUITE_PATH.read_text())
+```
+
+I need old_suite_sha captured before overwrite; anchors["prior_suite_ref"] already computes it. Let me add archiving after anchors creation.
+
+Also PRIOR_SNAPSHOT exists already? Not yet — I need to create it from the verified f962c117 copy. That's a precondition; if missing, script exits 3. Let me create it manually first (cp from worker-16 copy) and verify hash. That's evidence creation, appropriate.
+
+Let me patch and set up.
+dsh: reasoning:
+I made an indentation typo: "   NEW_SNAPSHOT.parent..." with 3 spaces. Fix it.
+dsh: reasoning:
+Interesting: `canonical_path_matches_pin: true` — the canonical `schemas/af_wcc_vacuum.yaml` now matches b65fcc0f! Lead-formulation must have published it in the last couple minutes (publish-frozen assignment). Let me verify: earlier it was 7a3e1f93; now it equals b65fcc0f. Good — the canonical-path divergence is resolved. So no blocker needed on that front; in fact I should note it as resolved in my status.
+
+Delta results:
+- 24 tests, 0 probe failures, 0 flips.
+- delta_counts: 22 unchanged, 1 field_added (F1-AMB-23 class_identity_variants), 1 field_content_changed (F1-AMB-24 anti_scope.not_this_class).
+- added top-level block: class_identity_variants.
+
+Wait, `canonical_path_matches_pin: true` means canonical schema = b65fcc0f. But FROZEN pin = b65fcc0f too. So now everything is consistent: canonical == authoring == FROZEN rev20. 
+
+Let me verify the report and suite content, and check the canonical suite + schema hashes. Also verify that my suite rows all have required IDs/evidence/hash/falsifier. Then emit events.
+
+Let me also double-check: my script overwrote `schemas/f1_falsifier_tests.jsonl` — the canonical artifact path. New sha 39f884e0863f14... 24 rows. Archived old suite 6e8e7f44 to versions. Good.
+
+Quick validation of the suite JSONL.
+dsh: reasoning:
+Everything checks out. Now let me quickly verify the probe semantics of new tests 23/24 by looking at their probe results, and check the report content for accuracy (e.g., canonical_path_state now true). Then emit events.
+
+Let me view the report summary fields and the last two suite rows' probes.
+dsh: reasoning:
+One inaccuracy: the `canonical_path_state.note` says "The published copy is still the rev3 draft" but it now matches the pin (true). The note is stale text from my template. I should fix the note in the report to reflect the resolved state. Let me patch the report file directly (small edit) or fix the script and re-run. Re-running the script is fine (idempotent; suite already written; old_suite_sha archive: now old suite is my new one, archive would be versions/f1_falsifier_tests.39f884e0.jsonl — harmless duplicate). But re-running would recompute delta vs f962c117 — fine. However re-running after the canonical publication changes nothing else. Simpler: edit the report JSON note in place and re-hash. But then report hash changes and the script's verification_command would regenerate a slightly different note... Better to fix the script text and re-run so the report is reproducible. Let me fix the note to be conditional:
+
+```python
+"note": ("canonical-path policy ... resolved: published copy matches the rev20 pin" if canon_sha == NEW_SHA else "stale: published copy is ...")
+```
+
+Then re-run. It will archive the current suite as versions/f1_falsifier_tests.39f884e0.jsonl (a copy of the same 24-row suite, fine) and rewrite identical suite + report with corrected note. Hash of report changes; suite hash unchanged (same content). Let me do that.
+
+Then emit events. Let me write the emitter.
+
+Events (all must be valid JSON lines):
+1. artifact suite:
+```json
+{"actor":"deepseek-flash-04","artifact_type":"falsifier_test_suite","bytes":<size>,"class_id":"AF-WCC-VAC-GEN","created_at":<now>,"event_id":"flash-04-art-F1-rev20-suite-20260912T00XXXX","event_type":"artifact","evidence_refs":[...],"falsifier":"...","gate":"G-FORM","group_id":"formulation","next_falsifier":"...","node_id":"F1","path":"schemas/f1_falsifier_tests.jsonl","sha256":"39f884...","summary":"...","supersedes":["flash-04-art-F1-rebind-suite-20260912T000807"],"validation_status":"unverified"}
+```
+2. artifact report:
+```json
+{"...","artifact_type":"delta_report","path":"artifacts/flash-04/f1_ambiguity/rebind_b65fcc0f_delta_report.json","sha256":<report sha>,"validation_status":"unverified", "evidence_refs":[...]}
+```
+3. claim: required class_id, statement, conclusion_type, assumptions, falsifier, evidence_refs; plus artifact_refs.
+4. status: node_id F1, status active, hours 0.4, summary, evidence_refs, next_falsifier.
+5. Maybe no blocker — canonical divergence resolved; obligations remain but are already recorded. I'll skip a new blocker and instead include the remaining obligations in status/next_falsifier. Hmm: my earlier drift note from the prior instance (00:09:10) said "requires re-run after next FROZEN bump" — my status will explicitly supersede that requirement (rebind done). Good.
+
+Also should I emit a `review`? No — reviewer role isn't mine.
+
+Emitter script writes with a validation function:
+- For artifact: required node_id, artifact_type, path, sha256, validation_status.
+- For claim: class_id, statement, conclusion_type, assumptions, falsifier, evidence_refs.
+- For status: event_id, event_type, created_at, actor + node_id,status,hours,summary,evidence_refs,next_falsifier.
+- For blocker: description, needed_to_unblock, evidence_refs.
+Check file exists and sha matches for artifact events.
+
+I'll write `emit_rev20_events.py` in my dir, run it, then checkpoint, then update CHECKPOINTS.md.
+
+Note on event id uniqueness and timestamps: use current time. Also `supersedes` links: the old events from 00:08:07 (rebind suite/report/claim/status at f962c117/rev19). I'll supersede the artifact + status events.
+
+Let me first fix the script note and re-run.
+dsh: reasoning:
+The re-run failed because the suite now has 24 rows (my script expects exactly 22 rows with 17 carried). I need to make the script idempotent: accept 22 or 24 rows, and treat carried as rows 1-17 (should always be 17), and for new tests 18-22, rebuild them from rb.new_tests rather than carrying. My current logic: `if len(old_rows) != 22 or len(carried) != 17: fail`. Change to `if len(carried) != 17 or len(old_rows) not in (22, 24): fail`.
+
+Also archive logic: old_suite_sha of current 24-row suite. Fine.
+
+The report still has the old note (since script exited before writing). Re-run after patch. Also, the suite hasn't changed (hash 39f884e0), good.
+
+Patch the guard.
+dsh: reasoning:
+Suite hash changed from 39f884e0 to bd405cff — why? Because on the second run, the carried rows 1-17 were copied from the 24-row suite (which had `delta_vs_f962c117` from the previous run) and then `rec["evidence_refs"] = base_evidence + [anchors["prior_suite_ref"]]` — same. Hmm, what differs? The `prior_suite_ref` computed in anchors is the sha of the suite *before* this run (39f884e0...) whereas in the first run it was 6e8e7f44. So each re-run self-references differently. That's a non-idempotency: the suite's evidence_refs embed its own prior hash, which changes each run. Not a correctness problem (it records the actual prior suite), but re-runs always produce a new hash. Acceptable; the report's `suite_sha256` matches the suite as written (both from the same run). But the record's prior_suite_ref now points at 39f884e0 (the previous rev20 run). That's fine historically: "prior suite" = suite before this run. Slightly odd but honest.
+
+Wait, there's a subtlety: the report `evidence_refs` includes anchors["prior_suite_ref"] = 39f884e0, and suite rows reference the same. Both match. Good.
+
+But now I need to be careful: any further re-run changes the suite hash again. I'm done running it.
+
+Current hashes:
+- suite: bd405cffcc2d87e97c18ce521a50e6636a02edb67702eb7b428ee10905147692
+- report: 7ddef02aeaa06440d0333418e02af597124d205535dd3f026cc6fa3ae44ad866
+- script: 868e0cc50cface43f8f05e9c256e92c2671ca35183b6e3853968c3547ed0b937 (unchanged since patch? I patched after measuring; re-measure)
+- schema b65fcc0f (frozen rev20, canonical matches)
+- FROZEN.json: 855e7cba (rev20) — re-measure to confirm unchanged.
+
+Also versions archive: check that versions/f1_falsifier_tests.39f884e0.jsonl got archived this run (yes) and the b65fcc0f.prefreeze copy now has bd405cff content (script writes SUITE_VERSION_PATH each run).
+
+Let me now write the emitter. Before that, re-measure all hashes to embed.
+
+Event plan (created_at now). Use `supersedes` for prior rev19 events:
+- prior artifact suite event: `flash-04-art-F1-rebind-suite-20260912T000807`
+- prior artifact report event: `flash-04-art-F1-rebind-report-20260912T000807`
+- prior claim: `flash-04-claim-F1-rebind-20260912T000807`
+- prior status: `flash-04-status-F1-rebind-20260912T000807`
+- prior drift note artifact/status: `flash-04-art-F1-drift-note-20260912T000910`, `flash-04-status-F1-drift-note-20260912T000910`
+
+I'll reference these.
+
+The emitter must validate and append. Let me write it.
+
+Emitter details:
+```python
+EVENTS = [...]
+def validate(ev):
+    base = {"event_id","event_type","created_at","actor"}
+    ...
+    if ev["event_type"]=="artifact":
+        for k in ("node_id","artifact_type","path","sha256","validation_status"): assert k in ev
+        p = ROOT/ev["path"]; assert p.is_file(); assert sha256_file(p)==ev["sha256"]
+    if claim: required class_id, statement, conclusion_type, assumptions, falsifier, evidence_refs; assert ev["evidence_refs"]
+    status: node_id,status,hours,summary,evidence_refs,next_falsifier; status in {...}
+    blocker: description, needed_to_unblock, evidence_refs and node_id
+```
+Write lines with json.dumps(sort_keys=True) and a trailing newline; check the file currently ends with newline (it does). Also check for duplicate event_ids across the whole outbox (quick scan) to ensure uniqueness.
+
+Then checkpoint:
+- `runtime/state/w04_checkpoint_f1_rev20.json`: id, created_at, actor, assignment, node, class, gate, status, hours, binding, artifacts (suite/report/script/snapshots), delta counts, probe failures, obligations, canonical path state, next falsifier, evidence refs.
+- append to `runtime/state/w04_checkpoints.jsonl`.
+- update CHECKPOINTS.md (insert CP14 row after CP13 and add a "State at CP14" or just the row). I'll add a row and a short section.
+
+Let me write the emitter script now.
+dsh: reasoning:
+Wait, one validation issue: `assert all("#" in r for r in e["evidence_refs"])` — the ref `"comms/inbox/deepseek-flash-04.jsonl:1-3"` uses `:1-3` not `#`. So this assert would fail. The protocol allows `path:line`. Fix the assertion to accept `#` or `:`.
+
+Also the checkpoint `canonical_path` sha uses hashes[schema] — schema is the authoring path; the canonical path file has the same hash (verified). But I should hash the canonical path explicitly to be honest. Let me include canonical path in the hashes dict. Actually `hashes` keys are paths; add "schemas/af_wcc_vacuum.yaml" to the list — but careful, `ev = ref(schema, ...)` uses authoring path. Fine, just add canonical to the hash list.
+
+Also `prior_binding.sha256` uses hashes[snap_prior] — that's the snapshot hash = f962c117. Good.
+
+Let me patch the two issues.
+dsh: reasoning:
+Now run the emitter. But note the timestamps: `ts = now().replace(":", "").replace("-", "")` gives e.g. "20260912T001500+0800" — contains "+" which is fine in an event id. Prior ids looked like "20260912T000807" (no offset). To match convention, better strip the offset: use `datetime.now(CST).strftime("%Y%m%dT%H%M%S")`. Let me patch ts.
+dsh: reasoning:
+Events written and checkpoint created. Now verify:
+1. The appended events parse as JSON and match schema (validate with the map's own validator if possible).
+2. Try `python3 research_map/validate_map.py` — it may print VALID; it doesn't mutate. But it reads research_map.json which is under the controller lock; the validator is read-only. The handoff says "Validator: python3 research_map/validate_map.py" — safe to run? It might write nothing. Let me check validate_map.py's main quickly... It likely just prints. But careful: `map.lock` exists; read-only validation shouldn't conflict. Let me run it.
+
+Also: should I ingest my outbox into the map? No — controller-only (`research_map/comms.py ingest`). Rule: "accepted stream research_map/events.jsonl | research_map/comms.py ingest only". So I leave it; the controller's checkpoint loop ingests every 15 minutes.
+
+3. Update CHECKPOINTS.md with CP14 (and CP15) entries.
+
+Let me validate the appended lines and run the map validator. Note: prior events in my outbox used non-sorted keys, mine sorted — fine.
+
+Let me also verify the last 4 lines correspond to my events and check the `hours` type etc. Then run `python3 research_map/validate_map.py`.
+dsh: reasoning:
+Map validator prints VALID. Now update CHECKPOINTS.md with CP14 (rebind rev20) — the human-readable checkpoint. Then final verification of hashes and finish.
+
+I'll add rows to the table and a "State at CP14" section. Use edit to insert after CP13 row (line 22) and update the Next falsifier section.
+
+Current CHECKPOINTS.md lines 20-23:
+```
+| 23:35 | CP11 freeze drift | ... |
+| 23:36 | CP12 delta rebind | ... |
+| 23:37 | CP13 emit | ... |
+```
+Wait, the table ends at CP13 (line 22), then "## State at CP7" section, then "## Next falsifier". Let me append CP14/CP15 rows after CP13 and add a short State at CP14 section before Next falsifier, and update Next falsifier to mention the new binding.
+
+Let me read the current file again just to be safe with exact strings (I read it earlier; unchanged). I'll use edit.
+
+New rows:
+```
+| 00:08 | CP13b rev19 delta | suite rebound to FROZEN rev19 `f962c117` (22 tests, sha `6e8e7f44`); post-run drift note: authoring head moved to `b65fcc0f` |
+| 00:11 | CP14 rev20 freeze | FROZEN rev20 pins `b65fcc0f` (internal rev9); prior snapshot recovered (two independent 30904-byte copies hash `f962c117`) |
+| 00:14 | CP15 rev20 rebind+emit | 24 tests rebound to `b65fcc0f` (sha `bd405cff`); 22 unchanged, 1 field_added (`class_identity_variants`), 1 field_content_changed (`anti_scope.not_this_class`), new F1-AMB-23/24, 0 failures, 0 flips; 4 events emitted; worker checkpoint `runtime/state/w04_checkpoint_f1_rev20.json` |
+```
+
+Hmm, the table's time column entries are "23:15" style. Also note that the prior instance's CP13 at 23:37 then work at 00:08 (rebind rev19) wasn't in the table. I'll add CP14/CP15 only for my work, with a CP13b row noting the 00:08 rev19 rebind (from the outbox events). Let me keep it accurate: the outbox shows 00:08:07 rev19 rebind and 00:09:10 drift note. So:
+
+| 00:08 | CP13b rev19 rebind | suite rebound to FROZEN rev19 `f962c117` (22 tests, sha `6e8e7f44`); drift note: authoring head moved to `b65fcc0f` at 00:08:37 |
+| 00:11 | CP14 rev20 freeze | FROZEN revision 20 pins `b65fcc0f` (internal rev9); prior `f962c117` recovered from two independent 30904-byte copies |
+| 00:14 | CP15 rev20 rebind+emit | ... |
+
+And State at CP14 section:
+```
+## State at CP14 (rev20 rebind)
+
+* declared artifact `schemas/f1_falsifier_tests.jsonl` sha256
+  `bd405cffcc2d87e97c18ce521a50e6636a02edb67702eb7b428ee10905147692` (24 rows).
+* bound schema: frozen rev20 `artifacts/formulation/schemas/af_wcc_vacuum.yaml`
+  sha256 `b65fcc0f0118980fe50b4a5eaf5fb637f4f744d0db095105fd8031db1dabcd94`
+  (internal rev9); canonical copy `schemas/af_wcc_vacuum.yaml` byte-identical.
+* delta vs rev19 `f962c117`: 22 unchanged, 1 field_added (`class_identity_variants`),
+  1 field_content_changed (`anti_scope.not_this_class`); probes F1-AMB-23/24 added;
+  0 probe failures, 0 probe flips.
+* report `artifacts/flash-04/f1_ambiguity/rebind_b65fcc0f_delta_report.json` sha256
+  `7ddef02aeaa06440d0333418e02af597124d205535dd3f026cc6fa3ae44ad866`; runner
+  `rebind_b65fcc0f.py`; worker checkpoint `runtime/state/w04_checkpoint_f1_rev20.json`.
+* node state: `F1` stays `active`; `validation_status: unverified`; no gate verdict.
+* remaining open obligations: F1-AMB-01, F1-AMB-02, F1-AMB-03, F1-AMB-15.
+```
+
+Next falsifier update:
+```
+A content-hash change of `artifacts/formulation/schemas/af_wcc_vacuum.yaml` (or its canonical
+copy) after `b65fcc0f` invalidates the binding: re-run `rebind_b65fcc0f.py` with the new hash and
+emit a fresh status line. A lead/A1 reply in `comms/inbox/deepseek-flash-04.jsonl` takes
+precedence over all of the above.
+```
+
+Let me make these edits. Also note the report hash may change if I re-run the rebind script later... I won't. But wait — I ran the emitter after the rebind; the report hash 7ddef02a is embedded in events and checkpoint. Confirm current hashes match what was emitted. Let me verify at the end.
+
+Now edit CHECKPOINTS.md.
+dsh: reasoning:
+Now final verification:
+1. All emitted artifact hashes still match disk (schema, suite, report, snapshots, version copy). Re-run a quick hash check of everything cited in the last 4 events and the checkpoint.
+2. Confirm events are in the outbox, valid JSON; confirm the map validator still VALID (done).
+3. Confirm nothing under research_map/ was modified by me (no map mutation).
+4. Check the FROZEN pin is still rev20/b65fcc0f (in case the lead bumped it again — if so, my binding may be stale, but the suite records the binding it was run against; still, check).
+
+Also, the checkpoint file and log were written. Let me verify.
+
+Then exit.
+dsh: reasoning:
+All hashes verified. Interesting: FROZEN is now at **revision 23** but still pins b65fcc0f — the lead bumped the manifest revision (other files changed) while the F1 pin stays b65fcc0f. My suite binds the F1 sha (which is what matters), and my evidence ref cites FROZEN.json#sha256:855e7cba... which was rev22? Wait, the events were emitted at 00:14:32 with FROZEN hash computed at that time. Let me check: the emitter computed hashes[frozen] at run time. FROZEN has since changed to rev23 (some other file updated). My event's `frozen_ref` = whatever hash it was at 00:14:32. The claim evidence refs include the frozen ref; that's fine as a historical citation, but it no longer matches the current file. That's acceptable: evidence refs are hash-bound citations at time of writing. But the status event says "FROZEN.json revision 20 pins F1 at b65fcc0f" — now revision is 23 (still pinning b65fcc0f). The statement "revision 20 pins b65fcc0f" remains *historically* true, and the binding to F1's hash b65fcc0f is still current. Good enough — and I should not chase a moving manifest.
+
+Hmm, but one point: my suites' rows have `binding_frozen_revision: 20`. FROZEN is now rev 23. The protocol says reviewers bind to the sha256, not the revision label — which is exactly what we do (binding_sha256 b65fcc0f, still current). The revision label is informational. Fine.
+
+Should I re-emit with rev23? No — the F1 pin is unchanged, and the manifest revision label is explicitly not the binding. Chasing it would be churn.
+
+One more check: is the map `frozen_artifacts` entry for my suite path updated by the controller on ingest? Not yet — controller ingests periodically. My outbox events are queued. That's expected: "a message is not a result until the artifact hash is recorded" — controller's job.
+
+I'm done with the bounded task:
+- Read handoff (HANDOFF.md, README.md, ASTRA_HANDOFF.md, PROTOCOL.md), map (research_map.json gates/lock/F1), comms (inbox assignment + lead follow-up).
+- Took one class-bound task: F1 / AF-WCC-VAC-GEN / G-FORM, artifact schemas/f1_falsifier_tests.jsonl.
+- Emitted 4 valid JSON events with IDs, evidence (hash refs), artifact hashes, falsifiers; claim has artifact_refs.
+- Checkpoint: worker checkpoint JSON + log + CHECKPOINTS.md.
+- Exit.
+
+Should I run the global `research_map/checkpoint.py`? The instruction "checkpoint, then exit". I wrote a worker-level checkpoint. The global controller checkpoint runs on a 15-min loop (formulation_checkpoint_loop.pid) and ingests my outbox. Running it could race with the controller. I'll note in the final summary that the global checkpoint is controller-owned and my worker checkpoint is at runtime/state/w04_checkpoint_f1_rev20.json. Hmm — but the instruction might literally require running checkpoint.py. Let me consider the risk: `checkpoint.py` calls `comms.ingest(dry_run=False)` which reads outboxes and appends accepted events to research_map/events.jsonl via apply? Let me check comms.ingest — does it mutate research_map.json? checkpoint.py docstring says "Writes (never mutates research_map.json)". ingest writes to research_map/events.jsonl and moves? Let me check whether ingest is safe to run concurrently with the controller loop (which likely runs the same command every 15 min). There is a `map.lock` file at runtime/state. If both ingest and the loop run simultaneously, there could be a double-ingest of the same outbox lines. The ingest uses `ingested_ids.json` to dedupe (I saw runtime/state/ingested_ids.json), so idempotency likely holds.
+
+Given "Approval policy: ask" and the risk of racing the live controller, I'll not run the controller's checkpoint tool. The swarm convention (w06/w13/w14 checkpoint JSONs written by workers) supports worker-level checkpoints. My checkpoint file is written and logged.
+
+Actually, wait. Let me reconsider the instruction: "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit." In the harness, "checkpoint" likely means the global checkpoint or my own state save. I've done the latter plus CHECKPOINTS.md. Good.
+
+Let me do a final quick sanity check that I haven't written anything under research_map/ (map state untouched by me): my writes were:
+- schemas/f1_falsifier_tests.jsonl (assigned canonical artifact path)
+- artifacts/flash-04/f1_ambiguity/* (my own tree): rebind_b65fcc0f.py, report, snapshots, versions, emit_rev20_events.py, CHECKPOINTS.md
+- comms/outbox/deepseek-flash-04.jsonl (upward channel — correct)
+- runtime/state/w04_checkpoint_f1_rev20.json, runtime/state/w04_checkpoints.jsonl
+No map mutation. Good.
+
+Let me quickly check the supervisor/loop won't run me again? Not my concern.
+
+One last consideration: the `F1` node in the map — is there an `assignments` entry that has a deadline 03:15; my work delivered within budget (0.4h claimed vs 4 budget). Fine.
+
+Final answer: concise summary of what was done, with the JSON event details and hashes, and state that I exited (worker=04). Include blockers/notes: 4 open obligations remain; FROZEN manifest revision moved to 23 but F1 pin unchanged.
+
+Let me also get the exact event IDs and the frozen ref hash in my events to report accurately. Let me extract the 4 events' key fields and the FROZEN hash as cited.
+dsh: reasoning:
+Everything is consistent and emitted. The FROZEN ref cited is bbbaa1362abe3f97 — the hash at emit time (rev22/23 transition). FROZEN is a live document; the F1 pin b65fcc0f is unchanged. That's fine.
+
+Bounded worker task complete. Final answer: concise report.

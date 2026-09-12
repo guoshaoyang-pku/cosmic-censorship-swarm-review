@@ -1,0 +1,912 @@
+dsh: reasoning:
+Let me start by understanding the environment. I need to read handoff/map and comms. Let me look at the workspace.
+dsh: reasoning:
+The workspace is huge. I need to find "handoff/map" and "comms". Probably a swarm workspace. Let me look at recent files — there's `launch_swarm.sh`, `supervise_swarm.sh`, `ai4math-swarm.tar.gz`, `workdir`, `ca_worldmodels`, `.agents`, etc.
+
+Let me check `launch_swarm.sh` and look for a handoff directory.
+dsh: reasoning:
+There's a swarm at `/data3/guoshaoyang/workdir/ai4math-swarm`. I need to read handoff/map and comms, take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, exit. worker=021.
+
+Let me explore that directory.
+dsh: reasoning:
+This is the swarm. I'm worker 021 (worker=021). Let me read the handoff, map, and comms. The task says:
+
+"You are a bounded execution worker. Read handoff/map and comms. Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit. worker=021"
+
+So I should:
+1. Read HANDOFF.md, research_map/ASTRA_HANDOFF.md, research_map.json (maybe summary), ARCHITECTURE.md
+2. Read comms/inbox and outbox for assignments
+3. Take one class-bound task assigned to worker 021 (deepseek-flash-21)
+4. Emit valid JSON with node/class IDs, evidence refs, hash, next falsifier into comms/outbox/deepseek-flash-21
+5. Checkpoint (using research_map/checkpoint.py presumably)
+6. Exit
+
+Let me look at the map files first. Note research_map.json is 4MB — I should check its structure with python/jq rather than reading raw. Let me read HANDOFF.md and ASTRA_HANDOFF.md.
+dsh: reasoning:
+Now, I need to read comms — specifically my inbox: `comms/inbox/deepseek-flash-21.jsonl` (worker=021, likely agent id deepseek-flash-21). Let me check.
+
+Also read comms/PROTOCOL.md. Let me inspect inbox dir.
+dsh: reasoning:
+I'm worker-021. There's an outbox `comms/outbox/worker-021.jsonl` (36KB, modified 00:52). There's no inbox `worker-021.jsonl`... wait, there's `deepseek-flash-21.jsonl` in the inbox (subset of workers 01-20). But the outbox has worker-021.jsonl which suggests worker 021 is an active worker assigned tasks by leads. But no inbox for worker-021.
+
+Let me check the map for assignments to worker-021, and read my outbox to see what I've already done (the prior worker-021 session). The task says "Take one class-bound task" — likely there's an assignment for me in the map (`assignments` field) or an inbox message. Let me check.
+
+Let me query research_map.json for assignments mentioning worker-021, and look at the tail of my outbox.
+
+Also note the outbox worker-021.jsonl is 36KB modified 00:52 — that's very recent (now ~00:53+). So a worker-021 identity exists and has been emitting. But wait — maybe that was a previous incarnation of this same worker slot. My job: take ONE class-bound task, emit JSON, checkpoint, exit. I should not duplicate existing work (CF-12: one canonical path, one owner — do not duplicate or repoint).
+
+Let me look at the last few events from worker-021 outbox, and search the map for assignments with assignee worker-021.
+dsh: reasoning:
+Interesting. The previous worker-021 session completed task W021-L0-BUILD-REPL-01 at 00:52:10 and appeared to exit cleanly. Now I'm a new bounded execution worker (worker=021). The instruction: "Read handoff/map and comms. Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit."
+
+So I should find a currently open, unclaimed class-bound task. Let me look at the assignments in the map, particularly the pass-05 cards and worker-level assignments. Also check the inbox for worker-021 — there's no inbox file for worker-021? Let me check `comms/inbox/worker-021.jsonl` existence. The listing showed inbox files up to worker-16, worker-100... Let me list all inbox files matching worker-021 and deepseek-flash-21.
+
+Actually the inbox listing was truncated? It showed files from astra ... worker-100. Let me grep for "worker-021" in inbox list. From the ls output: astra.jsonl, astra-lead-*, deepseek-flash-01..20, flash-*, worker-012, 015, 01, 035, 041, 046, 052, 06, 071, 084, 085, 089, 091, 16. Head -60 cut off. Let me list all.
+
+Then I need to check the map's assignments for open tasks that are class-bound and unassigned/available. Let me dump assignments with status, assignee, node_id, gate, deadline.
+
+Given lots of traffic, I must pick ONE bounded task and complete it quickly, with evidence hash and falsifier, then checkpoint and exit. Also worker events cannot set status=done etc.
+
+Let me inspect assignments and open tasks.
+dsh: reasoning:
+No inbox for worker-021 (grep found nothing). Assignments have no status field. Let me look at recent assignments (pass-05 cards) and which are assigned to whom. Also look for assignments to "worker-021". Let me dump the last ~30 assignments compactly.
+dsh: reasoning:
+These assignments are mostly for leads, not for worker-021. The worker-level assignments (audit-r2-*) went to specific workers. My worker id 021 has no inbox and previous outbox shows it did an L0 build replication task.
+
+Hmm — the instruction says "Take one class-bound task". Since there's no assignment for worker-021 in the map yet, I need to "inspect the immediate queue and propose one artifact-backed task without claiming completion" — per the launch_swarm prompt for workers: "Work only on a class-bound task assigned by a group lead; if no assignment exists, inspect the immediate queue and propose one artifact-backed task without claiming completion."
+
+But the direct instruction to me says "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit." So I should pick a task from the immediate queue, do bounded artifact-backed verification work that is genuinely useful and not duplicating, emit events, checkpoint, exit.
+
+Let me check the current open queue / direction. Perhaps there's a leads' outbox with a work queue for workers. Also check `runtime/state/counts.tsv`, `supervisor.log`, and any pending "proposed" tasks. There is `proposals/` and `proposed/` dirs.
+
+Also, importantly, check whether worker-021's previous task left a follow-up. The previous outbox's last status says "CHECKPOINT complete and exiting cleanly". Note that the outbox worker-021.jsonl has events at 00:52:10 which may be from a prior run of this same worker (perhaps the same harness). The current time? Let me check date. The swarm is live (files modified 00:53). I need to be careful about racing with other agents.
+
+Let me first check what the current open work items are. Look at recent lead-audit inbox (assignments to lead) and lead outboxes to see the live queue. Actually, my instruction is to pick one class-bound task. Given the state:
+
+- G-FORM evidence-binding repair in flight (lead-formulation), r3 re-review pending (lead-audit).
+- G-NUM protocol adjudication.
+- G-AUDIT classsep calibration (CF-16 false positives).
+- L0 final verification.
+
+A useful bounded worker task: independently verify something specific with a hash. Since I must emit valid JSON with IDs, evidence, hash, falsifier, checkpoint, exit — a good candidate: a targeted independent check that supports one of the pending gates, e.g.:
+
+1. CF-21: scalar `axes.genericity_kind` stale against explicit comeager conclusion in F0 taxonomy — check whether rev5 taxonomy `axes.genericity_kind` is actually stale; but G-F0 passed and file is frozen; writing to it voids G-F0. Read-only verification is fine.
+2. The G-FORM evidence-binding defect: schema `consistency_evidence_sha256` stale, case corpus rebound in flight — verify current binding hashes between F1/F2 schemas and the case corpus. But lead-formulation is actively repairing (rev13 pending) and lead-audit is re-reviewing; CF-12 says don't duplicate. Careful.
+3. CF-16: 20 CLASSSEP hard findings may be metalinguistic-mention false positives — a calibration task is assigned to lead-audit (astra-life05-classsep-calibration). Hmm.
+
+Given "one class-bound task... emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit", and given worker events can't set done/passed, the deliverable is an evidence-backed artifact plus events.
+
+Maybe better: check for a pending worker-level queue in the leads' inboxes — maybe lead-formulation sent assignments to worker-021 that haven't been picked up. Let me grep the leads' outbox for "worker-021" and also check `comms/inbox` files list in full to see if there's an inbox for worker-021 or deepseek-flash-21.
+
+Also check `runtime/state/counts.tsv` for open node count, and `proposals/` / `proposed/` dirs for tasks awaiting workers.
+
+Let me also check the "immediate queue" in ASTRA_HANDOFF: open assignments are all lead-owned. Hmm, but there might be lower-level task cards in `research_map/research_map.json` → assignments where assignee starts with "worker-" and for nodes not yet claimed.
+
+Let me search the leads' outbox for recent assignment events to workers and see if any is unclaimed. Actually since I have no inbox, the cleanest is to pick an unassigned, class-bound verification task that directly feeds a pending gate and has not been done: e.g., independent verification of the G-FORM rev13 repair once it lands (but that's lead-audit's r3 card), or the CF-21/CF-20 residuals.
+
+Wait — let me re-read my instruction: "Read handoff/map and comms. Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit. worker=021". This mirrors the worker prompt pattern. Perhaps the intended behavior is exactly: find any open class-bound task in the immediate queue, do it, emit JSON, checkpoint, exit. The supervisor may then ingest my events.
+
+Let me look at what other "worker-NNN" agents have been doing recently and find a gap. Let me look at runtime/state/supervisor.log tail and counts.tsv to see the current pipeline.
+
+Also there's `research_map/class_separation.py` (CF-16 detector) — the classsep calibration is assigned to lead-audit. A worker could produce an independent measurement: recount the 20 CLASSSEP hard findings and classify metalinguistic-mention false positives with an independent detector. But that duplicates lead-audit's card.
+
+Alternative: CF-21 scalar genericity axis. That's a residual non-blocking finding on G-F0. A bounded, class-bound verification: read `formulation_taxonomy.yaml` rev5 rev28-frozen, extract `axes.genericity_kind` scalar and the F0 class conclusion text, and determine whether the scalar is stale. This is read-only, safe (no write to the frozen file), independent, small, and useful for the F0 residual. It's class-bound to AF-WCC-VAC-GEN etc. Evidence: file + line + hash; falsifier: if the scalar actually matches the comeager conclusion, finding fails.
+
+But is it already done? CF-21 was raised at pass 05. Let me check controller_findings CF-21 text and whether any event addresses it. Let me search events.jsonl for CF-21.
+
+Another candidate: verify the "class corpus rebound" binding after rev13 lands. Timing-dependent.
+
+Let me gather info: CF-16, CF-20, CF-21 details; recent events about classsep; tail of supervisor log; current time.
+dsh: reasoning:
+Now let's decide the ONE class-bound task. Options:
+
+A. CF-21 independent read-only adjudication: verify the exact text at `research_map/formulation_taxonomy.yaml#0abb9ed8a961` lines 393,414 and whether `axes.genericity_kind` is stale for AF-WCC-SCALAR-SPH. This is truly read-only, class-bound, bounded, and produces an artifact + hash + falsifier. It supports the residual. Risk: could be viewed as duplicating lead-audit? CF-21 action says: "G-F0 passed ... finding recorded, NOT discharged... If a future revision repairs the axis, it must re-run the F0 review round." So it's recorded-open, no assignment. A worker delivering an independent measurement of the specific lines and a precise repair recommendation (not writing the frozen file) is useful and non-duplicative.
+
+B. CF-20/G-FORM evidence binding: verify current state of rev13 (lead-formulation is repairing hastily; deadline 01:40). A worker could independently measure whether bindings now match. But the repair is in flight and the r3 review is lead-audit's. Doing it now risks racing stale bytes and duplicating.
+
+C. CF-16 classsep calibration: assigned to lead-audit; skip.
+
+D. L0 final verification: two blind reviewers needed; lead-audit card. Worker-021 already did build replication. A *third* independent check could be useful but may collide with astra-life05-verify-l0-final.
+
+E. A targeted G-NUM item: `numerics/gates.py` fcd1d70991b6 — protocol contested. The adjudication is lead-audit's.
+
+F. Check the last item in my own outbox — was there a "next falsifier"/open thread from W021-L0-BUILD-REPL-01? It said "Re-run ... replicate_l0_build.py". That's a self-contained task already done. But maybe I should do a *new* bounded task.
+
+Given "take one class-bound task", option A is clean, safe (read-only), bounded, independent, and generates real evidence for a recorded-open CF. But is it "class-bound"? Yes: AF-WCC-SCALAR-SPH (the class whose `axes.genericity_kind` is stale), under G-F0 taxonomy rev5.
+
+However, I should first check whether someone else already delivered exactly this (search events/outbox for genericity_kind / CF-21). Let me grep recent events for "genericity_kind" and "CF-21". Also search for open worker tasks in the leads' inboxes/outboxes referencing "worker-021".
+
+Also, potentially better: find an actual *unclaimed work assignment* meant for a free worker. Let me search the leads' outbox recent events for `assignee: worker-*` and check claimed status. But the map's assignment list is authoritative; the last worker-level cards were audit-r2-* for workers 071/085/046/091/015/035/041/052/089/012, and those workers all have outboxes. There's no card for worker-021 except the L0 build replication which the prior session apparently self-assigned (W021-L0-BUILD-REPL-01). Hmm, interesting: worker-021 outbox has events tagged `w021-l0buildrepl-...` and referenced artifact `artifacts/worker-021/l0_build_replication/`. That looks like the same "bounded execution worker" pattern: a previous worker=021 took a self-proposed bounded task and completed it.
+
+So my path: pick a self-proposed bounded class-bound task, do it, emit JSON, checkpoint, exit.
+
+Let me check quickly whether CF-21 has any existing worker measurement, and inspect the taxonomy lines. Also check the F0 gate entry in map.
+dsh: reasoning:
+Worker-094 at 00:56:30 (in the future relative to now 00:53:55? Wait, the event timestamp says 2026-09-12T00:56:30+08:00 — that's later than current date 00:53:55 *from my `date` call*. Hmm, events.jsonl might contain events with slightly ahead timestamps? Actually my date call was at 00:53:55 and the events.jsonl file was modified 00:52. Wait, but I just grepped events.jsonl and found a worker-094 event with created_at 00:56:30. That means either the events file was updated between my commands (very likely — the swarm writes frequently), or clock skew. Actually, my grep ran at ~00:54-00:55. Let me re-check current time and the file mtimes.
+
+So worker-094 has ALREADY done the CF-21 genericity-consistency task with a declared checker, exit at ~00:56:30. That closes option A — do not duplicate.
+
+OK so the swarm is moving fast. I need to find a genuinely open bounded task. Let me look at the freshest state: what happened after 00:53? Let me check the tail of events.jsonl, and the newest outboxes, and look for open/unclaimed work. Let me also check supervisor.log tail and the leads' inboxes for outstanding worker assignments.
+
+Given the pace, my task should be:
+1. Read the latest traffic (events after 00:53).
+2. Find an unclaimed bounded class-bound item.
+3. Do it fast, emit events, checkpoint, exit.
+
+Candidates from CF-20: the evidence-binding repair is due 01:40. Worker could verify rev13 bindings once they land — but that's lead-audit r3.
+
+Let me look at the most recent events (last ~60) to see what's in flight and what's missing.
+dsh: reasoning:
+Small error on one field being a list. Let me redo with safe conversion. Also note current time is 00:54:10 and events file was modified 00:53:28. The worker-094 event at 00:56:30 I saw earlier... wait, that grep was over events.jsonl and found "CF-21" in `astra-life05-gate-gf0` etc. Let me check the created_at of w094-gencons events. It said 20260912T005630 in the event_id, and I printed the statement only. The created_at is probably ~00:53 or the event_ids carry a timestamp that's ahead? Odd. Actually, the event_id `w094-gencons-20260912T005630-...` means 00:56:30 — but current time is 00:54:10. That is in the future! Unless... the machine clock vs event timestamps. Hmm, maybe worker-094's clock or the event was pre-dated. Let me check the created_at of those events directly. If events exist with future timestamps, that's worth noting (could be a clock-skew finding, but not my task).
+
+Let me re-run the tail listing properly.
+dsh: reasoning:
+Interesting: worker-094 events have created_at 00:56:30 while my `date` says 00:54:10. There's a ~2.5 min clock/timestamp skew, OR the system clock moved. Whatever.
+
+Key observation: The swarm has many workers all self-claiming bounded tasks near the same time. The work is getting saturated. I need a task that:
+- is class-bound
+- is bounded (can finish in minutes)
+- adds evidence/gain, not duplicate
+- emits proper JSON events with IDs, evidence, hash, falsifier
+- checkpoint + exit
+
+Let me look at worker-095's blocker (W095-HOLD-BIND-INTEGRITY-05): "Event-stream shadow: 4/5 held paths ... R4 FAIL" — evidence-resolution defect at pass-06. That's about FROZEN rev28 manifest binding. And worker-16 (W16-CORPUS-REBIND-01): "run_acceptance.py cannot exit 0 at frozen bytes... only remaining failure is canonical F1 R03" — F1 corpus rebind.
+
+And worker-098: classsep detector drift, G-AUDIT blocked with 16 live hard findings, 3/4 declared false-positive probes still firing.
+
+Also the lead-formulation repair deadline 01:40 — the rev13 + FROZEN rev29 publication.
+
+Given the fast traffic, a good candidate for a worker-021 bounded task would be something no one has done: an *independent* measurement task that is orthogonal and small. Options:
+
+1. CF-23 A0 detector scope: assigned to lead-audit, but a worker could provide an independent census of the 8 files. Hmm, worker-021 previously did an A0 HF-14 corpus recount (per the review in my outbox: "A0 HF-14 corpus recount independently confirms lit-l5-20260912-021: all 586 affected records across 12 files are pre-rev3 snapshots, 0 canonical/build-input"). So worker-021 has A0 context. But CF-23 is assigned.
+
+2. L1 spot check #5 (worker-100 did #4 at 00:54). The astra-life05-verify-l0-final card (lead-audit, 02:30) needs two blind accepts at a1674f094979. Worker-100 is doing spot checks. Could I do an independent L1 spot-check on a *different* row range? That's useful: a fifth independent spot check, rows SRC-061..080 perhaps. But is that class-bound? Class_id GLOBAL for L0/L1. Hmm, "class-bound" means tied to a class node — L1 is literature ledger. The instruction says "Take one class-bound task" — probably means a task bound to a node/class ID, not necessarily one of the four physics classes. The GLOBAL class_id is used for L0/L1/A0/A1 nodes. I think that qualifies.
+
+But careful: "two blind L0 reviewers at a1674f094979" is the resource decision. Worker-100 doing spot checks is helpful. An independent, non-duplicative bounded task: L1 citation spot-check on rows not yet sampled (checking which SRC ranges have been sampled so far).
+
+3. The F1 "canonical F1 R03" failure in W16-CORPUS-REBIND-01: run_acceptance.py cannot exit 0 at frozen bytes; only remaining failure is canonical F1 R03 (corpus base mismatch 1bb78ce9 vs 55d0a1ea). This is exactly the G-FORM binding repair in flight; lead-formulation's card. Not mine.
+
+4. G-NUM: numerics protocol contested; N0 stop-rule evidence da7c36071995. Maybe there's an unassigned independent check of the N0 flat-space convergence evidence? The adjudication is lead-audit's (astra-life05-gnum-protocol-adjudication, 02:15). Worker-012 did audit-r2-N0. Hmm.
+
+5. CF-21 is now done by worker-094 (at 00:56:30, ahead of me). So skip.
+
+Let me check what task cards exist that are *unclaimed by any worker* — perhaps in `comms/inbox/<lead>.jsonl` there are cards to workers that no one picked up. Or maybe there's an explicit queue file. Let me check `proposed/`, `proposals/`, and the `runtime/state/counts.tsv`. Also check `research_map/research_map.json` → `run` (maybe has open_queue) and `comms`.
+
+Actually, a cleaner approach to "one class-bound task": pick the highest-value missing evidence per the current controller decisions (REC-11..REC-21) that no worker is on. Let me read the decisions record and the latest checkpoint to see explicit "needed" items. Let me read `runtime/state/controller_verification/astra-lifecycle-05-decisions.json` and check the newest controller verification JSON for gaps.
+
+Let me also check whether there's a fresh pass-06 running (lifecycle 06). The supervisor log tail will tell.
+dsh: reasoning:
+I was launched by the supervisor as `worker-021` at 00:53:07 (`supervisor.log: launch worker-021 worker-021-20260912T005307-968807`). So I'm the fresh incarnation of worker-021, launched 00:53:07. The prior worker-021 events ended at 00:52:10 — a different run.
+
+My instructions: take one class-bound task. Given the supervisor launched me with a generic worker prompt (probably similar to the swarm prompt: read handoff/map, work on assigned class-bound task; if no assignment, inspect the immediate queue and propose one artifact-backed task without claiming completion).
+
+Let me check the supervisor script to see exactly the prompt worker-021 got. `supervise_swarm.sh` / `supervise_loop.sh` / `independent_supervisor*.sh` / `overnight_watch.sh`. That will tell me the expected format. Let me read supervise_swarm.sh and overnight_watch.sh.
+
+Also note: many workers run in parallel; the system is timing out workers quickly? Let me check the supervisor to see the worker prompt and timeouts. This matters: if I'm killed after a few minutes, I must produce output fast.
+
+Let me read supervise_swarm.sh and the wrapper.
+dsh: reasoning:
+The driver scripts are in /data3/guoshaoyang (root), not the swarm dir. `supervise_swarm.sh`, `supervise_loop.sh`, `independent_supervisor*.sh`, `overnight_watch.sh` are in the home dir. Let me read them.
+dsh: reasoning:
+My prompt matches `supervise_loop.sh` worker: "You are a bounded execution worker in cosmic-censorship. Read handoff/map and consume comms. Each iteration take one available class-bound task; if none, inspect immediate queue and propose one artifact-backed task. Emit valid JSON event with IDs, evidence/hash and next falsifier; checkpoint; finish iteration. Never claim theorem from prose."
+
+And the direct message says worker=021. Good.
+
+So: pick ONE available class-bound task. It must be bounded and completable within this iteration. Emit events to `comms/outbox/worker-021.jsonl`, checkpoint (there may be a worker checkpoint convention — previous worker-021 wrote a checkpoint event; also `research_map/checkpoint.py` writes full controller checkpoint; but "checkpoint" for a worker likely means a worker-local checkpoint artifact/event with checkpoint sha, e.g. `runtime/state/w021_*_checkpoint.json`).
+
+Now, what task? Let me find something genuinely available and not duplicate. Let me check:
+1. Which L1 spot-check row ranges are already done (worker-100 #1-#4: SRC-001..060?). If spot checks #1-4 covered SRC-001..060, a #5 on SRC-061..080 would be new and directly supports `astra-life05-verify-l0-final` (needs two blind accepts at a1674f094979) and G-LIT.
+2. Are there other L1 spot-check workers? Let me grep events for "spot check"/"spotcheck" and see the coverage and owners.
+3. Check A1 classsep: worker-098 just closed; 16 live hard findings remain. The calibration is lead-audit's card. A worker measuring the remaining 16 findings independently could help but may duplicate.
+
+Let me check L1 spot-check coverage. Also check who is verifying L0 (two blind reviewers). Note the G-LIT resource decision: "literature lit-l5-20260912-022 APPROVED 3.0 h (two blind L0 reviewers at a1674f094979)". So two *blind L0 reviewers* are needed. A blind L0 review would be higher value than another L1 spot check (worker-100 is already doing L1 spot checks). Is any worker already doing an independent L0 content review at a1674f094979? worker-097 did "L0 content review ... revise 1.75" at an earlier hash. Let me check recent events for L0 reviews at a1674f094979.
+
+Careful: CF-19 says "Two blind accepts at the announced hash are required before G-LIT is proposable (astra-life05-verify-l0-final)". The lead-audit card is the verifier; workers can supply independent blind reviews. If no worker has yet produced a blind L0 review at a1674f094979, that's a high-value, bounded, class-bound (GLOBAL/L0) task. It also matches worker-021's prior L0 build-replication work (I know the build internals).
+
+Let me check events for L0 reviews at a1674f094979 (created after 00:35). Let me grep the outboxes too.
+dsh: reasoning:
+Now I see the landscape. A lot of L0 verification work has been done. The critical path per lit-l7-20260912-004/005 (00:56:20):
+
+- 8 L0 rows disjoin two frozen class ids (HF-02) — numerous workers on it.
+- NEW: lit-l7-20260912-005: "HF-14 renamed-vocabulary scope. Measured from bytes at a1674f09: the literal detector predicate is absent (0/62 rows carry status, validation_status or supports_claim)..." — this is a new finding about HF-14 vocabulary. Let me read that blocker fully.
+
+Also G-FORM evidence-binding repair: rev13 items (2)-(4) open; deadline 01:40. And CF-23 A0 detector scope; CF-16 classsep.
+
+Since the swarm saturates quickly, I need to pick carefully. Let me pick something that:
+(a) hasn't been done by another worker,
+(b) is bounded (~few minutes),
+(c) is class-bound,
+(d) supports a live gate,
+(e) has an artifact + hash + falsifier.
+
+Given my identity is worker-021 and I already know the L0 build/replication path, an excellent task: independent verification of the **CF-20 item (2)** — the schemas' `f0_binding.consistency_evidence_sha256` refresh to the live taxonomy_consistency.json after a clean `check_taxonomy_consistency.py` run. But the formulation lead is actively repairing (rev13 in flight, deadline 01:40). A *pre-repair* measurement is unhelpful; a post-repair verification duplicates lead-audit's r3.
+
+Alternative: CF-23 A0 detector scope — the audit lead has the card, but the card's action is "scope the detectors to canonical artifacts + live build inputs or define an explicit historical-marker exclusion, with a measured before/after list at pinned hashes". This is partly a tool change (audit_evidence.py). A worker could measure the 8 historical-record hits independently — but lead-audit owns it.
+
+Alternative: an independent measurement to support `astra-life05-verify-gform-r3`: e.g., confirm the exact list of files the three schemas bind (`consistency_evidence_sha256`), and provide a small checker. But again lead-audit.
+
+Alternative: **G-FORM item (3): F1 variant SET/CH strictness text at worker-076 lines (assertion direction only)**. Hmm, that's a text change by formulation lead.
+
+What about checking the *new* lit-l7-20260912-005 HF-14 renamed-vocabulary scope? Let me read that blocker; it says the literal detector predicate is absent (0/62 rows carry status/validation_status/supports_claim) — meaning after rev3 FINAL rebuild, the HF-14 detector no longer matches because the vocabulary changed; and there may be a *new* exposure path: rows that self-certify via renamed fields. A worker could independently measure the renamed-vocabulary exposure (e.g. `review_status`, `validation_status`, `self_certified`, etc.) across the 62 rows — i.e., build a vocabulary-agnostic HF-14 detector and measure exposure. That's a genuinely valuable independent check and it's fresh (00:56:20). But wait — worker-093 did "(1) the HF-14 triple predicate returns 0 rows... (2) the A0 rubric..." and worker-097 did "HF-14 literal/axis scans". Let me read lit-l7-20260912-005 full text and check what's already covered.
+
+Let me also check the F1/F2 schema binding current state; maybe there's a quick, high-value check: the `f0_binding.consistency_evidence_sha256` in the three schemas vs live evidence, and whether `check_taxonomy_consistency.py` exits clean. That's exactly CF-20 item (2)'s acceptance criterion, and if the formulation lead already landed it (they might have by now), an independent verification would feed the r3 re-review. But the r3 card is lead-audit's; a worker can still supply a bounded independent measurement — that's the swarm's pattern (workers emit measurements; leads review).
+
+Careful about duplicating worker-095's binding-integrity re-probe (r3 at 00:53:20) which already covered "schemas/af_wcc_vacuum.yaml ... event-stream shadow, R4 FAIL". Hmm, that's the freeze-hold/binding integrity task. Worker-095 measured: "the five held canonical paths match their pins (R1...)" and "R4 FAIL" with the blocker: "Two evidence-resolution defects persist at pass-06... (1) Event-stream shadow: 4/5 held paths ...". That's related to CF-20 but not identical.
+
+Let me read lit-l7-20260912-005 and lit-l7-20260912-004 in full, plus the current FROZEN.json state, to find the gap. Also check whether rev13 landed (schemas hashes/mtimes).
+
+Actually, let me think about what would be most valuable and *non-duplicative* right now:
+
+The G-LIT gate's critical path: L0 needs accepts at a1674f094979. Recent verdicts: worker-075 accept 4.0, worker-029 measurement (?), worker-005 content/honesty pass, worker-093 revise, worker-097 revise, deepseek-flash-18 revise, worker-006 accept at old hash, worker-035 corrections. The lead literature says critical path is the 8 HF-02 rows + HF-14 renamed-vocabulary scope.
+
+A bounded, independent, *decisive* worker task: **produce a vocabulary-agnostic HF-14 exposure census at a1674f094979** — i.e., enumerate every row field that could constitute a self-certification of source support (status/validation_status/supports_claim/review_status/source_support/evidence_level/...), and report which rows carry an affirmative value without a reviewer verdict + artifact hash. That directly addresses lit-l7-005 and is independent of the literal detector. But worker-093/097 may have done pieces of it.
+
+Let me read lit-l7-20260912-005 in full from the events (or find the artifact/outbox). Then decide.
+
+Also, importantly: I must finish within a bounded time. Let me not over-analyze. I'll do one focused measurement with a small script, artifacts, events, checkpoint, exit. Let me read the blocker text now.
+dsh: reasoning:
+This is a rich picture. BL-9 (HF-14 renamed-vocabulary scope) needs an A0/rubric-owner ruling. BL-7 needs controller/A0 ruling. BL-10 is controller-owned. BL-11 is literature/formulation.
+
+A bounded class-bound worker task that would be genuinely valuable and non-duplicative: an **independent measurement to inform BL-9's ruling** — but the ruling itself is A0's. Workers can provide evidence. However, lit-l7-001 already measured the renamed-vocabulary counts (60/62 author_asserts_supports, 50 content_status=verified, 62/62 review_status=not_independently_reviewed). An independent *verification of those counts* plus a precise mapping of the rubric HF-14 text to the renamed fields could be useful but is close to duplication.
+
+Alternatively, BL-7's ruling needs a scope decision: does HF-02 (class disjunction) apply to ledger rows? evaluation_rubric.yaml:52-54 says classes "must never be disjoined in a statement" — A0 configuration question. Workers have already re-derived it 5 times. Worker-077 provided an adjudication ("A0 HF-02's disjunction branch operates on the singular claim field class_id"). So that's saturated.
+
+BL-10 is controller-owned (scan undercount). Interesting: "The missed reports sit outside reviews/ and use non-standard keys (verdict_recommendation) or lack artifact_sha256 on their events." A worker could independently measure the scan surface and provide the exact list of L0 verdicts the controller scan misses, with a small reproducible checker. But it's controller work; workers shouldn't do the controller's job. Though providing evidence is fine. Hmm.
+
+BL-11: "Literature: give SRC-096 and SRC-097 theorem entries at the next authorized L0 revision ... and add primary-source anchors for the s>5/2 / delta / positive-mass / predictability items". Worker-039 already did the Sobolev class check at 00:49. Worker-009 did DET-REV12 candidate promotion. The positive mass theorem and future-asymptotic-predictability equivalence anchors are still OPEN (0 hits in L0/L1). A bounded worker task: **primary-source anchor search for the positive mass theorem and the future-asymptotic-predictability equivalence, scoped to the four frozen classes** — i.e., find whether the pinned sources that F1 already cites contain those anchors, with exact quotes and locators, or report unresolved. But that requires literature/web work, and my iteration budget is limited; also "add theorem entries at next authorized L0 revision" is owner work.
+
+Hmm. Let me consider the G-FORM critical path instead: CF-20 repair items (2)-(4) with deadline 01:40. It's now ~00:57. The repair may land soon. The `astra-life05-verify-gform-r3` card (lead-audit, 02:45) will re-review at rev29 pins. A worker measurement that would help: an independent, read-only **binding-integrity checker at the rev13/rev29 pins** — but that's exactly what worker-095 did r3 (found event-stream shadow + R4 FAIL) and what lead-audit will do.
+
+What about the F1 corpus rebind (worker-16: "run_acceptance.py cannot exit 0 at frozen bytes... only remaining failure is canonical F1 R03")? That's formulation-lead repair item (1)/(4) territory. Lead-formulation is on it.
+
+Consider CF-23 (A0 detector scope). Lead-audit card astra-life05-a0-detector-scope (deadline 02:00, 0.5h). A worker can't preempt; but a bounded independent measurement of the *before/after list at pinned hashes* could feed the card. That's a concrete, bounded measurement: enumerate which files the HF-14/HF-03 detectors currently hit, classify historical vs canonical/build-input, and produce a before/after candidate scope list. worker-021 previously did an A0 HF-14 corpus recount (586 records across 12 files, all pre-rev3 snapshots, 0 canonical/build-input) — strongly related! So worker-021 has the tooling/context. But CF-23 says 8 files after rev-3 repair. The lead-audit card exists, and doing it might duplicate.
+
+Hmm, what about something time-stable and clearly unclaimed: **BL-10 independently**? "Controller repairs the scan/registration surface ... and re-runs the gate audit". Not a worker task.
+
+Let me look for the *actual* open assignment cards to workers in the leads' inboxes. The leads may have queued worker-level cards. Let me check the most recent outbox events of astra-lead-audit and astra-lead-formulation for "assignment" events with assignee worker-*. Those are downward messages; if any are unclaimed, I can take one. Let me grep the leads' outboxes for assignment events in the last ~30 min and see which assignees.
+
+Actually — a better plan: check `comms/inbox/worker-021.jsonl` doesn't exist; but maybe leads addressed a card to a *different* worker id that never got launched. The supervisor launches worker-001..100? The swarm now has worker-001..100 (launched in batches by `independent_supervisor*.sh`). Cards for specific workers may be unclaimed if that worker slot didn't run.
+
+Let me search recent assignment events (downward, in leads' outboxes) for assignee names and check if the assignee ever emitted a matching task. That's a bit heavy. A cheaper approach: check `comms/inbox/` for a worker file with content and no corresponding outbox activity. But I can't take another worker's card (CF-12 one owner).
+
+Given the saturation, the most defensible thing: pick a bounded class-bound measurement that is *clearly not done* and *directly informs a gate*. 
+
+Candidate: **Independent measurement of the A0 rubric HF-14/HF-02 rubric text vs the frozen L0 ledger vocabulary — a "rubric-to-ledger field binding table"** that A0 needs for BL-9/BL-7 rulings. But that's basically judgment for A0.
+
+Candidate: **First independent verification of the L1 `citation_audit.csv` exact-locator readiness for the AF-WCC-SCALAR-SPH class (BL-4)** — worker-099 did exactly that at 00:52 ("BL-4 decision support completed for the fourth frozen class AF-WCC-SCALAR-SPH ... 10 rows, 2 direct..."). Done.
+
+Candidate: check `evaluation_rubric.yaml` (A0, d748a9e3574e) is registered in artifact_hashes and that HF-14/HF-02 text is quoted correctly in the gate audit — meh.
+
+Let me step back and think about what "one class-bound task" would maximize value with minimal duplication and finish in ~10-15 minutes:
+
+**Verify the F0 rev5 canonical taxonomy's class-contract supplement is self-consistent with each of the four class schemas at their live pins — a cross-file axis-binding matrix.** This is the G-FORM/CF-20 area but distinct from "binding hashes": it checks *semantic axis agreement* across F0/F1/F2a/F2b. Hmm, but worker-083 and worker-090 did VOCAB_ALIASES and vocabulary tasks; worker-094 did genericity consistency. Risk of duplication.
+
+**Alternative: a "review-coverage scan" independent implementation (BL-10).** BL-10 says the controller's scan missed 3 of 5 verdicts; the missed ones use `verdict_recommendation` or lack `artifact_sha256`. A bounded worker deliverable: an independent scan implementation + the exact verdict census at a1674f094979 + a *falsifier* and recommended registration rule. But the controller owns the repair; a worker providing a measured census is evidence, not the repair. Is it duplicative? The literature lead measured 5 verdicts; the controller needs the scan fix. A worker could build a small reproducible scanner (glob all review-shaped JSON under reviews/ and artifacts/worker-*/**, key aliases verdict/verdict_recommendation/recommendation, bind by artifact_sha256/ledger sha) and measure the delta vs the controller's scan. This is a tool+measurement, bounded, class-bound (GLOBAL/L0, G-LIT), and clearly needed (BL-10 is open, controller-owned "needed_to_unblock"). But a worker doing a controller repair is against authority? No — workers can emit measurements/artifacts; the controller applies them. The task prompt says workers work on class-bound tasks; BL-10 is a controller-owned finding but the *measurement* is fair game and non-duplicative (nobody has built a registration-surface scanner).
+
+Yet: "Controller repairs the scan/registration surface" — the controller may already be fixing it in the next pass (a controller process was launched 00:53:27!). If I build a scanner, the controller might do it too. Duplication risk high.
+
+Hmm. Let me look at what the current worker fleet is *not* doing. Let me grep the last ~10 minutes of events for task topics to build a "coverage map". From what I saw:
+- L0 reviews/verdicts: workers 005, 018, 025, 029, 035, 037, 063, 072, 073, 075, 077, 093, 097, 006, 023, 062, 050, 099, 100, 079, 049, 056, 028, 009, 010, 016, 090, 098, 094, 095...
+- Classsep: 098.
+- A0 detectors: 063, 075, 005.
+- Formulation binding: 095, 016.
+- N0 numerics: 012, 081.
+
+The swarm is saturating the critical path. The best remaining thing might be an **independent verification of the N0 flat-space convergence result** — the N0 node evidence `da7c36071995` stop-rule + `8b52014dac47` N0 report; G-NUM protocol contested (accept 4.5 vs two revise). The adjudication is lead-audit's (02:15). Worker-012 did audit-r2-N0 at 00:47ish. A worker could independently re-run the flat-space scalar-wave convergence check from the frozen script to see if the numeric claim replicates — that's a real numerical check, high value for G-NUM, and bounded (run a solver script). But G-NUM is gated by G-FORM+G-AUDIT; N0 work is allowed. Is the numerics code runnable quickly? Let me check `numerics/` contents.
+
+Actually the N0 replication was already run by astra (`runtime/state/controller_verification/n0_flatwave_astra_run.json`, `n0_replication_astra_run2_FIXED.json`). And worker-012 was assigned audit-r2-N0. Hmm.
+
+Let me check whether N0's convergence evidence has an *independent* third implementation. Worker-081 withdrew task W081-N0-FDT-02 (CF-22). Maybe an independent replication of `numerics/results/flat_wave_convergence_rev3.json` is genuinely missing and valuable. Let me look at the N0 deliverable and see if re-running is quick.
+
+Actually, time check: it's ~00:57. I've spent several minutes reading. I should commit to a task now. Let me quickly inspect the N0 numerics artifact and the flat-space script, plus check the current map's gate reasons for G-NUM. If a quick independent re-run is feasible (<10 min), that's a strong, class-bound (AF-WCC-SCALAR-SPH), high-value task: independent numerical replication of the N0 convergence evidence with a *different* implementation (or at least independent driver), artifact + hash + falsifier.
+
+Let me look at numerics/ directory.
+dsh: reasoning:
+Look at `numerics/results/flat_wave_convergence_rev3.json` and `runtime/state/controller_verification/n0_*`. The G-NUM gate requires: flat-space convergence order measured AND independently replicated within tolerance; protocol reviewed; lock guard passes. The protocol is contested (accept 4.5 vs two revise); N0 verdict still revise.
+
+An independent replication of convergence order would be the strongest missing evidence for G-NUM's first criterion. Let me see if it already has independent replication: files `flat_wave_replication.json`, `fixed_replication_verdict.json`, `fixed_replication_verdict_rev2.json`, astra runs 1 and 2 FIXED. So there is a replication (astra's own?). The question is whether it's *independent*. Let me read the N0 gate proposal and the protocol summary to see what the contested points are.
+
+Let me read `numerics/protocol/build_n0_gate_proposal.py` summary / `gate_reports_summary.json` / `three_scheme_r1r5_summary.json`. And the G-NUM gate proposal in the map (`gate_proposals`). Let me look at those quickly.
+
+Actually — the protocol adjudication card is lead-audit's, deadline 02:15. Workers 012 etc. already covered N0 audit. Risk of duplication is moderate-high.
+
+Let me reconsider: what is definitely NOT covered and bounded?
+
+Given the swarm's pattern, each worker self-proposes. The highest-value *fresh* item I noticed: **BL-11's open "anchor half"** — primary-source anchors for (a) weighted-Sobolev thresholds s>5/2 and delta in (1/2,1) [worker-039 did this at 00:49], (b) the positive mass theorem, (c) future-asymptotic-predictability equivalence — with 0 hits in L0/L1. And "SRC-096 and SRC-097 theorem entries" are owner work.
+
+Another: CF-23's measured before/after list. Lead-audit card.
+
+Another: the **L1 locator problem**: 67/97 rows carry a *search query* instead of an exact locator. worker-050/062/099 produced readiness maps and replacements for WCC/SCC/scalar classes. Is there a cross-class consolidated census? Worker-056? Let me check if a *whole-ledger* 97-row locator census with live verification exists. worker-062 did SCC (34 rows), worker-050 SCC, worker-099 SCALAR (10), worker-050 WCC (12?)... This is a G-LIT criterion: "ledger rows have resolvable locators". A consolidated census across all 97 rows at the pinned hash, classifying each row's locator as exact/weak + verified live, would directly serve the gate. But multiple workers have pieces; a consolidation might duplicate.
+
+Hmm, let me check the map's `assignments` for cards to workers that are open/not yet done. Since assignments lack status, let me check which assignee cards have no corresponding event. The last batch of worker cards (audit-r2-*) went to workers 071, 085, 046, 091, 015, 035, 041, 052, 089, 012 — all of whom emitted (I saw 035, 041, 052, 012, 015 in outbox). So those are done.
+
+OK. Decision time. Given (1) my prior incarnation's strength/context on L0 build replication and A0 HF-14 corpus classification, and (2) BL-9 being fresh, gate-deciding (HF-14 renamed vocabulary), and explicitly needing an A0/rubric-owner ruling *informed by measurement*, I'll take a bounded task:
+
+**W021-HF14-RUBRIC-BIND-01**: Independent measurement binding each clause of the frozen `evaluation_rubric.yaml` HF-14 detector text (and its A0 implementation in `research_map/audit_evidence.py` / `audit_evidence` tooling) to the actual field vocabulary of the frozen L0 ledger at a1674f094979, plus a falsifier-grade census of renamed-vocabulary exposure. Deliverable: a small deterministic checker + report; verdict within worker authority (measurement, not ruling). It adjudicates nothing; it gives A0 the exact predicate-vs-vocabulary map.
+
+Wait — is this duplicative of deepseek-flash-18 (HF-14 revision), worker-093 ("A0 rubric..."?), worker-097 ("HF-14 literal/axis scans")? Let me check what specifically they measured. w093 claim: "(1) the HF-14 triple predicate returns 0 rows, so the map's requested first check passes at this revision; (2) the A0 rub..." — truncated. w097: "HF-14 literal/axis scans" in the 21-check report. lit-l7-001 measured the renamed vocabulary counts. So the *counts* exist; what's missing is the **rubric-text-to-field binding**: which rubric HF-14 clause is satisfied/violated by which renamed field, with quotes and line numbers, and the *falsifier* for each binding. That's a distinct artifact useful for the A0 ruling, but honestly it's close to what A0 must decide.
+
+Alternative fresh task, cleaner and definitely unclaimed: **CF-23 A0 detector scope, measurement-only**: run the canonical HF-14/HF-03 detectors across the repo, classify every hit file as canonical / live-build-input / historical-snapshot / worker-snapshot under the frozen rule, and produce the before/after scoped hit list at pinned hashes + a proposed exclusion predicate. Lead-audit owns the *decision*, but the census is the deliverable the card demands ("with a measured before/after list at pinned hashes"). Worker-021 already did the HF-14 corpus recount, so I can do this fast and correctly. But lead-audit may do it themselves. Hmm.
+
+Let me just check whether the A0 detector task is already done — search recent events for CF-23 / "detector scope" / "historical". If not done, I could do the measurement. Let me grep the last events for "a0-detector" or "historical".
+
+Actually, hold on. Let me re-read the immediate instruction once more: "Read handoff/map and comms. Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit." It doesn't demand the most valuable task in the swarm; it demands one class-bound task, done properly, with JSON, hashes, falsifier, checkpoint, exit. The swarm pattern is self-proposed bounded tasks. So I should pick a task I can complete quickly and correctly, that is not duplicate, and that has clear evidence.
+
+Given that, the **CF-23 A0 detector-scope measurement** is attractive: bounded (run a scanner over the repo, classify hits), uses the existing `research_map/class_separation.py` and `research_map/audit_evidence.py`? Wait, CF-23 says "the HF-14/HF-03 detectors report corpus-level hits on archive/, incoming/ and worker snapshot paths" and the audit report `artifacts/audit/reports/audit-20260912T003820.json` is the evidence. Let me first check if lead-audit already delivered the scope fix (the deadline is 02:00, so probably not yet). Let me check the audit lead's recent outbox and whether `artifacts/audit/reports/` has a newer report with scoping.
+
+Let me check that quickly, then commit. If taken, I'll fall back to the N0 numerics independent replication (which I can do locally with Python: recompute convergence orders from the stored rung data — a genuinely independent calculation from the raw numbers, no solver needed) — that's very fast and bounded, class-bound AF-WCC-SCALAR-SPH, and could be decisive for G-NUM's "independently replicated within tolerance" criterion.
+
+Actually, the N0 independent replication from raw rung data is a really good fit for a bounded worker: read `numerics/results/flat_wave_convergence_rev3.json` (the measured errors per rung per scheme), re-derive convergence orders independently (fit log-log slopes), compare against the declared orders and tolerance; check the fixed-dt certification; run negative controls (e.g., wrong-order demo) that must fail. All from stored data + a fresh implementation. That yields a hash-pinned report with a falsifier. And it's exactly the G-NUM criterion "flat-space convergence order measured AND independently replicated within tolerance". If a third independent replication doesn't exist yet, this is high-value and non-duplicative.
+
+Let me check what replications exist: `flat_wave_replication.json` (from whom?), `fixed_replication_verdict.json`, `fixed_replication_verdict_rev2.json`, `three_scheme_r1r5_summary.json`, astra runs. Let me quickly inspect these to determine independence and see the declared orders/tolerances.
+
+Let me look at the data files quickly and check recent N0 events to avoid duplication.
+dsh: reasoning:
+The N0 numerics surface is extremely saturated: workers 046, 051, 055, 057, 067, 071, 081, 012, 014, 020, 097... all over it. Independent replication exists multiple times. Do NOT take a numerics task.
+
+Similarly L0 review is saturated. The remaining genuinely open items:
+- BL-7 (HF-02 scope ruling) — needs controller/A0.
+- BL-9 (HF-14 renamed-vocabulary scope) — needs A0 ruling.
+- BL-10 (controller review-scan undercount) — controller.
+- BL-11 (SRC-096/SRC-097 theorem entries + anchors) — literature/formulation.
+- CF-20 G-FORM binding repair — formulation lead in flight.
+- CF-16 classsep calibration — lead-audit card, but worker-098 did a big pass.
+- CF-23 A0 detector scope — lead-audit card (deadline 02:00).
+
+There's a pattern: many workers hammer the same open items. The most useful non-duplicative bounded task now would be one that **closes a specific, named, still-open defect with a measured, hash-pinned artifact** and is *not* already in someone's active card.
+
+Let me check the A0 side: the rubric owner is the audit lead; HF-02/HF-14 scope rulings are A0's. Both BL-7 and BL-9 are waiting on the *same authority*. What would help A0 decide: a precise, quote-level mapping of rubric clause → detector implementation (audit_evidence.py) → live data field, showing exactly where literal predicate and substance diverge, with each clause's line number and hash. But is that duplicative of worker-077 ("A0 HF-02's disjunction branch operates on the singular claim field class_id") and worker-063 ("HF-02 path that reads the plural class_ids key of a record")? Those two already resolved the HF-02 scope question at the rubric level (no, the canonical scanner doesn't read plural class_ids) — but the lead literature's BL-7 says "class_separation.py reports the ledger clean -> the A1 detector does not scan ledger class_ids cardinality" and three C0-bound rows are typed conclusion_type=theorem. So the open question is whether *HF-02 applies to ledger rows* per the rubric text; workers 063/077 concluded the canonical validator does NOT implement that branch, i.e., it's a rubric-scope question, not a code bug.
+
+Hmm — what about the "three C0-bound rows typed conclusion_type=theorem (T-302, T-303, T-526) against evaluation_rubric.yaml:100-104"? That's a concrete, verifiable defect: ledger rows claiming `conclusion_type: theorem` without artifact_refs → PROTOCOL rule 1 says auto-reject. Is that being handled? It was mentioned in BL-7 as "additionally typed". Let me check whether any worker has measured that specific defect (L0 rows with conclusion_type=theorem and no artifact_refs / no reviewer verdict). If not, an independent, bounded census of **HF-01 (theorem without artifact_refs)** across the 62 ledger rows at the pinned hash, including the renamed conclusion-type vocabulary, would be directly gate-relevant and concrete.
+
+Wait: earlier worker-006's soft findings mentioned 'HF-01-THEOREM-NO-ARTIFACT-REF' at rev 3e3d3553. So it was measured at the previous revision. At rev3 FINAL a1674f094979, does HF-01 still fire? Let me check events for HF-01 at a1674f094979. Let me grep.
+
+Also the rubric says conclusion_type vocabulary; class_separation.py has a conclusion_type vocabulary collision (Blocker lit-l5-20260912-010). Hmm.
+
+Let me look at the rubric HF-01/HF-14/HF-02 definitions and audit_evidence.py, and check what's open regarding HF-01 at the current hash. A quick grep of events for "HF-01" after 00:35.
+
+Let me do that. If HF-01 at a1674f094979 is unmeasured/uncertain, that's my task: independent, deterministic census of theorem-typed rows lacking artifact refs and reviewer verdicts (HF-01) plus the conclusion_type vocabulary check — class-bound (GLOBAL/L0/G-LIT+G-AUDIT), bounded, fresh, and directly feeds the L0 accept decision (it's one of the rubric hard failures).
+
+Hmm, but worker-093's claim mentions "(2) the A0 rub..." truncated — maybe they already did the rubric axes. Let me read worker-093's full claim and worker-097's findings F1-F7 to know exactly what's covered. Let me also grep for HF-01 events after 00:35.
+dsh: reasoning:
+Very saturated. But I noticed a very important thing: **rev13 has landed** — worker-090's event at 00:54:34 says "Revision-stable measured property at the rev13 pins (F1 bf0c28fa673e, F2a e9a27996dfd3, F2b b2ab6acb2bbe, F0 0abb9ed8a961 ...)". So the formulation lead's evidence-binding repair has produced rev13 schemas (item 2/3), FROZEN rev29 may be landing. The r3 re-review (astra-life05-verify-gform-r3) is lead-audit's.
+
+Also `w083rev13repairpacket01` at 00:52:48 — worker-083 produced a repair packet.
+
+Now: what's open and unclaimed? One thing stands out from the output: **audit-r2-b8**: "A0 rubric d748a9e3574e has four unresolved machine-verifiable findings (HF-01 reads an absent field on 0/62 ledger rows; genericity vocabulary not single-sourced; conclusion_primary is an equivalence F1 marks UNVERIFIED; ...)". And worker-089's A0-089-A: "HF-01 conformance (evaluation_rubric.yaml:174) reads claim.artifact_refs, absent from all 62 ledger/theorems.jsonl rows incl. the 30 theorem rows...". So HF-01 is a *rubric/code mismatch*: the detector reads `claim.artifact_refs` in a ledger whose rows use a different key. That's an A0-owned finding (CF-23-ish scope). It's unresolved.
+
+But here's the thing: the audit-r2 cards were dispatched at 00:44-00:47 to specific workers (089 = audit-r2-A0). Those are done. The remaining A0 work is the lead's `astra-life05-a0-detector-scope`.
+
+Honestly, at this point the swarm is in a state where each worker picks something; the marginal value of yet another scan is low but the instruction demands one task. The best I can do is pick something *specific, verifiable, and clearly not yet done* that supports a live gate decision. Let me settle on this:
+
+**W021-FROZEN29-RECON-01: independent read-only reconciliation of the FROZEN rev29 publication** — verify that the newly published FROZEN revision 29 manifest exists, that every pinned canonical path matches its declared sha256 on disk, that the rev13 schema `f0_binding.consistency_evidence_sha256` equals the live `taxonomy_consistency.json` (CF-20 item 2), that `taxonomy_cases.jsonl` rows bind rev5 (CF-20 item 1), and that the F1 R03/frozen corpus base issue (item 1/4) is closed — with a fail-closed checker, controls, hash-pinned report, and falsifier. This is *review-adjacent but distinct*: it's a measurement at the new pins that the r3 reviewer (lead-audit) will need, and it's the natural successor to my earlier L0 build-replication work style. It is bounded: hash files, parse YAML/JSON, compare.
+
+Risk: lead-formulation may still be mid-repair; FROZEN rev29 may not exist yet at my snapshot (00:57). If rev29 isn't published yet, my measurement is premature and unhelpful. Let me check quickly: does `artifacts/formulation/FROZEN.json` now say revision 29? And do the schemas have the new rev13 hashes?
+
+Let me check the current on-disk state: FROZEN.json revision + hashes; schema hashes; taxonomy_consistency hash; taxonomy_cases binding. If rev29 is live, I take that task. If rev29 isn't live, I fall back to a different task.
+
+Actually — hmm, wait. Worker-007 at 00:53:19 already did "W007-REV29PRE" — a pre-repair measurement of the four card items: "Repair item (1) measures already satisfied at ccf7041bd0ff ... Residual (non-blocking)..." and they're re-measuring. And worker-083 produced the repair packet. Lead-formulation is about to publish. If I jump in now I might race the publication; the measurement would be "pre-rev29" like worker-007's.
+
+Alternative that's stable and clearly open: **CF-23 A0 detector scope**. Let me check whether lead-audit delivered it in the last minutes. Search events for "detector scope" / audit report after 00:54. Let me check the audit lead's recent outbox tail and `artifacts/audit/reports/` mtimes.
+
+Let me do both checks in one command: (1) FROZEN.json revision + schema hashes; (2) audit reports listing + grep for a0-detector-scope event.
+dsh: reasoning:
+FROZEN revision 29 is LIVE (sha 3d9e3d77fd87). The three schemas have moved:
+- F1 af_wcc_vacuum.yaml: d9cebb9404b2 (new rev13)
+- F2a af_scc_c2_vacuum.yaml: e9a27996dfd3 (rev13)
+- F2b af_scc_c0_vacuum.yaml: b2ab6acb2bbe (rev13)
+- taxonomy_cases.jsonl: ccf7041bd0ff (unchanged, item 1 done)
+- taxonomy_consistency.json: 9e335e9ba1bf (unchanged)
+
+Note worker-090's 00:54:34 event used exactly these rev13 pins (F1 bf0c28fa673e?) — hmm, they said F1 bf0c28fa673e, but now F1 is d9cebb9404b2. That means F1 moved AGAIN after 00:54:34 (the lead may be iterating). So the repair is still in motion! My measurement could race.
+
+Wait: worker-090 at 00:54:34 says "rev13 pins (F1 bf0c28fa673e, F2a e9a27996dfd3, F2b b2ab6acb2bbe...)". Now F1 = d9cebb9404b2. So F1 has moved once more (bf0c28fa → d9cebb94) after 00:54:34. FROZEN.json now revision 29 (sha 3d9e3d77). So rev29 is published with F1 d9cebb94 (probably). The lead is iterating quickly.
+
+Given FROZEN rev29 is live, a **post-publication independent verification of the CF-20 repair** is exactly the missing evidence for the r3 re-review, and it's time-critical (lead-audit's card deadline 02:45). But the lead may still be writing. I need to make my checker pin the exact bytes at measurement time and fail closed on drift — if bytes move mid-run, my report is void, not wrong. That's the standard pattern here (worker-095's binding probes). That is a clean, bounded, class-bound task (classes AF-WCC-VAC-GEN, AF-SCC-C2-VAC-GEN, AF-SCC-C0-VAC-GEN; node F1/F2a/F2b; gate G-FORM).
+
+Deliverable W021-REV29-BINDING-VERIFY-01: independent, read-only, fail-closed binding verification at FROZEN rev29:
+1. Parse FROZEN.json rev29; for every declared pin of the canonical formulation paths (F0 taxonomy, supplement, F1/F2a/F2b, taxonomy_cases, taxonomy_consistency, etc.), measure live sha256 and compare (declared == measured).
+2. CF-20 item 2: each of the three schemas' `f0_binding.consistency_evidence_sha256` equals the live `artifacts/formulation/evidence/taxonomy_consistency.json` sha256 (9e335e9ba1bf...).
+3. CF-20 item 1: `schemas/taxonomy_cases.jsonl` meta + all 36 rows bind F0 rev5 0abb9ed8a961 (and re-run the canonical checker if runnable read-only? maybe just parse).
+4. CF-20 item 3: F1 variant SET/CH strictness text fix at worker-076 lines — verify the assertion-direction change is present (can check the specific lines? risky; may skip or check a marker).
+5. Item 4: FROZEN rev29 exists with byte-verified pins + artifact events.
+6. Also check the three schemas are mutually distinct and that F0 canonical bytes are untouched (0abb9ed8a961).
+
+Controls: mutate in-memory copies (flip a hash char, drop a field) and confirm the checker fails; assert no canonical writes; exit 3 on pin drift, exit 2 on control failure.
+
+This is a solid bounded task: pure Python stdlib+PyYAML read-only, ~10 minutes. And it directly feeds the r3 reviewer. It does NOT duplicate worker-095 (freeze-hold probe at rev28, before rev13/29) or worker-007 (pre-repair measurement) since it binds the new rev29 pins. It's a natural extension of my previous W021 work.
+
+Before committing, let me confirm what FROZEN.json rev29 actually declares, so my checker can read the right structure. Let me inspect it.
+
+Also check whether someone has already emitted a post-rev29 binding verification (search events after 00:55 for rev29 / 3d9e3d77 / d9cebb94). Let me do both.
+dsh: reasoning:
+FROZEN rev29 is live with `rev29_delta` and an `evidence/evidence_binding_repair_rev29_report.json` entry. The files dict includes `artifacts/formulation/formulation_taxonomy.yaml` pointing to the *supplement* (d7419b4e8963 — the artifacts/ mirror). The canonical F0 is `research_map/formulation_taxonomy.yaml` (0abb9ed8a961).
+
+Note that FROZEN rev29's files dict does NOT list `schemas/*` — it lists artifacts/formulation/*. So the schema pins are in `logical_artifacts` maybe. Let me look at `logical_artifacts` and `rev29_delta`. That will define exactly what the repair claims.
+
+Also, importantly, worker-040's status at 00:54:02: "the rev12 schema pins moved while this worker was closing. Measured now: F2a rev13 e9a27996dfd3, F2b rev13 b2ab6acb2bbe, F1 rev13 d9cebb..." — so someone is already measuring rev13. And worker-004, worker-007 have rev29-preflight tooling with a `--mode rev29` acceptance predicate. So the post-rev29 verification is partially covered by worker-007's checker (they explicitly built `--mode rev29`). If I now run a binding verification, I'd duplicate worker-007's tool. Hmm. But worker-007's was "pre-repair census ... I2/I3/I4 open" and their checker has a rev29 mode — they may be the one to run it. Actually workers exit after each task; worker-007 relaunched at 00:53 and did the preflight. A new worker-007 instance could run rev29 mode, or not.
+
+I need to just pick and execute. Given the swarm's redundancy-tolerant design (many workers replicate), and the explicit instruction to take ONE class-bound task, I'll do the rev29 binding verification but make it *distinct in scope* from worker-007's card-item census: focus on **the full FROZEN rev29 declared-vs-measured pin reconciliation across the manifest's `files` + `logical_artifacts`**, plus **the rev29 acceptance predicate for CF-20 items (1)-(4)**, with a fail-closed drift guard at a frozen snapshot of FROZEN.json itself. If worker-007 already ran rev29 mode, my independent replication is exactly what this swarm treats as evidence (two independent measurements). If not, it's the needed evidence.
+
+Hmm, but wait. Actually, let me reconsider one more time. The instruction from the user (the direct human turn) emphasizes "emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit". So the quality bar is: valid event JSON, IDs, evidence refs, hash, falsifier, checkpoint, clean exit. The specific task choice matters less than doing it correctly and quickly. I've spent enough time scouting. Rev29 binding verification it is.
+
+Let me now:
+1. Read `logical_artifacts` and `rev29_delta` from FROZEN.json to know the declared pins.
+2. Write my instrument at `artifacts/worker-021/rev29_binding_verify/verify_rev29_binding.py`:
+   - Pin FROZEN.json sha at start (3d9e3d77fd87...) and re-measure at end; exit 3 on drift.
+   - Read FROZEN.json (rev 29), its `files` dict: for each declared (path, sha256), measure live bytes; compare. Also `logical_artifacts` if it's a dict of path->hash.
+   - Read the three schema files and check:
+     a. each declares exactly one class_id in the frozen four (and the right one);
+     b. `f0_binding.consistency_evidence_sha256` == live taxonomy_consistency.json sha (9e335e9ba1bf...);
+     c. F0 binding hash == 0abb9ed8a961 (canonical taxonomy) where declared.
+   - Read `schemas/taxonomy_cases.jsonl`: 36 rows, each row's bound taxonomy sha == 0abb9ed8a961; meta taxonomy_ref == rev5.
+   - Read FROZEN rev29 `rev29_delta` text, extract the four repair items and check the *measurable* ones:
+     item 1: taxonomy_cases rows bound to rev5 (above);
+     item 2: schema consistency_evidence == live evidence (above);
+     item 3: F1 variant SET/CH strictness text direction — find the specific assertion in F1; check it's present (compare to rev12? I don't have rev12 bytes unless the archived copy exists). Simpler: read the repair report `evidence_binding_repair_rev29_report.json` and verify its claimed before/after hashes match disk where applicable. Careful not to re-derive semantics.
+     item 4: FROZEN rev29 published: revision==29, files hashes match disk, and the report file exists with declared hash.
+   - Controls: in-memory mutations (flip declared hash; drop a row; set F0 hash wrong; set consistency evidence wrong) must make the checker fail (exit non-zero), 5-6 controls.
+   - Write results.json/report.json/README.md with all measurements, sha256s, verdict, falsifier.
+3. Run it twice for determinism.
+4. Write checkpoint `runtime/state/w021_rev29_binding_checkpoint.json` + hash.
+5. Emit events to `comms/outbox/worker-021.jsonl`: status (task), artifact(s), claim, review (worker verdict — advisory; must not set gate verdict), status (complete + checkpoint).
+6. Exit.
+
+One concern: file ownership/races. I'll write only under `artifacts/worker-021/rev29_binding_verify/` and `runtime/state/w021_*`. Safe.
+
+Let me first read logical_artifacts + rev29_delta, and the repair report.
+dsh: reasoning:
+Excellent. The rev29 delta is explicit and gives me a precise acceptance predicate:
+1. `schemas/taxonomy_cases.jsonl` 36/36 rows + meta bound to 0abb9ed8a961, and PASS at `artifacts/flash-02/check_taxonomy_cases.py`.
+2. `f0_binding.consistency_evidence_sha256` == 9e335e9ba1bf in all three class schemas.
+3. F1 visibility strictness directions corrected at worker-076 lines (line 72 STRONGER→EQUIVALENT; line 213 misclassification example removed; line 234 variant SET STRONGER→WEAKER). Also CH variant direction checked correct.
+4. FROZEN rev29 pins the two re-pinned corpora and repair report/tool.
+Residual: L-FORM-03 (SET inversion survives in F0:200, artifact taxonomy:176, VARIANT_REGISTRY:57, variant delta:11,22).
+
+So my task: **independent, read-only, fail-closed verification of the rev29 acceptance predicate** — measure each of the four items on live bytes, verify the residual L-FORM-03 locations are as stated, and check F0 canonical untouched. Deliverable with a checker + report + controls + falsifier + checkpoint.
+
+This is bounded and precisely falsifiable. Let me build it now. Steps:
+
+1. Snapshot pins at start: FROZEN.json sha, the 3 schemas, taxonomy_cases.jsonl, taxonomy_consistency.json, research_map/formulation_taxonomy.yaml, artifacts/formulation/formulation_taxonomy.yaml, VARIANT_REGISTRY.json, variant SET delta.
+2. Checker logic:
+   - A1: FROZEN.json parses; revision==29; frozen_at; `rev29_delta` non-empty and mentions the 4 items.
+   - A2: FROZEN `files` dict: each declared sha256 matches live file bytes (excluding files that don't exist? no — fail closed: any mismatch/missing = FAIL).
+   - A3: FROZEN `logical_artifacts`: F0-declared-taxonomy path/hash == live research_map/formulation_taxonomy.yaml == 0abb9ed8a961; supplement == live artifacts/formulation/formulation_taxonomy.yaml == d7419b4e8963.
+   - B1: taxonomy_cases.jsonl: 36 rows; meta.taxonomy_ref indicates rev5/0abb9ed8; each row's binding field (need to discover the key: `bound_taxonomy_sha_0abb9ed8a961` per worker-076: "36/36 rows bound_taxonomy_sha_0abb9ed8a961") == canonical; count.
+   - B2: run `artifacts/flash-02/check_taxonomy_cases.py` in a sandbox? It may write outputs. Better to run it with cwd temp and read its exit/output; but the checker may write to canonical paths. Let me inspect it first — if it writes only to stdout or a temp path, run it; otherwise, skip the canonical tool and note it (worker-007 already ran it). Actually a read-only independent check of the row bindings is enough; plus optionally record that the canonical checker exists and hash it.
+   - C1: each schema's `f0_binding.consistency_evidence_sha256` == live taxonomy_consistency.json sha (9e335e9ba1bf...) and declared F0 hash == 0abb9ed8a961.
+   - C2: each schema class_id is the right single frozen class; no cross-class leakage.
+   - D1: F1 line checks: line 72 contains "EQUIVALENT" (not "strictly STRONGER"); line 213 corrected (no misclassification example — check the specific text); line 234 variant SET "strictly WEAKER". I need to look at the actual lines to write robust asserts. Let me read those lines.
+   - D2: residual L-FORM-03 locations: F0:200, artifact taxonomy:176, VARIANT_REGISTRY:57, variant delta:11,22 contain the inverted SET direction ("strictly STRONGER" for SET). Verify they still exist (evidence for the residual blocker).
+   - E1: checks that no declared F0 bytes changed: research_map/formulation_taxonomy.yaml == 0abb9ed8a961 (the gate-freeze condition).
+   - Controls (in-memory; no canonical writes): (a) flip one declared hash char → must FAIL; (b) drop a schema's consistency_evidence → FAIL; (c) point F0 logical artifact to wrong hash → FAIL; (d) remove a row from the in-memory case list → FAIL; (e) mutate F1 line 72 text in memory → FAIL; (f) pin drift simulation (change FROZEN sha between start/end) → VOID exit 3.
+3. Determinism: run twice; compare digest.
+4. Write report.json, results raw, README.md, controls.json, checkpoint json; hash everything.
+
+Let me first inspect the relevant lines: F1 lines 60-80, 205-240; F0 line 200; artifact taxonomy line 176; VARIANT_REGISTRY line 57; variant delta lines 11,22; and taxonomy_cases.jsonl structure; and the schemas' f0_binding block. Let me look.
+dsh: reasoning:
+I now have everything needed. Note: F1 rev13 line 72 (in the file, D5 definition) says "is EQUIVALENT to the tail form"; line ~213 says "the rev12 misclassification example was a non-sequitur and is removed"; the variant SET statement at ~234 says "strictly WEAKER than this class's single-q tail predicate". The residual L-FORM-03 inverted SET direction survives at:
+- research_map/formulation_taxonomy.yaml:200 ("strictly stronger")
+- artifacts/formulation/formulation_taxonomy.yaml:176 ("strictly stronger" in D1 ledger)
+- artifacts/formulation/VARIANT_REGISTRY.json:57 ("strength": "strictly STRONGER")
+- artifacts/formulation/variants/...:11 ("strength": "strictly stronger") and :22 ("strictly stronger than")
+
+Wait — is the variant SET relation really "strictly WEAKER"? F1 rev13 says: "variant SET ... relation: 'strictly WEAKER than this class's single-q tail predicate: the single-q tail predicate entails the union reading, and non-containment in the union implies no single q sees a tail of gamma, but not conversely'". Yes: single-q tail ⇒ union, so union (SET) is weaker. The rev12 registry said SET is "strictly STRONGER" — inverted. So the residual files still carry the inversion. Note this inversion was *the F1 line 234 fix*; the other files were out of the repair card's scope (L-FORM-03 blocker).
+
+Now let me write the instrument. Directory: `artifacts/worker-021/rev29_binding_verify/`.
+
+Important: I must not write to canonical files. Read-only on canonical paths; write only in my dir + runtime/state.
+
+Checker design (`verify_rev29_binding.py`):
+- Constants: CANON pins discovered at runtime (no hardcoded expectation beyond the declared F0 0abb9ed8a961 which is the frozen declaration).
+- `--frozen artifacts/formulation/FROZEN.json`, `--out <dir>`.
+- Steps:
+  1. Read FROZEN.json bytes at start, compute sha; parse. Check revision==29.
+  2. Build declared file map from `files` (path→sha256) and `logical_artifacts` (name→{path,sha256}).
+  3. Measure every declared path: exists, sha matches. Record counts.
+  4. F0 canonical untouched: research_map/formulation_taxonomy.yaml == 0abb9ed8a961 (from logical_artifacts['F0-declared-taxonomy'].sha256); supplement == d7419b4e8963.
+  5. Schema checks (F1/F2a/F2b): parse YAML safely (yaml.safe_load). For each: class_id in frozen four; f0_binding exists; f0_binding.consistency_evidence_sha256 == live evidence sha; f0_binding.declared_taxonomy_sha256 or similar == 0abb9ed8... (need to check actual key names!). Let me check the f0_binding blocks.
+  6. taxonomy_cases.jsonl: parse rows (36), meta; all bound taxonomy tokens == 0abb9ed8.
+  7. F1 rev13 line markers: find the lines and assert:
+     - a line contains "is EQUIVALENT to the tail form" (line 72 region);
+     - the D5 block has no "strictly STRONGER" (rev12 false assertion removed);
+     - a line contains "strictly WEAKER than this class's single-q tail predicate" (variant SET direction).
+     - Also verify no residual "strictly STRONGER" remains in F1 (it shouldn't).
+  8. Residual L-FORM-03: the 4 other files still contain the inverted direction (expected presence). Record boolean `residual_present` — this is a *recorded residual*, not a failure of rev29.
+  9. Item 4: the repair report file declared in FROZEN `files` (evidence_binding_repair_rev29_report.json) matches; rev29_delta mentions the 4 items.
+  10. End-of-run drift: re-measure FROZEN sha and the 6 canonical pins; if any changed → VOID (exit 3).
+  11. Controls (in-memory, 6): 
+      C1 declared-hash flip → mismatch detected; 
+      C2 missing file path injected → detected; 
+      C3 schema consistency evidence mutated → detected; 
+      C4 one taxonomy_cases row rebound to wrong sha → detected; 
+      C5 F1 text mutated removing EQUIVALENT → detected; 
+      C6 FROZEN revision decremented to 28 → detected. 
+     Each control runs the same predicate function on a mutated in-memory copy and must return FAIL.
+  12. Output: results.json with per-check PASS/FAIL, counts, sha256 of inputs; report.json summary with verdict (BINDING_VERIFIED_AT_REV29 / FAIL / VOID), controls, falsifier; write README.md.
+  
+Let me check f0_binding key names and taxonomy_cases structure. Also check `check_taxonomy_consistency.py` and `check_taxonomy_cases.py` paths/hashes for evidence refs. Let me grep the schemas for f0_binding block and heads of taxonomy_cases.
+dsh: reasoning:
+Interesting details:
+- taxonomy_cases.jsonl has 37 lines: 1 meta + 36 rows. The rows have `leak_rule_catalog`, `case_schema_version`... The "36/36 rows bound" is checked by `artifacts/flash-02/check_taxonomy_cases.py` (worker-076/flash-02). The rows themselves may not have `bound_taxonomy_sha_0abb9ed8a961`; the binding is meta + the checker's rule. Actually worker-076's claim said "36/36 rows bound_taxonomy_sha_0abb9ed8a961". Let me check the full first case row keys: the Counter shows only the meta row has taxonomy_ref/rebound_at. So rows have other keys. Let me look at the checker to understand the binding predicate, so my independent check replicates the *claim* rather than the tool.
+
+Where is `check_taxonomy_consistency.py`? Not in research_map/. Driver earlier said `research_map/class_separation.py` etc. Let me find it: `find . -name "check_taxonomy_consistency.py"`. Also find `run_gate_tests.py` etc.
+
+Let me read the checker quickly (head) to understand the binding fields and then write my own independent implementation with my own logic (not importing theirs).
+
+Actually, to keep my task bounded: my independent check can be:
+- meta.taxonomy_ref.sha256 == canonical F0 hash and revision==5;
+- every non-meta row's fields that reference classes match; and independently verify the checker's *claim* (36/36 rows bound) by reading the checker's rule... Hmm, since the binding is in the meta + checker catalog, the cleanest independent measurement is: run the canonical checker in an isolated copy? That requires writing to a temp dir, which is fine (my own out dir). But "independent" means my own predicate. Let me read the checker to see how it binds rows.
+
+Let me look at the checker's key logic (grep for sha256 / bound). And find check_taxonomy_consistency.py.
+dsh: reasoning:
+Now I understand: each *case* row has a `binding_status` field of the form `bound_taxonomy_sha_<12hex>`. The meta's `taxonomy_ref.sha256` is the full hash. The checker `check_taxonomy_cases.py` verifies. So my independent check: parse all non-meta rows, extract binding_status, ensure it equals `bound_taxonomy_sha_0abb9ed8a961` for 36/36; meta.taxonomy_ref.sha256 == canonical; and the `case_id`/class coverage.
+
+`check_taxonomy_consistency.py` isn't in the repo (maybe it's in `artifacts/formulation/` or `flash-02`). Let me find it properly (`find . -name "*taxonomy_consistency*"`). It matters for evidence refs, but my independent predicate can just measure the binding directly.
+
+Now let me write the instrument. Keep it self-contained (stdlib + yaml; PyYAML is available since other tools use it). Output dir: `artifacts/worker-021/rev29_binding_verify/`.
+
+Plan for the script:
+
+```python
+#!/usr/bin/env python3
+"""W021-REV29-BINDING-VERIFY-01 ..."""
+import argparse, hashlib, json, sys, datetime
+from pathlib import Path
+try:
+    import yaml
+except ImportError:
+    yaml=None
+
+ROOT = Path(__file__).resolve().parents[3]  # artifacts/worker-021/rev29_binding_verify/x.py -> root
+```
+Wait: `artifacts/worker-021/rev29_binding_verify/verify.py` → parents: [rev29_binding_verify, worker-021, artifacts, ROOT]. So parents[3] = root. Good.
+
+Constants:
+- FROZEN = artifacts/formulation/FROZEN.json
+- SCHEMAS = [schemas/af_wcc_vacuum.yaml, ...] with expected class ids
+- CASES = schemas/taxonomy_cases.jsonl
+- EVIDENCE = artifacts/formulation/evidence/taxonomy_consistency.json
+- F0 = research_map/formulation_taxonomy.yaml
+- SUPP = artifacts/formulation/formulation_taxonomy.yaml
+- REV29_EXPECTED = 29
+- F0_EXPECTED = 0abb9ed8a961... (this is the frozen declaration; hardcoding it is fine as the *target being verified*)
+
+Functions:
+- sha(p)
+- load_frozen() -> (sha, obj)
+- check_declared_files(obj, root): returns list of (path, declared, measured, ok, exists)
+- check_logical(obj, root)
+- check_schemas(...): for each schema path: yaml.safe_load; class_id check; f0_binding checks; returns records
+- check_cases(root): parse jsonl; meta + rows; count binding_status == "bound_taxonomy_sha_"+F0[:12]; also rows' class_ids tokens subset of frozen four
+- check_f1_directions(root): read F1 text lines; find:
+  - "is EQUIVALENT to the tail form" present
+  - "strictly WEAKER than this class's single-q tail predicate" present
+  - the D5 block does not contain "strictly STRONGER"
+  - the rev12 misclassification sentence gone: F1 must not contain "would misclassify"
+- check_residual(root): the 4 L-FORM-03 locations still contain inverted direction ('strictly stronger'/'strictly STRONGER') — record value (True expected per rev29_delta; it's an informational check, not pass/fail of binding)
+- check_delta(obj): revision==29; rev29_delta mentions each of items 1-4 keywords: 'taxonomy_cases', 'consistency_evidence_sha256', 'strictness directions corrected', 'pins the two re-pinned corpora'
+- controls: implement as small mutations against in-memory copies and re-run predicate; each must be detected.
+- drift: measure FROZEN sha and all pins at start and end; if changed → VOID.
+
+Verdict logic:
+- If drift: verdict = "VOID_PIN_DRIFT", exit 3.
+- If all checks pass: "BINDING_VERIFIED_AT_REV29" exit 0.
+- else "BINDING_FAILED" exit 1.
+
+Outputs (write into out dir):
+- results.json: full machine records incl. all measured hashes.
+- controls.json
+- report.json: summary with verdict, counts, falsifier, non-claims, input pins.
+- README.md
+- SHA256SUMS
+
+The report.json needs a stable sha for evidence refs; compute in shell after run.
+
+Determinism: second run to out2, compare report.json bytes (excluding nothing time-dependent — I'll include generated_at only in report? Better: report.json has no timestamp; results.json has measured_at? For determinism, avoid timestamps or use a fixed field `generated_from` and put wall-clock only in README/checkpoint. The swarm pattern: byte-identical re-runs. I'll make results.json/report.json/controls.json fully deterministic (no timestamps, sorted keys). The checkpoint event gets the timestamp.
+
+Let me write the script now. Keep it tight but complete. Also emit raw pin snapshot file `pins.json`.
+
+One more consideration: `yaml.safe_load` — the schema has `>`-folded block scalars and anchors maybe. Fine.
+
+Let me write it.
+dsh: reasoning:
+Now run it. Note control C3 line: `recs = schema_records(root, "f"*64)` — `ev` unused; fine. Also `.control_cases.jsonl` is written inside the out parent dir (artifacts/worker-021/rev29_binding_verify/), which is my directory — fine, and unlinked after.
+
+One issue: in `control_suite`, C1 uses `frozen.get("files", {})` — if files is empty this fails; it's non-empty. C2 similar.
+
+Another: `residual_record` expects specific lines; line numbers may shift but rev29 delta names them. If lines don't match, all_present=False; informational only.
+
+Also the drift guard: I measure pins AFTER run_checks and compare to... wait, `pins` is computed after run_checks, using current measurements, then compared to `meas(...)` again — that's wrong ordering! I need pin measurements BEFORE run_checks. Let me fix: snapshot pins before run_checks, then re-measure at end. Let me fix that now.
+dsh: reasoning:
+Wait, there's a subtlety: if I snapshot pins BEFORE the run, but run_checks itself reads FROZEN freshly (frozen loaded before pins — ok, same bytes). If a canonical file drifts DURING my run, the end re-measure differs → VOID. But the checks themselves measured mid-run values; that's the fail-closed design (void on drift). Good.
+
+However `pins` uses measurements taken before run_checks; but if a file was already different from what FROZEN declares, `pins` records the live value and the check compares live-vs-declared; fine.
+
+Let me run it now (first run, writing to out/). Then a second run to a determinism dir and compare.
+
+Also note: my control C4 writes `.control_cases.jsonl` and unlinks — that's within my dir. Fine.
+
+Run.
+dsh: reasoning:
+5 of 57 checks failed. Let me inspect which ones. It could be a genuine finding (e.g., some declared file hash doesn't match, or the F1 markers/f0 binding), or a bug in my checker. Let me look at results.json.
+dsh: reasoning:
+This is a live finding! Four FROZEN rev29 declared hashes do NOT match the live bytes:
+- `artifacts/formulation/VARIANT_REGISTRY.json`: declared 5eb42f9a384a, live 6bac9adea19e
+- `artifacts/formulation/evidence/variant_delta_check.json`: declared fc6ee058dd96, live 0b23f0b2...
+- `artifacts/formulation/variants/AF-SCC-C0-VAC-GEN.variant-CH.delta.json`: declared c28795b0..., live 7c165a90...
+- `artifacts/formulation/variants/AF-WCC-VAC-GEN.variant-SET.delta.json`: declared 45b9b6a8..., live 64b8d639...
+
+Careful: these could be drift *after* FROZEN rev29 was published (the lead may have written the residual files after freezing — indeed rev29_delta says residual L-FORM-03 survives at those files, and someone may have since edited them, e.g. worker-083/097 patched them). Or my measurement raced a write. The drift guard compared my start pins to end pins: drift=0, so bytes didn't move during MY run. But they moved between FROZEN.json's publication (00:55:02) and my run (00:58+).
+
+Also the I3 marker "d5_no_strictly_stronger" failed because my D5 block extraction is too broad: the D5 block text includes the note "[rev13: strict-order direction corrected - ... the rev12 'strictly STRONGER' assertion was false]" — which contains "strictly STRONGER" inside the historical note. My marker is wrong: the note legitimately quotes the old assertion. So that's a checker bug, not a finding. I need to refine: check the *definition sentence* before the bracket note, or check that "is EQUIVALENT to the tail form" appears and that the D5 definition does not *assert* strictly stronger (e.g., check the sentence before "[rev13:"). I'll fix by taking the definition minus the bracketed rev13 note.
+
+And L-FORM-03 residual line 11: my line number was off (the delta file at line 11 has "strength": "strictly stronger than..." per my earlier sed: line 11 was `"strength": "strictly stronger than AF-WCC-VAC-GEN",`? Let me recheck: sed -n '8,24p' printed lines 8..24; the 4th printed line = line 11: `"strength": "strictly stronger than AF-WCC-VAC-GEN",`. Yes line 11 should contain it... but my measured file may have changed (live hash differs from declared!). Indeed the live variant SET delta is 64b8d639 ≠ declared 45b9b6a8, so the file changed — maybe the residual direction was FIXED in the live file, which would explain line 11 not containing "strictly stronger" anymore. Interesting! That suggests someone (maybe worker-097/083 or the lead) has repaired the residual L-FORM-03 in the live files *after* FROZEN rev29 was published — which would itself be a FROZEN drift event: the manifest's declared pins for those four paths are stale.
+
+So my measurement has found: **FROZEN rev29 declared pins are stale for 4 paths (VARIANT_REGISTRY.json, variant_delta_check.json, CH delta, SET delta)** — i.e., a freeze-breach/drift analogous to CF-19 but on formulation artifacts. This is exactly the kind of finding the swarm values. But I must be careful:
+1. Verify the measurement is correct (recompute hashes independently with sha256sum).
+2. Determine whether the drift is *after* rev29 freeze (mtime) and who wrote it (artifact_hashes.json registry, events). Maybe FROZEN rev29 was published at 00:55:02 with these pins, and then the formulation lead updated the variant files as part of a later action (e.g., L-FORM-03 repair in a new revision) — in which case a rev30 manifest should be expected. Check mtimes and whether a newer FROZEN.json appeared (my end-of-run check says FROZEN unchanged during run; but maybe it changed after? Let me re-measure now).
+3. Check the live variant SET delta content: is the direction now corrected (STRONGER→WEAKER)? If yes, the drift is a *substantive improvement* that invalidates the rev29 pin set.
+
+This is a real, fresh, high-value finding for G-FORM. My task now: verify it rigorously, fix my checker's two issues (D5 marker extraction, residual line semantics), re-run, and emit events reporting the drift with exact measured hashes + mtimes + a falsifier. I must be careful about attributing intent: report as "FROZEN rev29 declared pins for 4 paths do not match live bytes; bytes moved after freeze; possible post-freeze repair/iteration → rev29 manifest stale; re-freeze (rev30) or revert required before r3 binds".
+
+Let me verify with sha256sum and stat mtimes, and diff the live variant SET delta vs what rev29 declared (I don't have the old bytes, but FROZEN rev29's declared hash + maybe an archive copy? Let me check if there's an archive of older variant files, e.g. artifacts/formulation/archive/ or the repair packet from worker-083).
+
+Let me look:
+- sha256sum the four files (confirm my numbers).
+- stat mtimes.
+- grep the live variant SET delta for direction text (is it now WEAKER?).
+- grep live VARIANT_REGISTRY for "strength".
+- check FROZEN.json mtime/revision now.
+- check events after 00:55 for writes to these files (artifact events from astra-lead-formulation or workers).
+
+Note: earlier I saw `rev29_delta` says item 3 corrected F1 line 234, residual at VARIANT_REGISTRY:57 etc. If the live files now say WEAKER, perhaps the lead fixed them in a follow-up beyond the card (making L-FORM-03 partially resolved) but FROZEN still pins the old bytes.
+
+Let me investigate.
+dsh: reasoning:
+Confirmed: the live files now carry the corrected direction ("strictly weaker") and a `rebind_note` explicitly says "astra-life05-evidence-binding-repair rev29: base moved cce9c60146d6->d9cebb9404b2 (rev 12->13)" — i.e., the formulation lead (or a worker) updated these variant/registry files at 00:57:02/00:57:15, i.e. ~2 minutes AFTER FROZEN rev29 was frozen at 00:55:02, and did NOT bump FROZEN to rev30 (FROZEN.json still revision 29, mtime 00:55:02).
+
+Wait — one of the four (variant_delta_check.json) matches the declared hash fc6ee058dd96! Look again: my checker said declared fc6ee058 ≠ measured 0b23f0b2 at run time (00:58?), but now sha256sum shows fc6ee058. Hmm! The independent sha256sum now shows:
+- variant_delta_check.json = fc6ee058... = declared → MATCHES now.
+But earlier checker measured 0b23f0b2 (mismatch) and mtime is 00:57:15. My checker ran at ~00:58? Let me check timing: my run happened after I created the file; the first run's output. Let me reconstruct: my run1 was at approximately 00:58. The file mtime 00:57:15 is BEFORE my run. So why did the checker measure 0b23f0b2 while now it's fc6ee058?
+
+Wait, maybe the checker's measurement was of a *different* file: `artifacts/formulation/evidence/variant_delta_check.json` — same path. Hmm. Unless the file was rewritten again after my run (mtime would then be later than 00:57:15; stat shows 00:57:15). Let me think: maybe a writer rewrote it with new content at 00:57:15 and then rewrote again to the declared hash? mtime would update on the last write. If the last write was 00:57:15 and content now equals declared hash, then my checker (run later) should have measured fc6ee058. Unless... my run happened BEFORE 00:57:15? The first run command completed before I checked failures; the sequence: I wrote the file, edited it, ran it. The current time when I ran `date` earlier was 00:55:45 (before FROZEN read). Then I wrote the script (~00:56), ran it (~00:56:30-00:57?). So my checker may indeed have run at ~00:57:1x, racing the writer: it measured variant_delta_check.json mid-write (0b23f0b2) before the final write at 00:57:15... but then the drift guard should have caught it: my end-of-run re-measure compares to the start pin (which I snapshot as `pins[rel] = meas(...)` BEFORE run_checks). If the file changed between my start snapshot and end re-measure, drift would be nonzero. But drift=0. Hmm, that means the start pin itself was 0b23f0b2 and end was 0b23f0b2; both mid-race, then the final write happened after my end measurement. But mtime 00:57:15 = final write; my run's end must have been before 00:57:15. So sequence: variant_delta_check written at ~00:57:0x with 0b23f0b2 (valid:false? maybe), my run measured it, then at 00:57:15 it was rewritten to fc6ee058 (valid:true), after my run finished. But then my "now" sha256sum shows fc6ee058 — consistent.
+
+But wait, the other three files' mtimes are 00:57:02 and their live hashes still differ from declared. So at 00:57:02 the lead rewrote VARIANT_REGISTRY + both deltas, and at 00:57:15 rewrote variant_delta_check. FROZEN rev29 (00:55:02) declared the *older* bytes for all four. So the freeze is stale for these three (at minimum) and was stale for the fourth during my run.
+
+Hmm, actually is it possible FROZEN rev29 was *supposed* to pin the new bytes, and the lead wrote FROZEN at 00:55:02 with hashes computed from files that were then overwritten at 00:57 as a follow-up (L-FORM-03 residual repair / rebase)? rev29_delta explicitly says residual L-FORM-03 was NOT repaired inside the card and lists those files as carrying the inversion. So at freeze time (00:55:02) those files had the inversion ("strictly stronger") and their declared hashes correspond to the inverted versions. Then at 00:57:02 someone repaired the four residual locations (the new content says "direction corrected from 'strictly stronger'"), which:
+ (a) resolves the L-FORM-03 residual, but
+ (b) invalidates FROZEN rev29's declared pins for those paths (3 still stale; 1 was re-written to match? no...).
+
+Hold on: the fourth file `variant_delta_check.json` now equals the *declared* hash fc6ee058. Its content is `{"deltas":[...],"valid":true,"errors":[]}`. This file is a *check output*, and worker-083's repair packet or the lead may have regenerated it. Its declared hash in FROZEN rev29 is fc6ee058 (the same as now) — but at 00:55:02 the file must have had some other content (with valid:false?) that the 00:57 repair updated to valid:true; then the declared hash would be the OLD one, not fc6ee058. Unless FROZEN rev29's declared hash for variant_delta_check was already fc6ee058 at 00:55:02 and the file was temporarily reverted at ~00:57:0x (mid-write) and then rewritten identically. Possible: `check_variant_delta` tool writes it, and during the race my checker caught an intermediate state in which `valid` was false/errors non-empty, then the final write produced the declared bytes.
+
+Either way, at MY measurement instant, three files (VARIANT_REGISTRY, CH delta, SET delta) demonstrably do not match FROZEN rev29's declared hashes, and their mtimes (00:57:02) are after FROZEN's frozen_at (00:55:02). The variant_delta_check is now consistent, so I should re-run the checker now to get a clean current-state measurement: it will show 3 failures (probably), unless something else changed. My instrument is designed to measure at one instant with a drift guard.
+
+Also I must fix two instrument defects before finalizing:
+1. `d5_no_strictly_stronger`: the marker must apply to the *assertion*, not the historical note. Fix: extract the D5 definition, strip the `[rev13: ...]` bracket, then check no "strictly STRONGER"/"strictly stronger" remains in the assertion.
+2. L-FORM-03 residual: the live bytes have been repaired, so `present` is now False for the variant files and possibly the registry/F0 lines too? From my checker output: F0:200 present=True, artifact taxonomy:176 present=True, registry:57 present=True (but the live registry line 57 now says "strictly weaker ... [rev13 direction corrected from 'strictly STRONGER']" — my needle "strictly STRONGER" matched the *historical note*). So my residual predicate is also too naive (historical note). The residual check is informational only, but let me make it accurate: strip bracketed rev13 notes, then look for the inverted assertion.
+
+So the real story after fixing the checker:
+- FROZEN rev29 declared pins: 3 stale (VARIANT_REGISTRY, CH delta, SET delta), possibly 0 stale for variant_delta_check on re-measure.
+- L-FORM-03: the four out-of-card locations were repaired at 00:57:02 (post-freeze) — so the residual is now repaired in the live bytes but FROZEN rev29 pins are stale for 3 of them; the F0 taxonomy line 200 still says "strictly stronger" in the F0 canonical file (F0 frozen; untouched — expected, and its pin still matches, so that's a recorded F0-side residual that cannot be fixed without voiding G-F0).
+
+Wait, F0:200: the canonical taxonomy says the set-based reading "is strictly stronger" — that's the *inverted* direction still present in F0 (frozen). And artifact taxonomy:176 (D1 ledger) also says "strictly stronger". Those two are still present (true inversion, not a historical note). The registry:57 and the two delta files were repaired at 00:57 (now "strictly weaker" + note). So L-FORM-03 is partially repaired post-freeze.
+
+This is a genuinely important finding for the G-FORM r3 review: **post-freeze writes to FROZEN rev29-pinned variant artifacts at 00:57:02 without a manifest bump** → the FROZEN rev29 pin set for those paths is stale; any r3 reviewer binding to FROZEN rev29 would either fail closed (good) or bind wrong bytes. The repair itself is substantive (corrects the SET direction), but the freeze protocol requires a rev30 manifest.
+
+Also note FROZEN rev29's `files` dict DOES include those variant paths: yes, that's where I read declared hashes. And logical_artifacts only has the F0 pair, which still match.
+
+Let me now:
+1. Fix the instrument's two marker predicates (assertion-level, strip historical notes).
+2. Re-run on the current stable bytes (run2). Get a clean verdict: I expect 3 I4 file mismatches → BINDING_FAILED + a finding. Keep the checker's semantics: verdict BINDING_FAILED because declared pins are stale — that's the *measurement*, not a failure of my instrument. The report will state `declared_pin_stale` explicitly.
+3. Also capture the evidence: mtimes, the live vs declared hashes, the rebind_note text, and the F0 side.
+4. Write README, checkpoint, emit events (status/artifact/claim/review/blocker? — a blocker event seems right: report the freeze-pin drift to the formulation lead/controller; the claim states the measurement; the review gives worker verdict advisory). Then checkpoint + exit.
+
+Actually wait — maybe the formulation lead intentionally rewrote those files *before* publishing FROZEN rev29? FROZEN.json mtime 00:55:02; the other files mtime 00:57:02. The lead may have started a rev30 publication and is about to update FROZEN; or the writes at 00:57:02 belong to a worker (worker-083's repair packet? worker-097?). Let me check the events after 00:55 for announcements of writes to VARIANT_REGISTRY / variant deltas / L-FORM-03. That determines whether this is an unannounced breach or an in-flight announced repair. Let me grep events after 00:55:30 for 'VARIANT_REGISTRY', 'L-FORM-03', 'variant', 'rev30'.
+
+Also, importantly: I should check `runtime/state/artifact_hashes.json` — is it updated with the new hashes? If the writer registered them, it's an announced repair mid-flight.
+
+Let me look. Then fix checker and re-run.
+dsh: reasoning:
+Very important context:
+1. Worker-007 at 00:57:09 already ran a rev29 acceptance check (`w007-rev29pre-artifact-rev29-12`): "I1 pass, I2 pass, I3 open (SET delta strength still pre-repair), I4 open (variant_delta_check.json drifted after the freeze); verdict OPEN_ITEMS=I3,I4". So worker-007 has already reported the variant_delta_check drift and I3 open. Then at 00:57:02 the lead apparently repaired the variant files (mtimes), which worker-007 at 00:57:09 still read as pre-repair? Timeline confusion: mtimes 00:57:02 for registry+deltas; worker-007's rev29 run at 00:57:09 says "SET delta strength still pre-repair at 45b9b6a8d192" — but 45b9b6a8 is the *declared rev29* hash, and the live file at 00:57:02 was already 64b8d639 (repaired). Unless the writes at 00:57:02 happened *after* worker-007's measurement but the mtime... no, 00:57:02 < 00:57:09. Hmm, maybe worker-007 measured before the write and emitted after. Or my mtime interpretation: registry+delta mtime 00:57:02 — that's the last write. Worker-007's claim event created 00:57:09 says still pre-repair. Perhaps worker-007's run started ~00:56:50 and measured old bytes, then emitted at 00:57:09; the write at 00:57:02 happened mid-run. Plausible.
+
+So: as of now (~00:59), the live variant files ARE repaired (weaker) and FROZEN rev29 declares the old hashes for registry/CH/SET. Worker-018 at 00:57:25 found the cross-artifact direction contradiction (F1 says WEAKER, F0 canonical still says STRONGER) as a blocking finding HF-W018-F1-1. And worker-007 concluded "rev30 required before binding reviews".
+
+My measurement is consistent with worker-007's I4 finding but *extends* it: after the 00:57:02 repair, the live SET/CH/registry bytes now differ from the rev29 declared pins in three paths (not just variant_delta_check) — the post-freeze repair made the manifest stale for those three; and L-FORM-03 is now repaired in the registry/deltas but not in the two taxonomy files.
+
+Is my contribution novel enough? Worker-007's I4 finding was "variant_delta_check.json drifted after the freeze". Mine adds: the 00:57:02 residual-direction repair moved three more pinned paths, so FROZEN rev29 now has 3 stale `files{}` pins (measured at a stable instant with a drift guard), and the SET/CH/registry now read WEAKER while F0 canonical (0abb9ed8) reads STRONGER — the cross-artifact contradiction worker-018 flagged remains, now with the *manifest-staleness* dimension. This is worth emitting as independent confirmation + scope extension. It's exactly the kind of "independent measurement with hashes and falsifier" the swarm wants. And it's cheap to finish.
+
+But careful: the writers may still be writing (00:57:02/00:57:15). By the time I re-run, FROZEN may have been bumped to rev30. My instrument handles that: it checks revision==29; if rev30 appears, delta_record fails (revision != 29) and I'd report "rev29 superseded" → my measurement becomes historical. To be robust, I should make the report record the measured FROZEN revision + sha and treat revision != 29 as VOID_SUPERSEDED rather than FAIL. Let me adjust: if FROZEN revision != 29 → verdict "VOID_FROZEN_SUPERSEDED" (exit 4) and report the drift set as informational. Also my drift guard would show FROZEN changed if it moves mid-run.
+
+Given time, let me:
+1. Fix the D5 marker (strip historical note).
+2. Fix residual predicate (strip bracketed rev13 notes; report assertion-level inversion).
+3. Add "VOID_FROZEN_SUPERSEDED" handling for revision != 29.
+4. Re-run to run2 (stable current bytes). Record verdict.
+5. Write README + checkpoint + events.
+
+Let me apply the edits.
+dsh: reasoning:
+Now add a "stale declared pins" summary to the report and the VOID_FROZEN_SUPERSEDED handling. Let me patch the main() verdict logic:
+
+- Collect `stale_declared` = list of I4_declared_files entries with ok False.
+- If frozen revision != 29 → verdict "VOID_FROZEN_SUPERSEDED", exit 4 (report still written).
+- Keep other verdicts.
+
+Also add to report: "findings": {"stale_declared_pins": [...], "drift": drift, "l_form_03": residual summary}.
+
+Let me edit main().
+dsh: reasoning:
+Wait — now the verdict is BINDING_VERIFIED_AT_REV29 with 0 failures?! And the I4 declared-file mismatches are gone. That means the FROZEN rev29 pins now match the live files. But the earlier stat showed registry/deltas at mtime 00:57:02 and live hashes 6bac9ade/64b8d639 ≠ declared 5eb42f9a/45b9b6a8. Now the check says they match?? Let me look: the residual findings show live_sha256 for VARIANT_REGISTRY = 6bac9ade (still the new content) and the needle "strictly STRONGER" present at line 57 (historical note stripped? No — it says present=True; because the note `[rev13 direction corrected from 'strictly STRONGER']` is NOT in the form `[rev13: ...]` — it lacks the colon, so my regex didn't strip it. Minor residual-predicate bug; informational only).
+
+But the I4 file check now passes: FROZEN rev29 declared hash for VARIANT_REGISTRY must now be 6bac9ade. Did FROZEN.json change? The frozen revision is still 29 (the run's verdict would be VOID_FROZEN_SUPERSEDED if revision != 29), and drift=0. Let me check FROZEN.json's current sha and its declared hashes. The FROZEN.json mtime might have changed (rewritten with revision 29, updated pins). Earlier: FROZEN.json sha 3d9e3d77fd87 at 00:55:02, revision 29. Let me re-check now: maybe the lead rewrote FROZEN.json at ~00:57:2x keeping revision 29 but updating the pins (a "silent re-freeze" under the same revision!). That would be a significant finding: FROZEN rev29 bytes changed / pins updated without a revision bump. But my drift guard only checks within-run drift; my `pins` snapshot at start of run2 recorded FROZEN sha (whatever it was then). Let me compare FROZEN sha across my two runs: run1 report pins vs run2 report pins.
+
+Let me check:
+- run1/report.json pins FROZEN_REL sha vs run2/report.json pins FROZEN_REL sha.
+- current FROZEN.json sha and mtime and declared hashes for the three paths.
+
+If FROZEN.json was rewritten (same revision 29, new pins) between run1 and run2, that's a **manifest mutation under a constant revision** — exactly the class of freeze-breach CF-19/CF-25. If the revision number stayed 29 while pins changed, that's a reproducibility hazard: two different byte-sets both called "FROZEN rev29".
+
+Let me investigate immediately.
+dsh: reasoning:
+Now the picture is clear:
+
+- The formulation lead completed the repair at 00:57:26–00:57:43: FROZEN.json was **regenerated at 00:57:26 as revision 29** (3d9e3d77 → 815e08079aef), with the new pins including the re-based variants. So the earlier FROZEN rev29 (3d9e3d77, frozen_at 00:55:02) was superseded by a **second FROZEN rev29** (815e0807, frozen_at 00:57:26) with a different pin set. Same revision number, different manifest bytes. That's a manifest identity defect: "rev29" names two distinct byte sets; the r3 reviewers binding "FROZEN rev29" must cite the sha256, which the protocol already says ("reviewers bind to the sha256 below, never to the path alone"), but the revision counter did not advance.
+
+- worker-018 already erratum'd this at 00:57:42: "FROZEN.json moved 3d9e3d77fd87 -> 815e08079aef at 00:57:26 (still revision 29...)".
+- worker-095 at 00:57:46 measured FROZEN rev29 manifest 815e0807: R1/R2 PASS, R3 FAIL (3/5 unannounced pins).
+- worker-007 at 00:57:09 flagged variant_delta_check drift and I3 open (old manifest).
+- worker-074 at 00:58:20 did a "rev29 landing guard" bound to instant 00:56:44.
+- My run2 measured the regenerated manifest (815e0807) at 00:57:58: **all declared pins match live bytes, I1-I4 pass, F0 untouched, 6/6 controls, no drift** → BINDING_VERIFIED_AT_REV29 for the 815e0807 manifest.
+
+So my contribution is now: an independent, drift-guarded verification that the *regenerated* FROZEN rev29 (815e0807) is internally consistent — declared pins match disk, I1-I4/C-20 items pass, the SET/CH directions are corrected in F1/registry/deltas, taxonomy_cases 36/36, and F0 canonical untouched. Plus the recorded observation that the revision counter was reused (two distinct manifests both labeled rev29: 3d9e3d77 at 00:55:02 and 815e0807 at 00:57:26), which is the finding worker-018/095 already partly noted. I should report that as a *finding* with my own measurement, not a new discovery claim: "independent confirmation: rev29 is ambiguous across two manifest byte-sets; 815e0807 is internally consistent; earlier 3d9e3d77 pin set is stale for 4 paths".
+
+Also my residual scan: assertion-level:
+- research_map/formulation_taxonomy.yaml:200 → still "strictly stronger" (F0 frozen, expected, L-FORM-03 residual in F0)
+- artifacts/formulation/formulation_taxonomy.yaml:176 → still "strictly stronger" (supplement D1 ledger; F0-pinned companion, residual)
+- VARIANT_REGISTRY.json:57 → my naive strip missed the note format `[rev13 direction corrected from 'strictly STRONGER']`; the assertion itself now says "strictly weaker". So present=True is a false positive of my residual scanner. I should fix the strip to also remove `[rev13 ...]` (without colon). Let me fix that quickly: regex `\[rev13[^\]]*\]`.
+- the two delta lines → False (repaired).
+
+So the L-FORM-03 residual is now confined to the two F0-frozen artifacts, exactly as the lead's blocker says ("L-FORM-03 (reduced): ... SURVIVES in the two F0 artifacts"). Let me fix the regex so my report matches the measured truth (RESIDUAL = 2, not 3).
+
+Then re-run run3 (manifest may have moved again; check). Since FROZEN is now 815e0807 and stable since 00:57:26, and my run2 already verified it, I'll do a final run3 with the fixed residual predicate and use that as the deliverable. Also add the "rev29 ambiguity" observation: record `frozen_manifest_sha256` and note that `revision: 29` was observed at two distinct manifest hashes during this worker's window (3d9e3d77 → 815e0807); the instrument can't detect that by itself from a single run, so I'll record it as a measured observation in the report via a new field? Better: keep the instrument honest — it verifies one instant. I'll put the ambiguity observation in the README and in the claim/review events with both hashes and mtimes, since I measured it across run1 (3d9e3d77) and run2 (815e0807). Also include run1's stale-pin findings.
+
+Let me fix the regex, then run3, then write README/checkpoint/events.
+
+Also note there's `verify_frozen.py` (lead mentioned exit 0). Not needed.
+
+Time check: ~00:58:40. I should wrap up within ~5-8 minutes: run3, README, checkpoint, events.
+
+Let me fix regex and re-run.
+dsh: reasoning:
+The sed worked for lines 246 and 279 (both are now `\[rev13[^\]]*\]`). Note the docstring at 269 still says "[rev13: ...]" — cosmetic, fine. Let me update the docstring note quickly? Not necessary.
+
+Now run3 (final), then compare with run2 for determinism. Then write README, checkpoint, events.
+dsh: reasoning:
+Final measurement at FROZEN rev29 manifest 815e08079aef:
+- 59/59 checks PASS, 6/6 controls, 0 drift → BINDING_VERIFIED_AT_REV29.
+- L-FORM-03 residual now confined to the two F0-frozen artifacts (F0 canonical line 200 and supplement D1 ledger line 176) — matches the lead's blocker lead-form-...-92.
+
+Now let me:
+1. Verify determinism: run4 to a temp dir and cmp run3 vs run4 (results.json/report.json/controls.json). Note results.json includes the check outputs which contain no timestamps → should be byte-identical. run3/report.json pins include hashes; same. Let me do run4 and cmp.
+2. Write README.md (human-readable: question, method, pins, verdict, the cross-manifest observation, residual, falsifier, controls, non-claims).
+3. Write SHA256SUMS.
+4. Write checkpoint `runtime/state/w021_rev29_binding_checkpoint.json` (with pins, verdict, artifact hashes, next falsifier) and hash it.
+5. Emit events to `comms/outbox/worker-021.jsonl`:
+   - status (task taken)
+   - artifact x4 (report.json, results.json, controls.json, verify script)
+   - claim (the measurement; conclusion_type: mechanical_evidence or formal_model — PROTOCOL says conclusion_type must be valid; the map's apply_events validates conclusion_type against a vocabulary. Others used `formal_model`, `numerical_evidence`, `mechanical_evidence` (rejected earlier for worker-032? The map rejection said "claim: invalid conclusion_type" for 'mechanical_evidence'? Let me check allowed values). Worker-021's earlier claim used `conclusion_type: formal_model` and was accepted. I'll use `formal_model` to be safe (it's a machine-checked statement about the build/binding model, not a physics claim). Let me check the events schema/apply_events allowed set quickly before emitting.
+   - review (worker verdict: accept at this binding scope, counts_as_full_schema_verdict=false)
+   - blocker? There's a residual/finding about the rev29 revision-number reuse: two distinct manifest hashes under revision 29 (3d9e3d77 → 815e0807). I measured run1 at 3d9e3d77 with 4 stale pins and run2/3 at 815e0807 verified. This is a real reproducibility hazard worth a blocker event (`node_id F1,F2a,F2b`, gate G-FORM, needed_to_unblock: advance the revision counter to rev30 or declare the manifest-identity rule; cite both hashes and mtimes). worker-018 already erratum'd it, worker-095 reported unannounced pins, but my event adds the measured stale-pin set at 3d9e3d77 and the verified pin set at 815e0807. It's fair to emit as a blocker (independent confirmation + precise scope). But careful: the lead might consider it already known; still, PROTOCOL allows blockers with evidence. I'll emit it as a `blocker` with `blocker_id: W021-B1`.
+   - status (complete + checkpoint sha)
+6. Exit.
+
+Let me check the allowed conclusion_type vocabulary in apply_events.py / schemas.py to avoid rejection.
+
+Also check the outbox event format requirements: event_id, event_type, created_at, actor required. I'll model on my earlier events (which were ingested/accepted).
+
+Let me check schemas.py for allowed conclusion types.
+dsh: reasoning:
+Determinism confirmed. `formal_model` is an allowed conclusion_type.
+
+Now write README.md, SHA256SUMS, checkpoint. Then emit events.
+
+README content: concise but complete. Include:
+- Task ID, actor, class/node/gate.
+- Question.
+- Pins (FROZEN sha 815e08079aef..., F0 0abb9ed8a961, supplement d7419b4e8963, three schemas d9cebb9404b2 / e9a27996dfd3 / b2ab6acb2bbe, taxonomy_cases ccf7041bd0ff, evidence 9e335e9ba1bf).
+- Result: 59/59 checks, 6/6 controls, 0 drift, verdict BINDING_VERIFIED_AT_REV29.
+- Cross-manifest observation: at 00:55:02 FROZEN revision 29 sha 3d9e3d77 had 4 stale declared pins (VARIANT_REGISTRY 5eb42f9a→6bac9ade, CH c28795b0→7c165a90, SET 45b9b6a8→64b8d639, variant_delta_check fc6ee058→0b23f0b2 at run1 instant); at 00:57:26 the manifest was regenerated still as revision 29 at 815e0807 with the repaired pins; a fresh measurement then passed. Consequence: "FROZEN rev29" is ambiguous without the sha; bind by sha256.
+- L-FORM-03 residual after the 00:57 repair: 2/5 assertion-level locations remain (F0 canonical:200, supplement D1 ledger:176); all three lower files corrected.
+- Method: read-only; drift guard; controls; falsifier; non-claims.
+- Reproduction command.
+
+Checkpoint JSON: `runtime/state/w021_rev29_binding_checkpoint.json`.
+
+Events to append (as a JSONL batch): I'll write with python (append mode) to comms/outbox/worker-021.jsonl. Must be valid JSON lines with required keys.
+
+Event list:
+1. status (task taken): node_id F1,F2a,F2b,F0; status active; summary; evidence_refs []; next_falsifier.
+2. artifact x4: report.json, results.json, controls.json, verify_rev29_binding.py — each with node_id, artifact_type, path, sha256, validation_status unverified, evidence_refs.
+3. claim: class_id "AF-WCC-VAC-GEN;AF-SCC-C2-VAC-GEN;AF-SCC-C0-VAC-GEN" (like my earlier events), gate G-FORM, conclusion_type formal_model, statement, assumptions, falsifier, evidence_refs, artifact_refs.
+4. review: target_id report.json#sha, verdict accept, score 4.0, findings; counts_as_full_schema_verdict=false.
+5. blocker: blocker_id W021-B1 — manifest revision reuse/ambiguity, with both shas; needed_to_unblock; evidence_refs. (Independent confirmation of worker-018/095 observations + the 4-stale-pin set at 3d9e3d77.)
+6. status complete with checkpoint_sha256 and next_falsifier.
+
+Timestamps: use current time. Let me compute all hashes after writing README and finalizing files. The sha256 of report.json etc. — note report.json doesn't change between run3/run4 (deterministic), so hashes stable.
+
+Also `SHA256SUMS` file; but emitting artifact events for it isn't necessary.
+
+Let me write README and checkpoint via python (to compute hashes in one go), then append events, then verify by parsing.
+
+I must also be careful: my earlier `run1` artifacts contain the stale-pin finding; I'll keep run1 as evidence of the earlier manifest state (`run1/report.json`). I'll reference it in the README/events as historical evidence — it's a legitimate part of my measurement window. But note run1 was produced by the *pre-fix* instrument (it had the D5 marker bug); its I4 findings are still valid (hashes) but the overall verdict "BINDING_FAILED" mixed in the marker bug. Hmm — better to not cite run1's verdict; cite the specific measured hashes/mtimes and my independent sha256sum verification (which I ran manually and printed). To be clean, I could re-run the *fixed* instrument against the old manifest — but I can't, the old bytes are gone (no archive). However, I recorded run1/report.json with pins for the three stale files: `pins` in run1 report shows the live hashes at that instant (6bac9ade etc.) and the stale declared values. That's evidence of the state at 00:57:1x. I'll cite run1/report.json as "historical snapshot of the pre-regeneration manifest and the then-live variant bytes" with the caveat that run1's verdict line is superseded (it also caught the D5 marker bug fixed in the instrument). Actually, to avoid confusion for reviewers, I'll explicitly mark run1 as SUPERSEDED and keep the authoritative deliverable = run3 (plus run4 determinism).
+
+Let me now write everything.
+dsh: reasoning:
+Now write the checkpoint to runtime/state and emit events. Let me do both in one python script. The checkpoint:
+
+```json
+{
+ "schema": "worker-checkpoint/v1",
+ "task_id": "W021-REV29-BINDING-VERIFY-01",
+ "actor": "worker-021",
+ "created_at": "...",
+ "node_ids": [...], "class_ids": [...], "gate": "G-FORM",
+ "verdict": "BINDING_VERIFIED_AT_REV29",
+ "pins": {...},
+ "artifacts": {path: sha256},
+ "counts": {...},
+ "finding": "rev29 label reused across 3d9e3d77 -> 815e0807",
+ "residual": "L-FORM-03 2/5 in F0 artifacts",
+ "next_falsifier": "...",
+ "superseded_snapshots": ["run1/report.json ..."],
+ "non_claims": [...]
+}
+```
+
+Then append events to comms/outbox/worker-021.jsonl. Let me construct carefully with correct keys per schemas.py:
+- required common: event_id, event_type, created_at, actor.
+- status: node_id, status, hours, summary, evidence_refs, next_falsifier.
+- artifact: node_id, artifact_type, path, sha256, validation_status.
+- claim: class_id, statement, conclusion_type, assumptions, falsifier, evidence_refs, artifact_refs.
+- review: target_id, reviewer, verdict, score, hard_failures, findings.
+- blocker: node_id, description, needed_to_unblock, evidence_refs.
+- status complete: include checkpoint_sha256.
+
+Timestamps: get now once. Use event ids prefixed `w021-rev29bind-<ts>-...`.
+
+Paths in evidence_refs use `path#sha12`.
+
+One thing to double check: `apply_events.py` may validate `gate` and other fields. My earlier accepted events had `gate`, `node_id`, `class_ids`, `role`, etc. I'll mirror the earlier successful structure.
+
+Let me write the script and run it. Then ingest? The protocol says the controller runs `comms.py ingest`; workers just write to outbox. I should NOT run ingest (that's the controller's). My earlier events were ingested by the controller. So just append to outbox and verify JSON parse.
+
+Let me also verify hashes of the files before emitting (recompute).
+dsh: reasoning:
+Events appended. Now let me validate the events against the schema locally (without ingesting) — e.g., run a quick check mimicking `research_map/schemas.py` validation on the last 9 lines, so I don't emit invalid JSON/schema. Also verify my artifact paths exist and hashes match (already done). Let me run the schema validation function if importable (research_map/schemas.py may be importable; it might depend on nothing). Let me try `python3 -c "import sys; sys.path.insert(0,'research_map'); import schemas; ..."` and validate each of the last 9 events.
+
+Careful not to run `comms.py ingest` (controller's job).
+
+Also I should double check the `formal_model` claim statement includes `assumptions` as list (yes) and `evidence_refs`/`artifact_refs` (yes). The blocker schema requires node_id, description, needed_to_unblock, evidence_refs — provided.
+
+Let me validate.
+dsh: reasoning:
+All 9 events validate; artifact hashes match what I emitted (report 8a76e29f8aa1 matches event, checkpoint a6f779665e1b matches).
+
+One more sanity check: the emitted artifact event for report.json used hash art['report.json'] = 8a76e29f... yes.
+
+The task is complete:
+- Read handoff/map and comms ✓
+- Took one class-bound task (self-proposed; no inbox card), class-bound to the three formulation classes, node F1/F2a/F2b/F0, gate G-FORM ✓
+- Emitted valid JSON with IDs, evidence refs, hashes, falsifier ✓
+- Checkpoint written ✓
+- Should exit cleanly now.
+
+Should I do a final quick summary for the user? Yes — concise report of what was done, the finding, and where the artifacts are.
+
+One consideration: "emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit" — done. I don't need to run any more jobs. No background jobs running.
+
+Let me also note the one remaining ambiguity: I did not ingest (correct — controller does that). And I did not set status=done / gate verdicts (correct).
+
+Final answer: brief summary.

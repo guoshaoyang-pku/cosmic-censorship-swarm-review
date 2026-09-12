@@ -1,0 +1,803 @@
+dsh: reasoning:
+Let me start by understanding the environment. I need to read handoff/map and comms. Let me look at the workspace.
+dsh: reasoning:
+No handoff directory in workspace root. Let me look for "handoff" and "comms" directories elsewhere. There are directories like workdir, .agents, tmp, etc. The task says "Read handoff/map and comms." Let me search.
+dsh: reasoning:
+Found it: /data3/guoshaoyang/workdir/ai4math-swarm with HANDOFF.md, comms, research_map. Let me read them, directed to worker=018.
+dsh: reasoning:
+This is a different project than the one for the swarm worker instructions. The task says: "Read handoff/map and comms. Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit. worker=018".
+
+Let me read the comms PROTOCOL.md, inbox, outbox, and the research_map/ASTRA_HANDOFF.md, and look for worker 018's assignment. Also there may be a runtime directory with worker assignments. Let me look at runtime.
+dsh: reasoning:
+The worker id is 018, i.e., deepseek-flash-18. There's an inbox file deepseek-flash-18.jsonl (13,927 bytes, modified 00:07) and outbox deepseek-flash-18.jsonl (51,128 bytes, modified 00:20). The task says: read handoff/map and comms, take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit.
+
+So I'm worker 018 = deepseek-flash-18. I need to read my inbox for the assignment(s), look at research_map for the class-bound tasks, pick one that's unclaimed/todo, produce an artifact, emit a valid JSON event (probably an upward `claim` or `artifact` + `status`), with IDs, evidence, sha256 hash, falsifier, then run checkpoint.
+
+Let me read the inbox messages for deepseek-flash-18 and the ASTRA_HANDOFF.md, ARCHITECTURE.md, and understand the state. Let me also check what previous flash-18 messages did (outbox) to understand the expected format.
+
+Let me read the inbox file first.
+dsh: reasoning:
+I'm deepseek-flash-18 (worker=018). My inbox has recent assignments:
+
+11. audit-a1-20260912T0008-l0-w18: Second independent fresh verdict on the CURRENT L0 ledger 7d78d2850b55 → write reviews/L0-review-18-current.json. Gate G-LIT.
+12. audit-a1-20260912T0008-a2-w18: A2 has ZERO review verdicts. Review evaluation/ablation_design.yaml at hash 1b2a83ef670b → write reviews/A2-review-18.json. Gate G-AUDIT.
+
+The instruction: "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit." So I should take ONE task — likely the newest, most gate-critical. The task must be "class-bound" (has class_id). Assignment 12 (A2) has class_id "GLOBAL" — hmm, class-bound suggests a specific class id like AF-SCC-C0-VAC-GEN. Assignment 11 (L0-review) — class_id? Let me check: event 11 doesn't list class_id explicitly... it has evidence_refs ledger/theorems.jsonl. Actually assignments 11 and 12 come from lead-audit and lack class_id field in the inbox line? Let me re-read:
+
+Line 11: has no class_id field visible. Line 12: no class_id either. Earlier ones have class_id.
+
+The user says "Take one class-bound task". Hmm. Perhaps the most class-bound open task is reviewing the frozen canonical schema at rev21 hashes, per the lead's clarification (line 10). But the assignment says "take one class-bound task" — pick one task that binds a class.
+
+Given the checkpoint requirement, and the need to emit valid JSON with IDs evidence hash falsifier, I should:
+
+1. Read the current research_map.json state to find my open assignments and their class bindings (e.g., map.assignments entries for deepseek-flash-18).
+2. Pick one (probably the L0 review or the A2 review, whichever is more class-bound and actionable).
+3. Read the target artifact from disk, hash it myself, review it independently, write the review JSON to the canonical path.
+4. Emit artifact + review/status events to comms/outbox/deepseek-flash-18.jsonl.
+5. Run checkpoint.py (and possibly comms.py ingest? The protocol says ingest is controller-only. But the instructions say "checkpoint, then exit"). Running `python3 research_map/checkpoint.py` is a controller command; as a worker maybe I should run it? The task says "checkpoint, then exit" — likely run checkpoint.py to snapshot. But careful: as a worker, maybe writing to runtime/state is allowed. Let me check checkpoint.py to see what it does.
+
+Let me first examine the map for my assignments, then inspect target artifacts. Let me look at the map structure quickly with python (jq may not be available). Also check reviews/ dir, INDEX.md, evaluation_rubric.yaml, ledger/theorems.jsonl.
+
+Let me be efficient. First, query the map for assignments with assignee deepseek-flash-18.
+dsh: reasoning:
+Interesting: `reviews/A2-review-18.json` already exists (15391 bytes, 00:19) — I (worker 18) apparently already wrote it? Wait, that's odd. It exists and was modified at 00:19. My outbox deepseek-flash-18.jsonl was modified 00:20, 51KB. It seems worker 18 has already been running and produced outputs (F2a-review-18.json, F2b-review-18.json, convergence-18.json, F2-review-18.json, and possibly A2-review-18.json).
+
+Hmm — this session is a fresh worker invocation with worker=018. The instruction says "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit." So I'm being re-instantiated as worker 018. There is already work by worker 18. But that may be from a previous incarnation. The instruction is a bounded execution: take ONE class-bound task, emit valid JSON, checkpoint, exit.
+
+Let me check what's already done and what's still missing/open. The inbox's most recent assignments (00:07:42) are:
+- L0-review-18-current.json (G-LIT) — reviewing ledger/theorems.jsonl at 7d78d2850b55.
+- A2-review-18.json (G-AUDIT) — but that file already exists at 00:19 (15KB).
+
+Wait, A2-review-18.json exists but is it referenced in outbox? Let me check the outbox tail and the map reviews list for deepseek-flash-18.
+
+Also the ASTRA_HANDOFF says reviews/A2-review-18.json acceptance etc. Let me check if the current A2-review-18.json is complete and whether the corresponding outbox event was emitted. And check L0-review-18-current.json existence.
+
+Let me inspect my outbox tail, and check which of my artifacts are emitted/ingested.
+dsh: reasoning:
+So worker 18 already delivered the A2 review at 00:20:09 (event 36), and the artifact reviews/A2-review-18.json exists. The remaining open assignment from inbox line 11 is the L0 review: `reviews/L0-review-18-current.json` against ledger/theorems.jsonl#7d78d2850b55 — and note that ledger/theorems.jsonl now hashes ce42d205e761 (current), not 7d78d2850b55. The handoff says "G-LIT needs an L0 accept at ce42d205e761". The assignment said "CURRENT L0 ledger 7d78d2850b55". The current file hash is ce42d205e761 — so the ledger has changed since the assignment was issued. The acceptance says "Verdict cites sha256 7d78d2850b55". Hmm. The frozen class list and A0 rubric.
+
+Wait — but the instruction from the user says "Take one class-bound task". The L0 review is about the literature/theorem ledger; class-bound? The assignment evidence_refs are ledger/theorems.jsonl and evaluation_rubric.yaml. Ledger theorems have class metadata (class tokens). This is a class-bound task in the sense of checking citation scope against class list (frozen classes AF-WCC-VAC-GEN, AF-SCC-C2-VAC-GEN, AF-SCC-C0-VAC-GEN, AF-WCC-SCALAR-SPH). Indeed the falsifier: "A citation whose source class metadata mismatches the claim's class, passed as verified."
+
+Alternatively, the A2 review is done already. The convergence-18 review is done. F2a/F2b reviews done. So the one remaining ungated task for me is the L0 review → `reviews/L0-review-18-current.json`. That's the natural "one class-bound task".
+
+But wait — the ASTRA_HANDOFF says G-LIT needs an L0 accept at ce42d205e761 and 3 L1 spot checks. My assignment is a "second independent fresh verdict on the CURRENT L0 ledger 7d78d2850b55". The current on-disk ledger is ce42d205e761. The protocol rule: "if the file changes mid-review, restart against the new revision" (from the F2b recon assignment; general principle). So I should review the current revision hash I actually read (ce42d205e761) and note that the dispatched hash 7d78d2850b55 is superseded. The acceptance for the latest handoff is at ce42d205e761, so citing the current hash is right and better aligned with the gate.
+
+Hmm, but the assignment explicitly says "Verdict cites sha256 7d78d2850b55". If I cite ce42d205e761 instead, am I failing acceptance? The handoff (which is newer, 00:18, and "LIVE CONTROLLER STATE — read this before doing anything") says G-LIT needs an L0 accept at ce42d205e761. And the controller notice said re-read the map; stale hashes are superseded. The F2b recon assignment's stop rule: "if the file changes mid-review, restart against the new revision". So citing the hash I actually read is correct, and I should explicitly state the dispatched hash is stale, mapping revision deltas. That's the "delta" reporting the leads asked for.
+
+Actually wait. Let me check the map's assignments for the L0 assignment event id and check whether it's recorded, plus check whether a review of L0 at ce42 exists already (L0-review-lead-audit.json, L0-review-17.json). Also check the map reviews list for target L0 and gate G-LIT audit reason.
+
+Let me look at the map details: assignments for deepseek-flash-18 (the two audit ones weren't in the assignments list output above? I only printed those matching 'flash-18'; the list showed 5 entries but not the latest two audit assignments). Let me search the map for the audit assignment event ids, gate G-LIT, and reviews for L0.
+
+Also, importantly: "Take one class-bound task" — the L0 review checks the theorem ledger's class-binding, which is exactly the class-bound task. Good.
+
+Let me gather:
+1. Map: G-LIT gate audit reason, reviews recorded for L0, assignment records for audit-a1-20260912T0008-l0-w18.
+2. The A0 rubric: evaluation_rubric.yaml — read it to apply "the A0 rubric literature verifier and the frozen class list".
+3. ledger/theorems.jsonl — inspect entries structure and verify citations' class metadata vs claim class.
+4. Check artifacts/literature/* for the registry.
+5. Write reviews/L0-review-18-current.json.
+6. Emit outbox event(s): review + artifact + status with hashes, falsifier, IDs.
+7. Run checkpoint.py.
+
+Let me first check whether the class metadata exists in the ledger entries. And check the primary sources cited — do we have web access? The web_search tool is available. The assignment says "Apply the A0 rubric literature verifier and the frozen class list". The earlier L0 reviews may have checked citations. As worker 18, I must do independent verification. Let's look at the ledger.
+
+Let me check the map gate G-LIT reason and L0 reviews.
+dsh: reasoning:
+Key fact: G-LIT audit at 00:19:58 says: "L0 measured ce42d205e761; review scan at this hash: 0 distinct accept reviewer(s) [none]." So the gate needs an L0 accept review bound to the current hash ce42d205e761. My assignment (00:07:42) said review 7d78d2850b55, which is stale; the current ledger is ce42d205e761. So the highest-value class-bound task for worker 18 is: produce reviews/L0-review-18-current.json — a fresh second independent verdict on the CURRENT ledger hash — and accept/reject based on independent verification.
+
+Note the map's assignments list doesn't include the audit-a1-20260912T0008 events (they were issued at 00:07:42, after the map snapshot?). Actually the map updated_at may be 00:20. But search for 'audit-a1-20260912T0008' returned nothing — those assignments were sent to inbox but not yet in map.assignments, or applied under different key. Let me check map['assignments'] for event ids starting 'audit-a1'. Not found. Hmm, maybe the map apply didn't include them. Let me check events.jsonl for them.
+
+Also check the accepted events for the L0 assignment and the A2 review event 36 (was it ingested?).
+
+Regardless, my job: do the L0 review now, class-bound, emit valid JSON.
+
+Deliverable: reviews/L0-review-18-current.json with target_id, artifact, artifact_sha256, verdict, score, hard_failures, findings with line refs, plus class list checks and Kish ESS statement (falsifier mentions independence).
+
+Plan:
+1. Read evaluation_rubric.yaml (A0 rubric literature verifier) to apply the right checks.
+2. Read ledger/theorems.jsonl (ce42d205e761) — 140KB, ~43 theorem entries plus registry. Inspect structure, class tokens, locators, verification_status, duplicate titles, broken refs, class metadata mismatches.
+3. Independently spot-check several citations via web (primary sources) to verify class metadata matches claim class. That's the class-bound requirement: "A citation whose source class metadata mismatches the claim's class, passed as verified."
+4. Write review JSON; hash it; emit outbox events (review + artifact + status).
+5. Run `python3 research_map/checkpoint.py`.
+6. Exit with summary.
+
+Let me first check what the earlier L0 reviews found (17's review, lead-audit's) — but for independence, I should not copy. I can read them after forming my own view; actually the assignment says "do not read or copy worker-17's review while writing". So I must avoid reading reviews/L0-review-17.json before/during writing. I already saw a snippet of flash-17's review in the map (HF-01 critical: 30 entries set conclusion_type=theorem with no artifact_refs). That's map metadata. I'll do my own analysis first, then optionally compare after writing. Better: don't read L0-review-17.json at all; keep independence and note Kish ESS.
+
+Let me read the rubric and ledger now. The ledger is 140KB — I'll parse with python and summarize structure. Also read artifacts/literature files if needed.
+
+Let me start with the rubric (evaluation_rubric.yaml, 13,969 bytes) and the ledger structure.
+dsh: reasoning:
+Now the ledger. Let me parse ledger/theorems.jsonl (ce42d205e761). Summarize: fields, entries count, conclusion_type, artifact_refs presence, class_id, citation metadata, class tokens, unresolved, duplicates.
+dsh: reasoning:
+Ledger has 62 rows (entries), each with class_ids, conclusion_type, verification_status, etc. Earlier INDEX said "theorem entries: 43; registry entries: 119" — that was an earlier revision. Now at ce42d205e761 the ledger has 62 rows, each with class_ids etc. and it seems enriched (the soft flag cleared per gate audit: "The ledger class-token flag is cleared at this hash").
+
+My job: fresh independent literature verdict per A0 rubric on this ledger. Checks:
+- locator present, resolution_status honest, retrieved page recorded, per-source matter/Lambda/dimension/symmetry/formulation scope recorded, quote recorded, quantity_check for numeric claims
+- every citation has locator (DOI | arXiv id | journal page) and resolution_status
+- citation_support == 1.0
+- statement scope matched to class_id; matter/Lambda/dimension/symmetry explicitly recorded
+- quantitative claims carry quantity_check
+- unresolved items listed in unresolved[], not silently dropped
+- class metadata mismatch = HF-03 critical
+- HF-01: conclusion_type == theorem AND (no artifact_refs OR ...) — note ledger entries have no artifact_refs field at all; but entries with conclusion_type=theorem? Let me count.
+
+Let me analyze thoroughly: counts by conclusion_type, verification_status, class_ids, entry_kind, supports_claim, status, unresolved emptiness, presence of source locators, quantity checks, duplicates, and class-token mismatches.
+
+Also check whether the ledger references a separate source registry with locators — source_ids point to artifacts/literature/*.jsonl. Let me look at those files. The ledger rows might carry all metadata inline.
+
+Then I need to do my own independent spot-check of a few sources via web (primary sources) to verify the class metadata (matter/Lambda/dimension/symmetry/formulation) matches the claim class. That's the class-bound part and the strongest evidence.
+
+Let me dump an analysis.
+dsh: reasoning:
+Now I have a good picture. Important observations:
+
+1. Class-binding:
+   - `class_ids: {'': 28}` — 28 rows have an empty class_ids list. The A0 rubric G-LIT criteria says "statement scope matched to class_id". Empty class_ids may be intentional for definitional/background entries (e.g., D-008 MGHD definition, D-009 background singularity theorems). But entries with conclusion_type=theorem and empty class_ids (T-306, T-501, T-502, T-504, T-506, T-508, T-509, T-511, T-513, T-514, T-517, T-519, T-520, T-521, D-008, D-009, T-529) — these are theorems not bound to any frozen class. Is that a hard failure? The rubric's G-LIT says "every claim's evidence set has citation_support == 1.0" and "statement scope matched to class_id". Claims with no class_id are arguably outside the class-binding scope but that's a gap.
+   - Multi-class rows: 4 with "AF-SCC-C2-VAC-GEN;AF-SCC-C0-VAC-GEN", 2 with reverse, 2 with "AF-WCC-VAC-GEN;AF-SCC-C0-VAC-GEN". The rubric says frozen_classes: "Any other ID is a class-binding failure. Classes are not interchangeable and must never be disjoined in a statement." HF-02 detector: "unknown class_id | disjunction of class_ids | ...". So disjoined class_ids are an HF-02 critical failure! The gate audit at 00:19 says "The ledger class-token flag is cleared at this hash" — meaning the earlier class-token flag (perhaps unknown class tokens) is cleared, but disjunctions remain. Hmm, "class-token flag cleared" may refer to a specific check (non-class tokens). But 8 rows have disjoined class lists. That's directly HF-02 per the A0 rubric ("Classes ... must never be disjoined in a statement").
+
+Wait — T-303, T-526, T-514 are results that genuinely concern both C0 and C2 (they establish C0 statements which imply C2). But the rubric explicitly forbids disjunction. The correct treatment per rubric: bind to C0 (the stronger) or list separately with separate conclusion types per class. T-303 "Luk 2018: weak null singularities in vacuum with C^0 extension..." — conclusion is about C0 extension, so it should bind to AF-SCC-C0-VAC-GEN only. T-526 "Luk-Sbierski 2026: formation of a weak null singularity in generic rotating black holes" — class list C2+C0. T-514 "Luk-Oh 2017/2019 two-part proof: C^2 SCC holds and C^0 SCC fails for spherical EM" — that one genuinely has two conclusions (C2 holds for one class, C0 fails) — should be split.
+
+   - Cross-class row: "AF-WCC-VAC-GEN;AF-SCC-C0-VAC-GEN" (2 rows) — mixing WCC vacuum and SCC C0 is class leakage unless transfer_argument. Let me check which rows those are.
+
+2. HF-01: conclusion_type == theorem (30 rows) with no artifact_refs at all in any row. The detector: "claim.conclusion_type == theorem AND (no artifact_refs OR artifact missing OR hash mismatch)". All 62 rows lack artifact_refs. So 30 rows trip HF-01 critical as literally written. But wait — does the ledger count as the artifact itself? The rule PROTOCOL 1: "conclusion_type: theorem without artifact_refs is auto-rejected." The ledger rows are the claims; the artifact is the ledger file itself? The earlier flash-17 review flagged HF-01 critical: 30 entries set conclusion_type=theorem with no artifact_refs (25 accepted). That's a real documented finding.
+
+   However, for a literature ledger, the "artifact" that backs a theorem is the cited source. The rubric HF-01 detector as written fires. This is a design decision for the reviewers: is the source citation an artifact_ref? The rubric says artifact_refs required for theorem. The ledger has source_ids, and there's a separate source registry (artifacts/literature/*.jsonl) with locators/hashes perhaps. Let me check the source registry files to see whether each source has a locator + retrieved page + hash. If source registry entries carry sha256 of retrieved pages, then source_ids could serve as artifact refs, and HF-01 might be argued not to fire. But strictly, `artifact_refs` field is absent.
+
+   Also note: 30 theorem rows but 31 entry_kind=theorem (one is conditional?). D-009 has verification_status=unverified and conclusion_type=theorem — that's an honesty issue resolved by "unverified" status. Hmm, but "conclusion_type: theorem" with "verification_status: unverified" is odd: conclusion_type should reflect the strength of the claim; the rubric's `resolved/unresolved` handling requires unresolved marked unresolved, which they are.
+
+3. verification_status: 61 "abstract-read" and 1 "unverified". G-LIT criteria says "ledger rows have resolvable locators; verification_status honest". "abstract-read" is honest but weak; the gate criteria says ">=3 independent re-fetch spot checks" (recorded for L1: 6 spot checks). 
+
+4. Every row has unresolved non-empty — that's honesty (nothing silently dropped). But G-LIT requires "every claim's evidence set has citation_support == 1.0 (no unresolved/contradicted)". If every row has unresolved items, then no claim can have citation_support 1.0 per the strict reading. However, metrics define citation_support per citation status (verified_primary=1.0...). The unresolved field lists gaps, not necessarily the citation status. Need to check the source registry statuses.
+
+5. Locators: need to check source registry for locator/resolution_status per source, and whether all source_ids resolve. There was a "broken refs: 24" in the older INDEX (at e42923726186). Need to check the current ledger's source ids against the registry.
+
+Let me look at artifacts/literature/ to find the registry and source entries with locators. Also check for quantity checks: rows with numbers in statement (e.g., "Price law", "codimension", "H^1", exponents) must carry quantity_check. Do rows have a quantity_check field? The keys list did not include quantity_check! Keys: assumptions, class_ids, conclusion_type, does_not_imply, entry_kind, evidence_level, falsifiers, genericity, informs_classes, label, ledger_tags, next_action, regularity, scope_caveats, source_ids, statement_exact, status, supports_claim, theorem_id, topology, unresolved, verification_status. No `quantity_check` and no `locator`/`resolution_status`/`retrieved_page`/`quote` fields. So per-source metadata must live in the registry (artifacts/literature/...). G-LIT says "every citation has a locator and resolution_status" and "per-source matter/Lambda/dimension/symmetry/formulation scope recorded". If the registry has those, the ledger is fine by reference.
+
+Let me inspect the literature artifacts.
+dsh: reasoning:
+Let me inspect the registry.jsonl structure and the source entries: locator, resolution_status, retrieved page, matter/Lambda/dimension/symmetry/formulation scope, quote, quantity_check. Also check the ledger's source_ids against registry coverage (broken refs).
+
+Let me parse registry.jsonl (143KB) and check all source_ids referenced in the ledger are present, and each has required fields.
+dsh: reasoning:
+The registry has 97 sources, all with locators (doi/url/arxiv), `status` (e.g. verified-primary), a `verification` block with evidence, evidence_type, evidence_url, fetched_at, http_status, method, page. No explicit resolution_status/verification_status fields — the field is named `status`. The rubric mentions `resolution_status`; the registry uses `status`. Naming difference, but semantically there.
+
+Ledger references 92 sources, all present in registry → no broken refs at this hash. 5 registry ids unused.
+
+Now, per-source matter/Lambda/dimension/symmetry/formulation scope: registry entries do NOT have those fields (keys list: arxiv_id, authors, bibkey, doi, notes, reviewer, source_id, status, title, url, venue, verification, year, mirror_of, assessment, next_action, status_reason). The G-LIT criterion "statement scope matched to class_id; matter/Lambda/dimension/symmetry of the source explicitly recorded" is not satisfied field-wise in the registry — unless it's captured in `notes` prose. The ledger class_ids carry the class binding per entry, but the sources don't carry machine-readable matter/Lambda/dimension/symmetry.
+
+Let me check status distribution of the 97 sources and their evidence_type (abstract vs full text). Also check mirror_of duplicates (13) — duplicate clusters.
+
+Then check the ledger's class-binding correctness on the specific risky rows:
+- rows with disjoined class ids (HF-02 by rubric).
+- rows with empty class_ids but conclusion_type theorem (class-binding gap).
+- rows where the class binding looks wrong: e.g., T-502 (RNdS charged matter) with empty class; T-501 (spherical EM-scalar) empty; fine.
+
+And the key literature class-scope mismatch candidates for HF-03:
+- T-301/T-305 (Dafermos-Luk, Gurriaran) are Kerr C0/Lipschitz results — class AF-SCC-C0-VAC-GEN? Check their class_ids.
+- T-303 bound to C2+C0.
+- Rows with AF-WCC-VAC-GEN;AF-SCC-C0-VAC-GEN: which? Let me find them.
+
+Also check the "assertion: every row has unresolved non-empty" -> G-LIT requires unresolved items listed; they are. But criterion "every claim's evidence set has citation_support == 1.0 (no unresolved/contradicted)" conflicts with 61 abstract-read (abstract-level evidence). abstract-read is not unresolved though. Let me compute citation_support per the metrics definition using registry status values: verified-primary=1.0, verified-secondary=0.5, partial=0.25, unresolved=0.0, contradicted=-1.0.
+
+Let me check source status distribution.
+
+Then: my independent verification. I should re-fetch a few primary sources and check:
+(a) a locator resolves (DOI/arXiv),
+(b) the claimed class metadata matches (e.g., a source cited for AF-WCC-VAC-GEN actually concerns vacuum AF WCC, not scalar field or AdS),
+(c) quantities (e.g., T-518's corrected page range 1948-1995; T-514's Ann. Math. 190(1) 1-111).
+
+The strongest independent spot-check for a class-bound review: pick 3 sources bound to specific classes and verify their scope from the primary source page. Since this is a literature verifier with no model calls needed (I have web tools), I can do real spot checks. The assignment's falsifier: "A citation whose source class metadata mismatches the claim's class, passed as verified."
+
+Candidate checks:
+1. T-302 Sbierski 2018 C^0-inextendibility of Schwarzschild — class C0 (correct: C^0 stronger). Check class_ids of T-302 = ['AF-SCC-C0-VAC-GEN'] ✓.
+2. T-101 Christodoulou 1999 scalar-field naked singularity instability — class AF-WCC-SCALAR-SPH ✓ (scalar, spherical, WCC). But WCC class with spherical symmetry is the AF-WCC-SCALAR-SPH class ✓.
+3. T-202/T-201 vacuum trapped surface formation — AF-WCC-VAC-GEN ✓ (vacuum).
+4. Any row where a source with matter (scalar/EM/charged) is bound to AF-WCC-VAC-GEN (vacuum) → HF-03/class leakage. Let me check for that specifically: e.g., T-501 Dafermos 2005 EM-scalar → class empty (good). T-502 RNdS charged → empty. T-508 Dafermos-Shlapentokh-Rothman (rough data, Lamb...) → empty.
+
+Let me search for suspicious bindings: rows with class AF-WCC-VAC-GEN and any source whose title contains scalar/charged/dust/fluid/EM; rows with AF-SCC-C2-VAC-GEN and source with cosmological constant (dS) etc.
+
+Let me do a systematic check: for each ledger row, gather source titles from registry and flag keyword/class mismatches.
+dsh: reasoning:
+Interesting. The "UNKNOWN STATUS" lines are a bug in my script: I used `w.get(...)` with a dict missing 'verified-api'. The registry uses status values {'verified-primary': 19, 'verified-api': 78}. The A0 rubric metrics define weights for verified_primary / verified_secondary / partial / unresolved / contradicted — but "verified-api" is not in the rubric's weight table. So computing citation_support per the rubric's exact weights is impossible for 78/97 sources: the honest score would be undefined/0 or requires mapping verified-api → some weight. This is a real finding: the registry uses a status vocabulary (`verified-api`) not in the A0 rubric's citation_support weights; the gate criterion "citation_support == 1.0" cannot be evaluated as written without an explicit mapping. Also "verification_status" field absent (named `status`); the ledger row-level `verification_status` uses 'abstract-read'/'unverified', a different vocabulary than the registry's.
+
+Also: `evidence_type`: 84 abstract, 12 metadata, 1 full-text. So 96/97 sources verified at abstract/metadata level only. The gate criterion "retrieved page recorded" is satisfied (page/evidence_url), but "quote recorded": evidence field holds abstract text (for abstract type). Some entries have evidence_type=metadata with probably no quote. Let me count entries where evidence text is empty.
+
+Class-binding issues found:
+- 8 disjoined class_ids rows (D-004, D-005, T-303, T-305, T-402, T-515, T-526, T-528). Per rubric frozen_classes: "Classes are not interchangeable and must never be disjoined in a statement" and HF-02 detector "disjunction of class_ids" is critical. However: is this a defect of the ledger or acceptable because these entries describe results relevant to two classes? The rubric is explicit. Note the current map's G-LIT audit says "The ledger class-token flag is cleared at this hash" — the class-token flag likely referred to non-class tokens (like AF-SCC-OTHER-MODELS). Disjunction may be tracked under class_separation tests. But per A0 rubric HF-02, disjunction = critical.
+
+Let me check if class_separation.py or validate_map.py flags disjunction. Also check the ledger's own acceptance file L0_L1_ACCEPTANCE.md and the literature lead's L0-rev2-disposition.md to understand what the authors claim. But careful about independence. It's fine to read the artifact's own docs; independence means not copying another reviewer's verdict.
+
+- D-004 has AF-SCC-C2-VAC-GEN + AF-SCC-C0-VAC-GEN; source is Einstein-Maxwell-scalar mass inflation → not vacuum! The class is AF-SCC-*-VAC-GEN (vacuum), evidence is EM-scalar (matter) → HF-03 class-metadata mismatch / forbidden_evidence (matter_model != vacuum) without transfer_argument. Note that D-004's class binding is a definitional item ("Christodoulou-Chrusciel version") — but binding a charged-matter source to a VAC class without transfer argument is class leakage. Its conclusion_type is open_problem, not theorem, but HF-02 is about class binding regardless.
+
+- D-005 also disjoined C0+C2, source Kamran? Let me check its sources.
+
+- T-303 Luk 2018 weak null singularities in vacuum → vacuum OK, but disjoined C0+C2.
+- T-305 Gurriaran Lipschitz Kerr → likely C0; disjoined.
+- T-515 Kerr stability status → AF-WCC-VAC-GEN + AF-SCC-C0-VAC-GEN disjoined — mixing WCC and SCC class. The label is about Kerr stability (full subextremal nonlinear stability) — that's relevant to WCC (completeness of I+ / predictability) and SCC. Disjunction forbidden.
+- T-528 Hintz 2026 stability — same disjunction.
+- T-526 Luk-Sbierski 2026 → C2+C0 disjoined.
+- T-402 Dafermos-Luk revised SCC picture → C2+C0 disjoined (arguably fine because it's literally about both C0 and C2 conclusions, but rubric forbids).
+
+Empty class_ids for 28 rows including 16 theorem/conditional_theorem/counterexample/stability_result rows. These are entries outside the four frozen classes (Kerr-dS, RN-dS, Gowdy, EM-scalar, MGHD definition, background singularity theorems). Binding them to a frozen class may be impossible; but then they are "not class-bound" — acceptable as background/unresolved, yet their conclusion_type=theorem and status=accepted means they function as claims in the ledger without class binding. The G-LIT criterion "statement scope matched to class_id" fails for them. The correct treatment per the rubric might be to mark them `informs_classes` (field exists, 7 rows have it) or set status to provisional/background. Let me check which rows have informs_classes and whether empty-class accepted rows have it.
+
+- HF-01: 30 rows conclusion_type=theorem with no artifact_refs. Also 2 rows with conclusion_type=theorem and status=provisional/rejected? Let me check: status accepted 50, provisional 11, rejected 1. D-009 unverified. Let me find theorem rows with status provisional/rejected and supports_claim false.
+
+- T-518 notes "CORRECTED after review C2: the earlier 2189-2235 value was wrong" → the ledger text retains a correction note; that's fine.
+
+- Every row has non-empty unresolved → nothing silently dropped ✓ (good). But 61/62 verification_status=abstract-read.
+
+Now — is there any actual citation misbinding (my falsifier)? Let me find specific hard cases:
+
+1. D-004: AF-SCC-VAC-GEN classes bound to an Einstein-Maxwell-scalar source with no transfer_argument field (ledger rows have no transfer_argument field at all). This is a critical HF-02/HF-03.
+2. T-307? no.
+3. T-517 Chrusciel-Isenberg-Moncrief 1990 Gowdy polarized — class empty. Fine but unbound.
+4. T-502 RNdS (Lambda>0) — empty class ✓ correct (not in frozen AF classes).
+5. Check rows bound to AF-WCC-VAC-GEN whose sources include matter. My keyword scan found only D-004 flagged for Lambda-ish source among SCC-AF rows. The WCC vacuum rows with matter keywords: none flagged, good.
+
+Let me now check the remaining verification: registry `assessment` (5 rows) and `status_reason` (1) — maybe flagged issues. And check evidence quotes for empty.
+
+Then do independent spot checks via web on maybe 3 locators:
+- T-514/SRC-086: Ann. of Math. 190(1), 1-111 (2019), DOI 10.4007/annals.2019.190.1.1 → verify via web.
+- T-518/SRC-089: J. Funct. Anal. 271(7), 1948-1995 (2016), DOI 10.1016/j.jfa.2016.06.013 → verify.
+- T-302/SRC-? Sbierski 2018 JDG 108(2) 319-378 → verify DOI 10.4310/jdg/... maybe.
+- T-208/SRC-002 Rodnianski-Shlapentokh-Rothman 2023 (vacuum naked singularity) → check published venue.
+- D-004 source: "On the occurrence of mass inflation for the Einstein-Maxwell-scalar field system" → bind to class.
+
+Also verify a class-scope claim: e.g., T-526 Luk-Sbierski 2026 "generic rotating black holes" — arXiv 2606.xxxxx (future-dated, suspicious, but this is a simulated future world). Since this is a fictional/future dataset (dates 2026), web search may not find them. Actually the project is set in 2026-09; real-world current date unknown but the environment might have web access to real internet where those 2026 papers don't exist. Let me try web_search for a couple. If web is real (2025-ish), the 2026 sources won't resolve; that's a finding about "retrieval" not necessarily about the ledger. Best to spot-check well-established older sources (Christodoulou 1999, Sbierski 2018, Luk-Oh 2019, Chrusciel-Isenberg-Moncrief 1990).
+
+Let me check what tools exist for L1 spot checks: artifacts/literature/tools/check_acceptance.py, and the L1 spotcheck JSONs to see their format (but independence — those are other workers' work; the gate needs >=3 and has 6). My assignment is the L0 verdict.
+
+Let me now look at:
+1. Ledger rows with theorem status/provisional and supports_claim false.
+2. The `informs_classes` rows.
+3. Registry entries with assessment/status_reason.
+4. evidence empty counts.
+5. Duplicate title pairs across sources (mirror_of covers same paper duplicates — 13 mirrors, acceptable if flagged).
+
+Then run spot checks with web_search/web_fetch.
+
+Also important: the review needs a "verdict accept|revise|reject|inconclusive" per the acceptance: "Second independent fresh verdict on the CURRENT L0 ledger 7d78d2850b55... Apply the A0 rubric literature verifier and the frozen class list." Given disjoined class ids (critical HF-02 per rubric), missing artifact_refs on theorem rows (critical HF-01 per literal detector), class-vocabulary mismatch in citation_support, and D-004 matter-source bound to VAC class → the honest verdict is "revise" with hard failures. That likely aligns with gate needs (an accept is needed for G-LIT, but I must be honest; a revise with enumerated hard failures is what my independent read gives). Hmm — but consider: is the disjunction really a defect at this hash? The gate audit says class-token flag cleared. The frozen_classes text says never disjoined. The rubric is the A0 authority. So revise.
+
+But wait — I should consider whether entries with multiple classes could be legitimately listed if they are multi-class *status* entries (D-004, D-005 definitions of formulations; T-402 status). The rubric says "Classes are not interchangeable and must never be disjoined in a statement". D-004 is a formulation definition spanning C0/C2 — could bind to both if the two formulations are separately stated. But as one row with class_ids list = disjunction. The clean fix: split rows per class or bind the primary class. As reviewer, I report HF-02 as a hard failure with the list.
+
+One more check: the `class_separation.py` tool in research_map might define the official class-separation linter. Let me read it to know what the project itself counts as a violation (avoid false positives). Also `audit_evidence.py` and `validate_map.py` — check what they say about the ledger class token flag. This informs whether disjunction is flagged by the project tool or only by my reading of the rubric.
+
+Let me check these.
+dsh: reasoning:
+Very useful. Note that the 7 rows with `informs_classes` have empty `class_ids` — they are "unbound but informing" entries with an explicit informs_classes pointer. That's a reasonable pattern: 7 rows documented. But there remain many empty-class theorem rows without informs_classes (T-104, T-207, T-501? no T-501 has informs; T-502, T-503, T-504, T-506 has informs, T-507, T-508, T-509, T-511 has, T-513, T-514, T-517, T-518, T-519, T-520, T-521, D-008, T-522, T-529, T-306 has informs, T-304 has informs). Let me count empty-class rows without informs_classes: 
+Empty-class list: T-104, T-207, T-304(informs), T-306(informs), T-501(informs), T-502, T-503, T-504, T-505(informs), T-506(informs), T-507, T-508, T-509, T-510(informs), T-511(informs), T-513, T-514, T-517, T-518, T-519, T-520, T-521, D-008, T-522, D-009, T-529 = 26 rows. 7 have informs. So 19 rows have neither class_ids nor informs_classes, including 12+ with conclusion_type theorem/conditional_theorem.
+
+Also the interesting one: T-501 (Dafermos 2005 mass inflation, spherical EM-scalar) has class_ids=[] but informs_classes=['AF-SCC-C0-VAC-GEN'] — informing a *vacuum* class from an EM-scalar source, no transfer argument. Hmm, that's weaker than a binding (informs, not class_id), and the evidence is exactly the known obstruction (mass inflation) relevant to C0 vacuum SCC. The rubric says evidence metadata must not violate forbidden_evidence "without transfer_argument" — but for informs_classes, there's no claim binding. This is the "known_obstructions labelled non-generic vs open" discussion. I could mention as a non-blocking finding (N) or blocking? The relation is via known obstructions, standard in the field; D-004 also. I'll flag it as a finding requiring an explicit transfer_argument note but not the primary critical.
+
+Now, the registry naming: status `verified-api` (78) and `verified-primary` (19); the rubric expects resolution_status in a specific vocabulary and citation_support weights {verified_primary, verified_secondary, partial, unresolved, contradicted}. Mapping: `verified-api` is not in the table; also `verified-primary` may mean page fetched (method primary-page-fetch). Note: SRC-090 is `verified-primary` via "open copy PDF + OCR". OK.
+
+So per-rubric citation_support cannot be computed ⇒ "n/a / undefined" for 78 sources. That's a schema/vocabulary gap (HF? Not enumerated — could be HF-04? No. It's a criterion failure under G-LIT: "every claim's evidence set has citation_support == 1.0" — undefined ≠ 1.0). I'll report it as a blocking finding (B) since the gate criterion is literally unevaluable.
+
+Now let me check the ledger's own L0_L1_ACCEPTANCE.md, FREEZE.md/FREEZE-REV2.md to know what's frozen/claimed, and the L0-rev2-disposition.md (author's response to prior reviews) — reading the author's disposition is fine; independence is about not copying other reviewers. But the instruction says "do not read or copy worker-17's review while writing". So avoid L0-review-17.json. I already have a snippet from map of flash-17's HF-01 finding. I'll form my own review anyway; overlap on HF-01 is expected and I'll report Kish ESS implications.
+
+Let me read:
+- artifacts/literature/L0_L1_ACCEPTANCE.md
+- artifacts/literature/FREEZE-REV2.md
+- artifacts/literature/reviews/L0-rev2-disposition.md (author's disposition of earlier review — gives me the counterarguments to address, good for a fair review; but it may be from the author, so fine).
+
+Actually, careful about time budget: 1.5h budget per review; this is a bounded worker. Let me be efficient but thorough.
+
+Let me read those three quickly.
+dsh: reasoning:
+This is very informative. The author's disposition already anticipates findings:
+- HF-01 vocabulary collision: they argue HF-01 detector is claim-scoped, so no HF-01 fires against ledger rows.
+- HF-03 source_meta absent: OPEN (deliberate rev-3 backlog) — 0/97 registry and 0/62 ledger rows carry source_meta. That's a major G-LIT criterion failure: "statement scope matched to class_id; matter/Lambda/dimension/symmetry of the source explicitly recorded". The A0 rubric labels the detector HF-03 as *unsupported_citation* critical: "claim cites a citation whose resolution_status in {unresolved, contradicted} or whose class metadata mismatches the claim's class". Since source_meta is absent, class metadata cannot be checked → the criterion is unmet; whether it's HF-03 is arguable. But G-LIT criteria explicitly require per-source matter/Lambda/dimension/symmetry recorded for the gate to pass. The author defers it to rev 3 after review. As an independent reviewer, I should verify whether the absence is real and whether the gate can pass without it. The answer: the G-LIT criteria (both map gate and A0 rubric) require it; therefore the artifact cannot be accepted as satisfying G-LIT, though one may accept the L0 claim set as an honest record with known gaps.
+
+Important: my verdict should consider whether the assignment expects an "accept" for the gate. The gate audit (00:19) says G-LIT needs "an L0 accept at ce42d205e761". The author froze and requested blind review. My job as independent reviewer: fresh verdict. Honest verdict based on A0 rubric:
+
+Evidence for accept:
+- All 92 referenced source_ids resolve; 0 broken refs.
+- All 97 sources have locators (DOI/arXiv/URL), http 200, fetched page recorded, non-empty evidence quote.
+- 62/62 rows carry non-empty unresolved lists (nothing silently dropped).
+- No non-frozen class tokens in class_ids (DEFINITIONS etc. moved to ledger_tags).
+- 0 accepted rows rest on metadata-only (per disposition; verify: T-207 and D-009 metadata? D-009 provisional unverified).
+- Hazards flagged honestly (preprints provisional, state-of-field T-401).
+
+Blocking defects (B):
+B1. `source_meta` absent for all 97 registry rows and all 62 ledger rows → G-LIT criterion "statement scope matched to class_id; matter/Lambda/dimension/symmetry of the source explicitly recorded" not met; class-scope mismatch is not machine-detectable. Author admits OPEN.
+B2. Disjoined class_ids on 8 rows (D-004, D-005, T-303, T-305, T-402, T-515, T-526, T-528) → frozen_classes rule "Classes are not interchangeable and must never be disjoined in a statement" + HF-02 detector "disjunction of class_ids". Note the author's disposition claims "0 extension tokens" but doesn't address disjunction. Need to check whether class_separation.py flags it — the freeze says class_separation exit 0. Let me check class_separation.py to see if disjunction is checked. If the project tool doesn't flag it, my reading of the rubric still stands. Let me verify D-004's source actually is EM-scalar → bound to VAC class (disjoined anyway).
+B3. Citation-support vocabulary unevaluable: 78/97 sources use `verified-api` which has no weight in evaluation_rubric metrics; and registry field is `status` not `resolution_status`; ledger `verification_status` uses a different vocabulary (abstract-read/unverified). G-LIT criterion "citation_support == 1.0" cannot be computed as specified. This is a schema/vocabulary defect, major.
+B4. HF-01 vocabulary collision: 30 rows conclusion_type=theorem with no artifact_refs field anywhere in ledger. Author argues claim-scoped; but the ledger rows are the claims (they carry supports_claim/status accepted) — so by the letter of HF-01 detector, rows do fire. At minimum this needs either artifact_refs per row binding to source page hashes or a field rename. Also the `status: accepted` + `supports_claim: true` on 50 rows is self-certified (HF-14!) since there's no reviewer verdict field: HF-14 detector "a ledger ... record sets status=accepted ... with no independent reviewer verdict field and no artifact hash". The ledger rows have status=accepted and supports_claim=true with source_ids only and no reviewer verdict → HF-14 critical. The author's disposition admits "independent verdicts at the frozen hash still absent → blocker BL-1". This is a strong, rubric-grounded blocking finding.
+
+Wait — HF-14's evidence_2026_09_11 explicitly cites ledger/theorems.jsonl T-201..T-203 carrying status=accepted and supports_claim=true with source_ids only and no reviewer verdict. Those rows still carry status=accepted/supports_claim=true at ce42d205 (T-201..T-203 are in accepted list). So HF-14 fires at this hash as well, by the rubric's own detector and its recorded evidence. That's critical and blocking.
+
+Hmm, but one could argue the reviewer verdict is the review being written now; however HF-14 requires the record itself to carry an independent reviewer verdict field (or artifact hash). It doesn't. So B.
+
+Also possible B: T-513 `conclusion_type=theorem` + status=rejected + supports_claim=false — rejected-as-superseded, fine (honest). Not a defect.
+
+Another check: `verification_status` values ('abstract-read', 'unverified') are not from the rubric vocabulary either ("resolution_status honest"). Minor.
+
+Now, does any of this rise to "revise" vs "reject"? The ledger is a literature record with real gaps deliberately declared; the claims themselves are honest, sources resolve, unresolved items listed. Verdict "revise" with blocking findings is right. Score: maybe 3.0/5. The prior reviews were 2.5–3.5. Given 0 broken refs, resolved class tokens, honest unresolved, but HF-14 critical + missing source_meta + disjunctions, score 3.0.
+
+I should do independent verification of at least a few sources to earn "independent" (and to test the falsifier: a citation whose source class metadata mismatches the claim's class, passed as verified). Since source_meta is absent, I can re-fetch some primary sources and check class scope myself. Let me do 3-4 spot checks:
+
+1. T-101 Christodoulou 1999 → source SRC-0xx (Annals? "The instability of naked singularities in the gravitational collapse of a scalar field", Ann. of Math. 1999?). Verify it is scalar field (not vacuum) and relates to WCC → matches AF-WCC-SCALAR-SPH binding ✓ (class correct).
+2. A row where ambiguity risk is high: T-526 Luk-Sbierski 2026 (future preprint, arXiv 26xx). Web may not have it. Skip or note not independently retrievable.
+3. T-514 Luk-Oh 2019 Ann. Math. 190(1), 1-111, DOI 10.4007/annals.2019.190.1.1 → verify DOI resolves and title matches (class empty; tagged C2/OTHER-MODELS).
+4. T-302 Sbierski 2018 C^0-inextendibility of Schwarzschild → verify it's C^0 and vacuum.
+5. D-004 source (Costa-Girão-Natário-Silva 2018? "On the occurrence of mass inflation for the Einstein-Maxwell-scalar field system...") vs class AF-SCC-*-VAC-GEN → mismatch, vacuum class + charged matter source → class-scope issue.
+
+Let me first identify which sources those rows cite, then fetch. Let me print rows T-101, T-302, T-514, D-004, T-301 with their source ids/titles/urls.
+
+Also check class_separation.py and audit_evidence.py to know project's own linter verdicts (to avoid claiming a false positive). Let me read class_separation.py quickly and run it (read-only). Running their tools is allowed? It's a bounded worker with workspace-write; scripts are in repo. Running class_separation.py is read-only presumably. Let me check its source first.
+dsh: reasoning:
+Let me read class_separation.py around lines 60-140 to understand what it flags — particularly "composite C0/C2 asserted as one class" and whether `class_ids: [C2, C0]` (a list of two) is flagged, or whether the scan treats the joined string. Let me read lines 30-140.
+dsh: reasoning:
+The linter `_scan_class_ids` accepts a list of two distinct class tokens (each token individually doesn't merge C0 and C2) — it only flags a *single token* that merges both (e.g., "AF-SCC-C0-C2-VAC-GEN"). So the project linter does NOT flag `class_ids: [C2, C0]`. But the rubric frozen_classes text says "Classes are not interchangeable and must never be disjoined in a statement", and HF-02's detector says "disjunction of class_ids". So there's a linter/rubric gap: my review can report this as a finding with the exact rubric line reference (evaluation_rubric.yaml:53-54, 174-179) — the review's job is to check the artifact against the acceptance/rubric, not just the linter.
+
+Let me verify rubric line numbers for citations:
+- Line 53-54: "Exactly these class IDs may appear in claims/artifacts. Any other ID is a class-binding failure. Classes are not interchangeable and must never be disjoined in a statement."
+- HF-02 lines 176-179.
+- HF-01 line 171-174.
+- HF-14 lines 244-252.
+- HF-03 lines 182-186.
+- G-LIT criteria lines 135-144.
+- frozen_classes status_risk for C0 lines 100-104.
+
+Good.
+
+Now: independent spot-checks. I'll verify a handful of locators and, importantly, test whether class binding metadata matches the source's actual scope. Given source_meta is absent, I can fetch primary source pages myself for 3 sources and check:
+
+1. SRC-014 (Christodoulou 1999) — T-101 bound to AF-WCC-SCALAR-SPH. Fetch arXiv abs/math/9901147 to confirm scalar field + spherical symmetry + WCC.
+2. SRC-005 (Sbierski) — T-302 bound to AF-SCC-C0-VAC-GEN. Fetch arXiv 1507.00601 abs to confirm C^0-inextendibility of Schwarzschild (vacuum, AF) → class C0 correct.
+3. SRC-029 (Costa-Girão-Natário-Silva?) — D-004 bound to AF-SCC-{C2,C0}-VAC-GEN (vacuum) while the source is Einstein-Maxwell-scalar → matter model mismatch; check the abstract to confirm charged matter. Actually the title itself says "Einstein-Maxwell-scalar field system" — a VAC class binding is a mismatch. But D-004 is an open_problem/definitional item, provisional, and its note says the version name is quoted from CGNS 2018. Still, class_ids bind frozen VAC classes; the rubric's forbidden_evidence for AF-SCC C2 says "matter_model != vacuum" → violation without transfer_argument. Since ledger rows have no transfer_argument field, this is a hard failure by detector (HF-02/HF-03). I should confirm there is no transfer_argument anywhere in the row. Keys confirmed: no transfer_argument. Also D-004 is `provisional` and open_problem rather than a claim — mitigating, but the class binding remains.
+
+Hmm, one could argue D-004 and D-005 are *formulation* definitions (open_problem), not evidence claims, and thus class_ids list which formulations the definition serves; but the rubric's class-binding rule doesn't exempt definitions. I'll report as B with the note that the fix is to reclassify to a non-class tag (e.g., `informs_classes`) or split + attach transfer argument.
+
+4. Also verify T-514's SRC-086 Crossref DOI: Ann. Math. 190(1) 1-111 → check via api.crossref.org. And T-518's SRC-089 J. Funct. Anal. 271(7) 1948-1995 DOI 10.1016/j.jfa.2016.06.013. These were "corrected after review C2" — good to independently confirm.
+
+Let me fetch:
+- https://arxiv.org/abs/math/9901147 (Christodoulou 1999)
+- https://arxiv.org/abs/1507.00601 (Sbierski)
+- https://arxiv.org/abs/1707.08975 (CGNS mass inflation) — confirm Einstein-Maxwell-scalar
+- https://api.crossref.org/works/10.4007/annals.2019.190.1.1
+- https://api.crossref.org/works/10.1016/j.jfa.2016.06.013
+
+Use web_fetch. Note: this simulated world is set in 2026; real web may differ. Let's try. I can batch independent fetches in one block.
+
+Also maybe check T-301's SRC-004 DOI 10.4007/annals.2025.202.2.1 — "The interior of dynamical vacuum black holes I" published in Annals 2025? In the real world it's still arXiv 1710.01722 (unpublished?). In this simulated 2026 world it claims Annals 202.2.1. Fetching may confirm or not. It's a good check of "verification_status honest": the registry says SRC-004 verified-primary/abstract with page fetched. Let me fetch its page too? Limit to 5 fetches.
+
+Let me do the fetches now.
+dsh: reasoning:
+Excellent — real web access, and the world is the real world (2026-09 dates in Crossref indexed date would be real time; the current real date appears to be ≥2026-09-01). The 2026 arXiv papers may actually exist! Interesting: arXiv:2606.28253 (Hintz 2026) — arXiv IDs 26xx would be June 2026. The Crossref index date is 2026-09-01, so the real current date is around September 2026. So those 2026 sources may be real. Good — I can verify them.
+
+Spot check results so far:
+1. SRC-014 Christodoulou 1999: arXiv math/9901147 title matches, "spherical gravitational collapse of a scalar field" → T-101 binding AF-WCC-SCALAR-SPH ✓ (class scope matches: massless scalar, spherical, WCC). Journal ref Ann. of Math. 149(1) 183-217. The registry may record this. Fine.
+2. SRC-005 Sbierski: title matches, C^0-inextendibility of Schwarzschild, motivated by SCC → T-302 binding AF-SCC-C0-VAC-GEN ✓ (vacuum, C0 stronger formulation).
+3. SRC-029 Costa-Girão-Natário-Silva: Einstein-Maxwell-scalar with positive cosmological constant → D-004 binds AF-SCC-C2/C0-VAC-GEN (vacuum, Λ=0) → **class-scope mismatch**: source matter=EM-scalar, Λ>0; class requires vacuum, Λ=0. This is exactly my falsifier firing: a citation whose source class metadata mismatches the claim's class, passed as verified. Even though the row is a definitional/open_problem entry marked provisional, it carries class_ids binding two frozen classes with forbidden evidence (matter_model != vacuum, cosmological_constant != 0) and there's no transfer_argument. This is a hard failure under HF-02/HF-03.
+
+Wait — but is D-004 a "claim"? It's an open_problem entry defining the "Christodoulou-Chruściel version" of SCC, for which the CGNS paper provides the violation example. The class_ids are the classes the definition serves. The definition itself is about the C0/L^2 version — it's not a claim about vacuum. However, the ledger assigned class_ids [C2, C0] to it. Per rubric, frozen classes are the only IDs allowed, but binding a definition to a class whose forbidden evidence the cited source violates is a class-scope defect. I'd rate it B (blocking) since HF-03's detector ("evidence metadata violates ... forbidden_evidence list without transfer_argument") reads exactly on this: the ledger row has no transfer_argument field, and the source evidence (EM-scalar, Λ>0) violates the class's forbidden_evidence.
+
+4. Crossref DOI 10.4007/annals.2019.190.1.1: title "Strong cosmic censorship in spherical symmetry for two-ended asymptotically flat initial data I. The interior of the black hole region", Ann. Math. 190(1), July 2019 → matches T-514/SRC-086 metadata claim (volume 190, issue 1). Page range 1-111 was claimed in the unresolved note; Crossref doesn't give pages. Fine.
+
+Now let me also verify the two remaining items quickly:
+- T-518 SRC-089 DOI 10.1016/j.jfa.2016.06.013 → J. Funct. Anal. 271(7) 1948-1995.
+- The T-526 Luk-Sbierski 2026 arXiv:2606.xxxx maybe. Let me check the actual source IDs for T-526 and whether their arXiv IDs resolve. Possibly "arXiv:2606.xxxxx". This tests the "future-dated" events issue (CF-14) but those are real 2026 papers.
+- Check the class-binding of T-101 etc.
+
+Also should check a source cited for AF-WCC-VAC-GEN that might actually be a matter source. My keyword scan found nothing except D-004 for Lambda. Let me do a more careful scan across classes with titles: for each class, flag sources with forbidden keywords:
+- AF-WCC-VAC-GEN rows: sources containing scalar/dust/fluid/EM/dS/AdS.
+- AF-WCC-SCALAR-SPH rows: sources containing "vacuum" (without scalar).
+- AF-SCC-C2/C0-VAC-GEN rows: sources containing scalar/EM/dS/RNdS (without vacuum).
+Let me list them explicitly to see if any theorem rows have mismatched sources. From the class distribution: SCC-C0 rows: T-301, T-302, D-004(disjoined), T-402, T-305, T-526, T-303, T-515, T-528. Let me check each source's title for matter keywords, with rows that are theorem/counterexample/stability_results (accepted).
+
+Let me compute a focused mismatch table. Then check the arXiv:2606 sources. Then write the review.
+
+Also I want to check the ledger's `evidence_level` and `status` for supports_claim in the T-201..T-203 HF-14 evidence. Already know: T-201 accepted, T-202 accepted, T-203 accepted, no reviewer field → HF-14 fires.
+
+Let me run the focused class-scope scan based on title/matter keywords across all rows, and fetch SRC-089 crossref + one of the 2026 arXiv sources for T-526.
+dsh: reasoning:
+SRC-089 verified: J. Funct. Anal. 271(7) 1948-1995, title "Instability results for the wave equation in the interior of Kerr black holes" — matches T-518/SRC-089 correction. Good.
+
+Class-scope mismatches from the focused scan:
+1. D-004: EM-scalar + Λ>0 source bound to AF-SCC-{C2,C0}-VAC-GEN. **Hard mismatch** (matter + Λ vs vacuum + Λ=0), no transfer_argument. → HF-02/HF-03.
+2. D-002: sources include charged black holes, self-gravitating scalar, EM — bound to AF-SCC-C0-VAC-GEN (open_problem/accepted). D-002 is the "C0-inextendibility formulation of SCC (attribution disputed)" definitional row; its sources are the origin texts (Penrose etc.) plus these. Hmm, D-002's source list includes SRC-021 (charged BH interior), SRC-056, SRC-061 (scalar Price law), SRC-072 (EM). These are likely cited as background where the C0 formulation appears. For a definition row, class_ids bind AF-SCC-C0-VAC-GEN; the evidence includes non-vacuum sources without transfer. Similar issue but weaker. Let me look at D-002's sources and scope_caveats.
+3. D-003: SRC-025 "Mass inflation and the C^2-inextendibility of spherically symmetric charged scalar field dynamics" — charged scalar → bound to AF-SCC-C2-VAC-GEN. Mismatch again (matter vs vacuum), open_problem/accepted.
+4. D-007: SRC-033 (cosmological black holes with Λ?) and SRC-014 (scalar field) bound to AF-SCC-C2-VAC-GEN — D-007 is "Genericity quantifier" formal_model; sources are methodological precedents. Weaker.
+5. T-515: SRC-064 (Kerr-de Sitter), SRC-035 (Kerr-dS) bound to AF-WCC-VAC-GEN + AF-SCC-C0-VAC-GEN. T-515 is an open_problem status row about Kerr stability; the dS sources are comparative background. The row's primary source (SRC-078 Hintz) is vacuum. Disjunction is the main defect here.
+
+So the pattern: definitional/status rows cite non-vacuum sources as background while carrying frozen VAC class IDs, without per-source `transfer_argument` or scope qualifiers. The rubric's forbidden_evidence applies to "evidence metadata" violating class constraints. Given source_meta is entirely absent, none of this is machine-checkable — which is exactly the B1 finding. As a reviewer, I verified by reading titles/abstracts: D-004/D-003/D-002 have at least one source whose matter model or Λ violates the bound class's forbidden_evidence. That fires the assignment's falsifier ("a citation whose source class metadata mismatches the claim's class, passed as verified") — at least for D-004 (Λ>0 + EM-scalar), D-003 (charged scalar), D-002 (charged/scalar sources). Note: these are open_problem/definition rows, not theorem claims, and the ledger marks them accepted/provisional. Still, the review's falsifier fires.
+
+Wait, careful: D-004's rebuttal — it's the definition of the Christodoulou-Chruściel version; the CGNS source is the one that *names* the version (quoted verbatim). The class_ids were assigned because the version is a candidate formulation of SCC. The row's own note says "The name is quoted verbatim from Costa-Girao-Natario-Silva 2018". So the source is cited for the *name/definition*, not as evidence for a vacuum claim. That's a legitimate use of a non-vacuum source in a definition row. But then the class_ids binding is what's wrong: a definition of an inextendibility formulation should probably carry no class_ids (like D-005) or `informs_classes`. Hmm, D-005 also has disjoined class ids. The clearer defect is the disjunction + class binding of definitional rows.
+
+I should be fair: report D-004 as a blocking finding because (a) disjoined class_ids (rubric explicitly forbids), (b) the row's only source is EM-scalar with Λ>0 while both bound classes forbid non-vacuum and Λ≠0, and no transfer_argument exists anywhere in the row schema; the fix is either drop class_ids to ledger_tags/informs_classes or add per-source scope fields + transfer note. This is defensible.
+
+Now, let me also verify that the ledger contains no `transfer_argument` field anywhere (already confirmed by key census: no such key). Good.
+
+Also the HF-14 self-certified acceptance: 50 rows status=accepted + supports_claim=true with no reviewer verdict field and no artifact hash. Let me verify no row has a `reviewer`/`review`/`artifact_refs` field (key census says no). Yes.
+
+And HF-01: 30 rows conclusion_type=theorem (let me count rows with conclusion_type in {theorem} → 30). No artifact_refs. Author argues detector is claim-scoped and ledger rows aren't claims... but rows have supports_claim and status accepted, so they function as claims. I'll report HF-01 as a *blocking* vocabulary/binding defect but acknowledge the author's counterargument and the fact that source_ids resolve; recommend either adding `artifact_refs` pointing to source records with hash or renaming conclusion_type to `result_kind` + adding explicit "not a project claim" marker. Actually, since the A0 rubric's HF-01 detector is explicit, and the ledger's `conclusion_type=theorem` is a claim-level field, I'll list it as B (blocking) with the note that prior reviewer flagged it and the author's disposition claims it doesn't fire; my judgment: the detector's condition is satisfied literally; the author's reading requires a scope assumption not present in the rubric. Report as B.
+
+Hmm, but careful about how many B findings: the acceptance says "Verdict cites 1b2a..." for A2; for L0: "Verdict cites sha256 7d78d2850b55; independent text; hard_failures enumerated with ledger line refs." Note "hard_failures enumerated with ledger line refs". I need line refs. I have JSONL line numbers! The ledger is line-delimited: line numbers correspond to rows. I should cite line numbers for each row (e.g., `ledger/theorems.jsonl:26`). Let me compute line numbers for the rows I cite: D-004, D-002, D-003, T-515, T-528, T-526, T-305, T-303, T-402, D-005, T-201..T-203 (HF-14), T-101 (HF?). Let me get line numbers.
+
+Also per PROTOCOL rule 4: cite evidence as path#sha256-prefix or path:line. So use `ledger/theorems.jsonl:NN`.
+
+Let me get the line numbers and a few more details for the review:
+- line numbers of rows: build mapping theorem_id → line no.
+- D-002 sources and statement.
+- Verification of T-101 class status: it's provisional, so HF-01 doesn't fire (conclusion_type theorem + status provisional?). The detector doesn't condition on status; but T-101 has no artifact_refs. All 30 theorem rows lack artifact_refs. Fine.
+
+Let me also quickly check whether T-515/T-528's disjunction is the "WCC+SCC unified in one declaration surface" — the linter has a rule: WCC and SCC unified in one declaration surface if text has both marks + merge assertion. T-515's label/statement might. class_separation exit 0 means either the surface keys scanned didn't include statement_exact (DECLARATION_KEYS includes "statement" but ledger's field is "statement_exact" — NOT in DECLARATION_KEYS!). Let me check how class_separation processes the ledger: it may scan `statement_exact`? DECLARATION_KEYS = {label,title,class_id,class_ids,conclusion,conclusion_type,notes,purpose,scope,scope_statement,direction,event,statement,declared_selector,regularity,regularity_token,family}. `statement_exact` is absent → the linter does NOT scan the ledger's actual statement field! That's a linter coverage gap worth a finding (N or B). Let me verify by reading the rest of class_separation.py (lines 150-251) to see if it has special handling for the ledger.
+
+Actually, this could be an important finding for the review: the project's class-separation check reports exit 0, but it never scans `statement_exact` (the field that actually contains the mathematical statements), so its "0 findings" is not evidence about the ledger's statements. Let me confirm.
+
+Let me read the rest of class_separation.py.
+dsh: reasoning:
+Confirmed: `class_separation.py` `findings_for_map` only scans map nodes/claims, never the ledger; `findings_for_text` scans artifact text for key:value lines using ASSERTED_LINE_KEYS which includes "class_ids" and "conclusion_type" — a JSONL line from the ledger parsed as a line... Let me think: if someone runs class_separation on the ledger file, findings_for_text does regex `^\s*["']?([A-Za-z_]+)["']?\s*[:=]\s*(.+)$` per line. A JSONL row is one long line starting with `{"assumptions": [...]`. The regex requires the line to start with optional quote + key + quote + `:` — the ledger line starts with `{"assumptions"`, so group(1) would be... the regex anchors at start: `\s*["']?([A-Za-z_]+)["']?\s*[:=]` — after `{"` the first char `{` is not in `[A-Za-z_]`, so no match. Thus ledger JSONL lines are never scanned by the key:value path either. Also `_scan_composite(text, ..., mode="prose")` on the whole JSONL: prose mode only flags explicit merge assertions; "C^0" and "C^2" tokens... `_MERGE_PAT` matches "c0 or c2", "c0 and c2", "c0/c2", "c0, c2", "c0 c2", "c2c0" etc. In the ledger text, T-514's statement "C^2 SCC holds and C^0 SCC fails" — pattern `c\s*2\s*(?:or|and|/|,|\+|\s)\s*c\s*0`? Sequence is "c2 scc holds and c0 scc fails" → between "c2" and "c0" there's " scc holds and " — the regex allows only one separator char (or `\s` single whitespace) between; "c2 scc" has letters between, so no match. So class_separation.py would find nothing on the ledger even if pointed at it. And the freeze doc lists `python3 research_map/class_separation.py` exit 0 as evidence — but that tool scans the map, not the ledger. Let me verify what class_separation's main() does — maybe it scans the ledger explicitly via args. Let me check the top of the file (lines 1-30 and main at end? The file ends at 251 with regression; there's no main? Let me check the first 30 lines and whether there's a __main__ block. Actually the file is 251 lines and I read 30-251; the top 1-29 I haven't read. There's no main function seen. Let me check.
+
+Actually the grep earlier showed line 213 `out.append(f"CLASSSEP-SOFT: unknown class token ...")`, and the run_cycle.py probably calls it. The freeze doc's claim "class separation → exit 0" might be from run_cycle or a CLI in another file. Let me check quickly.
+
+This matters: if the project's class-separation evidence doesn't cover the ledger, then the "0 findings" claim in the freeze doc is not evidence about the ledger's class bindings, and my finding stands stronger. Let me check the top and any CLI usage.
+
+Time is a factor; let me not over-engineer. Quick check: grep for class_separation in research_map/*.py and read lines 1-29.
+dsh: reasoning:
+Let me check audit_evidence.py lines ~100-125 to see what it scans: `findings_for_map(m)` and `findings_for_text(...)` for artifact paths — does it scan ledger/theorems.jsonl? Let me read that part. If audit_evidence scans artifacts listed per node and the L0 node's artifact is ledger/theorems.jsonl, then findings_for_text on the ledger JSONL → as analyzed, no flags due to regex anchoring. So the tool's "0 literature finding" is vacuous. Let me confirm by directly running the relevant check on the ledger: `class_separation.findings_for_text(open('ledger/theorems.jsonl').read(), 'ledger/theorems.jsonl')` → expect [].
+
+Let me do that as an independent control, and also run a targeted scan of the ledger with my own disjunction detector.
+
+Also check audit_evidence.py lines 100-125.
+dsh: reasoning:
+Confirmed:
+- `findings_for_text` on the raw ledger JSONL → 0 findings (the tool cannot see ledger rows).
+- `findings(row-dict)` on parsed ledger rows → 1 finding: T-402.regularity "Between C0 and C2 (weak null singularity)." flagged as a bare composite in declaration mode.
+
+So the project's "class separation exit 0" claim does not apply to the ledger as a file; and even when rows are parsed individually, the detector flags only T-402's regularity string, not the 8 disjoined `class_ids` lists (because a list of two distinct known tokens passes `_scan_class_ids`).
+
+This is a solid, independently-controlled finding: the linter does not cover the ledger; the freeze doc's check table cites class_separation exit 0 as evidence; therefore the "0 class findings" is not evidence. The A0 rubric's own HF-02 detector explicitly includes "disjunction of class_ids", so the ledger has 8 rows with disjoined class_ids (HF-02 critical by the rubric) and the project linter misses them.
+
+Now I have a strong set of findings. Let me also verify one more time the exact claim "0 accepted rows rest on metadata only" (Falsifier cross-join in disposition). And check the registry status vocabulary against the frozen class list.
+
+Let me now also double check the "source_meta absent" claim: registry keys don't include matter_model/cosmological_constant/dimension/symmetry/formulation. Confirmed by the key census. But wait — maybe those are nested in `verification` or `notes`? Keys at top: arxiv_id, authors, bibkey, doi, notes, reviewer, source_id, status, title, url, venue, verification, year, mirror_of... `verification` keys: evidence, evidence_type, evidence_url, fetched_at, http_status, method, page. No scope fields. Confirmed absent. The disposition admits it ("0 of 97 registry rows and 0 of 62 ledger rows carry source_meta").
+
+Additional finding candidates:
+(a) `resolution_status` naming: gate criterion says each citation has "resolution_status"; registry uses `status`. The G-LIT gate as written in research_map (apply_events line 73) says "ledger rows have resolvable locators; verification_status honest"; the rubric says locator + resolution_status. Field-name mismatch → criterion unevaluable as written. B or N? I'll fold into the vocabulary finding.
+(b) `citation_support` metric: weights defined only for verified_primary/verified_secondary/partial/unresolved/contradicted; registry uses verified-api (78) and verified-primary (19) → 80% of sources have no defined weight ⇒ the G-LIT criterion "citation_support == 1.0" cannot be evaluated. Blocking (gate criterion uncomputable).
+(c) HF-14: 50 accepted rows, no reviewer verdict field, no artifact hash. Blocking.
+(d) HF-01: 30 theorem rows, no artifact_refs. Blocking per literal detector; author disputes scope. I'll list as B with the note.
+(e) Disjoined class_ids (8 rows) + linter blind spot. Blocking (HF-02).
+(f) D-004 source class mismatch (EM-scalar + Λ>0 → VAC classes), no transfer_argument; also D-002/D-003 cite non-vacuum sources; but D-002/D-003 are definition rows with caveats. I'll make D-004 the hard failure and D-002/D-003 the same finding family (class-scope of sources not recorded → cannot be checked; D-004 verified mismatch).
+(g) 96/97 sources are abstract/metadata level; only 1 full-text. G-LIT "human_adjudication_only: whether the quoted theorem really has the claimed scope" — with abstract-only evidence, exact theorem scope is not verified; T-101's statement (instability of naked singularities) is supported only at abstract level, and its own unresolved says exact function space/quantifier not extracted. This is honestly declared (provisional status for T-101), so it's a gap not a defect; report as N (non-blocking backlog) with the note that T-101 is provisional and the unresolved list names the resolving action.
+(h) Empty `class_ids` on 19 rows without `informs_classes` (12 with theorem-like conclusion_type), meaning the ledger contains theorem-level entries not bound to any frozen class, contrary to G-LIT "statement scope matched to class_id". But many are deliberately outside the four classes (Kerr-dS, RN-dS, Gowdy). The disposition argues these are tag-only deliberately. That's defensible: binding them would be leakage. Non-blocking (N) recommendation: require `informs_classes` or an explicit `out_of_scope` tag on all class-empty rows.
+(i) T-306/T-304/T-501 etc. "informs_classes" pointing to a vacuum class from a non-vacuum source without a transfer note — N (needs transfer_argument or scope caveat).
+(j) `verification_status` vocabulary ('abstract-read', 'unverified') differs from rubric's `resolution_status` vocabulary; D-009 is 'unverified' + provisional + supports_claim False → honest.
+
+Also positive checks to state:
+- P1: 92/92 source_ids in the ledger resolve in registry.jsonl; 0 broken refs (my cross-join).
+- P2: all 97 registry rows have DOI/arXiv/URL locator, http_status 200, page/evidence_url, non-empty evidence quote.
+- P3: 62/62 rows carry non-empty unresolved lists; no silent drops.
+- P4: 0 non-frozen class tokens in class_ids/informs_classes (freeze delta 5 claim verified: all tokens ∈ 4 frozen).
+- P5: rejected/superseded row T-513 carries status=rejected, supports_claim=false (honest).
+- P6: my own 4 spot re-fetches (Christodoulou 1999 arXiv math/9901147, Sbierski 1507.00601, CGNS 1707.08975, Crossref 10.4007/annals.2019.190.1.1, 10.1016/j.jfa.2016.06.013 — that's 5) resolved and their titles/scope matched the ledger's class binding for T-101 (scalar, spherical) and T-302 (C0 Schwarzschild vacuum). Wait — does the arXiv abs page confirm "vacuum" for Sbierski? It says Schwarzschild spacetime (vacuum solution) and C^0-inextendibility; the class AF-SCC-C0-VAC-GEN matches (Schwarzschild is vacuum, AF). ✓. Christodoulou 1999: scalar field spherical → AF-WCC-SCALAR-SPH ✓.
+
+Kish ESS: The acceptance falsifier says "two 'independent' reviews sharing text/template (Kish ESS must be reported)". My review is text-independent from lead-audit/flash-16/17; I did not read their texts (I did read flash-17's finding summary from the map and the author's disposition quoting them). I should report honestly: my review shares no text; but all reviewers are LLM agents sharing the same rubric, so nominal ESS < n. I'll state Kish ESS ≈ 1.0 for my own verdict as a single independent unit, and note that of the four verdicts at rev1 (lead-audit, flash-16, flash-17, plus mine at rev2), the shared-template risk is real; my verdict is derived from independent disk reads, hashes, and primary-source re-fetches, with specific deltas. I'll report `kish_ess: 1.0` for my review and `kish_ess_prior_corpus: <=2.2` citing project prior.
+
+Now: verdict. Given HF-14 (critical), HF-02 disjunctions (critical), HF-01 (critical literal), source_meta absence (major gate criterion), citation_support unevaluable (gate criterion), D-004 class mismatch (critical HF-03-ish) → verdict "revise" with score 3.0/5. The rev-2 delta itself (SRC-090/092/093/096/097, T-201 tag fix, dedup) is an improvement and many criteria pass; but the gate-blocking defects remain and are acknowledged by the author as a rev-3 backlog. So: accept the honest-record aspects, revise before G-LIT pass. Score 3.0 (same ballpark as prior 3.0-3.5).
+
+Hmm — the gate needs an accept to pass. My honest verdict is revise. The controller will have to decide. That's the point of an audit: "disagreement with lead-audit is the signal".
+
+Now the deliverable JSON format. Acceptance (inbox line 11): "Verdict cites sha256 7d78d2850b55; independent text; hard_failures enumerated with ledger line refs." The current ledger hash is ce42d205e761; I must cite the hash I actually read and explain the dispatch hash is superseded (per F2b recon rule "if the file changes mid-review, restart against the new revision"). I'll include `artifact_sha256: ce42d...` and `dispatch_sha256: 7d78d2850b55`, `hash_note`.
+
+Required fields per lead-audit's other template: target_id, artifact, artifact_sha256, verdict, score, hard_failures[], findings[] with line refs. Also class-bound: class_id(s) — the L0 ledger spans all four frozen classes; I'll list `class_ids: [AF-WCC-VAC-GEN, AF-SCC-C2-VAC-GEN, AF-SCC-C0-VAC-GEN, AF-WCC-SCALAR-SPH]` and note per-finding class bindings.
+
+Plus evidence_refs with path#sha256-prefix or path:line, falsifier, next_falsifier, created_at, actor, event_id, event_type=review. Also include `independent: true`, `author`: not me (ledger authored by lead-literature; I didn't author), `kish_ess: 1.0`.
+
+Let me also compute the ledger's per-row counts I cite precisely:
+- 62 rows; conclusion_type=theorem: 30 (from counter) — but wait, HF-01 says "claim.conclusion_type == theorem AND no artifact_refs". Count = 30. Let me get the exact list of line numbers for those 30 to enumerate compactly. Actually the finding can cite counts + representative lines (T-201..T-203 per rubric evidence + the 30-row list in an appendix field). I'll include `rows` list of theorem rows' line numbers.
+
+Let me compute:
+- theorem rows line numbers,
+- disjoined rows line numbers,
+- empty-class rows without informs_classes line numbers,
+- accepted rows without reviewer field (all 50) line list maybe count only.
+
+Then write the review JSON with a python script (so the JSON is valid) and compute its sha256. Then append outbox events:
+1. `review` event with target_id L0, artifact ledger/theorems.jsonl, artifact_sha256 ce42..., verdict revise, score 3.0, hard_failures, findings (compact), evidence_refs [ledger/theorems.jsonl#ce42d205e761, evaluation_rubric.yaml#d748a9e3574e, reviews/L0-review-18-current.json#<sha>], falsifier, kish_ess.
+2. `artifact` event with node_id L0, artifact_type review, path reviews/L0-review-18-current.json, sha256, validation_status unverified (worker can't set passed).
+3. `status` event node L0, status active, hours ~1.2, summary, evidence_refs, next_falsifier.
+Maybe also a `blocker` for the class-separation linter blind spot? That's a finding, not blocking my work. Keep to review+artifact+status.
+
+Then run checkpoint: `python3 research_map/checkpoint.py`. Let me check what checkpoint.py does (writes runtime/state/current_checkpoint.json etc., may run class_separation.regression). Running it is part of the task instruction ("checkpoint, then exit"). Let me read checkpoint.py quickly to make sure it's safe (writes to runtime/state). It's a controller command; the instruction explicitly says to checkpoint, so run it.
+
+Also should I run `python3 research_map/comms.py ingest`? PROTOCOL says accepted stream is written by comms.py ingest only (controller). The bounded worker instruction says emit valid JSON + checkpoint, then exit. Ingesting is the controller's job; but the handoff says "Pull accepted traffic: python3 research_map/comms.py ingest" for agents to read. That would pull *my* outbox into events.jsonl. Hmm, ingest is described in PROTOCOL as the controller's command. As a worker, running ingest might be acceptable ("pull accepted traffic") but it mutates global state. The controller notice says "ingest → apply" is the lifecycle's job ("locked ingest → apply → repair → audit → checkpoint"). I'll not run ingest; just checkpoint as instructed. Actually, "checkpoint" might mean my own checkpoint or the project checkpoint. The task says "checkpoint, then exit" — the project has `research_map/checkpoint.py # full 15-min checkpoint snapshot`. I'll run it and report the result. If it fails due to permissions, note it.
+
+Let me look at checkpoint.py briefly to know outputs and expected exit.
+dsh: reasoning:
+Wait — theorem rows lines list uses enumerate over rows with index; the lines mapping I built uses `enumerate(rows,1)` but rows were built from non-empty lines, so line numbers match actual file lines only if there are no blank lines. Earlier I computed lines from actual file enumeration for key rows: D-002 line 2, T-101 line 7, T-201 line 14, T-526 line 58, T-528 line 60 etc. Those matched the enumerate(rows,1) values (T-201=14, T-526=58, T-528=60, D-004=4). Good, so no blank lines; my lists are correct line refs.
+
+Note: empty&no-informs claim-like = 19 rows lines [10,20,32,33,34,37,38,39,43,45,48,49,50,51,52,53,54,61,62].
+
+Also HF-01: 30 theorem rows (lines above) — all lack artifact_refs. HF-14: 50 accepted rows lack reviewer/artifact hash fields.
+
+Now, "30 rows conclusion_type=theorem with no artifact_refs" — but note the author's argument: HF-01 detector: `claim.conclusion_type == theorem AND (no artifact_refs OR ...)`. Ledger rows are not `claims` in the map's `claims` array but they are claim-like records (`supports_claim: true`). I'll report as blocking with both readings and name the exact rubric line (evaluation_rubric.yaml:171-174) and the HF-14 detector (244-252).
+
+Now let me write the review JSON. Structure:
+
+{
+  "schema_version": "0.1",
+  "artifact_id": "L0-review-18-current",
+  "created_at": "2026-09-12T00:4x:xx+08:00",  (get current time)
+  "actor": "deepseek-flash-18",
+  "event_type": "review",
+  "event_id": "w18-review-20260912-l0-current",
+  "target_id": "L0",
+  "assignment_event_id": "audit-a1-20260912T0008-l0-w18",
+  "artifact": "ledger/theorems.jsonl",
+  "artifact_sha256": "ce42d205e7617e3a032c109b24a00b57c7c6b104f37dad5125745af15deebd72",
+  "dispatch_sha256": "7d78d2850b55...", (full? I only know prefix 7d78d2850b55; use prefix)
+  "dispatch_hash_superseded": true,
+  "hash_note": "...",
+  "class_ids": [...4...],
+  "verdict": "revise",
+  "score": 3.0,
+  "independent": true,
+  "author_of_target": "astra-lead-literature (not the reviewer)",
+  "kish_ess": {"this_review": 1.0, "prior_verdicts_at_rev1": 3, "project_prior": "<=2.2 nominal-independent LLM judges", "method": "..."},
+  "checks": {...pass/fail per A0 G-LIT criteria...},
+  "hard_failures": [ {id, severity, name, evidence (line refs), note}, ... ],
+  "findings": [ {id: B1/N1..., blocking: true/false, class_id, statement, evidence_refs, required_action}, ...],
+  "positive_findings": [...],
+  "spot_checks": [ {source_id, url, http_status, what_matched, class_binding_effect} ...],
+  "falsifier": "...",
+  "falsifier_result": "...",
+  "next_falsifier": "...",
+  "evidence_refs": [...],
+  "limits": [...]
+}
+
+Hard failures (rubric-mapped):
+1. HF-14 self_certified_acceptance (critical): 50 accepted rows, lines list, no reviewer/artifact hash → cite evaluation_rubric.yaml:244-252 and the ledger evidence itself.
+2. HF-02 class_leakage (critical): 8 disjoined class_ids rows lines [4,5,25,27,30,46,58,60] violating frozen_classes "never disjoined" (evaluation_rubric.yaml:52-54) + detector line 174-179. Plus class_separation linter gap (control).
+3. HF-01 fluent_text_promotion (critical, contested): 30 theorem rows lines list without artifact_refs (rubric 171-174). Note author's counterargument; detector is literal.
+4. HF-03 unsupported_citation (critical): D-004 line 4 binds AF-SCC-C2/C0-VAC-GEN to SRC-029 (EM-scalar, Λ>0, verified from primary abstract), no transfer_argument anywhere in row schema; G-LIT criterion source matter/Λ/dimension/symmetry not recorded for any of 97 sources. Related weaker instances D-002 line 2, D-003 line 3, D-007 line 9? Let me get D-007's line: earlier not computed. Let me compute: rows order — D-007 line? I'll compute in the write script if needed; but findings can cite the range. Actually let me just include D-002/D-003/D-004 lines I have, and mention T-515 line 46 (dS sources) under the disjunction/scope finding.
+
+Blocking findings (B):
+B1. HF-14 (as above).
+B2. HF-02 disjunction + linter blind spot.
+B3. HF-03 D-004 class-source mismatch + source_meta absent (0/97) → gate criterion unmet; HF-01.
+B4. citation_support unevaluable: registry status vocabulary {verified-primary, verified-api} vs rubric weights; no `resolution_status` field; policy gate criterion "citation_support == 1.0" cannot be computed for 78/97 sources. Cite evaluation_rubric.yaml:260-265 and 135-144.
+
+Non-blocking (N):
+N1. 19 claim-like rows with empty class_ids and no informs_classes (lines) — require explicit out_of_scope/informs_classes or downgrade; note the 7 rows with informs_classes as the good pattern.
+N2. 96/97 sources abstract/metadata-only; only T-... full-text. Recommend targeted full-text spot checks for the rows that gate classes (list which classes lack a full-text source: all four? SRC-090 full-text is Chruściel; the single full-text is SRC-090 → all class-bound theorem rows rest on abstract-level evidence). Honest but limits scope verification.
+N3. informs_classes non-vacuum → vacuum class (T-501 line 20 informs AF-SCC-C0-VAC-GEN from EM-scalar) without a transfer/obstruction note. Same family as D-004 but weaker (informs, not binding).
+N4. `verification_status` vocabulary mismatch ('abstract-read'/'unverified' vs rubric's resolution_status vocab) — naming/consumer audit.
+N5. T-513 line 43 rejected-as-superseded row still carries conclusion_type=theorem; consider `retracted`/`superseded` marker to avoid count-based detectors counting it (it already has supports_claim=false and status rejected → honest; low priority).
+N6. Duplicate anchors: 13 registry rows mirror_of; overlaps are flagged. Positive really. Skip.
+
+Positives:
+P1. 92/92 source refs resolve (my cross-join); 0 broken (fixes lead-audit finding 3).
+P2. 97/97 registry rows: locator (doi/arxiv/url), http_status 200, fetched page, non-empty evidence quote.
+P3. 62/62 rows non-empty unresolved.
+P4. class token census = exactly the 4 frozen ids (DEFINITIONS etc. moved to ledger_tags) — fixes earlier non-class token finding.
+P5. 0 accepted rows rest on metadata-only; D-009 unverified is provisional + supports_claim=false; T-513 rejected + supports_claim=false.
+P6. my 5 independent re-fetches all resolved HTTP 200 and matched the ledger class bindings for T-101/T-302 and the corrected locators for T-514/T-518.
+
+Verdict revise, score 3.0.
+
+Now, the acceptance says "Verdict cites sha256 7d78d2850b55". I'll explain clearly: dispatched hash superseded; current frozen rev2 hash ce42d205e761 as measured by me at review time; the delta between rev1 (7d78…) and rev2 (ce42…) is the 5-row source delta + T-201 tag fix per FREEZE-REV2.md#eeac41f58661 (MANIFEST hash) — wait, FREEZE-REV2.md itself has a hash; let me compute FREEZE-REV2.md's sha256 and MANIFEST.json's to cite. MANIFEST declared eeac41f58661646e... let me measure. And citation_audit.csv 315c19145065 (L1). I'll measure those three quickly in the write script.
+
+Wait — also I should double-check whether `reviews/L0-review-18-current.json` already exists (from a prior incarnation). `ls reviews | grep L0` showed no L0-review-18-current.json. Good.
+
+Also, the assignment node: "node_id L0", gate G-LIT, run_id run-2026-09-12T00:05+08:00.
+
+Let me now check current time to set created_at. The environment: run `date`. Then write the JSON file via python (ensuring valid JSON), compute sha256, then append outbox events, then checkpoint.
+
+One more consideration on the outbox event schema: The review events ingested earlier had fields like assignment_event_id, actor, created_at, event_id, event_type, findings, artifact, artifact_sha256, verdict, score, class_id, evidence_refs... Let me look at one accepted review event in events.jsonl from flash-19 or lead-audit to match the schema exactly (validate_events may require fields). Let me check schemas.py / events.schema.json for required fields, and look at an ingested review event. This matters: my event must be valid or it'll be rejected into rejected.jsonl.
+
+Let me read research_map/schemas.py (4003 bytes) and check the events schema requirements.
+dsh: reasoning:
+Very important discovery: other workers (deepseek-flash-21, -22) already reviewed L0 at hash ce42d205e761 at 00:22-00:23 — after my assignment was issued (00:07:42). Events f21-20260912T002329-review-L0 and f22-20260912T002210-review-L0 both target ledger/theorems.jsonl#ce42d205e761 with counts_as_full_schema_verdict true. Let me read those two reviews fully to know their verdicts (this affects whether my review is still needed and what "independent" means). Hmm, but wait: the assignment told me to review the CURRENT L0 at 7d78d2850b55 (rev1); the ledger moved to ce42 (rev2) and *other* workers were assigned fresh reviews of the current hash (21/22 got lifecycle-02 assignments presumably). My inbox's latest L0 assignment (00:07:42) pinned 7d78d2850b55.
+
+So there may now be multiple verdicts at ce42. Let me check the map's review corpus for L0 at ce42 to see the distinct verdicts and whether an accept exists. The gate audit at 00:19:58 said "0 distinct accept reviewer(s) [none]" — but that was at 00:19:58, before f21/f22 (00:22-00:23) were ingested (the map updated_at was 00:20; new events landed 00:23:42). Let me check the map for reviews of L0 at ce42 (the map may have been updated by a later lifecycle pass? The map's mtime was 00:20; events.jsonl mtime 00:21+). Actually events.jsonl is 00:21... The events I just read in events.jsonl include _received_at 00:23:42, so events.jsonl was appended after; the map (research_map.json) mtime was 00:20 — maybe stale relative to events.
+
+Let me query the map reviews for L0 ce42 and also the raw map's controller_gate_audit timestamp. If the map hasn't applied f21/f22 yet, the gate still lacks an accept from those.
+
+Key question for me: what should worker-18 do now? Options:
+A. Still write reviews/L0-review-18-current.json as assigned (fresh independent verdict at current hash ce42). My review would be a 3rd/4th verdict at ce42. Given f21/f22 exist, my verdict adds to independence accounting but is not gate-critical anymore. Still valid work with class-bound content.
+B. Do something else class-bound.
+
+The instruction says: "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit." My assigned open task is the L0 current review. The fact that others also reviewed it doesn't cancel my assignment; more independent verdicts are fine (G-LIT needs "an L0 accept"; G-AUDIT needs 2 independent accepts per target). But before writing, I should check the verdicts of f21/f22 to avoid duplicating their exact findings and to report Kish ESS honestly. Reading them after forming my own view is fine; I've already formed the core findings independently (HF-14, disjunction, source_meta, citation_support vocab, linter blind spot). Let me read the f21-L0 and f22-L0 findings fully to compare and to potentially add distinct value. But beware: "do not read or copy worker-17's review while writing" — that's worker-17, and f21/f22 are different workers. Still, for independence I should not copy; I can note convergence/divergence. Actually the assignment explicitly names only worker-17. Reading f21/f22 to check verdicts is important for the gate state and for my status event. I'll read just their L0 entries.
+
+Let me grep events.jsonl for the f21/f22 L0 review events and print them fully. Also check whether an accept exists at ce42. Then decide.
+
+Actually, let me reconsider: perhaps the controller's newer assignments for 21/22 (lifecycle-02) supersede my L0 card. My inbox's last messages (00:07:42) are what worker-18 got; 21/22 got their own (probably `astra-life02-l0-*`). The gate audit at 00:19:58 said 0 accepts. f21/f22 both likely issued "revise"/"inconclusive" due to HF-14/disjunction. If both are revise, then a *third* revise from me is low information gain. But the user instruction is to take ONE class-bound task — the L0 review is my open one. Alternatively, I could check whether a more valuable task is open for me. But my inbox only has L0 and A2 (A2 already delivered by my prior incarnation at 00:20:09, event 36). Hmm, wait: the A2 review was delivered at 00:20:09 by deepseek-flash-18, and reviews/A2-review-18.json exists. So my only open item is L0.
+
+Let me check the f21/f22 L0 verdicts and whether the map now records an accept. If the gate already has 2+ verdicts at ce42, I can still deliver mine as the third independent verdict — that's within my assignment and increases confidence (and G-AUDIT wants 2 independent accepts per target; if mine is the only accept among revises, it's a signal of disagreement). Fine — proceed with my review, using my own evidence and framing, and explicitly report the hash-supersession.
+
+Actually, one consideration: writing to `reviews/L0-review-18-current.json` — the acceptance says "New file reviews/L0-review-18-current.json only." Good, no collision.
+
+Let me read the f21/f22 L0 verdicts (verdict/score/hard_failures/findings) to include a delta statement and avoid claiming novelty for findings they already made. This is due diligence, not copying: my findings were derived before reading them.
+dsh: reasoning:
+Two revise verdicts at ce42 already (f21 score 3.0, f22 score 2.0), both citing HF-01 and HF-14, and vocabulary gaps. They diverge on the disjunction: f21 treats it as a defect needing explicit binding; f22 treats it as "class coverage annotation, not merged class identity" and accepts it. My review's distinct value can be:
+
+1. Independent primary-source re-fetch (f21/f22 explicitly fetched nothing; f22 says "No network access was used") — I did 5 live re-fetches. That's a genuinely independent verification dimension.
+2. The class-separation linter blind spot: I ran the project detector on the ledger and on parsed rows and showed the "0 findings" claim is vacuous / misses disjunctions (T-402 flagged only when rows are parsed individually). This is a distinct, evidence-backed finding about the tooling claim used in FREEZE-REV2's check table.
+3. D-004 source class-mismatch verified from the primary abstract (EM-scalar + Λ>0 bound to VAC classes) — firing the assignment's named falsifier. Distinct.
+4. A tiered B/N verdict with the explicit hash-supersession note (dispatch 7d78 → current ce42).
+
+So my verdict: revise, score 3.0, with 4 blocking findings and non-blocking backlog. This is a third revise verdict at ce42 — no accept. That means G-LIT remains unpassable at this hash, correctly. Good.
+
+Also I must report Kish ESS: three LLM reviewers (21, 22, 18) issued verdicts at ce42 from the same rubric; nominal n=3, but they converge on HF-01/HF-14 — I should report ESS honestly. Since our texts are independent but our verdicts/reasoning share template and the same underlying model family, Kish ESS is likely ~1-2. I'll report ESS ≈ 1.5 (est.) with the note that convergence on HF-01/HF-14 across three same-family agents is weak evidence of independent discovery; the *divergence* on disjunction (21 vs 22) is itself evidence that verdicts are not copies.
+
+Hmm, do I need to worry that reporting an ESS would undercut my own review? No — honesty is the point.
+
+Now, one more check: does the ledger have an `artifact_refs`-like file proposed by worker-007 (mentioned by f21/F6)? Yes: artifacts/worker-007/l0_hf01_artifact_refs/proposed/theorems.with_artifact_refs.jsonl. I can mention as repair path but not use as evidence (it's outside the frozen hash). I should not copy f21's text; I'll state it in my own words if I mention it. Actually, I independently verified? No, I haven't looked at it. I'll mention that a repair path was reported by another reviewer without verifying — better: leave it out or note "not independently verified". I'll leave it out to avoid asserting unverified claims. Hmm, but it's useful for the required_action. I'll phrase: "A per-row artifact_refs patch is proposed elsewhere on disk (not independently verified by this reviewer); applying it moves the hash and requires re-review." That's honest.
+
+Now write the review JSON. Let me get the current time (date) and hashes:
+- ledger/theorems.jsonl ce42d205e7617e3a032c109b24a00b57c7c6b104f37dad5125745af15deebd72
+- evaluation_rubric.yaml d748a9e3574ebe0c34c22b608ba0bf018d525a644ebff815371c6dcfca055885 (verify)
+- registry.jsonl hash (measure)
+- FREEZE-REV2.md hash (measure)
+- MANIFEST.json hash (measure)
+- research_map/class_separation.py hash (measure; f19 said c266dbceca87)
+- artifact hashes of my spot-fetched pages? I can't hash the web pages easily; I'll record URLs + http 200 + retrieval time in the review's spot_checks. I could save the fetched page text locally to artifacts/worker18/l0_review/ and hash those files — that's good evidence practice. My tool outputs are in /tmp spill files maybe. Simpler: record URL + fetched_at + the exact quoted fragment from the page. That is checkable by re-fetch. Good enough, and cheaper. Actually saving evidence is better for audit; let me save the key fragments into a JSON under artifacts/worker18/l0_review/spotcheck_fetches.json and hash it. That is a new artifact of mine; can attach to the review event as evidence_ref.
+
+Hmm — bounded worker: keep it manageable. I'll create:
+1. reviews/L0-review-18-current.json (main deliverable)
+2. artifacts/worker18/l0_review/spotcheck_fetches.json (spot-check evidence with URLs, fragments, retrieval timestamps, http status) — hashed.
+
+Then outbox events: review + artifact (for review file) + artifact (spotcheck file)? The artifact event requires node_id, artifact_type, path, sha256, validation_status. Two artifact events fine. Plus status. Keep it to review + 2 artifacts + status = 4 events.
+
+Wait: is `artifacts/worker18/` the right path? Earlier worker18 artifacts are at artifacts/worker18/f2_review/... So yes.
+
+Then checkpoint.py. Note checkpoint runs ingest first — "Astra checkpoint: ingest comms, validate map, audit evidence..." So running checkpoint.py will ingest my outbox events into events.jsonl (good, my events get accepted). It writes snapshots only, doesn't mutate research_map.json. 
+
+Let me now write the files. First get time, hashes, and build the JSON.
+
+Let me construct the review content carefully.
+
+Checks table (A0 literature verifier × G-LIT criteria):
+- locator present: PASS (97/97 registry rows carry doi/arxiv/url + page; ledger rows indirect via source_ids)
+- resolution_status honest: PARTIAL — field named `status` not `resolution_status`; vocabulary {verified-primary, verified-api} not in A0; ledger verification_status {abstract-read, unverified} honest as far as it goes.
+- retrieved page recorded: PASS (97/97 page/evidence_url, http 200)
+- per-source matter/Lambda/dimension/symmetry/formulation scope: FAIL (0/97 rows; 0/62 ledger rows)
+- quote recorded: PASS (0 empty evidence among 97)
+- quantity_check: FAIL/N-A (0 fields; quantitative claims T-514/T-518/T-526 etc. carry numbers in text but no quantity_check field)
+- statement scope matched to class_id: FAIL (disjoined bindings; 19 claim-like rows with no class_id and no informs_classes; D-004 verified source mismatch)
+- unresolved listed: PASS (62/62 non-empty; unresolved.jsonl present)
+- citation_support == 1.0: NOT EVALUABLE (vocabulary mismatch; verified-api undefined weight)
+
+Hard failures (rubric IDs):
+HF-14 (critical) — self-certified acceptance, 50 accepted rows lines [...]; structural absence of reviewer/verdict/hash; detached from my own work (I am not the author). Evidence: ledger/theorems.jsonl:1-62 (all rows), rubric 244-252; line list of accepted rows.
+HF-01 (critical) — 30 theorem rows with no artifact_refs; lines list; rubric 171-174. Note author counterargument (FREEZE-REV2 §Review status / disposition A.1) and that f21/f22 concur.
+HF-02 (critical) — 8 disjoined class bindings lines [4,5,25,27,30,46,58,60]; rubric 52-54 + detector 176-179; plus the linter blind-spot control.
+HF-03 (critical) — D-004 line 4 binds two VAC classes to SRC-029 (EM-scalar + Λ>0, verified live), no transfer_argument field anywhere in the ledger schema; gate criterion source matter/Λ/dimension/symmetry not recorded (0/97) makes this class of defect undetectable; related D-002 line 2 / D-003 line 3 / D-007? (only D-004 verified live).
+Maybe also HF-04 (major) — quantitative claims without quantity_check (T-526 etc.) — report as major but not critical. The verdict is already revise.
+
+Findings with B/N labels (like astra-conv-03 style):
+B1 HF-14 (lines)
+B2 HF-01 (lines)
+B3 HF-02 disjunction + linter blind spot (lines) — note f22's opposing reading and explain why the rubric text controls; include my control runs: findings_for_text(ledger)=0; findings(row-dict)=1 (T-402 only); class_ids list-of-two never flagged by _scan_class_ids (cite class_separation.py:97-114).
+B4 HF-03 D-004 + source_meta absence 0/97 (lines 4; registry key census)
+B5? citation_support/G-LIT evaluability — is it blocking? The gate criterion can't be computed, so yes blocking for gate purposes (B5). But it overlaps f21 F5. I'll label B5 "gate criterion unevaluable (vocabulary)".
+N1 19 claim-like rows with empty class_ids and no informs_classes (lines) → add informs_classes/out_of_scope tag.
+N2 96/97 sources abstract/metadata; only 1 full-text (SRC-090) → class-scope verification rests on abstracts; propose targeted full-text checks for the four class-defining rows (T-101, T-302, T-514, T-526...).
+N3 informs_classes matter→vacuum transfers without note (T-501 line 20; T-505 line 24? let me get exact lines for informs rows: T-304 line 26, T-306 line 28, T-501 line 20, T-505 line 24, T-506 line 25?, T-510 line 34?, T-511 line 35?). Earlier: informs rows are T-304, T-306, T-501, T-505, T-506, T-510, T-511. Let me compute their lines in the write script and include.
+N4 verification_status vocabulary mismatch (naming/consumer audit).
+N5 T-513 line 43 rejected-but-conclusion_type=theorem — add retracted/superseded marker. (verify T-513 line = 43 yes.)
+
+Potentially also N6: D-009 line 61 provisional theorem with metadata-only sources — honest; keep.
+
+Positive findings:
+P1 92/92 refs resolve, 0 broken (control cross-join).
+P2 97/97 locators + http 200 + quotes.
+P3 62/62 unresolved non-empty, nothing silently dropped.
+P4 class token census exactly 4 frozen (earlier DEFINITIONS finding fixed).
+P5 honest rejections/markings.
+P6 5 independent live re-fetches: list.
+
+Spot checks table:
+1. SRC-014 arXiv math/9901147 — title matches; abstract: spherical collapse of a scalar field, cosmic censorship. Effect: T-101 (line 7) binding AF-WCC-SCALAR-SPH scope-consistent at abstract level.
+2. SRC-005 arXiv 1507.00601 — C^0-inextendibility of Schwarzschild, motivated by SCC. Effect: T-302 (line 24) AF-SCC-C0-VAC-GEN consistent.
+3. SRC-029 arXiv 1707.08975 — EM-scalar + positive cosmological constant; abstract explicitly "violating the Christodoulou-Chruściel version". Effect: D-004 (line 4) binds two VAC classes (Λ=0) → mismatch confirmed; falsifier FIRES.
+4. SRC-086 DOI 10.4007/annals.2019.190.1.1 (Crossref) — Ann. Math. 190(1), 2019, Luk-Oh Part I title matches T-514 unresolved note. No pages in Crossref.
+5. SRC-089 DOI 10.1016/j.jfa.2016.06.013 (Crossref) — JFA 271(7) 1948-1995, "Instability results for the wave equation in the interior of Kerr black holes" — matches T-518 (line 51?) correction. T-518 line number: theorem rows list — T-518 is line 51? Let me confirm: theorem lines list [7,8,11,14,15,16,24,25,28,31,32,34,36,38,39,41,43,45,47,48,50,51,52,53,55,56,58,59,61,62]. I need mapping. Let me compute in the script.
+
+Falsifier (assignment): "A citation whose source class metadata mismatches the claim's class, passed as verified." → FIRES (D-004/SRC-029; structural absence of source_meta makes the class undetectable).
+Next falsifier: A revision that (a) records source_meta for every registry row and (b) shows D-004's bound sources satisfy the bound classes' forbidden_evidence or carries an explicit transfer_argument, plus per-row artifact_refs/reviewer verdicts; any further claim of G-LIT conformance without those fields is rejected. Or: a page check showing CGNS 2017's class is actually vacuum/Λ=0 (would refute my HF-03 reading) — clearly false.
+
+Score: 3.0. Rationale: strong honest-record properties (locators, unresolved, parse, class token census) but four critical rubric findings and one unevaluable gate criterion; lower than 3.5 because the assignment's falsifier fired. f21 gave 3.0, f22 gave 2.0; mine 3.0 with different reasons.
+
+Kish ESS: nominal same-hash verdicts = 3 (18,21,22) + prior rev1 verdicts 3 (lead-audit,16,17). For the HF-01/HF-14 findings, all three ce42 verdicts concur → not independent discoveries; ESS estimate ~1.5 (range 1-2). My distinct contributions (live re-fetch, linter blind spot, D-004 mismatch) are not shared. Report both.
+
+created_at: use "date -Iseconds".
+
+Now, the review event itself must include required fields: target_id, reviewer, verdict, score, hard_failures, findings. I'll set reviewer="deepseek-flash-18", target_id="L0", verdict="revise", score=3.0.
+
+One caution: the map's apply_events may route review events with target_id "L0" to the node. Earlier f21/f22 used target_id "L0". Good.
+
+Artifact event for reviews/L0-review-18-current.json: node_id="L0", artifact_type="review", path, sha256, validation_status="unverified".
+
+Status event: node_id L0, status "active", hours 1.4, summary, evidence_refs, next_falsifier.
+
+Let me now write everything with a python script. I'll first measure hashes and time. Then create the review JSON and the spotcheck JSON, print their hashes.
+
+Let me be careful with the JSON content: no unescaped issues; write via json.dump.
+
+Let me draft the review dict in a heredoc python script. It's long; that's fine.
+
+Also: artifacts/worker18/l0_review/ directory creation.
+
+Let me first gather remaining line numbers (informs rows, T-518, T-301, T-302, T-101, T-514, T-402, T-513, D-009) and file hashes.
+dsh: reasoning:
+Current time 00:25:27+08:00. Note the deadline in the L0 assignment? The inbox line 11 had no deadline but node L0.
+
+Now write the two artifacts. Let me compose the review JSON carefully.
+
+Also note: my earlier theorem-rows line list [7,8,11,14,15,16,24,25,28,31,32,34,36,38,39,41,43,45,47,48,50,51,52,53,55,56,58,59,61,62] — verify T-518 is 49, not in theorem list (T-518 conclusion_type=conditional_theorem → not counted). Good.
+
+T-514 line 45 is a theorem row with class_ids=[] and is tagged OTHER-MODELS — relevant to N1.
+
+Let me now create:
+- directory artifacts/worker18/l0_review/
+- spotcheck_fetches.json with 5 entries.
+- reviews/L0-review-18-current.json
+
+Then compute hashes and append outbox events.
+
+For the spotcheck evidence, include: source_id, locator, url, fetched_at, http_status, matched_title, key_fragment (short quote), class_binding_checked, result.
+
+review JSON fields — let me write it out.
+
+One more thing: the acceptance for my assignment says "Verdict cites sha256 7d78d2850b55". I must handle this explicitly: `dispatch_sha256: "7d78d2850b55"`, `artifact_sha256: ce42...` and explain that 7d78 is rev1 (superseded by FREEZE-REV2 8512f8dd4d11, which declares ce42 as rev2 canonical) and that per the project's own deviation rule (F2b recon card: "if the file changes mid-review, restart against the new revision"; A1-rebind-coverage §7 moving-target process defect) I reviewed the frozen current revision. Also note MANIFEST ce42 and L1 hash match.
+
+Let me write the script now. It's long, but one shot.
+
+Also careful: `hard_failures` in review event must be a list. The map's ingest (`apply_events.py`) may parse hard failures. Keep each as a string with prefix "HF-14 (critical): ..." etc.
+
+Findings: list of dicts with label/severity/finding/evidence_refs — like worker-18's convergence events used dicts with finding/label/severity. I'll use dicts with more keys (blocking bool). The schema only requires findings present; no type constraint. The map's apply_events might expect strings? In ws18's earlier events, findings were dicts with finding/label/severity — ingested fine (they're in map.reviews). Good.
+
+Write now.
+dsh: reasoning:
+Now, before emitting events: validate the review JSON parses, verify content sanity, and confirm hashes. Then append 4 events to comms/outbox/deepseek-flash-18.jsonl:
+
+1. artifact event for spotcheck JSON (node L0, artifact_type "evidence_spotchecks", path, sha256, validation_status unverified)
+2. review event (target_id L0, reviewer, verdict revise, score 3.0, hard_failures, findings — I'll include the findings summaries; schema requires findings present. Use the same dict list.)
+3. artifact event for the review JSON (node L0, artifact_type "review", path, sha256, validation_status unverified)
+4. status event (node L0, status active, hours 1.4, summary, evidence_refs, next_falsifier)
+
+Wait: event ordering matters for the map's review extraction? The review event should probably reference the review artifact hash (self-reference not possible; the hash is computed after writing, so we can include it in the review event as `artifact_refs`/`review_sha256`). Yes I have rh.
+
+Let me write the events via python append. Then run validate on them with research_map.schemas.validate_event to ensure each passes. Then run checkpoint.py.
+
+Note: checkpoint.py runs comms ingest — it will read my outbox and ingest. Let me check comms.ingest behavior: it likely processes new lines from all outbox files. If it ingests my events, great. The checkpoint also validates events. Let me just run it and inspect output.
+
+Also should I run `python3 research_map/comms.py ingest` separately? checkpoint.py runs ingest itself per its docstring ("Astra checkpoint: ingest comms, validate map, audit evidence..."). Let me confirm by looking at the main of checkpoint.py (lines 60-200). Let me quickly check its main to see the order and that it doesn't mutate map. Then run it.
+dsh: reasoning:
+Now run the checkpoint: `python3 research_map/checkpoint.py`. It runs ingest (which will ingest my outbox events into events.jsonl) and writes snapshots. Let me run it and capture output. It might take a while. Run with a reasonable timeout.
+dsh: reasoning:
+Checkpoint ran, exit 0. Let me verify:
+1. My events were ingested (events_pending_application: 108 means events ingested but not applied to map — that's normal; checkpoint ingests then reports pending application until lifecycle apply).
+2. Check the checkpoint record file and that my review event is in events.jsonl (not rejected).
+3. Check comms/rejected.jsonl didn't get my events.
+
+Let me verify quickly: grep for my event ids in events.jsonl and rejected.jsonl; read the checkpoint log tail / current_checkpoint summary.
+dsh: reasoning:
+Everything went through:
+- My 4 events ingested: comms accepted 4, rejected 0, duplicates 1649 (the duplicates count is high because the checkpoint ingests the whole outbox history; that's normal for this project).
+- Checkpoint id ckpt-20260912-002620, current_checkpoint.json written, gates pending.
+- artifact_hashes.json includes reviews/L0-review-18-current.json with sha 45c3dd0b04fe... and reviews/ dir hash updated.
+- My review file is 16115 bytes.
+
+Note that the checkpoint's artifact_hashes includes my review path already — good.
+
+The task: "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit."
+
+I've done:
+1. Read handoff/map (HANDOFF.md, ASTRA_HANDOFF.md, room map, protocol).
+2. Read comms (inbox assignments, prior outbox).
+3. Took one class-bound task: L0 literature ledger review across all four frozen classes (assignment audit-a1-20260912T0008-l0-w18, G-LIT).
+4. Emitted valid JSON (validated against research_map/schemas.py) with IDs (event_id, target_id, node_id, assignment_event_id), evidence (path#sha256 / path:line), hashes (artifact_sha256, review sha, spotcheck sha), falsifier (named, result FIRES, next_falsifier).
+5. Checkpointed (python3 research_map/checkpoint.py, exit 0, ckpt-20260912-002620).
+6. Exit: summarize.
+
+Should I also mark a goal? No — this is a bounded single-turn task, no goal needed.
+
+Let me do a final quick sanity check of the review file (read a few key fields) and confirm the outbox line count. Then write the final summary. Keep it concise but complete: task taken, artifact paths + hashes, verdict/findings, evidence, falsifier result, checkpoint id.
+
+Let me verify the review file's JSON and the last 4 outbox lines parse.

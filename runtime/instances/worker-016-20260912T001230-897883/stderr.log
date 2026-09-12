@@ -1,0 +1,396 @@
+dsh: reasoning:
+Let me start by understanding the environment. I need to read handoff/map and comms. Let me look at the workspace.
+dsh: reasoning:
+There's no handoff directory at the root. There's a "workdir" directory that seems relevant. Let me check for handoff/map and comms. Also, there's a ".agents" directory. Let me look around.
+
+Also `launch_swarm.sh`, `supervise_swarm.sh` — this is likely the swarm context. Let me look at workdir and .agents.
+dsh: reasoning:
+The relevant location is likely /data3/guoshaoyang/workdir/ai4math-swarm. Let's look there for handoff/map and comms.
+dsh: reasoning:
+I'm worker 016 in the cosmic-censorship research swarm. I need to read handoff/map and comms, take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit.
+
+Let me read:
+- HANDOFF.md
+- research_map/research_map.json
+- research_map/ARCHITECTURE.md
+- research_map/ASTRA_HANDOFF.md
+- comms/ (inbox/outbox)
+- README.md
+- evaluation_rubric.yaml
+
+Let me start.
+dsh: reasoning:
+Now let me read the research map (research_map/research_map.json), ARCHITECTURE.md, ASTRA_HANDOFF.md, comms PROTOCOL.md, and my inbox (deepseek-flash-16.jsonl, worker-16.jsonl).
+dsh: reasoning:
+Now let me read ASTRA_HANDOFF.md, ARCHITECTURE.md, my inbox (deepseek-flash-16.jsonl and worker-16.jsonl), and check the map's structure. The map is large (737KB). Let me extract key parts with python.
+dsh: reasoning:
+Now let me read my inbox: deepseek-flash-16.jsonl and worker-16.jsonl. Also check assignments in map. Let me do this with a python script to extract relevant info.
+dsh: reasoning:
+I'm worker-16 (deepseek-flash-16). There are multiple assignments in my inbox. The most relevant/current one is the task FORM-HELDOUT-08: "SECOND held-out corpus against FROZEN revision 13: independent out-of-sample estimate of the hardened two-stage pipeline".
+
+The instruction says: "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit."
+
+So I should take the FORM-HELDOUT-08 task (most recent, from astra-lead-formulation, 23:52:35). Note the earlier assignments (reviews) may already be handled — let me check outbox for worker-16 / deepseek-flash-16 to see what has been done. There's no deepseek-flash-16.jsonl in outbox listing, but there's worker-16? Let me check: outbox listing showed worker-03, worker-06, worker-09..., no worker-16. Hmm, actually the listing showed "worker-03.jsonl, worker-06.jsonl, worker-09*.jsonl". Let me check for artifacts/worker-16.
+
+Let me examine:
+1. artifacts/worker-16/ (existing work)
+2. artifacts/formulation/FROZEN.json, rule_spec.json, evidence/heldout_rebased.json
+3. artifacts/formulation/tools/check_class_schema.py
+4. artifacts/worker-06/spec_conformance_audit.py
+5. The canonical schemas at the frozen revision 13 hashes.
+
+Let me look.
+dsh: reasoning:
+Let me check the heldout2 directory in artifacts/worker-16 — there's existing work from a previous run (00:13). Also I should read CHECKPOINTS.md in worker-16 to see what the previous worker-16 session did.
+
+Note: worker-16 might have already started the FORM-HELDOUT-08 task. But the task says: take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit. The current session is likely a fresh worker-16 session (recycled). I should check what's already in artifacts/worker-16/heldout2/.
+dsh: reasoning:
+A previous worker-16 session has already built the heldout2 corpus and run it. It appears there's `report.json`, `raw_verdicts.json`, `manifest.json`, `drift_addendum.json`, `gate_sensitivity_check.json`, `emit_comms.py`. The latest file is emit_comms.py (00:13). So the previous session got as far as preparing to emit comms. My job now: "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit."
+
+Let me check whether the report is complete and whether the comms events were emitted. Look at:
+- report.json — main deliverable
+- drift_addendum.json — possibly a critical finding (frozen revision 13 hash drift?)
+- gate_sensitivity_check.json
+- emit_comms.py — what it intends to emit
+
+Let me read these.
+dsh: reasoning:
+The report has been completed. Union escape = 1.0 (all 29 mutants escaped, 0 caught) — a completely unfavorable result but the deliverable per the task ("Report the escape rate even if unfavorable"). Controls all pass both stages → valid = true.
+
+Interesting: there's the drift_addendum.json, plus emit_comms.py. Let me check the drift addendum and emit_comms.py, then the raw_verdicts, and check what comms were emitted by previous session (outbox). I saw the outbox listing had no worker-16.jsonl. So my job is probably to emit the JSON events (artifact events with hashes) and checkpoint, then exit.
+
+Wait — but note the report says the controls pass both stages, and the 3 frozen canonical schemas pass, but "live canonical drift check" shows sha256_now differs from frozen for all three canonical schemas, and they also pass. This is a problem: the LIVE canonical schemas are from a NEWER revision (rev19+) and they pass. It suggests the drift is real.
+
+Actually wait, there's a subtlety: the stage A gate script is `artifacts/formulation/tools/check_class_schema.py` at sha 000e09e4... — but the assignment said to use that path. That's fine.
+
+Now, union escape = 1.0 means the two-stage pipeline caught ZERO of 29 mutants. But hold on — that seems suspicious: a pipeline that catches nothing while controls pass. The report mentions "stage_a" escapes. Hmm, "escaped: true" for controls means... they "escape" (i.e., pass both stages) — that's the desired state for controls. The measurement rule: "union escape = accepted by BOTH stages". So mutants accepted by both stages = escape. All 29 escaped → union_escape = 1.0.
+
+This is a strong, unfavorable finding. The task said "Report the escape rate even if unfavorable; do not iterate fixes after seeing results; do not coordinate with the lead between corpus construction and the run."
+
+Hmm, but wait. Is it plausible that a hardened two-stage pipeline catches zero of 29 mutants? Also note in the report's escape families, each has a "one_sentence_reason" that names specific rules (R05, R16, R04, R03, R07, R14, R15, R10, R31) — these are precise. But if all mutants are accepted, then the structural stage passes everything. That's a suspicious outcome: it could be that the structural stage gate is being run with a wrong interface (e.g., a `--json` flag that makes it not actually check) or the mutants are only mutated in the *bases* copies, but the gates resolve class schemas by canonical path, not using the fixture passed. Hmm. Also possible: the check_class_schema.py `--json <f>` returns "pass" always due to some bug.
+
+But an important possible confound: the mutants are mutated copies of the *bases* — but maybe the two gate scripts look up the schema by class_id from canonical paths (artifacts/formulation/schemas/*.yaml) rather than the file given on the command line. In that case, all mutants would pass because the gate is checking the canonical (unmutated) file! That would be a format/interface artifact, not a real escape. The task H3 says run both stages per mutant with the mutant file as argument. But if stage A ignores its argument in favor of canonical... that's an "invalid run"? Actually the falsifier says: "Format-dominated rejections invalidate the run and must be redone on the canonical layout." That's about false rejections. Here we have false acceptances. The H5 controls: canonical schemas pass both stages — that's expected.
+
+Hmm, wait. Let me look at the previous session's work more carefully. There's `gate_sensitivity_check.json` — probably tests whether the gates actually detect anything at all (e.g., a negative control: grossly invalid file). Let me read it. Also `drift_addendum.json` and `emit_comms.py`.
+
+Let me also verify by re-running one mutant myself to see whether the gate really accepts it. The instruction for me is to "take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit". The task is essentially complete on disk (report.json), but the comms events may not have been emitted yet, and there's a positive-control gap I should check: a gate sensitivity check exists. Let me read those files.
+dsh: reasoning:
+Now let me check emit_comms.py to see what events the previous session planned to emit, and check whether they were emitted to outbox. Also, the report JSON says union_escape=1.0, but the gate_sensitivity_check shows that known leaks from FORM-HELDOUT-07 ARE caught by the gates (R21, R28, etc.). That means the gates do reject content-level mutations — so the 29 mutants from the new corpus really did slip through (they're classes not covered by the rules). That's a credible, important finding: R26-R31 catch their own families but the new corpus (built to avoid those families per H6) exposes 21 uncovered families.
+
+Wait, but careful: gate_sensitivity_check ran *after* the FORM-HELDOUT-08 run, using known leaks from HELDOUT-07 — that's a positive control proving the gates aren't inert. Good. That addresses my concern.
+
+But hold on — the report's `live_canonical_drift_check` shows the live canonical files at run time drifted (b65fcc0f etc.) yet "stage_a pass". Those live files pass both stages. Fine.
+
+Now — has the previous session emitted the comms events? Let me check outbox for worker-16/deepseek-flash-16 and the events.jsonl. emit_comms.py exists (00:13). Let me read it.
+dsh: reasoning:
+So outbox/worker-16.jsonl exists (33590 bytes, timestamp 23:36 — before the heldout2 run at 00:10). So the heldout2 artifacts have NOT been emitted to comms. There's 1 occurrence of FORM-HELDOUT-08 in events.jsonl — that's the assignment itself.
+
+The emit_comms.py exists but hasn't been run (or has it? outbox worker-16.jsonl is from 23:36, so no). Also, `leak_validity_review.json` doesn't exist in the heldout2 dir (the emit script checks for it; not in the file list). There is no checkpoint for the heldout2 run in CHECKPOINTS.md either (last CKPT-6 at 00:15 mentions F2b/detector patch, not heldout2).
+
+So my job as the new worker-16 session:
+1. Verify the completed heldout2 deliverables on disk (report.json, manifest.json, raw_verdicts.json, controls, hashes). Actually the do_not_claim says "do not iterate fixes after seeing results" — I must not rebuild the corpus. But I can validate/verify.
+2. Emit the valid JSON events to comms/outbox/worker-16.jsonl (artifact events with IDs, evidence refs, sha256, falsifier).
+3. Checkpoint (append to CHECKPOINTS.md and maybe emit a status/blocker event).
+4. Exit.
+
+But wait: the task says "Take one class-bound task". The FORM-HELDOUT-08 task is the class-bound task (class_ids: AF-WCC-VAC-GEN, AF-SCC-C2-VAC-GEN, AF-SCC-C0-VAC-GEN; gate G-CLASSBIND; node A1). Good.
+
+Before emitting, I should independently verify the key claims:
+- The manifest hash read before run matches the current manifest file (integrity).
+- The report is bound to raw_verdicts and manifest via drift_addendum. Check current hashes match.
+- Re-run a sanity check: maybe re-run the two stages on 2-3 mutants to confirm escape (reproducibility), and confirm the frozen bases match rev13 hashes. Actually re-running the pipeline is a verification, not an iteration/fix. It's allowed and improves evidence quality. But careful with "do not coordinate with the lead between corpus construction and the run" — run is done. Re-verification is good.
+
+Important: also check the H1 requirement: ">=20 mutants across >=10 leak families, >=8 rephrased". Report says 29 mutants, 21 families, 22 rephrased. Need to verify from manifest.json (the pre-run definition) rather than report claims.
+
+Also H5: controls must pass both stages → report says 7/7 accepted both.
+
+Also H6: prefer leak classes not in R26-R31. Report says 21 families.
+
+Potential integrity issue: the `manifest_sha256_before_run` is 1c8fa888... Let me check the current manifest.json hash equals that (should, since manifest wasn't edited). And check the raw_verdicts hash 84c1b879... and report hash 87f20491... Actually the drift_addendum binds report sha 87f204918003 — but the report.json mtime is 00:10 and drift_addendum is 00:12. Let me check report.json's current sha256. If it equals 87f20491..., good.
+
+Let's compute hashes. Also check `bases/*.yaml` match rev13 hashes.
+
+Then run a verification script (or reuse run_heldout2.py in a verify-only mode?). Let me look at run_heldout2.py to understand the measurement and see if there's a verify mode.
+
+Let me also read manifest.json structure briefly.
+dsh: reasoning:
+The hashes are consistent:
+- report.json = 87f204918003... matches drift_addendum bind.
+- manifest.json = 1c8fa888... matches manifest_sha256_before_run.
+- raw_verdicts.json = 84c1b879... matches drift_addendum.
+- bases match rev13 hashes exactly.
+
+Now, I should independently verify the key result: re-run the two stages on a few mutants to confirm they're accepted, and re-run the gate_sensitivity positive control to confirm gates are live. But careful: the previous session already did the gate sensitivity check. Rather than just trusting it, I could re-verify a subset as an independent verification (my role is new session). But re-running the full pipeline would take time; a targeted re-verification of, say, 3 mutants + 2 positive controls is cheap and makes the evidence stronger.
+
+Actually, the most important verification for me: does the measurement script's report correspond to the raw_verdicts? I can recompute the aggregates from raw_verdicts.json. And do a spot-check re-run.
+
+Also key: the previous session's `emit_comms.py` hasn't been run. The task from the human says: "emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit." So the deliverable of THIS session is the comms emission + checkpoint.
+
+Let me:
+1. Recompute aggregates from raw_verdicts.json (independent check).
+2. Spot-check re-run of two mutants (one WCC, one C2/C0) + the positive-control fixture if available (h06/h08 etc. — where are they? They were from FORM-HELDOUT-07 corpus; let me check artifacts/worker-06/heldout_corpus/). Confirm the gates still reject the known leaks.
+3. Check the manifest's control set and mutant metadata (families, rephrased count) to confirm H1.
+4. Run emit_comms.py --dry-run to validate events against schema; then for real.
+5. Optionally run `python3 research_map/comms.py ingest`? The protocol says ingest is a controller command ("research_map/comms.py ingest — pull outbox -> events.jsonl"). The ASTRA_HANDOFF says "Pull accepted traffic: python3 research_map/comms.py ingest". Hmm, that's a controller command but the handoff says it to workers. The PROTOCOL table says accepted stream writer is "research_map/comms.py ingest only". Running ingest from my side might be acceptable but it modifies shared state; the worker rule says worker events cannot set statuses. The controller does ingest. But then, note the previous worker-16 wrote to outbox/worker-16.jsonl at 23:36 and events got ingested (the notice says outbox traffic newer than 00:09:29 is un-ingested). Hmm.
+
+Given the instruction "emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit" — the safest: write events to comms/outbox/worker-16.jsonl (the designated upward channel), validate them with the schema, run ingest? Let me check comms.py to see if ingest is safe and idempotent. The controller does the ingest in its lifecycle pass; but the handoff tells agents to run ingest to pull accepted traffic. Ingest reads all outbox files and appends new events to events.jsonl — it's a shared write. Previous worker-16 clearly wrote to outbox without ingesting (based on the notice "outbox traffic newer than 00:09:29 un-ingested"). Hmm, but wait — maybe the previous session did run ingest since events.jsonl is at 00:13. Let me check whether worker-16's 23:36 events are in events.jsonl.
+
+Let me check events.jsonl for actor deepseek-flash-16 entries and their timestamps.
+
+Actually — a cleaner approach: emit to outbox (my designated upward channel) and also run `python3 research_map/comms.py ingest` as the handoff instructs. That's what "emit valid JSON" means; the ingest makes it accepted (or rejected with recorded reasons). But it's a shared-state write; the protocol explicitly documents ingest as a controller command, yet ASTRA_HANDOFF line 6 says "Pull accepted traffic: python3 research_map/comms.py ingest" as an instruction to the reader (the controller). I'm a worker; the controller run_cycle/astra_lifecycle does ingest. To avoid races with the controller (which may be running), maybe I should not ingest. Writing to outbox is the worker's job. The controller's next lifecycle pass will ingest.
+
+Hmm, but "comms/outbox" writes are exactly the sanctioned worker action. I'll write to outbox only, and note in the checkpoint that ingest is the controller's step. Actually wait — let me check what the other workers do. worker-06.jsonl is in outbox. Did worker-06 run ingest? events.jsonl has entries actor worker-06 presumably. The controller's astra_lifecycle does locked ingest. Let me check if there's a running controller and whether ingest is locked.
+
+Actually the safest and most useful: write to outbox and validate with schemas.validate_event (dry-run). That's the full worker deliverable. The controller will ingest.
+
+Hmm, but "emit valid JSON with IDs evidence hash falsifier" — the events must be valid. Dry-run validation ensures that.
+
+Let me also check CHECKPOINTS.md needs an update, and outbox event for status/checkpoint. The emit_comms.py only emits artifact events because status/blocker shapes were rejected by the validator. Let me check the events.schema.json to see what shapes are valid, and check a recent accepted status event in events.jsonl to see the accepted shape.
+
+Let me look at schemas.py validate_event and events.schema.json.
+dsh: reasoning:
+Now, the `status` shape IS valid per schemas.py: node_id, status, hours, summary, evidence_refs, next_falsifier. The emit_comms.py comment claims status/blocker are rejected by "the stream validator" — maybe apply_events.py or comms.py ingest has additional validation. Let me check comms.py ingest to see what gets rejected. It may require e.g. actor whitelist or "to" field. Let me grep rejected.jsonl for my actor and for a status event to understand.
+
+Let me check:
+1. `comms/rejected.jsonl` recent entries.
+2. `comms.py` ingest validation logic.
+dsh: reasoning:
+OK. So the ingest tool normalizes. The rejects were from unique events; `artifact` events are fine.
+
+Now let me see the rest of comms.py ingest to understand dedup and whether it's safe to run. Also note: "It never mutates research_map.json". Running `comms.py ingest` only appends to events.jsonl and rejected.jsonl plus the seen set. It's designated as a controller command, but the ASTRA_HANDOFF tells the reader to pull accepted traffic with it. Hmm.
+
+Decision: My primary worker deliverable = outbox events + checkpoint. I can also run `ingest --dry-run` to confirm acceptance without touching shared state. But then the events sit in outbox until the controller's next cycle. The controller lifecycle does "locked ingest → apply → repair → audit → checkpoint". So writing to outbox is sufficient and safe; the controller will pick it up.
+
+But wait — hold on. The human task says "emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit". So: emit outbox events (valid JSON), checkpoint (CHECKPOINTS.md + a checkpoint file maybe), then exit. Good.
+
+However, before emitting, I want to independently verify the measurement, because the result is surprising (1.0 escape). The previous session's evidence includes a gate sensitivity check — good. But the result's credibility hinges on whether the gates accept the mutants because they truly don't cover the axis, vs. some interface artifact. One important check: the mutants were generated by build_corpus.py, which mutated specific fields. The report's one_sentence_reasons are pre-registered in run_heldout2.py (FAMILY_RATIONALES) — they were written before the run. Good sign.
+
+Let me spot-check:
+1. Diff a mutant against its base to see what changed (e.g., m06 sobolev index lowered).
+2. Run stage A and stage B on that mutant and confirm accept.
+3. Verify the base against canonical (byte-identical to rev13).
+4. Run one known leak from HELDOUT-07 through both stages to confirm rejection (positive control) — check where those fixtures are: artifacts/worker-06/heldout_corpus/.
+5. Recompute aggregates from raw_verdicts.json.
+
+Also check whether the raw_verdicts' 29 mutants each have exactly one run — no re-runs after seeing results.
+
+Let me also check the manifest: number of entries, families, rephrased. Let me write a verification script that outputs a JSON verification report into artifacts/worker-16/heldout2/verify_16.json (my own evidence artifact). That's a new artifact under my path — allowed.
+
+Important: "do not iterate fixes after seeing results" — verification is not a fix. I must not change mutants/bases/report. Writing a verification artifact is fine and adds value (independent re-check by the recycled session).
+
+Let me first inspect manifest.json summary and build_corpus.py header to understand what the mutation families are.
+dsh: reasoning:
+Good. Now let me perform an independent verification pass (new session, so genuinely independent re-measurement):
+
+1. Recompute aggregates from raw_verdicts.json.
+2. Spot re-run stage A + stage B on a sample of mutants (e.g., m01, m06, m16) confirming accept/accept.
+3. Re-run the positive controls (h06, h08, h26 from worker-06/heldout_corpus) confirming stage A rejects.
+4. Verify control set passes both stages (7/7) — maybe re-run all 7 controls too (cheap).
+5. Verify mutants are distinct from bases (mutation present) — e.g., check each mutant hash != base hash and contains the mutation text? The build_corpus.py already did that. I can verify hash differences and that each mutant's class_id matches base.
+6. Write `verify_16.json` with results and hashes.
+
+Then emit outbox events (reusing emit_comms.py but maybe adding a verification artifact event and a status/checkpoint event), update CHECKPOINTS.md, and exit.
+
+Wait: a concern about `emit_comms.py`: it references `artifacts/worker-06/heldout_corpus/report.json#sha256:3c172a1b6512` — does that file exist with that hash? Let me check. Also, the emit script writes event ids as `w16-heldout2-artifact-report`, etc. That's fine.
+
+Also, `leak_validity_review.json` doesn't exist — so 4 events will be emitted.
+
+Let me consider adding a `status` event (valid shape per schema): node_id A1, status active (not done — worker cannot set done), hours ~3.0, summary describing the result, evidence_refs with hashes, next_falsifier. That matches the human instruction to "emit valid JSON with IDs evidence hash falsifier, checkpoint". Given rejects show status events were rejected because of missing node_id (normalizer now handles that, but earlier rejections). Our status event will be fully-formed.
+
+Actually the emit_comms.py's docstring says status/blocker shapes being rejected by stream validator; but the schema requires node_id/status/hours/summary/evidence_refs/next_falsifier — we can provide all. The earlier rejections were from old events with missing node_id (rejected at 23:41 before normalizer?). Actually the reject reason "status: missing node_id" — the normalize adds default "GLOBAL" for status when missing... but rejection still happened, which suggests the ingest at that time didn't normalize or the reject list is from an older ingest run. Whatever — I'll emit a fully schema-valid status event.
+
+Wait, but careful about a subtlety: `comms.py ingest` dedups by event_id, and events already ingested can't be re-ingested. Fine.
+
+Another consideration: Should I run ingest myself? The controller will run its lifecycle. But risk: if the controller doesn't run again (supervisor restarts it, it does run every 30s check), the outbox will be picked up. Also, my "checkpoint" could include running `python3 research_map/comms.py ingest --dry-run` to show 0 schema errors, and then `ingest` to actually publish. Hmm.
+
+Looking at PROTOCOL.md: "python3 research_map/comms.py ingest # pull outbox -> events.jsonl" is listed under "Controller commands". And the ASTRA_HANDOFF line: "Pull accepted traffic: python3 research_map/comms.py ingest." — this line is addressed to agents reading the handoff (which includes workers). Given the swarm context and that the controller is persistent, I think the controller should do the ingest. However, "emit valid JSON" — validation via dry-run is enough for me to ensure validity. I'll run dry-run only, and note in the checkpoint that the controller's next locked ingest applies them.
+
+Hmm, but if everyone waits for the controller, events might not get ingested. Let me check if events from other workers' outbox files got ingested recently — e.g., worker-06.jsonl mtime 00:09, and events.jsonl mtime 00:13. Let me check the last ingested event timestamps/actors in events.jsonl. If the controller is running its cycle and ingesting regularly, fine.
+
+Let me check the tail of events.jsonl actors.
+
+Also, importantly: is there a risk of a *concurrent* controller ingest while I'm appending? The ingest reads all outbox files and appends. If I append a partial line... no, I'll write complete lines. The dedup by event_id handles repeat ingests (well, if the controller ingests my events and records them in SEEN, fine). A race where the controller reads the file while I'm mid-append could capture a partial line and reject it, then on the next pass re-read it (the file is re-read entirely each time, but the partial JSON line would have been recorded as a reject with a stable auto-id ... hmm, if the partial line becomes a rejected event, then the complete line would still be ingested later since dedup is by event_id — but the reject might create noise). To minimize risk, I'll append all events in one write (atomic-ish single f.write of the full batch with a single open/write/close). That's what emit_comms.py does.
+
+Let me now check events.jsonl tail and the ingest SEEN, then run my verification.
+dsh: reasoning:
+The controller is actively ingesting (events at 00:14, 01:00). There's a `map.lock` (empty file, 00:12) — the controller's lifecycle uses locks. I should NOT run ingest myself; the controller does it. Appending to outbox is safe-ish, but there's the partial-read risk. I'll write the outbox file with a single atomic append using python's `open(..., 'a')` and one `write()` of all lines — near-atomic for small content.
+
+However, note that my session's current time: the files show ~00:13-00:14 and now the controller wrote 01:00:00 created_at for flash-09 (that's a synthetic timestamp, not real time). Let me check the actual wall clock: `date`. The latest real mtimes: launch_swarm at 00:11, session presumably ~00:15+.
+
+Let me now do the verification pass. Plan:
+
+1. `date` to record timestamps.
+2. Recompute aggregates from raw_verdicts.json → verify equals report.
+3. Re-run stage A/B on a sample: 3 mutants + all 7 controls + 3 positive controls from heldout-07.
+4. Check mutation presence: for each mutant, compare with base; ensure sha differs and record a field-level diff count. Also confirm rephrased count from manifest.
+5. Write verify_16.json with all this + hashes of inputs and outputs.
+6. Emit events: use emit_comms.py (dry-run then real), plus append a status event (checkpoint) and a verification artifact event. Maybe better to write my own emit script extension... Simpler: run emit_comms.py to append the 4 artifact events; then append my verification artifact event + status event with a small python snippet that validates via schemas.validate_event.
+
+Hmm, but should the verification artifact be included in the report event's evidence? The report event already lists evidence. The verify artifact is additional evidence I can reference in the status event. Fine.
+
+7. Update CHECKPOINTS.md with CKPT-7 (heldout2 run complete, independent re-verification, emission).
+8. Also update artifacts/worker-16/heldout2/... maybe not needed.
+9. Exit.
+
+Wait — one consideration: the previous session may still be "alive" in tmux as deepseek-flash-16? The supervisor restarts workers; a new worker-16 session might be running concurrently with me. If the previous session is still running, it might also run emit_comms.py → duplicate events. Let me check tmux sessions and the worker-16 log to see if there's a live process.
+
+Actually, I AM the worker-16 session presumably launched by the supervisor (the prompt matches "worker=016"). Let me check tmux to see if deepseek-flash-16 is running (it would be me). Hard to tell. Let me check the log tail for deepseek-flash-16.
+
+Let me check runtime/logs/deepseek-flash-16.log tail and mtime.
+dsh: reasoning:
+Interesting: the log for deepseek-flash-16 ended at 23:37 with a summary claiming "24 events emitted... 22 already ingested, 3 queued" (inconsistent numbers, whatever). The outbox worker-16.jsonl mtime 23:36. The heldout2 run happened at 00:09-00:13 — that's AFTER the log's last write at 23:37. Hmm, but the heldout2 files were created 00:09-00:13. Maybe the log wasn't flushed/tee'd until later? The log mtime 23:37 suggests the previous session ended at 23:37 and a NEW session (without tmux name deepseek-flash-16?) did the heldout2 work at 00:09-00:13.
+
+Wait — actually the timestamps: assignment issued 23:52:35. heldout2 build at 00:09-00:10. emit_comms.py written 00:13. The log's last mtime 23:37 contradicts this. Unless the heldout2 work is being done by a different agent (e.g., worker-16 tmux session from the newer supervisor 'supervise_swarm.sh' naming: worker-001..020, created 00:12:29). Hmm, the tmux list shows worker-001..worker-013 created at 00:12:29 by astra-supervisor. Those are new sessions named worker-0NN. And their prompts are maybe different.
+
+Wait, the human says "worker=016". Which tmux session is mine? Maybe "worker-016" exists later in the list (cut off at 30 lines). Let me check full tmux ls and the supervisor log to see what worker-016 is.
+
+Also there might be another live session that did the heldout2 work at 00:09-00:13 and is about to run emit_comms.py. If so, I must avoid duplicating its emissions. Let me investigate:
+- ls -la runtime/logs/ for recent logs (worker-*).
+- Check if there's a process running run_heldout2.py or emit_comms.py.
+- Check tmux list for worker-016.
+
+Let me look.
+dsh: reasoning:
+I am the process `worker-16-20260912T000356-843521` (started 00:03:56, node process 843957). So I am the session that did the heldout2 work? Wait — I started at 00:03:56, but my conversation began fresh reading the map. The heldout2 artifacts were created 00:09-00:13 which is *after* my process started and *during* my session. But my conversation just started (this is my first turn) — so who created heldout2 at 00:09-00:13?
+
+Hmm. The heldout2 build timestamps: bases 00:09-00:10, mutants 00:10, report 00:10, drift_addendum 00:12, emit_comms.py 00:13. My process started at 00:03:56 and the log file `deepseek-flash-16.log` mtime is 23:37 (old). But there's also `runtime/instances/worker-16-20260912T000356-843521/` — let me look at its stdout.log/trajectory to see what this instance has done. The instance stdout would show my session's own output.
+
+Wait — the tmux session "worker-16" was created at 00:03:56 as well, but with the OLD supervisor (supervise_swarm.sh) using tmux names like "worker-16" and logging to `$LOGS/<name>.log` = runtime/logs/worker-16.log? Hmm, actually supervise_swarm.sh logs to `$LOGS/$name.log` with name "deepseek-flash-$n"... no wait, supervise_swarm.sh (old) starts "deepseek-flash-N" sessions. supervise_loop.sh? Let me check: tmux has sessions `worker-16` (created 00:03:56) and `worker-016`? The list shows "worker-16: 1 windows (created Sat Sep 12 00:03:56 2026)". So tmux session worker-16 was created at 00:03:56 — same time as my process 843950/843957 but note the tmux session name worker-16 is NOT in the ps output as a bash -c line with id=worker-16-20260912T000356... Actually yes: ps shows `bash -c echo start id=worker-16-20260912T000356-843521 ...` on pts/46 — that's the tmux session worker-16.
+
+So I AM that session, started at 00:03:56. But then the heldout2 artifacts at 00:09-00:13 must have been created by... me? That can't be, I just started. Unless there were multiple turns already and my context is fresh... Actually, this is a new conversation for this session (the harness may have started this conversation when the process started at 00:03:56 and I've been idle?). No — files at 00:09-00:13 exist.
+
+Wait. Maybe there's ANOTHER session: the tmux list showed `worker-016`? Let me search: the tmux output was truncated in the middle (head -30 earlier showed worker-001..013; tail -20 showed worker-086..100, worker-14, worker-15, worker-16, worker-17). There are also sessions worker-001..worker-100 (created 00:12:29-31) from the new supervisor. And the "worker-16" tmux session created 00:03:56 — that's me.
+
+Hmm, so who wrote the heldout2 files at 00:09-00:13? Possibly the previous deepseek-flash-16 session (tmux `deepseek-flash-16`)? But tmux ls doesn't show deepseek-flash-16 in the full list (the list was cut: head showed up to worker-013, tail showed worker-086 onwards; deepseek-* sessions would sort before worker-*... Actually tmux ls sorts alphabetically: astra-*, controller-01, dst_*, http, lead-*, night, replay*, rt_w02, super, t3, worker-*. So deepseek-flash-16 would appear between controller-01 and dst_login. It didn't appear in the head -30 output... The head -30 showed: astra-metrics, astra-supervisor, controller-01, dst_login_20260908, dst_login_display_20260908, http, lead-audit-01, lead-formulation-01, lead-literature-01, lead-numerics-01, night, replay, replay_w01_hf, rt_w02, super, t3, worker-001..worker-013. So no deepseek-flash-16 tmux session. 
+
+Hmm! So which process wrote heldout2 at 00:09-00:13? Let me look at the instance directory `runtime/instances/worker-16-20260912T000356-843521/` — maybe there are multiple instances. Let me list runtime/instances and find ones with worker-16 in the name, and check their stdout logs. Also, maybe the heldout2 directory was already there BEFORE (from a previous worker-16 session in the older deepseek-flash-16 tmux that exited at ~23:58?) — no, mtimes are 00:09-00:13, and the current time is 00:15.
+
+Hold on. Maybe I'm not the only agent: the harness "worker=016" session might have started at 00:03:56, and could have already had a first turn that did all this work at 00:09-00:13, and now I'm being invoked in a *continuation* with a fresh snapshot? The system prompt says "This snapshot supersedes earlier runtime-context snapshots." Hmm.
+
+Actually, maybe my own conversation is the one that did the work but I don't see it because this conversation began at 00:15? No — the conversation content I have begins with reading files, and timestamps: my first bash call output showed mtimes like "Sep 12 00:11" and "00:13" for files, and `date -Is` returned 00:15:01. So my session started around 00:14-00:15. But my process started at 00:03:56. There's a gap of ~10 minutes where the process existed but the conversation wasn't started? Unlikely.
+
+Alternative: The heldout2 work at 00:09-00:13 was done by *another* agent instance — e.g., `worker-016` from the new supervisor (worker-001..100 created at 00:12:29+) — but those started at 00:12:29, after most of heldout2 was built (00:09-00:10). Hmm, but emit_comms.py was written at 00:13, after.
+
+Wait — check the tmux sessions list more carefully. Let me run `tmux ls | grep -E '016|16'` and also examine `runtime/instances/` for worker-16 entries. This matters because I must not duplicate another agent's emission. Let me investigate the instance dirs and any trajectory logs.
+
+Actually — simpler hypothesis: this harness conversation is a *subagent* or a resumed session of the same process; i.e., the process 843957 runs the harness which spawned a sub-session for me with a fresh context (the top-level "deepseek-flash-16" agent delegated to me?). But the prompt "You are a bounded execution worker... worker=016" is the top-level prompt.
+
+Let me just check: the process start time 00:03:56 for the bash wrapper; node process 843957 started at 00:03. The parent tmux session worker-16. The instance directory runtime/instances/worker-16-20260912T000356-843521/stdout.log will show what this process has printed. If it contains heldout2 activity, then this process did it (perhaps an earlier turn not in my context). Let me check.
+dsh: reasoning:
+The worker-16 instance (843957, started 00:03:56) has stderr.log 220KB updated at 00:15 — that's the harness output for MY conversation presumably. The stderr.log would contain the harness logs of my own tool calls. So my session started at 00:03:56 and... hmm, but the heldout2 files at 00:09-00:13.
+
+Wait — maybe the harness had my conversation running for 12 minutes before I received the user prompt? The stderr.log is 220KB. Let me inspect its beginning to see the timeline. Actually, likely explanation: this process was started at 00:03:56, and the *previous* worker-16 conversation within this same process wrote heldout2 (00:09-00:13), then the context was compacted/reset and I was re-prompted with the same worker=016 prompt? The note in the system prompt: "Current runtime context. This snapshot supersedes earlier runtime-context snapshots." — this smells like a re-invocation within the same process (perhaps a "bounded execution worker" that got re-prompted after context reset). 
+
+Actually, wait. The prompt says "worker=016" while the tmux/instance says worker-16. Also the earlier stderr might reveal. Let me look at the head of stderr.log and grep for "worker=016" or heldout.
+
+Actually, it doesn't matter much. What matters: avoid duplicating emissions and complete the task. The heldout2 corpus+report were built by an earlier turn/instance of worker-16. There's a risk that the earlier turn already emitted events to outbox (outbox worker-16.jsonl mtime 23:36 — no). Let me check the stderr.log for emit_comms runs, and check whether there's an "exit_code" for this instance (no, still running).
+
+Let me grep the stderr.log for "emit_comms" / "appended" / "heldout2".
+dsh: reasoning:
+Now it's clear! My session (this conversation) has been running since 00:03:56 — the stderr.log contains my own reasoning from earlier turns in this same conversation that I don't have in context (context was likely compacted/summarized away, or I'm seeing a resumed session with truncated context). Wait, no — the stderr begins with exactly the same reasoning as my first turn ("I'm a bounded execution worker...").
+
+Hmm, actually, this suggests the conversation was re-run: the harness restarted my conversation (fresh context) at ~00:14, but the process started at 00:03:56 and the earlier incarnation of this conversation did the heldout2 work at 00:09-00:13. The stderr.log contains both the earlier incarnation's reasoning and mine (appended). The line "emit_comms.py, so if I run now it will skip the review... emit_comms once after the review" indicates the earlier incarnation was planning an independent leak validity review before emitting.
+
+So: the earlier incarnation (same worker-16 instance) built the corpus, ran it, wrote report, drift addendum, and emit_comms.py; it was planning a `leak_validity_review.json` before running emit_comms. Then the context was reset and I (new incarnation) am asked to finish: "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit."
+
+Let me grep the stderr log more to understand the plan and any unresolved concerns (e.g., gate sensitivity check, leak validity review). It's 220KB of harness log. Let me search for key phrases: "leak_validity", "CKPT", "next steps", "TODO".
+
+Actually — important: the emit_comms.py mtime is 00:14:39, which is AFTER I started this turn (~00:14:50?). Hmm, no: my first tool call output showed emit_comms.py in the listing, and my `date -Is` call returned 00:15:01. The emit_comms.py was modified at 00:14:39 — just ~20 seconds before. That means the earlier incarnation was active until 00:14:39 and then context switched to me. So the earlier turn was interrupted mid-plan ("Then when the review lands, run emit_comms once after the review").
+
+So the earlier incarnation's plan: create `leak_validity_review.json` (independent adversarial review of the 29 mutants), then run emit_comms.py once (which includes the review event if present), then checkpoint. My task now: finish that. But careful — the emit_comms.py was modified at 00:14:39; maybe it was fixed to use a dynamic ref for FROZEN.json. Let me diff/read the current emit_comms.py — I read it at 00:14:5x; the content I read includes `ref("artifacts/formulation/FROZEN.json")` dynamic. Good.
+
+Now, what is the leak_validity_review supposed to be? A post-run adversarial review of the 29 mutants to calibrate whether they are genuine leaks vs legitimate formulations. This is important because the escape rate 1.0 could be inflated by mutants that are actually legitimate formulations (i.e., corpus over-claim). The emit script says: "A mutant classified legitimate by a domain reviewer is a corpus over-claim and must be dropped from the family list or relabelled before the escape rate is cited."
+
+Given my budget (3 agent-hours, ~1.5h left), I can do this review myself: examine each mutant's mutation vs the frozen class requirements, and classify genuine_leak / borderline / legitimate. That's a substantive, high-value verification of the 1.0 escape rate — and it's the kind of independent adversarial check the swarm values.
+
+But the human prompt says "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit." So my job is to emit JSON and checkpoint. I shouldn't spend too long. Yet the deliverable's credibility depends on the mutant validity. A middle path: do a focused adversarial review of all 29 mutants using the mutation descriptions and targeted field inspection, classify each (genuine/borderline/legitimate) with a one-line justification, write leak_validity_review.json, then emit events (including the review event), append checkpoint, and exit.
+
+That's exactly what the earlier incarnation planned. I can do it efficiently with a script: for each mutant, extract the mutation text from manifest and the changed fields vs base; then judge.
+
+Let me first look at the rest of the stderr log to see if the earlier incarnation already wrote any analysis (e.g., in a scratch file), and check whether leak_validity_review.json exists anywhere. Let me also check git status to see untracked changes.
+
+Also let me verify the aggregates independently and run the spot checks. Let me be efficient and start with a verification script.
+
+Plan of action (bounded):
+1. Write `verify.py` under artifacts/worker-16/heldout2/ that:
+   a. Recomputes aggregates from raw_verdicts.json and compares to report.json.
+   b. Verifies manifest hashes of all fixtures/bases on disk.
+   c. Verifies mutant count/families/rephrased against H1.
+   d. Re-runs stage A and stage B on a deterministic sample: all 7 controls + 6 mutants (one per class + largest families) + 2 known-leak positive controls from worker-06 heldout corpus.
+   e. Emits `verify_16.json`.
+2. Review mutants for legitimacy → `leak_validity_review.json` with per-mutant classification and summary.
+3. Run emit_comms.py (it will include the review event).
+4. Append a status event (checkpoint) to outbox with valid schema, including artifact hashes of all emitted artifacts; verify with schemas.validate_event and comms ingest --dry-run.
+5. Append CKPT-7 to CHECKPOINTS.md.
+6. Exit with summary.
+
+Let me first check the stderr for the earlier incarnation's findings about the mutants (maybe it already did some review, e.g., "leak_validity"). Let me grep for "legitimate" and "genuine".
+dsh: reasoning:
+Whoa — the tail of the stderr log shows the earlier incarnation got MUCH further than I thought: it ran a subagent review (leak_validity_review.json exists — 25 genuine / 4 borderline / 0 legitimate), ran emit_comms.py for real, appended CKPT-8, ran checkpoint.py, and the last step was verifying the review file hash. The tail is from a *later* time (~00:35).
+
+But wait — the file listing earlier showed NO leak_validity_review.json in artifacts/worker-16/heldout2/! Let me re-check: my `find artifacts/worker-16/heldout2 -type f` listing showed: raw_verdicts.json, mutants/*, bases/*, emit_comms.py, drift_addendum.json, controls/*, manifest.json, gate_sensitivity_check.json, build_corpus.py, run_heldout2.py, report.json. No leak_validity_review.json, no verify_16.json.
+
+Hmm! So the sequence in the stderr log tail describes actions that... don't exist on disk? Maybe the harness log is from a *different* fork/branch of the conversation (a parallel attempt that was rolled back?). Or maybe the stderr log contains the *planning* text of a model that hallucinated execution? The "dsh: reasoning:" lines are the model's reasoning, but the tail says "Now run emit_comms.py for real, then check the events, then update CHECKPOINTS.md CKPT-8, then run checkpoint.py" — those are reasoning/plans. The final tail says it ran checkpoint.py already, etc.
+
+Wait, the current time is 00:15 per my `date` call. But the tail mentions ~00:35 and CKPT-8. That's impossible if the current time is 00:15... unless the `date` output I saw (00:15:01) was from my first turn and now more time has passed? No — my `date` call was a few tool calls ago in this same turn. Hmm, actually the date call returned "2026-09-12T00:15:01+08:00". And the drift_addendum says written_at 00:33. The report generated_at 00:10.
+
+Wait, the drift_addendum.json says "written_at": "2026-09-12T00:33:00+08:00". But the current date is 00:15! That's a future timestamp. So the timestamps in this environment are inconsistent — the "logical" swarm time is ahead. Ah, I see — the swarm's simulated clock: files are being written with timestamps ahead of the actual system clock? No, mtimes are filesystem times and they showed 00:12-00:14 for drift_addendum and emit_comms.py. The *content* timestamps (00:33, 00:35) are just labels written by the agent — the agent's reasoning mentions a fictional/estimated time.
+
+Hmm, actually the environment's wall clock advanced? Let me re-check date now. Maybe my session's `date` was at 00:15 and the stderr.log tail is from... no, the stderr.log is my own process's stderr, appended by the harness as my conversation progresses. The tail I just read is the *end* of the log (220KB), which corresponds to the *latest* activity of my process. But if my conversation is only at turn ~5 and the log ends with "Let me verify the hash" after having run checkpoint.py... that means the log's tail is from an earlier incarnation that completed the whole task, and my current incarnation is a *replay/restart* whose stderr appends at the end? But then the tail would be from the earlier run, and my current activity would append after — but the tail I read ends with the earlier run's final reasoning. So maybe my current conversation started AFTER that, and my tool calls haven't been flushed to stderr yet? No, my tool calls would be in there...
+
+OK let me stop speculating and gather hard evidence:
+1. Current date.
+2. Does artifacts/worker-16/heldout2/leak_validity_review.json exist now?
+3. Does comms/outbox/worker-16.jsonl contain the new events (w16-heldout2-*)?
+4. Did events.jsonl ingest them?
+5. CHECKPOINTS.md content (CKPT-7/8?).
+6. runtime/state/current_checkpoint.json label.
+
+The earlier file listing was taken at ~00:14:50 and showed no leak_validity_review.json. Maybe it was created after (the subagent settled later). Let me check now.
+dsh: reasoning:
+Now everything is clear: the earlier incarnation of my conversation (same process, same session) already:
+- Built and ran heldout2 (report 87f20491, valid=true, union escape 1.0).
+- Ran gate sensitivity check.
+- Got an independent subagent review (leak_validity_review.json b2623a5dc459; 25 genuine/4 borderline/0 legitimate).
+- Ran emit_comms.py → 5 new artifact events in outbox/worker-16.jsonl (created_at 00:15:26).
+- Ingested them (events.jsonl has 5 w16-heldout2 events; 0 rejects).
+- Appended CKPT-7 and CKPT-8 to CHECKPOINTS.md.
+- Ran checkpoint.py → ckpt-20260912-001530.
+
+The conversation context was then reset, and I (fresh context) am the continuation. The system prompt says: "You are a bounded execution worker. Read handoff/map and comms. Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit. worker=016".
+
+So now my job is to finish/close out. The prior turn's final open item (from the stderr tail): "Verify the review file hash still matches the emitted event (b2623a5dc459); if unchanged, no action needed. If changed, emit a corrected event and checkpoint again."
+
+Current facts:
+- leak_validity_review.json mtime 00:15, emitted sha b2623a5dc459. Let me verify the current hash.
+- All 5 events ingested (grep shows 5 in events.jsonl, 0 rejects).
+- CHECKPOINTS has CKPT-8.
+
+So the work is essentially complete. What remains for me:
+1. Verify the review file hash matches the emitted event (b2623a5dc459) — quick.
+2. Verify the emitted events are valid (already ingested, 0 rejects).
+3. Possibly emit a final `status` event for the checkpoint (node A1, status active, hours ~3.0, summary, evidence_refs with hashes, next_falsifier). The outbox already has 23 events including old ones. The human instruction says "emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit". The 5 artifact events lack a status/checkpoint event for the heldout task. The earlier incarnation emitted a status event for ckpt6 at 00:16 (w16-20260912T0016-status-ckpt6), but not for heldout2 CKPT-7/8. Adding one final status event (node A1, active, not done) would satisfy "emit valid JSON ... checkpoint".
+
+But careful about duplication and map state. A status event for node A1 with status=active and hours=3.0 summarizing FORM-HELDOUT-08 completion (report valid, union escape 1.0) + falsifier is appropriate and schema-valid. The worker authority rule: cannot set done, can set active. Hmm — could set status "active" (node A1 is still open, awaiting review). Good.
+
+Also: should I run checkpoint.py again? The checkpoint was already taken at 00:15:30 (which included the 5 events). A second checkpoint after my status event would ingest the status event too. The prompt says "checkpoint, then exit" — so yes, run checkpoint.py once more at the end, with a label like `worker-16-heldout08-close`, which ingests my new status event and records a checkpoint snapshot.
+
+Let me first verify:
+a) Current hash of leak_validity_review.json == b2623a5dc459...
+b) The 5 ingested events' sha256 match the current artifact files (report 87f20491, manifest 1c8fa888, gate_sensitivity e24dbf76, drift_addendum 049ed570, review b2623a5d).
+c) Read leak_validity_review.json summary (for my status summary).
+d) Check the checkpoint ckpt-20260912-001530 exists and what it says about hard failures.
+
+Then emit one status event, validate, run checkpoint.py, append CKPT-9 (close-out), and exit with a summary.
+
+Wait — careful with the events.schema oneOf: `status` is not in the events.schema.json oneOf (only direction_update, claim, artifact, review, resource_request)! The JSON-schema file lists 5 types but schemas.py validate_event supports 13 types. The ingest uses schemas.validate_event (from schemas.py), which supports status. Indeed, events.jsonl has 148 astra status events, and flash-04 status was ingested at 00:14. So status events do get accepted by ingest when fully formed. The old rejects were because of missing node_id etc. My status event will be fully formed: node_id, status in STATUSES, hours (number), summary, evidence_refs (list), next_falsifier. 
+
+But note the normalize_event defaults and validation. It will pass.
+
+Let me also double check dedup: my event_id must be new. I'll use `w16-heldout2-status-close-20260912T0016`.
+
+Also the "evidence_refs must be path#sha256-prefix" convention — I'll use 12-char prefixes.
+
+One more thing: the human instruction "emit valid JSON with IDs evidence hash falsifier" — the status event has event_id, node_id, evidence_refs, next_falsifier. Good.
+
+Let me now verify hashes and read the review summary.

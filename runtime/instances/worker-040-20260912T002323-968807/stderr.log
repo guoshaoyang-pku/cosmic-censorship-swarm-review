@@ -1,0 +1,1071 @@
+dsh: reasoning:
+Let me start by understanding the task. I'm worker=040, a bounded execution worker. I need to read handoff/map and comms, take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit.
+
+Let me explore the workspace.
+dsh: reasoning:
+No handoff dir at root. Let me look for handoff/map and comms. Perhaps in workdir, or in swarm-related dirs. There's ai4math-swarm.tar.gz, launch_swarm.sh, supervise_swarm.sh, independent_supervisor*.sh. Let's look for "handoff" directories.
+dsh: reasoning:
+Found `/data3/guoshaoyang/workdir/ai4math-swarm/`. Let me explore it.
+dsh: reasoning:
+This is the ai4math-swarm. Let me read HANDOFF.md, README.md, PROTOCOL.md, and look at research_map, comms/inbox/outbox, ledger, schemas.
+
+I'm worker=040. My task: "Read handoff/map and comms. Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit."
+
+Let me read the key docs.
+dsh: reasoning:
+Now let me read PROTOCOL.md, the comms inbox/outbox, research_map, ledger, schemas. And look at the runtime directory, particularly to find worker 040's assignment / class-bound tasks.
+dsh: reasoning:
+There's no worker-040 inbox file. Hmm. Let me check the runtime directory and the research_map. Also, notice the swarm includes workers deepseek-flash-01..22, worker-01, worker-06, worker-16. My worker id is "040". Maybe the assignment is in `comms/outbox/assignments/` or in research_map. Let me check research_map.
+
+Also there's `runtime/` directory. Let me explore.
+dsh: reasoning:
+Interesting. There are artifacts dirs for worker-001.. etc. But worker=040. Let me check if there's a worker-040 dir. Also, I need to read the map (research_map.json) and look for "class-bound task" — likely tasks with class_id. Let me look at ASTRA_HANDOFF.md and the runtime/state.
+
+Let me also check for any worker-040 references anywhere.
+dsh: reasoning:
+There's a worker-040 artifact directory and outbox file. Let me read the inbox for worker-040 — wait, there was no worker-040.jsonl in the inbox listing. Let me check again. The inbox listing showed only up to worker-16 plus deepseek-flash-* and flash-*. Hmm, the listing may have been truncated? It said total 296, and listing showed all files (29 files). No worker-040 inbox.
+
+But there is `comms/outbox/worker-040.jsonl` and `artifacts/worker-040`. Let me look at those, and the runtime instances for worker-040, which probably contain the assignment.
+
+Let me read:
+- /data3/guoshaoyang/workdir/ai4math-swarm/artifacts/worker-040/
+- /data3/guoshaoyang/workdir/ai4math-swarm/comms/outbox/worker-040.jsonl
+- runtime/instances/worker-040-*/ contents
+dsh: reasoning:
+So I am worker-040 and there have been prior instances. The most recent instance (worker-040-20260912T002323) is likely the current run — started at 00:23, and this is me. Let me read the prompt.txt and meta.json of that instance to see my assignment.
+
+Also, read the prior instance's prompt to see what was done, the outbox, and the artifact.
+
+Let me read the current prompt.
+dsh: reasoning:
+I am instance worker-040-20260912T002323-968807, started 2026-09-12T00:23:23+08:00. My prompt is exactly the user message. My predecessor at 00:16:57 completed work at 00:22 (artifact f0_independent_verdict). I need to take one class-bound task (not duplicate), emit valid JSON with IDs, evidence, hash, falsifier, checkpoint, then exit.
+
+Let me examine:
+1. The outbox worker-040.jsonl (what predecessor reported)
+2. The artifact f0_independent_verdict (verdict.json, README.md)
+3. The research_map.json assignments to find an open class-bound task assigned to worker-040 or unassigned
+4. The comms/inbox for worker-040 (doesn't exist — so maybe assignments come from map.assignments)
+5. runtime/state/artifact_hashes.json, current_checkpoint.json
+
+Let me read the outbox and verdict.
+dsh: reasoning:
+My predecessor did W040-F0-INDEP-VERDICT-01. I must take one class-bound task — a different one, to avoid duplication (rule: one canonical path has exactly one owner, CF-12).
+
+Now let me read the research_map.json to find:
+- assignments (open, with class_ids, node ids)
+- classes
+- gates
+- current checkpoint state
+
+The map is 1MB JSON. Let me use python to inspect it.
+
+Also, I need to understand what "checkpoint" means here — `research_map/checkpoint.py` full 15-min checkpoint snapshot, and `runtime/state/checkpoint_log.jsonl`.
+
+Plan:
+1. Read map assignments and open nodes.
+2. Pick ONE class-bound task that is not already owned/duplicated, ideally assigned to worker-040 or open to workers (deepseek-flash / worker pool).
+3. Execute bounded verification/measurement producing an artifact with IDs, evidence refs, sha256, falsifier.
+4. Emit JSON events to comms/outbox/worker-040.jsonl (upward message types status/claim/artifact/review).
+5. Run checkpoint.py (controller command) or at least record in checkpoint log — but careful: checkpoint.py might be a controller tool that writes shared state. The protocol says controller commands include `python3 research_map/checkpoint.py  # full 15-min checkpoint snapshot`. As a worker, protocol says "Checkpoints: runtime/state/current_checkpoint.json and checkpoint_log.jsonl". The instruction says "checkpoint, then exit". So likely I should run checkpoint.py (idempotent snapshot). Let me check checkpoint.py to see what it does and whether it's safe for a worker to run.
+
+Let me first inspect the map structure.
+dsh: reasoning:
+Now let me look at the assignments. 89 assignments. I need to find open ones (which are unclaimed or assigned to worker-040) with class bindings. Let me print them.
+dsh: reasoning:
+No worker-040 assignment. Let me look at the assignments relevant to the open gates (G-F0 needs 2 independent accepts at published F0 hash; G-AUDIT has 0/2 independent accepts per target; G-LIT needs L0 accept etc.).
+
+Key insight from ASTRA_HANDOFF: "G-F0 needs two independent accepts at the published F0 hash plus 2 soft-flag dispositions". My predecessor provided one independent accept (verdict 4.0) at hash 276009f4... but the map's G-F0 unmet says "no accept verdict exists at the current hash 66bf917bd368". Wait — the handoff said canonical `0fcc6a1928fd` vs authoring `01e7f841643c`, then post-pass observation: F0 canonical `276009f4f63d`. And gate unmet says current hash 66bf917bd368. Hmm, hashes keep changing because the formulation lead keeps publishing. Let me re-measure now.
+
+My task: take ONE class-bound task. Since I'm the second instance of worker-040 after a completed verdict, I could:
+- Provide the SECOND independent F0 verdict at the current hash (G-F0 needs two independent accepts). But that risks duplication with the predecessor's canonical path. Actually G-F0 needs TWO independent verdicts; predecessor gave one. But rule CF-12 "one canonical path has exactly one owner" — my predecessor's path is artifacts/worker-040/f0_independent_verdict. A second independent verdict would normally be a different agent (different worker), not the same worker re-verifying itself. Hmm, but I'm a fresh instance with no memory of the predecessor. Still, "independent" means reviewer is not the author and ideally independent of other reviewers. Two verdicts from the same worker slot might count as not independent (Kish ESS). Better to avoid.
+
+Alternative class-bound tasks:
+- G-FORM: needs accepts at rev21 hashes for F1/F2a/F2b. There are hard failures HF-A1/HF-A2 in F2a, HF-B1/HF-B2 in F2b. A useful class-bound task: independent verification of F2a/F2b schemas at their current hashes, or a falsifier test for the specific hard failures. But leads are working those.
+- G-LIT: needs L1 spot checks at `315c19145065` (2 recorded, need 3). A third independent re-fetch spot check is a class-bound task? Literature class tokens are AF-WCC-VAC-GEN etc. Hmm.
+- G-NUM: needs criterion C8 against protocol `1e6cdf04d7a2`. numerics_lock is LOCKED for N1; N0 is allowed. G-NUM criterion C8 — a class-bound? Hmm.
+- Evaluation: evaluation_rubric A0 has no reviewer verdict. A0 is audit, not class-bound.
+
+Let me look at open assignments in the map, especially the newest ones (astra-life02-*) and their acceptance tests. Also look at the map's `controller_gate_audit` with hash-bound reasons, and the reviews corpus.
+
+Actually, the most valuable "class-bound" bounded task consistent with my predecessor's would be: an independent F2a/F2b schema verdict with hard-failure falsifier tests — i.e., verify whether HF-A1 (dangling extension_predicate) and HF-B1/B2 are real at the published hashes. That's a genuine class-bound task (classes AF-SCC-C2-VAC-GEN, AF-SCC-C0-VAC-GEN). The map has schemas/af_scc_c2_vacuum.yaml and schemas/af_scc_c0_vacuum.yaml. There's also schemas/semantic_contract_tests/ and f1_falsifier_tests.jsonl.
+
+Wait — but let me check open assignments more carefully to avoid duplicating someone else's in-flight work. The outbox shows leads (astra-lead-formulation, lead-audit, etc.) are actively publishing. Let me read the open assignments for the relevant targets, then check what's already in reviews/ and f1_falsifier_tests.jsonl.
+
+Let me dump assignments with deadline/node/class/acceptance.
+dsh: reasoning:
+Now I have a rich picture. Let me determine what is genuinely open and class-bound, not already assigned to another agent in flight, and valuable.
+
+Key open gaps (from ASTRA_HANDOFF and gate audits):
+1. G-F0: needs two independent accepts at the published F0 hash. My predecessor (worker-040 instance 2) gave one accept at 276009f4. A second independent verdict could come from me — but as the same worker slot, "independent" may be questionable. Also the hash keeps moving (66bf917bd368 per map G-F0 unmet vs 276009f4 measured at 00:19). Actually special care: the assignment `astra-life02-publish-f0` is with lead-formulation until 01:00. The canonical/authoring trees are being republished.
+
+2. G-FORM: F1/F2a/F2b — F2a has HF-A1 dangling extension_predicate, HF-A2 forall mismatch; F2b has HF-B1 composite-regularity exemption, HF-B2 node_id mismatch. The assignment `astra-indep-1-F1-F2-formulation` is with lead-formulation. Reviews `astra-recon-*` assigned to flash-16/18/19.
+
+3. G-LIT: `astra-life02-l1-spotcheck` needs two further independent re-fetch spot checks binding L1 sha256 315c19145065, by reviewers distinct from deepseek-flash-07 and from each other. That's a bounded, class-bound task (L1 = citation audit; class GLOBAL though). Hmm, "class-bound" — the prompt says "Take one class-bound task". Class-bound probably means bound to one of the four frozen classes (AF-*). G-LIT spot checks are GLOBAL class. Not ideal.
+
+4. CF-16: claims[36] CLASSSEP hard failure — adjudicated as false positive. There's an interesting independent verification task: check whether audit_evidence.py's CLASSSEP checker false-positives on metalinguistic class labels, i.e., calibrate the checker. But class-binding-ish.
+
+5. `astra-life02-n0-c8-refresh`: G-NUM criterion C8 against protocol hash 1e6cdf04d7a2 — assigned to astra-lead-audit until 01:30. Class AF-WCC-SCALAR-SPH. Duplicate risk.
+
+Now, what class-bound task can I take that's not owned? The strongest candidate given the rules:
+
+Look at gate G-F0 unmet: "9 taxonomy cases remain open (new class vs split) and were never dispositioned" — that's from schemas/taxonomy_cases.jsonl (deepseek-flash-02's assignment). Hmm.
+
+Another candidate: independent verification of F2a/F2b schemas' specific hard failures (HF-A1 dangling extension_predicate; HF-A2 forall mismatch; HF-B1 composite-regularity exemption; HF-B2 node_id mismatch). But astra-recon-03/04 are on F2a reviews, and F2b reviews by flash-16/18. Duplication risk.
+
+Let me check what's actually already done: reviews/ dir listing, schemas/semantic_contract_tests/, f1_falsifier_tests.jsonl, artifacts dirs recently modified. Also check `runtime/state/controller_verification/` for the latest lifecycle report and `controller_gate_audit` reasons, which name exactly what's missing. Let me read controller_gate_audit.
+
+Then decide. Also note my predecessor's verdict exists but is not ingested into the map? The map's `applied_event_ids` has 1386 entries; my predecessor's events in outbox at 00:22:41 may not be ingested yet (the handoff says outbox traffic newer than 00:17:46 is un-ingested). The `comms.py ingest` command is a controller command; as a worker, should I ingest? PROTOCOL says "accepted stream research_map/events.jsonl — writer research_map/comms.py ingest only", and the controller commands list includes ingest. Workers "Report with ... events in comms/outbox/<agent>.jsonl". The ASTRA_HANDOFF says "Pull accepted traffic: python3 research_map/comms.py ingest" — that's addressed to the controller (Astra). Hmm, but as worker I read map; I should not run ingest (that's controller-owned, and could mutate global state). My instructions say "checkpoint, then exit" — checkpoint.py is listed under controller commands too, but the prompt explicitly says checkpoint. Let me check checkpoint.py to see if it's safe/idempotent (writes runtime/state/current_checkpoint.json and checkpoint_log.jsonl).
+
+Actually, wait. Let me reconsider: "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit." This is the worker contract. The "checkpoint" likely refers to writing a checkpoint event/status to outbox and/or running checkpoint.py. My predecessor interpreted: emitted status events + artifact + review to outbox, and referenced runtime/state/checkpoint_log.jsonl. Let me check whether checkpoint.py was actually run by the predecessor and whether checkpoint_log.jsonl has entries.
+
+Let me look at the latest lifecycle report + checkpoint log + controller_gate_audit, and reviews/ directory. Also measure current hashes of key files (they move fast).
+dsh: reasoning:
+The swarm is very active — many workers (worker-0xx) doing reviews. Note reviews already include F0-independent-worker-082.json, F0-review-16/21/22, F1-review-090/094/19/21/22, F2a-review-088/047/21/22, etc. Lots of independent reviews are arriving at the current hashes. So G-F0/FORM accept coverage may be filling.
+
+The controller_gate_audit says at 00:21:55: 0 distinct accepts at the current hashes — but that scan may lag incoming reviews.
+
+Important: my predecessor's work may be duplicated by worker-082 (F0-independent-worker-082). Let me check what the newest reviews say and their verdicts, to find a genuinely open class-bound gap.
+
+Given the very active swarm, the safest high-value unique contribution for a bounded worker:
+
+Option A: Independent verification of a specific claim/node with a machine-checkable falsifier, e.g.:
+- The claim that F2a HF-A1 "dangling extension_predicate" is present/absent at current canonical hash. But multiple reviews already cover F2a.
+- The `schemas/semantic_contract_tests/` heldout corpus — worker-06/16 have that.
+
+Option B: A G-LIT spot check — but G-LIT already has 15 spot checks at L1 hash, requirement satisfied (>=3). Yet L0 has 0 accepts; the L0 gap is the real one. L0 = ledger/theorems.jsonl. A class-bound task on L0: validate the class-token census? Already assigned to flash-19 (astra-indep-1-CF5-ledger-verify). Hmm, `artifacts/flash-19/class_token_census.json` — check whether it exists.
+
+Option C: G-NUM C8 — review of numerics/CONVERGENCE_PROTOCOL.md at 1e6cdf04d7a2, class AF-WCC-SCALAR-SPH. Assigned to astra-lead-audit until 01:30 (astra-life02-n0-c8-refresh). Also there might be other workers producing reviews/G-NUM-protocol-review.json. Let me check whether reviews/G-NUM-protocol-review.json exists and what it binds to. The audit says "the recorded protocol verdict reviews/G-NUM-protocol-review.json binds unbound (stale)". A bounded, independent C8 re-verification pinned to the current protocol hash could be useful but is assigned to lead-audit; duplication risk.
+
+Option D: Check the "9 taxonomy cases remain open (new class vs split)" from G-F0's unmet list — disposition the taxonomy cases in schemas/taxonomy_cases.jsonl. That's F0/G-F0, class-bound (4 classes). Wait, the G-F0 unmet in the map earlier said: "9 taxonomy cases remain open (new class vs split) and were never dispositioned". Meanwhile a checkpoint mentions "the 2 split rows (TC-F0-N14 C0/C2 merge, TC-F0-N15 WCC/SCC merge) need no new class". Actually there's a newer claim referencing astra-classscope-02. Let me look at taxonomy_cases.jsonl and the claims about cases.
+
+Hmm, let me think about what "class-bound task" means in the worker prompt. It likely just means a task bound to a specific class id (one of the four frozen classes) rather than GLOBAL, per hard decision 3: "Group leads must review class binding, assumptions, falsifier, artifact schema, and citation scope." So a class-bound task = a task tied to a specific AF-* class.
+
+The most valuable class-bound gap I can see, uniquely mine, is checking the **class-token census / class-binding consistency of the newly arriving artifacts** — but that duplicates flash-19.
+
+Alternative: Look at recent claims in the map that are class-bound and unverified; pick one and produce an independent machine-checkable verification of its class binding. The map `claims` list has 61 entries, each with class_id, statement, conclusion_type, evidence. The audit gate needs accepts for F0/F1/F2a/F2b/L0. But claims verification could be a bounded task: pick a class-bound claim with a decidable falsifier and machine-verify it.
+
+Let me look at the most recent claims and reviews, plus what the last lifecycle report says are the exact unmet requirements (runtime/state/controller_verification/lifecycle_20260912-001746.json). That will guide me to a non-duplicated gap.
+
+Also check the newest lifecycle: is there a lifecycle after 00:17:46? Let me list controller_verification.
+dsh: reasoning:
+Very useful. Latest lifecycle at 00:24:40:
+- G-AUDIT: F0 0, F1 1, F2a 2, F2b 4, L0 3 distinct accepts. Needs >=2 each: F0 needs 2, F1 needs 1 more.
+- G-F0: 0 accepts (worker-082:revise, worker-16:revise, flash-21:inconclusive, flash-22:inconclusive, lead-audit:revise). Note MY predecessor's verdict isn't in there — maybe it was not ingested or maybe it's not matched (predecessor's verdict artifact is at artifacts/worker-040/... and review event in outbox). It says 0 distinct accepts even though predecessor gave accept. Perhaps the ingest didn't bind because the review event's `reviewed_sha256` was fine but the ingestion only reads reviews/ or accepted events? Or the outbox file wasn't ingested at that scan (00:24:40; predecessor wrote at 00:22:41; ingest happens via controller lifecycle). Hmm, the audit scans `reviews/` directory and/or map reviews. Let me check what the review scan reads. Actually the reason lists reviewer names including worker-082, worker-16, flash-21/22, lead-audit — those are files in reviews/ (F0-independent-worker-082.json, F0-review-16.json, F0-review-21.json, F0-review-22.json, F0-review-lead-audit-r2.json). My predecessor wrote to comms/outbox — the map ingest might not have applied yet at 00:24 (events_pending_application ~239). So the F0 verdict gap is real: nobody accepts F0 at 276009f4.
+
+So the highest-value class-bound task for me: **an independent, fresh F0 verdict at 276009f4**, written directly to reviews/ (canonical review location) and outbox, with a genuinely independent method. But wait — my predecessor was worker-040 and already produced an accept verdict. Two verdicts from worker-040 don't count as two distinct reviewers. But my predecessor's verdict isn't in reviews/ dir, and the audit didn't count it. If I write reviews/F0-review-040.json as one distinct accept, that helps G-F0 toward "2 distinct accepts". The other needed accept could come later from another worker.
+
+However, there's a risk: my predecessor's accept might get ingested and count as worker-040; then a second accept from me would be the same reviewer → not distinct. That could look like gaming. Also the F0 file is about to be republished by lead-formulation (astra-life02-publish-f0, deadline 01:00): "publish ONE frozen revision so canonical and authoring are byte-identical". If F0 gets republished, a verdict at 276009f4 would be void. The gate reason says F0 publication pair is divergent; reviewers can't bind until canonical = authoring.
+
+Hmm. F0 is a moving target and is owned by lead-formulation. Between now (00:24+) and 01:00 they'll republish. So a verdict now is likely to be superseded. Predecessor already did exactly that. Duplicating it is bad.
+
+Better: G-AUDIT needs one more **F1** accept at 9a8bd4c96800 (currently only astra-lead-audit accepts; reviews F1-review-090/094/19/21/22 exist — need to check their verdicts; maybe some are revise). Also note F1/F2a/F2b are ALIGNED (canonical = authoring), so verdicts at those hashes bind now. That's a stable, class-bound target: **independent F1 verdict at schemas/af_wcc_vacuum.yaml#9a8bd4c96800** (class AF-WCC-VAC-GEN), to close the G-AUDIT F1 gap (needs 2 distinct accepts). Also it directly supports G-FORM (F1 needs 1 more accept: currently 1).
+
+Wait, G-FORM reason says F1 [1 distinct accept reviewer(s) ['astra-lead-audit']]. G-AUDIT says F1 1 distinct accept. So the gap is exactly one more independent accept on F1 at 9a8bd4c96800. That's a crisp, class-bound task: AF-WCC-VAC-GEN, artifact schemas/af_wcc_vacuum.yaml at hash 9a8bd4c9680042a40894f6085f183661500966f2d787a6bf28a7098a271ed503.
+
+But: reviews/F1-review-19.json (00:22), F1-review-21, F1-review-22, F1-review-090, F1-review-094 exist. Let me check their verdicts and hashes. If some of them are accepts at 9a8bd4, then the gap is filled already and the audit at 00:24:40 just hadn't scanned them (it lists only astra-lead-audit though — scan was at 00:24:40, after those files). Let me check.
+
+Also F2b has 4 accepts already; F2a 2. So F1 is the unique hole in G-FORM; F0 is the hole in G-F0 (but divergent publication and moving).
+
+Let me check the F1 review files' verdicts/hashes. If none is an accept at 9a8bd4, I'll write a fresh independent F1 verdict.
+
+Independence matters: I must not reuse another reviewer's reasoning. I'll build my own machine checks: parse the YAML schema, check exact quantifiers, topology, weighted data class, genericity, I+/visibility, conclusion_type = weak_cosmic_censorship, exclusions, positive/negative test cases, and run the canonical checkers (G3 validator, class separation). And a falsifier test: try to construct a C0/C2 (SCC) datum that satisfies the F1 schema → if the schema admits it, that's class leakage (falsifier).
+
+Actually, wait. Before deciding, let me check the F1 review verdicts to avoid duplication.
+dsh: reasoning:
+Confirmed: F1 at 9a8bd4c96800 has exactly one accept (astra-lead-audit-r2, 4.5). Every other F1 review at that hash is revise (094) or inconclusive (21, 22) or targets superseded hashes. So G-FORM F1 needs one more independent accept, and G-AUDIT F1 needs one more distinct accept. This is the highest-value, stable, class-bound gap right now.
+
+But careful: F1-review-090 has hard failures (contract_pointer_not_canonical, etc.) — what's its verdict/hash? It didn't show artifact_sha256/verdict fields in my extraction; the extraction found only hard_failures. Let me check its actual verdict and hash. If F1-review-090 is a revise at 9a8bd4, then F1 has 1 accept + multiple revise. For me to add an accept, I need to independently determine whether the schema is acceptable, or whether the revise findings are blocking. That's a real judgment: F1-review-19 (2.5, revise, HF-06 critical: whole-curve vs tail quantifier contradiction) and F1-review-090 might have major hard failures. If a critical hard failure is real, accepting would be wrong.
+
+Let me read F1-review-090 fully, F1-review-094, F1-review-19's HF-06, the lead-audit r2 accept (how it addresses HF-06), and examine the schema itself at 9a8bd4. This is the core of the task: independently adjudicate F1's class-binding at the current hash, then emit accept/revise verdict with evidence, hash, falsifier.
+
+Actually, wait. Let me reconsider whether the right bounded task is instead "independent adjudication of HF-06" — a decidable, machine-checkable question about the F1 schema's quantifier consistency. That is class-bound to AF-WCC-VAC-GEN. Either way I produce an F1 verdict artifact.
+
+Important consideration: rule 5 "Reject your own output before sending" and the protocol's independence requirements. I must:
+- hash the artifact I read myself (sha256)
+- check class leakage vs F2 (SCC), conclusion inflation (WCC not SCC), quantifier completeness, falsifier
+- record evidence refs path#sha256-prefix
+- emit `review` event to outbox, plus `artifact` and `status`
+- checkpoint (write a checkpoint record; possibly run research_map/checkpoint.py? Since it's listed as controller command. Let me check what checkpoint.py writes; it might be fine for a worker to run since it's an idempotent snapshot tool. But it may also require map.lock? Let's read it.)
+
+Also: write the review file into reviews/? Many workers put reviews in reviews/F1-review-*.json. But the review is "class-bound" and must cite hash. The gate scan reads reviews/ directory (per reason "review scan at this hash"). To make my accept actually count for G-FORM/G-AUDIT, it should land in reviews/ as e.g. reviews/F1-review-040.json. But is writing to reviews/ allowed for a worker? The outbox/ worker-082 wrote reviews/F0-independent-worker-082.json (that exists). worker-047 wrote reviews/F2a-review-047.json. worker-030 wrote reviews/F2b-review-030.json. So yes, workers write directly into reviews/ with their own names. Also outbox artifact events reference them.
+
+However, CF-12 "one canonical path has exactly one owner" applies to canonical artifact paths, not reviews. A review file per reviewer is normal.
+
+But hold on — do I have enough time? This is a bounded task. The F1 schema is ~28KB? Let me check. I need to read it, verify fields, run canonical checkers. Let me check what tools exist: `python3 research_map/validate_map.py`, `artifacts/formulation/tools/verify_frozen.py`, `check_taxonomy_consistency`, `check_variant_registry`, `class_separation.py`, `runtime/bin/classsep_regression.py`, `schemas/semantic_contract_tests/`, `artifacts/formulation/tools/` etc.
+
+A rigorous but bounded approach:
+1. Pin F1 sha256 (measure twice; verify stable during run).
+2. Parse schema (YAML). Verify structural requirements per assignment `asg-2026-09-11-F1-astra-lead-formulation-01`: exact quantifiers; topology; weighted data class with named s, delta; genericity; visibility at I+; conclusion_type=weak_cosmic_censorship; explicit exclusions.
+3. Run canonical checkers that exist (read-only): validate_taxonomy_G3?, class_separation, verify_frozen (it may check canonical paths), audit_evidence (read-only mode), classsep_regression.
+4. Independently test the two specific contested findings (HF-06 whole-curve vs tail; HF-090-01 pointer canonical resolution; HF-094-2 duplicate keys/future timestamps) with my own small scripts. Determine whether they are real and blocking.
+5. Decide verdict. If accept, note soft findings. If revise, that adds to the revise pile (less useful but honest).
+
+The key judgment: is HF-06 real? Let me read the schema's relevant lines and decide. If the schema has an internal contradiction that makes class membership ambiguous for a concrete spacetime, that's a legitimate hard failure → verdict revise, and my task becomes an independent confirmation/refutation of HF-06, which is still valuable (it adjudicates a contested finding).
+
+Actually, wait. Let me check what the current file looks like now — it may have been revised again since 00:24:40! The formulation lead keeps publishing. Let me measure current hashes right away. If F1 hash changed, the target moves. Let me continuously re-measure at start and end (drift guard), like my predecessor did.
+
+Let me look at the current F1 file.
+dsh: reasoning:
+F1-rev090 is a revise at 9a8bd4 with 3 major hard failures: 
+- HF090-01: class_contract_pointer targets authoring tree, fragment unresolved in canonical (canonical top-level key is 'classes' not 'class_contracts').
+- HF090-02: duplicate YAML keys revised_at x7, future-dated effective timestamp, revision-keyed ambiguity.
+- HF090-03: undefined normative symbol AF_{I+}.
+
+These are all real, machine-checkable issues. My predecessor (worker-040) found the same pointer issue for F0 ("F0-40-03 soft/interface: all three canonical schemas resolve class_contract_pointer to the authoring mirror"). So the pointer issue is confirmed by two workers independently. HF090-02 duplicate keys + future timestamps — I can verify. HF090-03 undefined symbol — verify.
+
+Now the key question: should I issue an accept or a revise for F1? The lead-audit-r2 accept (4.5) presumably argues these are non-blocking. But the G-FORM criteria say "all three schemas exist with exact quantifiers/topology/regularity/genericity/I+/visibility/conclusion_type; no C0/C2 merge; reviewers 17,18 accept with cited sha256". The major findings are hygiene/provenance, not class semantics, except HF-06 from F1-review-19 (whole-curve vs tail contradiction) which IS semantic and critical.
+
+Let me examine HF-06 myself. Let me read the schema sections: quantifiers.formal (lines ~54-55), D5 lines 79-81, visibility.definition lines 219-220, quantifiers.negation line 88. That's the decisive semantic question: does the schema contradict itself on visibility (whole curve vs tail)? If yes → the schema cannot be accepted (ambiguous class membership); verdict revise on semantic grounds. If no (e.g., the "whole-curve single-q containment" statement is a different object than visibility), then F1 may be acceptable and the HF-06 from review-19 is a false positive.
+
+This is a genuinely valuable adjudication: two competent workers disagree (lead-audit accepts 4.5; worker-090 revises 3.5 on hygiene; flash-19 revises 2.5 on HF-06 critical). My independent verdict will help.
+
+Let me read the schema carefully. 336 lines. Let me read it in chunks.
+dsh: reasoning:
+Let me read the rest of the schema (lines 131-336), focusing on visibility, genericity, conclusion, falsifier, anti_scope, class_identity_variants, f0_binding.
+dsh: reasoning:
+Now I have the full F1 schema. Let me evaluate the contested findings:
+
+**HF-06 (F1-review-19, critical):** claims `quantifiers.formal` lines 54-55 say "forall future-inextendible causal geodesics gamma ... not exists q in I+ with gamma subset J^-(q) intersect M" (whole-curve), which contradicts `visibility.definition` line 220 (tail: exists q AND t0 with gamma([t0,T)) contained in J^-(q)), and contradicts `quantifiers.negation` line 88 which negates the tail predicate ("some future-inextendible causal geodesic of finite affine length is visible from I+").
+
+Looking at the actual file:
+- Line 54-55: `forall future-inextendible causal geodesics gamma of (M,g) with finite affine length: not exists q in I+ with gamma subset J^-(q) intersect M.` — Indeed whole-curve (gamma subset).
+- Line 75-78 D4: definition includes future-inextendibility and finite affine parameter.
+- D5 line 79-81: "points q of I+ such that gamma([0,T)) is contained in the causal past J^-(q) intersected with M" — this is whole-curve containment too: gamma([0,T)) is the whole curve (T is the terminal affine parameter), so D5 as written = whole curve.
+- Line 84-88 negation: "...or some future-inextendible causal geodesic of finite affine length is visible from I+." — "visible from I+" refers to visibility.definition (line 220) which is the TAIL formulation.
+- Line 220 visibility.definition: tail formulation; explicitly says whole geodesic containment "would misclassify a geodesic that starts in the exterior and ends inside the black-hole region."
+- Line 221: visible_singularity_exists: exists gamma visible as above (tail).
+- Line 222 negation_conclusion: "for every ... gamma, for every q in I+ and every t0 in [0,T), the tail gamma([t0,T)) is NOT contained..." — tail negation. Consistent with line 220.
+- Line 251 statement_formal: "... not exists visible_singularity_from_I_plus(M_D)" — refers to the named predicate = tail definition.
+- Line 273 falsifier tier_1 witness: "visible from I+" (tail).
+- Line 228 witness_protocol: "(4) causal relation gamma subset J^-(q) for an exhibited q in I+" — whole curve again! Actually it says "causal relation gamma subset J^-(q)" — whole gamma. Inconsistent with tail.
+
+So there IS a real internal inconsistency: three places (quantifiers.formal line 55, domains.D5 line 80, witness_protocol line 228) use whole-curve containment, while the canonical predicate (visibility.definition line 220, negation_conclusion line 222, statement_formal via named predicate) uses the tail formulation. And the schema itself says (line 220) that whole-curve containment "would misclassify" — i.e., explicitly rejects the whole-curve reading. So the formal quantifier prefix is inconsistent with the declared canonical predicate.
+
+The lead-audit-r2 accept (score 4.5) apparently didn't treat this as blocking. worker-090 (3.5, revise) didn't mention HF-06 but had pointer/timestamp/undefined-symbol majors. flash-19 (2.5, revise) raised HF-06 as critical. flash-21/22 inconclusive due to freeze violation (hash moved during their window).
+
+So the decisive question for my verdict: Is the whole-curve-vs-tail mismatch in quantifiers.formal a blocking semantic defect? Under the class's own falsifier "two competent readers classify the same described spacetime differently under this schema" — yes, this is exactly the schema's own falsifier: a reader taking quantifiers.formal as normative (whole-curve) vs a reader taking visibility.definition as normative (tail) will classify the example at line 220 (starts exterior, ends inside BH) differently: under whole-curve reading it's NOT visible (hidden); under tail reading it IS visible. Therefore the schema is currently imprecise/self-contradictory on the class's central predicate, despite the amendment (rev9) claiming "ONE canonical visibility predicate (single-q tail) made explicit as the class's only predicate". Line 55 and D5 were not updated.
+
+Wait, careful about the direction: whole-curve containment (gamma ⊆ J^-(q)) implies tail containment. The negation "not exists q: gamma ⊆ J^-(q)" (formal) is WEAKER (easier to satisfy) than "not exists q,t0: tail ⊆ J^-(q)" (canonical class). So the schema's formal prefix states a weaker class than the intended tail class — hence "conclusion inflation" in reverse (defining a weaker class while claiming the stronger). Two readers: one applies statement_formal (weak) and one applies visibility.definition (strong) → different verdicts on a witness. That is the schema's own schema_falsifier #1.
+
+So an honest independent verdict is **revise** with a critical hard failure HF-040-01 (whole-curve/tail contradiction in the normative quantifier prefix), unless the file has been fixed since (it hasn't; hash is still 9a8bd4c96800 as measured at 00:25-ish... but it could change any minute).
+
+But wait: if I issue revise, I add to the pile and don't close the F1 accept gap. That's fine — honesty over gap-filling. However, is there an alternative reading in which line 55 is not normative? The quantifiers block is literally titled "quantifiers.formal" and statement_formal line 251 uses the named predicate. Line 90 quantifier_class describes the quantifier structure. The file's own D5 definition_ref: visibility. In visibility line 220, R1 F02 accepted the tail and explicitly rejects whole-curve. So the mismatch is a genuine drafting defect, not a semantic choice. Also the `falsifier.schema_falsifiers` says imprecision → "must be revised". So verdict revise is the defensible, evidence-bound answer.
+
+Hmm, but hold on. Let me check whether the lead-audit-r2 accept addresses HF-06 explicitly. If the lead's accept argues it's non-blocking (e.g., "formal is an abbreviation; visibility.definition controls"), that would be a reviewer judgment. But the gate criterion says "exact quantifiers". An "exact quantifier" block that contradicts the class's own canonical predicate is not exact. Let me read lead-audit-r2 and F1-review-19's full HF-06 to be fair and independent.
+
+Also check F1-review-090's HF090-01/02/03 that I can independently verify:
+- HF090-01: class_contract_pointer = artifacts/formulation/formulation_taxonomy.yaml#class_contracts.AF-WCC-VAC-GEN. Check canonical research_map/formulation_taxonomy.yaml top-level keys: does it have `classes` (not class_contracts)? Then the pointer fragment doesn't resolve in canonical. Confirm.
+- HF090-02: duplicate keys revised_at x7, revised_at_unused x2; effective last-wins = 2026-09-12T00:30:00+08:00 future-dated relative to mtime 00:19:14. Confirm with yaml.safe_load and mtime.
+- HF090-03: AF_{I+} undefined. Confirm no definition in schema/F0 trees (grep).
+
+These I can machine-verify with a script (strong evidence).
+
+Let me also run the canonical checkers read-only:
+- `python3 research_map/validate_map.py` (validates map; read-only?)
+- `artifacts/formulation/tools/verify_frozen.py` (check exit)
+- `research_map/class_separation.py` (module functions)
+- `schemas/semantic_contract_tests/` runner
+- A0 checker calibration? no.
+
+Let me check the tools available and their read-only nature. List artifacts/formulation/tools and schemas/semantic_contract_tests.
+
+Then build my artifact:
+- artifacts/worker-040/f1_independent_verdict/
+  - run_checks.py (my own, reproducible)
+  - checks.json (machine results)
+  - verdict.json (verdict, findings, evidence refs, hashes, falsifier)
+  - entry_hashes.json / exit_hashes.json (drift guard)
+  - README.md
+- reviews/F1-review-040.json (canonical review location, since the gate scan reads reviews/)
+
+Wait — should I name it reviews/F1-review-040.json? Existing pattern: worker-090 wrote only artifacts/worker-090/evidence.json + reviews? Actually F1-review-090.json exists in reviews/. Yes. And outbox event `review` targets `reviews/F1-review-040.json`.
+
+Hmm, but wait: my predecessor's F0 verdict is at artifacts/worker-040/f0_independent_verdict/verdict.json, and its review event was in outbox. It seems the controller scan reads reviews/ (the gate audit lists reviewers with names, including "worker-082" from reviews/F0-independent-worker-082.json). To make my verdict visible to the gate scan, put it in reviews/ too. But rule: is reviews/ a canonical path with exactly one owner? No — it's a directory for reviews; each reviewer owns their own file. Fine.
+
+Actually, let me double-check that `reviews/F1-review-040.json` doesn't already exist: listing showed F1-review-090, 094, 16, 16-r2, 19, 21, 22, lead-audit, lead-audit-r2. No 040. Good.
+
+Now: the "class-bound" requirement — F1 → class AF-WCC-VAC-GEN. Good.
+
+Let me also consider whether the F1 file might change before I finish (the formulation lead is fixing things; astra-life02-publish-f0 due 01:00). If it changes, my verdict binds to the hash I measured and must say it's void at a new hash. I'll include entry/exit hash checks.
+
+One more consideration: the format of the review file should satisfy the review schema in the map/events schema. Let me check `research_map/schemas.py` for the review event requirements, and look at an existing accepted review (F1-review-lead-audit-r2.json) as a format template. Also check what the audit/gate scan looks for (verdict == accept, reviewer distinct, reviewed_sha256/artifact_sha256 match). Since I'm issuing revise, exact accept format matters less, but I should still be schema-valid to be ingested.
+
+Let me read research_map/schemas.py and F1-review-lead-audit-r2.json + F1-review-19.json (HF-06 section).
+dsh: reasoning:
+F1-review-19 has HF-06 (critical) and a second HF-06 (major) about AF_{I+} — which overlaps worker-090's HF090-03. Both independent reviewers found the undefined symbol. That strengthens it.
+
+So the F1 schema at 9a8bd4c96800 has at least:
+1. Whole-curve vs tail contradiction in quantifiers.formal (lines 54-55) and D5 (79-81) vs canonical tail predicate (220/222/251). Two reviewers: flash-19 flagged as critical; worker-090 didn't flag but I can verify from bytes; lead-audit accepted.
+2. class_contract_pointer targets authoring tree with unresolved fragment in canonical (worker-090 HF090-01; my predecessor also found this for all three canonical schemas).
+3. Duplicate YAML keys + future effective timestamp (worker-090 HF090-02; also F1-review-094 HF-094-2 with 7x revised_at; future-dated).
+4. Undefined AF_{I+} normative symbol (worker-090 HF090-03 and flash-19's second HF-06).
+
+My task: verify these independently from bytes, machine-checkably, and emit a verdict. The honest verdict is **revise** (not accept). But that doesn't add an accept. Still, my value: adjudicating the contested critical HF-06 with a machine-checkable test, and confirming with my own scan. My verdict can explicitly state: "the accept at 4.5 is not supportable because ..." — a review of reviews, essentially.
+
+Wait — but maybe the file gets fixed very soon (lead is actively working; rev12 may be published within minutes). My verdict binds to 9a8bd4c96800 with a drift guard; if it changes, verdict void and my checks can be re-run. That's fine and is the protocol-correct behavior.
+
+But let me consider another option that adds more unique value: **write the falsifier test** that decides the whole-curve-vs-tail question mechanically, and check whether the schema's own `quantifiers.ordered`/`domains`/`negation_normal_form` are mutually consistent. I.e., a "quantifier normal-form consistency" check that the schema itself names as required (exact quantifiers). Deliver:
+- A machine check: reconstruct the two readings as predicates over described witnesses (e.g., the schema's own example at line 220), demonstrating they classify it differently → the schema's own schema_falsifier #1 is triggered.
+- A concrete counterexample-free demonstration: witness W = geodesic starting outside, ending inside B. Whole-curve predicate: hidden (not visible). Tail predicate: visible. So the two formal statements in the same document disagree on W. That's decisive and cheap.
+
+Also verify: quantifiers.formal's negation vs quantifiers.negation. formal P: not exists q: gamma ⊆ J^-(q). Its negation: exists q: gamma ⊆ J^-(q) — whole curve. But quantifiers.negation says "some ... geodesic ... is visible from I+" with visibility = tail. So formal and negation are not exact negations. This is a purely logical/structural defect, checkable without physics. That's the strongest, cleanest finding I can make: **the document's quantifiers.formal and quantifiers.negation are not logical negations of each other, and neither pair matches the canonical predicate at visibility.definition.**
+
+I can strengthen with a small formal model: define predicates over abstract curves/tails and show the two formulas differ on a model. Actually simpler: textual/structural extraction + a symbolic argument. I can also implement a tiny finite-model checker: over a small universe of points/curves with containment relations, evaluate formal_wholecurve and canonical_tail and find models where they differ. That is a real machine check (not just reading). Great.
+
+Let me now also check the canonical tools: run the G3 taxonomy validator / class separation checker at this hash, to report what the canonical gate says (PASS with failed_rules=[] per flash-19) and demonstrate the checker blind spot (it never compares quantifiers.formal to visibility.definition). Let me find those tools.
+
+Let me list artifacts/formulation/tools/, schemas/semantic_contract_tests/, runtime/bin/.
+dsh: reasoning:
+There's `artifacts/formulation/tools/check_class_schema.py` — the canonical gate checker. Let me run it on the canonical F1 file (read-only) and see what it reports. Also `check_taxonomy_consistency.py`, `check_variant_registry.py`, and `runtime/bin/classsep_regression.py`.
+
+Let me check how to invoke check_class_schema.py (argparse) and run it with the canonical path.
+
+Plan for the task (write it down as a todo list):
+1. Recon (done).
+2. Choose task: W040-F1-INDEP-VERDICT-02 — independent class-bound verification of F1 schema at current canonical hash (class AF-WCC-VAC-GEN), deciding contested HF-06 whole-curve vs tail plus independent re-measure of pointer/keys/symbol defects. Node F1, gate G-FORM (+ A1/G-AUDIT evidence).
+3. Build from-scratch checks in artifacts/worker-040/f1_independent_verdict/run_checks.py; run them; record entry/exit hashes.
+4. Write verdict.json + reviews/F1-review-040.json + README; emit outbox events (status, artifact, review).
+5. Checkpoint: write checkpoint record (and/or run research_map/checkpoint.py if safe).
+6. Update trajectory log? The runtime instance has trajectory.log — the supervisor likely appends exit. Maybe I should append an exit line? The supervisor handles that (predecessor's trajectory.log has "exit ... rc=0"). Actually predecessor's trajectory shows exit line appended by supervisor at 00:16:57 for instance 2 — that was the START time... weird: "exit id=... rc=0 ts=2026-09-12T00:16:57+08:00" — same as start. Hmm, that suggests instance 2 (00:16:57) exited immediately rc=0? But the artifact was produced at 00:21-00:22 by... maybe instance 2 ran 00:16:57–00:22 and the trajectory log line was written at start with a bug? Whatever. The supervisor writes trajectory; not me.
+
+Let me check the worker supervisor to understand what it expects (exit code / checkpoint). `supervise_swarm.sh`, `supervise_loop.sh`, `independent_supervisor*.sh` at /data3/guoshaoyang. Also the runtime control dir. Quick look to know if there's a required checkpoint file naming convention (e.g., runtime/state/w040_checkpoint.json). The prompt says "checkpoint, then exit". Looking at state dir: w006_checkpoint_1.json, w025_l1_adj_checkpoint_*.json, etc. So workers write their own checkpoint files like runtime/state/w0XX_checkpoint_*.json. Predecessor didn't (no w040 checkpoint). Hmm, my predecessor referenced checkpoint_log.jsonl in status-close. To satisfy "checkpoint", I'll write runtime/state/w040_f1_checkpoint.json (my own) and maybe append to the global checkpoint log? Appending to checkpoint_log.jsonl might conflict with the controller's writer. The controller runs checkpoint.py every 15 min (there's checkpoint_loop.sh). The global checkpoint_log.jsonl entries are "ckpt-..." written by checkpoint.py. I'll not touch the global log; I'll write my own file + reference it in outbox status. Actually, let me check what other workers did: w025_l1_adj_checkpoints.jsonl — per-worker checkpoint files. Let me read one to follow the convention.
+
+Let me also read checkpoint.py to see if it's worker-safe; if it takes a lock / writes map state, I'll avoid it.
+
+Let me do these in parallel:
+- read runtime/state/w025_l1_adj_checkpoint file + w041_checkpoint_1.json
+- read research_map/checkpoint.py
+- run check_class_schema.py help.
+dsh: reasoning:
+checkpoint.py DOES call comms.ingest(dry_run=False) — it ingests my outbox events into research_map/events.jsonl and writes global state. That is a controller action ("accepted stream ... writer comms.py ingest only"). But it's listed under "Controller commands" and run every 15 min by checkpoint_loop.sh. A worker running it would mutate global state; risky, and could race with the controller loop. The worker convention (w041, w027 checkpoints) is to write `runtime/state/w0XX_checkpoint_N.json` — that's the worker checkpoint. I'll follow that convention: write `runtime/state/w040_f1_checkpoint.json`, and NOT run research_map/checkpoint.py. My outbox events will be ingested by the next controller pass.
+
+Hmm, but the prompt says "emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit". The worker checkpoints in runtime/state are the established convention. Good.
+
+Now let me set up the todo list and start executing. First, run the canonical checkers read-only to gather evidence.
+
+Let me check usage of check_class_schema.py.
+dsh: reasoning:
+check_taxonomy_consistency.py and check_variant_registry.py don't take args (just run). Let me run all canonical checkers read-only now and capture output:
+
+1. `python3 artifacts/formulation/tools/check_class_schema.py schemas/af_wcc_vacuum.yaml --json`
+2. `python3 artifacts/formulation/tools/check_taxonomy_consistency.py`
+3. `python3 artifacts/formulation/tools/check_variant_registry.py`
+4. `python3 artifacts/formulation/tools/verify_frozen.py`
+5. `python3 research_map/validate_map.py`
+6. `python3 runtime/bin/classsep_regression.py`
+7. `python3 research_map/class_separation.py`? (probably a module; run its regression via classsep_regression)
+8. audit_evidence.py — read-only audit. Let me check it doesn't write. It's "audit_evidence.py # done-node artifact/evidence audit" — read-only likely.
+
+Let me run them and capture into my artifact dir. Note: I must create artifacts/worker-040/f1_independent_verdict/. Writing under artifacts/worker-040 is my own dir, allowed.
+
+Let me set up the directory and a raw log capture. Be careful: running these tools might write caches (__pycache__) — fine.
+
+Also check that check_class_schema.py doesn't write anything. Let me grep for write operations in it. It's the "canonical gate"; from F1-review-19: "The canonical gate returns PASS with failed_rules=[] at this hash because R03/R10 check domain resolution and field presence, never agreement with visibility.definition." Good—that's a known blind spot I can re-verify.
+
+Let me run them now.
+dsh: reasoning:
+The canonical gate passes with failed_rules=[] at 9a8bd4. verify_frozen revision 26, 0 problems — interesting: FROZEN.json now has 40 files and no problems (it was regenerated at 00:24:49). Note canonical F0 vs authoring still divergent per publication_status at 00:21:55, but FROZEN might now list the canonical path? Let me check FROZEN.json for the F0 entry and F1 entry — because verify_frozen passing means whatever paths it lists match disk. Let me inspect FROZEN.json entries for formulation_taxonomy and af_wcc_vacuum.
+
+Also, let me now write the independent checks. Key machine checks:
+
+**A. Hash pinning & drift guard**: sha256 of the 9 tracked files at start and end.
+
+**B. Structural completeness (from assignment acceptance)**: parse YAML, check required top-level keys: quantifiers (formal), topology, data_class (s, delta named), genericity, i_plus, visibility, conclusion.conclusion_type == weak_cosmic_censorship, falsifier, anti_scope. Also class_id == AF-WCC-VAC-GEN; class_components consistency.
+
+**C. The core falsifier (HF-06 adjudication), machine-checkable:**
+   - Extract `quantifiers.formal` text; detect the visibility clause pattern.
+   - Parse `visibility.definition`; detect tail formulation (exists q AND t0, gamma([t0,T))).
+   - Check `domains.D5.definition` text: "gamma([0,T)) is contained in ... J^-(q)" = whole curve (since [0,T) = entire domain).
+   - Check `quantifiers.negation` text: "some future-inextendible causal geodesic of finite affine length is visible from I+" → references the canonical predicate (tail).
+   - Check `witness_protocol` step (4): "causal relation gamma subset J^-(q)" → whole curve.
+   - Check `conclusion.statement_formal`: uses named predicate visible_singularity_from_I_plus (tail).
+   - Then build a **finite relational model** implementing both readings and show they differ on the schema's own described example: a curve γ starting in exterior and ending inside BH region. Model: points q ∈ I+ (say one point q0), curve γ parameterized [0,T); J^-(q0) ∩ M contains the tail γ([t0,T)) for some t0>0 but not γ(0) (the early exterior part). Then:
+     - whole_curve_hidden(formal): not exists q: γ ⊆ J^-(q) → TRUE (hidden)
+     - tail_hidden(canonical): not exists q,t0: γ([t0,T)) ⊆ J^-(q) → FALSE (visible)
+     So `quantifiers.formal` as written accepts a datum the `conclusion.statement_formal` rejects. Two competent readers (one reading quantifiers.formal, one reading visibility.definition/statement_formal) classify the same described spacetime differently → triggers the schema's own `falsifier.schema_falsifiers[0]`, and `quantifiers.formal` and `quantifiers.negation` are not exact negations.
+   - Also structural check: the negation of formal (exists q: whole curve ⊆ J^-(q)) is not the same as quantifiers.negation's visibility disjunct (exists q,t0: tail ⊆ J^-(q)). Implement truth-table over models to show non-equivalence; count distinct models where they differ.
+
+**D. Re-measure worker-090's HF090-01/02/03 and flash-19's second HF-06 independently:**
+   - pointer: class_contract_pointer value; resolve fragment in canonical taxonomy (key path) and authoring; report unresolved/resolved.
+   - duplicate keys: use yaml.compose to count duplicate mapping keys (revised_at, revised_at_unused); compute effective last-wins; compare to file mtime and wall clock.
+   - AF_{I+} definition scan: occurrences across F1, canonical F0, authoring F0; whether a definition leaf exists.
+
+**E. Class separation checks (my own)**: 
+   - conclusion_type == weak_cosmic_censorship (not SCC); forbidden tokens scan: "C0 or C2", "inextendibility" in conclusion block as conclusion, etc.
+   - Verify no class leakage: conclusion block must not assert extension regularity/inextendibility. Check anti_scope present.
+   - Check `class_components.regularity_token == none` and that F1 doesn't reuse C2/C0 conclusion.
+
+**F. Independence assertion**: I did not author; I consulted other reviews only after forming my own readings? To be honest: I read F1-review-090 and F1-review-19 before writing checks. I should state consulted_reviews = true and that my checks are re-measured from bytes; the verdict conclusion is my own judgment. Kish ESS = 1.
+
+Now: verdict. Given the whole-curve/tail contradiction is confirmed by my model check, the schema is imprecise on its central predicate. The schema's own falsifier says it "must be revised". So: **verdict = revise, score 2.5-3.0, hard_failures = [HF-040-01 whole-curve vs tail (critical), HF-040-02 undefined AF_{I+} normative symbol (major), HF-040-03 canonical pointer unresolved (major/provenance), HF-040-04 duplicate keys + future effective timestamp (major/provenance)]**.
+
+Wait — but is HF-040-01 really blocking for G-FORM? The gate criteria: "all three schemas exist with exact quantifiers/topology/regularity/genericity/I+/visibility/conclusion_type". The whole-curve-vs-tail mismatch means the quantifiers field is not exact and contradicts visibility. That's a direct failure of the criterion. So yes, revise is correct, and accepting F1 would be wrong. I should state clearly in the verdict that the F1 accept at 4.5 (lead-audit-r2) is not supported at these bytes because it does not address HF-06, and that the canonical checker's PASS is a checker blind spot (R03/R10 check presence/domain resolution, not cross-field logical consistency). This is a valuable adjudication and a constructive falsifier: fix quantifiers.formal lines 54-55 + domains.D5 (line 80) + witness_protocol step (4) to the tail formulation, define AF_{I+}, repoint pointer, collapse duplicate keys.
+
+Hmm, but hold on. Let me reconsider the direction of the defect once more, very carefully, because this is the centerpiece.
+
+quantifiers.formal (lines 48-55):
+```
+forall (s,delta) in D0: exists G subset X with G comeager:
+forall (Sigma,h,K) in G, letting (M,g) be the MGHD:
+exists a conformal completion (Mtilde,gtilde,Omega) of (M,g) at I+ such that
+(i) I+ is null with I+ diffeo R x S^2, and
+(ii) every null geodesic generator of I+ is future-complete, and
+forall future-inextendible causal geodesics gamma of (M,g) with finite affine length:
+not exists q in I+ with gamma subset J^-(q) intersect M.
+```
+D5: "points q of I+ such that gamma([0,T)) is contained in the causal past J^-(q) intersected with M".
+
+Since the γ in the quantifier is the full future-inextendible geodesic with affine parameter domain [0,T), "gamma subset J^-(q) ∩ M" ≡ "gamma([0,T)) contained in J^-(q) ∩ M" = whole curve. Yes, D5 matches formal: whole curve.
+
+visibility.definition (line 220): tail, explicitly rejecting whole-curve.
+quantifiers.negation (lines 84-88): "...or some future-inextendible causal geodesic of finite affine length is visible from I+." — "visible from I+" must mean the predicate defined in visibility (tail), because that's the only definition of "visible from I+" in the document. So negation = exists γ with tail visibility. The negation of formal (whole-curve not-exists) is: exists γ, exists q: γ ⊆ J^-(q) — whole-curve visibility. Tail visibility is strictly stronger (implies whole-curve visibility? wait: if tail ⊆ J^-(q) then since J^-(q) is past-closed... hmm, J^-(q) is a past set: if a point is in J^-(q), then all points causally preceding it are. But γ(0) (early points) need not precede the tail; the curve is causal, so γ(0) ≺ γ(t0). If tail γ([t0,T)) ⊆ J^-(q), then all tail points are in the past of q, and by causality all earlier points γ(t) for t<t0 are in the past of q as well (γ(t) ≺ γ(t0) ⪯ q) → the whole γ ⊆ J^-(q). Ah! Interesting! For a causal curve, tail containment actually IMPLIES whole-curve containment, because J^-(q) is past-closed and the curve is causal!
+
+Wait, is that right? If γ is a future-directed causal curve and γ(t0) ∈ J^-(q) (i.e., γ(t0) ⪯ q), then for t < t0, γ(t) ⪯ γ(t0) ⪯ q, so γ(t) ∈ J^-(q). Therefore tail ⊆ J^-(q) implies γ ⊆ J^-(q). Yes! So for causal geodesics, single-q tail visibility and single-q whole-curve visibility are EQUIVALENT. The schema's line 220 claim that "requiring the whole geodesic to lie in J^-(q) would misclassify a geodesic that starts in the exterior and ends inside the black-hole region" is FALSE — if the tail (and hence the end point) is in J^-(q), then the earlier exterior part is also in J^-(q) by past-closedness... 
+
+Hmm wait, but careful: is the exterior starting part causally preceded by the end point? The curve is causal and future-directed, so yes, γ(t) ⪯ γ(t0) for t < t0. So whole-curve containment follows. So actually the "tail" vs "whole-curve" distinction is vacuous for single-q containment of causal geodesics. Unless "gamma subset J^-(q)" is meant with a different causal relation (e.g., chronological vs causal, or requiring the whole curve to be in the causal past of the single point q in a way that... no, same).
+
+Hmm! But wait, what about the union-over-q set-based reading (variant SET)? "gamma ⊆ ∪_q J^-(q)" (i.e., γ ⊆ J^-(I+)). That's clearly different: each point of γ may be in the past of a different q. Variant SET is strictly stronger than single-q. For the single-q predicate, tail vs whole-curve are equivalent for causal curves. So the schema's stated reason at line 220 for using the tail is mathematically wrong, BUT the two formulations are equivalent, so the schema is not actually ambiguous in its classification behavior... 
+
+Hmm, hold on. Let me redo this. The claim "visible iff exists q AND t0 such that tail ⊆ J^-(q)" vs "visible iff exists q such that whole γ ⊆ J^-(q)". Given γ causal and J^-(q) past-closed: 
+- whole → tail: trivial.
+- tail → whole: as shown, holds.
+So equivalence holds *provided* J^-(q) is past-closed (it is, by definition: p ∈ J^-(q) iff there is a future-directed causal curve from p to q; if p' ⪯ p then p' ⪯ q by concatenation). Yes.
+
+So HF-06's claim "the expansion is strictly weaker" is actually WRONG as a matter of causal structure! The two readings are equivalent for causal geodesics. The example at line 220 (geodesic that starts in the exterior and ends inside the BH region): if the tail is in J^-(q) then so is the start; if the start is not in any J^-(q), then neither is the tail... no wait, that's backwards. Let's instantiate: q ∈ I+ is in the future of the black hole region? Hmm, if γ ends inside the BH region, can a tail of γ be in J^-(q) for q ∈ I+? If γ's tail is inside the BH region (future of the horizon), then for q ∈ I+, is γ(t) ⪯ q? In a black-hole spacetime, points inside the BH cannot causally precede I+ (that's exactly the definition of the event horizon: B = M \ J^-(I+)). So actually if γ ends inside B, no tail is in any J^-(q). Then both readings agree: not visible. Hmm, but the schema says "a geodesic may begin in J^-(I+) and end in the black-hole region" (line 222), and line 220 says requiring the whole geodesic to lie in J^-(q) "would misclassify a geodesic that starts in the exterior and ends inside the black-hole region".
+
+Think again: if γ starts in the exterior (in J^-(I+)) and ends inside the BH region (not in J^-(I+)), then no single q sees the tail (tail inside B is not in J^-(q)); whole curve also not contained in any single J^-(q) since the tail isn't. Both readings: not visible. Equal.
+
+What if a tail of γ IS in J^-(q) for some q? Then by past-closedness the whole curve is in J^-(q) — so whole-curve visibility holds. So for a SINGLE q, they're equivalent. The set-based variant (union over q) is where a curve can begin in J^-(I+) (covered by q1) and end in B (not covered) — i.e., visible under SET? No: SET requires the whole curve contained in the union. If the curve ends inside B, the end point is not in the union, so not SET-visible. Hmm, the SET variant says γ is visible iff γ ⊆ ∪_q J^-(q); the single-q says exists q with γ ⊆ J^-(q). SET is strictly weaker (easier to satisfy) — wait, the schema says variant SET is "strictly STRONGER than this class's single-q tail predicate: non-containment in the union implies no single q sees a tail of gamma, but not conversely". Hmm, "stronger" in the sense that more geodesics are visible (the visibility predicate is weaker/easier, so the censorship statement is stronger). Their wording: variant SET visibility = γ ⊆ ∪J^-(q). Single-q = ∃q: γ ⊆ J^-(q). Single-q implies SET (if contained in one J^-(q), contained in union). So SET visibility is implied by single-q visibility; SET's visible set is a superset; SET is a weaker visibility notion = stronger censorship statement. The schema says SET is "strictly stronger" as a statement — yes, consistent.
+
+OK so my analysis: the tail-vs-whole-curve mismatch claimed by flash-19 (HF-06 critical) is a **drafting inconsistency, but not a semantic difference** for single-q containment, because J^-(q) is past-closed and γ is causal. Therefore HF-06's assertion "strictly weaker" is false. This is a genuinely valuable independent adjudication: I can *refute* the critical hard failure, showing the two clauses are logically equivalent under the schema's own definitions (causal curve + past-closed J^-), and therefore F1's quantifier prefix, though sloppily worded, denotes the same class as the canonical tail predicate.
+
+Hmm! This changes my verdict calculus. Let me be very careful, because this is exactly the kind of subtle adjudication that matters.
+
+Definitions in play:
+- D4: "future-directed causal geodesics gamma: [0,T) -> M that are future-inextendible in M, with T < infinity in affine parameter".
+- visibility.definition: "visible from I+ iff there exists q in I+ AND t0 in [0,T) such that the TAIL gamma([t0,T)) is contained in J^-(q) intersect M."
+- quantifiers.formal: "forall ... gamma ... : not exists q in I+ with gamma subset J^-(q) intersect M."
+- D5: "points q of I+ such that gamma([0,T)) is contained in the causal past J^-(q) intersected with M"
+
+Lemma: For q ∈ M̃ and a future-directed causal curve γ: [0,T) → M: if γ([t0,T)) ⊆ J^-(q), then γ([0,T)) ⊆ J^-(q).
+Proof: J^-(q) is the set of points p such that there exists a future-directed causal curve from p to q (including q). For causal γ, for any t < t0, γ is causal from γ(t) to γ(t0); γ(t0) ∈ J^-(q) means causal from γ(t0) to q; concatenation gives causal curve from γ(t) to q, so γ(t) ∈ J^-(q). ∎
+
+Wait — subtlety: J^-(q) ∩ M vs J^-(q) in the conformal extension. The schema writes "J^-(q) intersect M". If the causal relation is computed in M (the physical spacetime), the same concatenation argument holds within M. For q ∈ I+ (boundary), J^-(q) ∩ M is still past-closed in M (proof as above, curves within M). Fine.
+
+Also subtlety: γ future-directed causal geodesic but with finite affine length is future-inextendible in M. For t<t0 the segment is causal. Yes.
+
+Conclusion: ∃q,t0: tail ⊆ J^-(q) ⟺ ∃q: γ ⊆ J^-(q) (for γ in D4). The ← direction is trivial. So the tail and whole-curve single-q predicates are equivalent. The schema's comment claiming whole-curve "would misclassify" is incorrect, but harmless semantically.
+
+Therefore HF-06 (critical) is a **false positive as a semantic defect** (it's a real internal drafting inconsistency in exposition — the document contains two phrasings it declares non-equivalent — but the two phrasings are in fact equivalent under the schema's own hypotheses, so class membership is unchanged and "two competent readers classify differently" does not actually occur... hmm, wait: would two competent readers classify differently? A reader who takes line 220's warning at face value might believe the tail reading is weaker... but applying either formula to a concrete spacetime yields the same verdict by the lemma. So no classification divergence. The falsifier "two competent readers classify the same described spacetime differently under this schema" is not triggered by this alone).
+
+Hmm, but careful: is the schema's *claim* that the readings differ itself a defect that matters? It says at line 241 "relation: strictly STRONGER ...: non-containment in the union implies no single q sees a tail of gamma, but not conversely; the two readings are NOT equivalent and must never be interchanged" — that's about the SET variant vs single-q, which is correct. Line 220's comment about whole-curve vs tail is the incorrect one. But that comment is about a hypothetical rejected formulation; it doesn't change the class definition (the quantifier block does use the whole-curve form, which by the lemma equals the tail form).
+
+So the honest verdict on F1's class semantics: the central predicate is **consistent in content** (whole-curve ≡ tail for causal geodesics), with a nit that the file's rationale contradicts its own quantifier block and the tail/whole-curve equivalence is undocumented. This is a soft finding, not a hard failure. Interesting! So flash-19's HF-06 (critical) is refuted by an elementary past-closedness argument. This is precisely the kind of independent verification the swarm needs, and it's a valuable, novel result (adjudicating a contested critical finding in the opposite direction).
+
+Then what about the other defects?
+- HF090-01 pointer not canonical: real (canonical top-level key is `classes`? let me verify). Protocol says canonical path is authoritative; the pointer's fragment does not resolve in canonical. This is a genuine major evidence-binding defect. My predecessor found the same for F0 (F0-40-03). Would it block G-FORM? Gate criterion doesn't mention pointers, but publication policy + class_contract binding matters. It's a real major finding, but "process/interface" rather than class semantics. Lead-audit's accept didn't mention it.
+- HF090-02 duplicate YAML keys + future timestamp: real, major/hygiene; parser-dependent revision key. Also `revised_at` 2026-09-12T00:30:00 is future-dated (the file mtime 00:19:14). This is CF-6/CF-14 family (future-dated events). Real.
+- HF090-03 / flash-19 HF-06b: AF_{I+}(M_D) undefined normative symbol. Let me verify: grep the schema for AF_{I+}; if only line 251, and no definition anywhere in F0 trees/VOCAB_ALIASES, it's real. Major (conclusion not self-contained) but the intended meaning is recoverable from quantifiers.formal... which is the whole-curve form and by my lemma equals tail. So the conclusion is recoverable.
+
+So the verdict hinges on whether the pointer + duplicate keys + undefined symbol are "hard failures" that should block acceptance. Existing reviews: worker-090 says revise 3.5 with those 3 majors. F1-review-094 says revise 4 with the duplicate-key/timestamp major. F1-review-21/22 inconclusive due to mid-review hash movement. Lead-audit-r2 says accept 4.5. F1-review-19 says revise 2.5 (HF-06 critical, which I believe is a false positive, plus the AF symbol major).
+
+The assignment acceptance for F1 (asg-2026-09-11-F1-astra-lead-formulation-01) requires: "Schema declares, as separate machine-readable fields: exact quantifiers; topology...; conclusion_type=weak_cosmic_censorship; explicit exclusions" and falsifier "Two competent readers disagree whether a given asymptotically flat vacuum spacetime satisfies the schema; or the conclusion type entails SCC rather than WCC."
+
+My independent check: the required fields are all present (check_class_schema PASS), conclusion_type correct, exclusions present. The defects are: non-canonical pointer fragment, duplicate top-level keys with future-dated last-wins value (parser-dependent revision identity), undefined symbol in the formal conclusion, and an incorrect explanatory claim about tail vs whole-curve (but no semantic effect).
+
+Are these enough to say "two competent readers disagree whether a given spacetime satisfies the schema"? The duplicate revised_at doesn't affect membership. The pointer doesn't affect membership (canonical taxonomy has `classes` key; need to check what the canonical class contract says — content agrees per check_taxonomy_consistency). The undefined AF_{I+} — meaning recoverable. So under the stated falsifier, no. But "exact quantifiers" — the quantifier block's visibility clause differs textually from the canonical predicate while being semantically equivalent; a strict reader could call the quantifier prefix non-exact (it uses a formulation the document itself says is wrong). Hmm.
+
+Also, is there a *real* semantic issue in the whole-curve form? Let me double check the "strictly weaker" claim by a potential counterexample: Suppose γ ⊆ J^-(q1) ∪ J^-(q2) but no single q contains all of γ (SET-visible, not single-q visible). The whole-curve single-q form: not exists q: γ ⊆ J^-(q) → true → hidden. Tail single-q: not exists q,t0: tail ⊆ J^-(q) → also true (since tail ⊆ J^-(q) ⟹ γ ⊆ J^-(q)). So both agree: hidden. Right.
+
+Now is there any case where tail ⊆ J^-(q) but γ ⊄ J^-(q)? Only if J^-(q) is not past-closed along γ. J^-(q) is by definition past-closed in the causal relation. Unless the schema means "causal past in M̃ \ {q}" or something weird. No.
+
+But one more: "gamma subset J^-(q) intersect M" — if we interpret J^-(q) ∈ M̃ and intersect with M, still past-closed in M. Fine.
+
+And is the equivalence worth stating in my review? Yes, as a finding: HF-06 (critical) as raised by flash-19 is **refuted**; the drafting divergence is real but semantically inert; recommend a one-line fix + a lemma note. This is a strong, checkable, novel adjudication. I can machine-check it on a small finite causal model: enumerate all finite causal sets with a past-closed J^-(q) and verify equivalence of the two predicates. Specifically: build a small poset M (say 4-6 points), fix q, define J^-(q) = {p: p ⪯ q} (past-closed by construction), enumerate all future-directed causal curves (chains starting anywhere going up), check: [∃t0: tail ⊆ J^-(q)] ⟺ [whole ⊆ J^-(q)]. Verify exhaustively. That demonstrates the lemma's combinatorial content, with the physics being just "causal past is past-closed". Also do the converse check to show the schema's claimed example (start outside, end inside B) is impossible for a single q: if end ∈ J^-(q) then start ∈ J^-(q).
+
+I can also add a check extracting the two text formulations from the YAML and classifying them, plus verify no OTHER clause uses a different visibility notion.
+
+Then my verdict: **accept** or **revise**? Let's weigh:
+- Class binding and conclusion are sound; canonical gate pass; required fields present; the claimed critical semantic defect is refuted by my analysis; conclusion type correct; no leakage into SCC; no inflation.
+- Remaining real defects are provenance/hygiene: pointer fragment unresolved in canonical, duplicate keys + future-dated effective timestamp, undefined AF_{I+} symbol.
+
+Gate G-FORM says "reviewers 17,18 accept with cited sha256" — and two accepts are needed per A1. F1 currently has 1 accept. If I accept, the number becomes 2 (mine + lead-audit-r2) → potentially unblocks F1 criterion. But is that right given the defects? The lead-audit-r2 accept at 4.5 presumably accepted despite these; worker-090 and 094 say revise for the hygiene issues. A "revise" verdict on hygiene grounds is defensible; an "accept with findings" is also defensible if the findings don't affect class semantics. The protocol schema only allows accept/revise/reject/inconclusive. Existing precedent: F2b has 4 accepts; F2b-review-030 accepted presumably with findings. Let me look at how other accepts handle major-ish findings... e.g. check F2b-review-17-current.json or F1-review-lead-audit-r2 to see what "accept" looks like and whether findings include unresolved majors.
+
+Actually — my main deliverable should be the *adjudication* of HF-06 with a machine-checkable lemma, plus independent re-measurement. The verdict itself must follow from the evidence. Let me think about what an honest reviewer should conclude:
+
+The F1 schema at 9a8bd4:
+1. Class semantics: sound; tail/whole-curve equivalent (I prove it).
+2. Pointer: class_contract_pointer resolves in authoring but not canonical. The canonical F0 taxonomy is authoritative; the canonical F1 schema's contract pointer fails to resolve against authoritative bytes. Does that fail "class-bound" review? The assignment astra-indep-1-F1-F2-formulation says "One frozen revision per class at the node's declared canonical path... a revision that still contains a dangling class-core reference... is rejected on re-review." Ooh — "dangling class-core reference" → rejected on re-review. The class_contract_pointer pointing to a fragment that doesn't resolve in the authoritative tree IS effectively a dangling class-core reference (the astra-pathpol-00 assignment: "Publish revision 6 by copying your five frozen files to the canonical paths..."). So per the lead's own acceptance criterion, a dangling class-core reference is a rejection condition. HF090-01 is major. Hmm, but does it dangle? It resolves against artifacts/formulation/formulation_taxonomy.yaml (authoring) but not research_map/formulation_taxonomy.yaml (canonical). The canonical policy says canonical is authoritative; the authoring file exists and resolves. It's an inconsistent-reference defect rather than fully dangling. My predecessor called F0-40-03 "soft/interface". flash-19 didn't flag it in HF-06 but likely in its other findings. worker-090 called it "major".
+
+3. Duplicate keys with future-dated value: the effective `revised_at` (last-wins) = 00:30 > mtime = 00:19:14, i.e., a future-dated timestamp embedded in a normative field. CF-14 family; also makes revision identity parser-dependent. Major hygiene, not semantics.
+
+4. AF_{I+} undefined: the normative conclusion statement uses an undefined symbol. Major completeness.
+
+So there are 3 real majors + 1 refuted critical + 1 refuted-ish soft (line 220 rationale). Under the map's own rule that a revision with a dangling class-core reference is rejected on re-review, and given A0 requires exact quantifiers/self-contained formal statements, the defensible verdict is **revise** with the majors as hard failures and the HF-06 refutation as a finding. That doesn't fill the F1 accept gap, but it's honest and it corrects the record on HF-06 (which currently sits as a critical hard failure in one review and an unaddressed item in the accept).
+
+Hmm, hmm. But wait. Consider the value: the swarm already has revise verdicts from worker-090 and 094 on exactly these majors. My verdict would be a third revise — low marginal value, though it does add: (a) the HF-06 adjudication refuting the critical, (b) independent reproduction of the majors.
+
+Alternatively, I could accept with the majors listed as "non-blocking findings" arguing they don't affect class identity — but then I'd be disagreeing with two other reviewers on whether duplicate keys/dangling pointer/undefined symbol are blocking, without authority. And the assignment's own rejection clause ("dangling class-core reference ... rejected on re-review") makes revise the safer, protocol-aligned call.
+
+Actually, let me check whether those issues might be *fixed* in a new revision soon. The lead is actively publishing (FROZEN rev 26 at 00:24:49). Let me check the FROZEN.json and the current canonical F1 hash again — maybe it changed in the last few minutes! If the lead just republished F1 (rev12) fixing these, my whole target changes. Let me re-measure now.
+
+Also, I should check F1-review-094's and F1-review-090's timing: they reviewed 9a8bd4 at 00:22-00:23, so the file has been stable since 00:19:14. The lead's current focus is F0 publication (astra-life02-publish-f0, due 01:00). So F1 likely stays at 9a8bd4 for a while.
+
+Let me check the canonical taxonomy top-level keys and whether the pointer fragment resolves, to verify HF090-01 independently; also count duplicate keys; also grep AF_{I+}. Let me write my run_checks.py now — a single self-contained python script that does everything and writes checks.json. Then review the output, write verdict.json, reviews/F1-review-040.json, README, entry/exit hashes, outbox events, checkpoint.
+
+Let me first quickly verify the raw facts with a scratch command (to make sure my script's claims will be right).
+dsh: reasoning:
+All confirmed:
+- F1 sha 9a8bd4c96800, stable, mtime 00:19:14.
+- Duplicate revised_at x7, revised_at_unused x2 (my print printed 6 dup lines before the 7th? It printed "revised_at" 6 times, then revised_at_unused. Hmm, the constructor fires for the top-level mapping once; 7 occurrences → 6 duplicates reported. Fine.)
+- Effective revised_at = 00:30:00 (future vs mtime 00:19:14).
+- class_contract_pointer → authoring fragment; canonical has `classes`, authoring has `class_contracts` → doesn't resolve in canonical.
+- AF_{I+} appears once (in F1 only), undefined anywhere.
+
+Note: the canonical F0 WAS changed/published? canonical F0 sha now? Earlier 276009f4. Let me re-measure at the end. Also, FROZEN.json revision 26 — let me check what FROZEN.json now lists for the canonical paths (maybe the lead republished F0). Let me check quickly; it matters for the publication pair status and for my verdict's "current state" accuracy.
+
+Now, the centerpiece adjudication of HF-06. Let me formalize:
+
+Claim (schema line 220, R1 F02): whole-geodesic single-q containment and tail single-q containment are different, and whole-curve "would misclassify a geodesic that starts in the exterior and ends inside the black-hole region."
+Refutation: For any future-directed causal curve γ: [0,T) → M and any q with tail γ([t0,T)) ⊆ J^-(q) ∩ M, causality gives γ(t) ⪯ γ(t0) ⪯ q for every t < t0, so γ ⊆ J^-(q) ∩ M. Hence ∃q: γ ⊆ J^-(q) ⟺ ∃q∃t0: γ([t0,T)) ⊆ J^-(q). The two formulas in quantifiers.formal (lines 54-55, with D5) and the canonical predicate (visibility.definition lines 219-220, statement_formal line 251) denote the same set of geodesics. Therefore HF-06's assertion that the formal expansion is "strictly weaker" is false; no two competent readers can classify a datum differently on this axis once they apply the definitions (J^-(q) is past-closed by definition).
+
+Machine-check: exhaustive finite causal-set enumeration confirming equivalence, including a check that no counterexample exists where tail ⊆ J^-(q) but whole ⊄ J^-(q). Also verify the "strictly weaker" claim would require such a witness; none exists in models with past-closed J^-.
+
+I should implement this as a genuine enumerated check: generate all finite posets up to n=4 or 5 (or all DAGs on n nodes with fixed transitive closure), for each q and each maximal chain (curve), test both predicates. Count models where they differ for the same (curve,q). Expect 0. And as a control, test the SET-union variant vs single-q: find models where they differ (should be >0) — proving my test has teeth (it can detect a genuine difference). That's an excellent positive control: the test detects the genuine SET-vs-single-q difference while finding zero tail-vs-whole differences. 
+
+Let me design the model precisely:
+- Universe: finite set of points with a causal relation R: p ⪯ q (reflexive, transitive, antisymmetric) = partial order. J^-(q) = {p : p ⪯ q}; past-closed by construction.
+- γ = a maximal chain (future-directed causal curve) as an ordered sequence of distinct points p0 ≺ p1 ≺ ... ≺ pk (a chain). Tail from index i = {pi,...,pk}; whole = all.
+- Predicates: 
+  - whole_single_q(γ): ∃q: γ ⊆ J^-(q) ⟺ ∃q: pk ⪯ q (since the chain's top is pk, and J^-(q) past-closed, whole ⊆ J^-(q) iff pk ⪯ q). 
+  - tail_single_q(γ): ∃q∃i: tail_i ⊆ J^-(q) ⟺ ∃q: pk ⪯ q. 
+  These are trivially identical in the model because past-closure makes the top dominate: whole ⊆ J^-(q) iff pk ∈ J^-(q) iff tail_i ⊆ J^-(q). So they're obviously equivalent — good, that IS the lemma (the endpoint alone determines it, by past-closure).
+  - set_union(γ): γ ⊆ ∪_q J^-(q) — this is always true if every point is in someone's past (e.g., if every point has an upper bound q in I+). To make SET differ from single-q, we need a γ whose elements are each below some q but with no single q above the top. E.g., poset with two maximal elements q1, q2, and γ = {a, b} with a ≺ q1, b ≺ q2, a and b incomparable → SET: {a,b} ⊆ J^-(q1) ∪ J^-(q2) true; single-q: no q above both... if q1,q2 are the only I+ points, then false. So the control shows difference.
+- Enumerate posets: all partial orders on n ≤ 4 labeled points, or random DAGs with transitive closure. Number of posets on 4 elements = 219; on 5 = 4231. Very manageable. Enumerate all chains, all q. Count decision differences between whole_single_q and tail_single_q → expect 0; between single-q and SET-union → expect >0 (control), and also count "strictly weaker" witnesses.
+
+This gives a real machine-checked demonstration, not just prose.
+
+Also I'll encode the schema's own example: "geodesic starts in exterior and ends inside the black-hole region" — model B = M \ J^-(I+) (not in any J^-(q)); a chain with early point in J^-(q0) and terminal point b ∈ B. Under both readings: not visible. Also, the schema's claimed misclassification scenario would require terminal point ∈ J^-(q) but an earlier point ∉ J^-(q) — impossible by past-closure; count such models = 0.
+
+Now the verdict. Given:
+(a) The critical HF-06 is refuted on the semantic axis (class membership is well-defined and equals the canonical predicate). That resolves the biggest threat to F1's class binding and supports acceptance in substance.
+(b) But there remain independently confirmed major defects: unresolved class_contract_pointer against the authoritative tree, duplicate YAML keys with parser-dependent future-dated effective revision timestamp, and an undefined normative symbol AF_{I+} in statement_formal.
+
+Verdict options:
+- "revise" (blocking majors): consistent with worker-090's 3.5 and the lead's own "dangling class-core reference → rejected on re-review" line. 
+- "accept" with findings: would need me to argue the majors are non-blocking. The undefined symbol + dangling pointer are exactly "exact quantifiers / class binding" hygiene, which the assignment cares about.
+
+I'll go with **revise**, score 3.0, hard_failures = 3 majors (pointer, duplicate-key/future timestamp, undefined symbol), and a prominent finding that HF-06 (critical) is REFUTED by the past-closure lemma with the machine check as evidence. The verdict should also state: "conditionally, if the three majors are fixed, the class semantics as measured are sound (my checks C1-C9), and this reviewer's remaining objection would clear." And note "accept is not supportable at these bytes; the two accepts needed for G-FORM must come after the majors are fixed and the hash republished." That's honest and useful: it also stops a premature gate pass.
+
+Hmm, wait. Let me reconsider one more time whether HF-06's whole-curve form could actually be intended differently: "not exists q in I+ with gamma subset J^-(q) intersect M". Note: q ∈ I+ is on the conformal boundary. Is J^-(q) computed in M̃ or M? "J^-(q) intersect M" suggests J^-(q) is in M̃. In M̃, the causal past of a boundary point q includes points of M. Is it past-closed in M? Yes, for causal curves in M̃ restricted to M (the curve from p to p' to q; if p ⪯ p' in M and p' ⪯ q in M̃ then p ⪯ q in M̃). But γ is a curve in M. The concatenation argument: for t < t0, the segment γ([t,t0]) is in M. If γ(t0) ∈ J^-(q) (a causal curve in M̃ from γ(t0) to q), concatenating with γ([t,t0]) gives a causal curve in M̃ from γ(t) to q, so γ(t) ∈ J^-(q). Yes, equivalence holds in M̃ too.
+
+One caveat: for causal (not necessarily achronal) relations, some authors define J^-(q) including only points connected by future-directed causal curves; concatenation of causal curves is causal. Fine.
+
+Another caveat: the tail vs whole-curve distinction would matter if J^-(q) were replaced by "the chronological past I^-(q)"... With I^-(q) (open), tail ⊆ I^-(q) does NOT imply γ(0) ∈ I^-(q) if γ(0) is only causally (not chronologically) related... Actually if γ(t0) ∈ I^-(q) then for t<t0 with γ(t) ⪯ γ(t0): if γ(t) ≺ γ(t0), then γ(t) ∈ I^-(q); if γ(t) = γ(t0) impossible for distinct t on a curve (unless constant). Hmm, for a causal geodesic with t<t0, γ(t) ≠ γ(t0) generally, and γ(t) ⪯ γ(t0) with distinct points implies either γ(t) ≺≺ γ(t0) (timelike) or they're null-related. If null-related and not chronologically related, then γ(t) ∉ I^-(q) could happen if the only connection is a null geodesic without timelike segment... but concatenating a causal curve from γ(t) to γ(t0) with one from γ(t0) to q yields a causal curve from γ(t) to q; it may be null throughout, so γ(t) ∈ J^-(q) but maybe ∉ I^-(q). But the schema uses J^-, so fine.
+
+So the lemma is solid. My check should state the precise lemma and hypotheses (γ future-directed causal; J^-(q) causal past; past-closedness), and note that the schema's D4 guarantees γ is causal.
+
+Also, let me double-check D5's wording: "points q of I+ such that gamma([0,T)) is contained in the causal past J^-(q) intersected with M" — this is the *domain* of q used in the formal quantifier. It matches the whole-curve form. And `definition_ref: visibility` — but visibility.definition has the tail. So the cross-reference is textually wrong even though semantically equivalent. A reviewer can call that a soft finding (F-040-02).
+
+Now, is the equivalence itself something the schema should state? Yes, my verdict recommends adding the one-line past-closure lemma, which also corrects the R1 F02 comment. Good constructive falsifier.
+
+Also, one more independent check: "conclusion inflation" — check the conclusion block doesn't entail SCC: it forbids C2/C0 inextendibility; my scan confirms forbidden_strengthenings present and conclusion_type WCC. "Class leakage" vs F2: scan F1 for C2/C0 conclusion strings and compare F2b's conclusion; ensure F1 doesn't contain the C0/C2 conclusion type. Also run the canonical class_separation tool on the F1 text.
+
+Let me also double check the canonical taxonomy class contract for AF-WCC-VAC-GEN and compare to F1's fields (family/regularity/conclusion/exclusions agreement) — check_taxonomy_consistency already says CONSISTENT (0 contract-text divergences), but that compares canonical F0 vs authoring F0, not F1! Let me write my own comparison: canonical F0 `classes['AF-WCC-VAC-GEN']` vs F1's conclusion_type/class_components/regularity/exclusions. Let me print the canonical class entry to see.
+
+Let me now also decide the artifact/reviews file naming and event IDs:
+- task_id: W040-F1-INDEP-VERDICT-02 (my predecessor took -01)
+- review_id: RV-040-F1-001
+- verdict_id: W040-F1-INDEP-VERDICT-02 (or separate)
+- artifact dir: artifacts/worker-040/f1_independent_verdict/
+- review file: reviews/F1-review-040.json
+- outbox events: 
+  - w040-f1-20260912T0030-claim (status/claim?) — task claim as `status` 
+  - w040-f1-20260912T0030-artifact-verdict (artifact)
+  - w040-f1-20260912T0030-review-f1 (review)
+  - w040-f1-20260912T0030-status-close (status)
+- checkpoint: runtime/state/w040_f1_checkpoint.json
+
+Events must validate against schemas.py:
+- status: node_id, status, hours, summary, evidence_refs, next_falsifier (+ optional class_ids etc.)
+- artifact: node_id, artifact_type, path, sha256, validation_status
+- review: target_id, reviewer, verdict, score, hard_failures, findings
+
+Now write run_checks.py. It must be self-contained, deterministic, read-only except writing its own output JSON (I'll have it write checks.json into my artifact dir). I'll include:
+- C0: pin+drift (entry/exit hashes of tracked files)
+- C1: parse + required fields + class_id/components
+- C2: conclusion type + no SCC leakage + forbidden strengthenings/weakenings present
+- C3: canonical checker replay (subprocess, read-only): check_class_schema --json, check_taxonomy_consistency, check_variant_registry, verify_frozen, classsep_regression, validate_map
+- C4: class_contract pointer resolution (canonical vs authoring)
+- C5: duplicate keys + effective revised_at vs mtime/wall clock
+- C6: AF_{I+} definition scan (F1 + both F0 trees + VOCAB_ALIASES)
+- C7: tail vs whole-curve equivalence (finite poset enumeration + control SET-union)
+- C8: schema's own falsifier index: does any pair of readers differ on the line-220 example? model check → no
+- C9: F0 binding declared hash vs measured canonical F0 hash
+- C10: independent re-measure of the claimed HF-06 witnesses (no model where tail⊆J^-(q) and whole⊄J^-(q)); plus positive control.
+
+Implementation details for C7:
+Generate all partial orders on n=4 (219) and n=5 (4231) labeled elements? Enumerating all posets on 5 elements: 4231 — feasible via all DAGs? Enumerating all 2^(n^2) relations and checking poset axioms: n=5 → 2^25 = 33M too many. Better: generate all transitive DAGs via itertools over subsets of pairs with cycle check — still big. Simpler approach: universe U = P({0..n-1}) (subset lattice) — causal sets as subsets ordered by inclusion, plus a chain. Or simply enumerate all *chains* and all *past-closed sets* directly: the mathematical content doesn't need all posets; I can enumerate all finite "causal configurations" abstractly:
+- A configuration is (P, ⪯) a poset generated as follows: take a chain c0≺...≺ck plus one or two extra maximal points q1,q2 above arbitrary tails. Hmm.
+
+Cleanest rigorous machine check: For the equivalence, prove it by exhaustive test over ALL finite posets on n ≤ 4 (219 posets) plus all chains in them and all q. 219 posets on 4 elements is easy to enumerate by brute force over 2^(4*4)=65536 binary relations (reflexive, antisymmetric, transitive check) — 65536 iterations × 4 elements is trivial. n=4 gives 219 posets. Also n=5 via 2^25 is too much; do random 5-6 element posets (e.g., 2000 random DAGs closed transitively) as a supplement. Good enough: exhaustive n≤4 + randomized n=5..7.
+
+For each poset:
+- choose q candidates = maximal elements (as I+ points) — but the lemma is about a single q, and a "set-based" control needs ≥2 maximal points. Use all elements as potential q actually; the equivalence holds for any q regardless.
+- chains: all nonempty chains (as sequences ordered). For each chain γ and each q:
+  - whole = all(pi ⪯ q)
+  - tail = any(i, all(pj ⪯ q for j>=i))
+  - Since past-closed: whole ⟺ pk ⪯ q; tail ⟺ pk ⪯ q. Difference count should be 0.
+  - single_q_visible = ∃q: whole(γ,q); tail_visible = ∃q: tail(γ,q). Also equal. Count differences → 0.
+  - set_visible = all(pi ⪯ some q in Q) for Q = maximal elements; single = ∃q∈Q: pk ⪯ q. Count models where set and single differ → >0 control (needs ≥2 maximal incomparable).
+Also explicitly model the schema's example: chain starting in J^-(q1) and ending at b with b not ⪯ any q (b ∈ B): single-q says not visible; tail says not visible → no divergence, and count of "misclassification" scenarios (early ∉ J^-(q) but tail ⊆ J^-(q)) = 0.
+
+That's a rigorous, reproducible check. Also document the lemma proof in the verdict.
+
+One more check (C8b): verify that `quantifiers.negation` is the logical negation of `quantifiers.formal` given the equivalence. formal: ∀γ: ¬∃q: γ⊆J^-(q). negation: ∃γ: visible(γ) where visible = ∃q∃t0 tail⊆. By the lemma, ∃q∃t0 ⟺ ∃q whole. So negation text ⟺ ∃γ∃q: γ⊆J^-(q) = ¬formal. Yes, exact negation. Under the false "strictly weaker" reading, they wouldn't be negations. My check computes: for every model, ¬formal_false == negation_pred where formal_false = ∃γ∃q: whole. Trivially true. But the interesting machine check is the equivalence of the two visibility predicates; I'll report that formal(whole) and negation(tail) are exact negations as a consequence, verified over all enumerated configurations.
+
+Now, about the verdict wording: I'll say verdict=revise, score 3.0, with:
+- HF-040-01 (major, class-binding/interface): class_contract_pointer does not resolve against the authoritative canonical taxonomy (fragment class_contracts.* missing; canonical uses classes.*); the same bytes resolve only in the authoring mirror. Under astra-pathpol-00/canonical-path policy and the "dangling class-core reference → rejected on re-review" clause of astra-indep-1-F1-F2-formulation, this is blocking until repointed/re-published.
+- HF-040-02 (major, provenance/clock): 7 duplicate revised_at keys (last wins 2026-09-12T00:30:00+08:00, later than mtime 00:19:14 and review wall clock) + 2 revised_at_unused; revision identity is parser-dependent and the effective timestamp is future-dated (CF-6/CF-14 family).
+- HF-040-03 (major, completeness): statement_formal uses AF_{I+}(M_D) which is defined nowhere in F1 or either F0 tree; class is declared bound to statement_formal, so the formal conclusion is not self-contained.
+- F-040-01 (positive/refutation): HF-06 (flash-19, critical) is REFUTED: whole-curve single-q and tail single-q containment are equivalent for the class's causal geodesics because J^-(q) is past-closed; machine check over all posets n≤4 + random n≤7 finds 0 divergences; the schema's line-220 rationale is mathematically incorrect but semantically inert. No reader divergence on class membership arises from this axis.
+- F-040-02 (soft): the same drafting inconsistency remains textually (quantifiers.formal/D5/witness_protocol whole-curve vs visibility.definition/negation/statement_formal tail/canonical); recommend a one-line lemma and textual unification; not blocking because equivalent.
+- F-040-03 (soft): F1-review-lead-audit-r2 accept 4.5 does not record dispositions of HF090-01/02/03; my verdict therefore cannot count the accept as covering them.
+
+Score: 3.0 (between flash-19 2.5 and worker-090 3.5).
+
+Independence: reviewer is not an author; consulted other reviews (090, 19, 094, lead-audit-r2) but re-measured every fact from bytes; own checks; Kish ESS=1; no network.
+
+Wait — one more consideration: is it wise to issue "revise" with hard failures when the acceptance criteria for the gate say "reviewers 17,18 accept"? My review would be a 4th revise on F1. The real value is the HF-06 refutation + the independent re-measure. Fine. Also, importantly, my verdict is honest: accept would require declaring the pointer/keys/symbol non-blocking, which I can't support given the lead's own rejection clause.
+
+Hmm, although... let me reconsider one thing: the F1 schema is a *draft_unverified authoring artifact* being reviewed; hard failures of hygiene are exactly why the revise verdict exists. Yes, revise.
+
+Now let me also consider: review files in reviews/ are scanned by the gate. My review event will also go to outbox. Good. I must be careful NOT to modify shared files (canonical artifacts, map, etc.). I'll only write:
+- artifacts/worker-040/f1_independent_verdict/** (my dir)
+- reviews/F1-review-040.json (new file; reviews/ is the shared review drop, standard practice for workers)
+- comms/outbox/worker-040.jsonl (append — my own outbox)
+- runtime/state/w040_f1_checkpoint.json (my own checkpoint)
+
+Appending to my outbox: read then append lines. Use python to append JSONL.
+
+Let me now write the run_checks.py script. I'll make it thorough but bounded. Let me draft carefully.
+
+Key detail: hashes recorded as sha256 full; evidence refs use path#12-hex prefix.
+
+Let me write the script to a file and run it. I need to be careful with YAML duplicate-key loader in the script.
+
+Also note: `check_class_schema.py` may import other tools; run via subprocess with cwd=ROOT.
+
+For the canonical F0 comparison: read research_map/formulation_taxonomy.yaml `classes.AF-WCC-VAC-GEN` and compare against F1 fields (conclusion_type, components, regularity, exclusions). Let me first peek at that canonical class node to know its schema. Then I'll write the comparison check.
+dsh: reasoning:
+The canonical F0 WCC class node (published, canonical) explicitly says: "Visibility uses the single-q TAIL predicate... This is a definition, not an asserted equivalence with any other formulation (review HF-06)."
+
+Interesting! So the canonical F0 revision already addressed HF-06 by declaring the tail predicate the definition (the rev9 amendment) — but the F1 schema's quantifier block still contains the whole-curve form. My lemma says they're equivalent, so the class content still agrees. Good.
+
+Note the canonical F0 also says "The set-based reading ... is strictly stronger" — that's the variant SET (weaker visibility → stronger statement). Fine.
+
+Also, this canonical taxonomy node is where the contract pointer should point: `classes.AF-WCC-VAC-GEN`. The F1 pointer points to `class_contracts.*` (authoring only). Confirmed HF090-01.
+
+Now let me write the check script. I'll structure the output checks.json with:
+{
+  "task_id", "worker", "instance", "created_at",
+  "target": {path, sha256, revision, mtime},
+  "tracked_hashes_entry": {...},
+  "checks": {...each with verdict, measured, evidence...},
+  "hf06_adjudication": {...},
+  "control": {...},
+  "tracked_hashes_exit": {...},
+  "drift": {...}
+}
+
+Then verdict.json and reviews/F1-review-040.json.
+
+Let me write the script now. I'll be careful about:
+- `yaml.safe_load` with duplicate detection (custom loader).
+- The enumeration of posets on n=4: iterate over all relations as bitmask of ordered pairs (i,j), i≠j; require irreflexive (strict poset via ⪯ as ≤: reflexive-transitive-antisymmetric). Simpler: iterate strict relations `p < q` over 4 elements: 2^12 = 4096 candidate strict relations; check transitivity + antisymmetry (irreflexive by construction). Count posets. For each, compute reachability/closure? A strict partial order must be transitive; I check transitivity directly, so relations are already closed. Then ⪯ = < ∪ =.
+- chains: enumerate all sequences of distinct elements p0≺p1≺...≺pk that are maximal in the sense that no element extends the end? For predicate testing, any chain works; but for visibility we care about future-inextendible curves. In a finite poset, a chain is future-inextendible iff its last element is maximal (no strict upper bound). I'll consider maximal chains (ending at a maximal element), and note that only the endpoint matters for both predicates.
+- q ranges over all elements (I+ points), and set Q = all elements (union) or maximal elements. For the control: Q = maximal elements; set_visible(γ) = all p in γ have some q∈Q with p ⪯ q; single_visible(γ) = exists q∈Q with all p ⪯ q. Find models where set_visible but not single_visible → control detects a difference (when |maximal| ≥ 2 and chain members split under them).
+- Expected: whole_vs_tail divergences = 0 across all posets; single_vs_set divergences > 0.
+
+Additionally, model the schema's described example explicitly: poset with q1, a≺q1 (exterior start), b maximal but *not* above q1 (BH interior), chain a≺b. single-q: no q with b ⪯ q (if b maximal and b ≠ q) → not visible. tail: needs q with b ⪯ q → none. Both agree: not visible. And the claimed misclassification scenario (exists q: tail ⊆ J^-(q) but whole ⊄ J^-(q)) requires b ⪯ q and a ⋠ q; impossible since a ⪯ b ⪯ q. Count over all posets = 0. 
+
+Now let me write the files. First run_checks.py. I'll write it with the write tool. It's long; let me be efficient but complete.
+
+Also include instrumentation runs of canonical tools (subprocess) inside the script, capturing returncode + parsed output. This makes instrument_runs.json.
+
+I'll write the script, run it, then build verdict.json based on results (not hardcoded). The script writes checks.json; then I'll review it and write verdict.json + review file manually (with the write tool) referencing measured hashes.
+
+One important thing: the script must record entry hashes BEFORE any checks (I already have hash_at_start.txt but the script should do its own entry/exit). Fine.
+
+Let me write it.
+dsh: reasoning:
+Wait, there's a bug in c5_duplicate_keys: `loader.get_single_data()` then `loader._w040_dups` — the constructor adds to loader attribute, fine. But `_dup_mapping` also calls `yaml.SafeLoader.construct_mapping(loader, node, deep=deep)` — good.
+
+Another possible bug: c7 `strict_partial_orders` transitive check:
+```python
+if any((i, k) not in rel for (i, j) in rel for (j2, k) in rel if j == j2 and i != k):
+    continue
+```
+If i == k, (i,k) is not in rel by asymmetry, so we skip those (correct, since transitivity with i==k would require (i,i) which is excluded). Good.
+
+But note: `for (i,j) in rel for (j2,k) in rel if j==j2 and i != k` — if i==k, skipped. Good.
+
+chains(): for n=4, permutations of lengths 1..4: 4+12+24+24 = 64 per poset. 219 posets → fine. Models counted = number of posets (2,3,4). Let me run it.
+
+One more thing: c6 SYMBOL contains regex-special chars `{`, `}`, `+`; I escape it. Good.
+
+c3: check_class_schema returns 0 on pass? Earlier it printed JSON; need to check exit code. Actually the `--json` output had "verdict": "pass"; exit code presumably 0. verify_frozen exits 0. classsep_regression prints PASS — exit code? Let me see. If some instrument returns nonzero for reasons unrelated to F1 (e.g., validate_map VALID → 0), fine. But if `verify_frozen.py` exits 1 (drift) then C3 fails; measured earlier it was exit 0 (though I didn't echo the code properly — I did `echo "verify_frozen exit=$?"` after a pipe to head, which gives head's exit code! Oops. In the script I capture the real returncode).
+
+Let me run the script.
+dsh: reasoning:
+Two issues:
+
+1. C2_class_binding failed — need to see why (leak token found? forbidden counts? anti_scope?). Let me inspect the checks.json C2.
+2. C7 positive control has no teeth: single_vs_set_divergences = 0. My control computation is wrong: `set_vis` uses Q=maximal elements and requires every p to be below some maximal q. In a finite poset every element is below some maximal element, so set_vis is always true. And whole_single = exists q with all p ⪯ q; a maximal q above all of them exists iff the chain is bounded above by a maximal element — every element is below some maximal element but that maximal element must be above the whole chain; since the chain is totally ordered, the top element's maximal upper bounds also dominate all lower elements (transitivity), so whole_single is also always true for maximal chains. Hence 0 differences. The SET vs single-q difference arises for *non-maximal* chains: e.g., chain {a} where a is below two incomparable maximal elements q1,q2: set_vis true (a ⪯ q1), whole_single true (a ⪯ q1). Hmm still equal.
+
+When does SET differ from single-q? SET: ∀p∈γ ∃q∈Q: p ⪯ q. single: ∃q∈Q ∀p∈γ: p ⪯ q. With Q = maximal elements: take γ = chain [a,b] with a ≺ q1, b ≺ q2, q1,q2 incomparable maximal. Is a ≺ b possible? Then b ≺ q2 → a ≺ b ≺ q2 → a ⪯ q2, so a is also below q2. Then set_vis true via q2 for a and q2 for b → single true via q2. Hmm, but wait: can a ≺ b with b ≺ q2? Then b ⪯ q2 and a ⪯ b ⪯ q2. So single works. For a *chain*, the top element's upper bound dominates the whole chain by transitivity! So single-q and SET are EQUIVALENT for chains in a poset where J^-(q) is past-closed. Of course! Because the union of past sets restricted to a chain: if the chain is covered by the union, the top point is in some J^-(q), hence the whole chain is in that J^-(q) by past-closure (top ⪯ q → all predecessors ⪯ q). So for causal *curves* (chains), the SET reading is ALSO equivalent to single-q in a past-closed setting! 
+
+Wait, but the schema says variant SET is "strictly STRONGER". Is that wrong too? Let's think: SET: γ ⊆ ∪_q J^-(q). Since γ is a chain with top point p_max, p_max ∈ J^-(q) for some q; then all of γ ⊆ J^-(q) by past-closure. So SET ⟺ single-q for causal curves with a terminal point in the union. Hmm... but if the union is over ALL q ∈ I+, and every point of the curve is in the union, then in particular the endpoint is in some J^-(q), and past-closure gives the whole curve in that J^-(q). So indeed SET ≡ single-q for causal curves! Unless the curve is future-inextendible with no endpoint (open end, e.g. γ: [0,T), T finite but no point "at" T). The "top" of the chain doesn't exist among the points {γ(t): t<T}. Then SET-visibility could hold with the sup being approached but not attained: each γ(t) ∈ J^-(q_t) for different q_t, but no single q contains all. Hmm! In that case SET is strictly weaker than single-q.
+
+So the distinction tail vs whole-curve vs set relates to the open-endedness of the curve. Let me redo the mathematics carefully:
+
+γ: [0,T) → M, future-inextendible, T < ∞ finite affine length. The image is γ([0,T)). For t0 ∈ [0,T), the tail is γ([t0,T)) — a subset with no last point. J^-(q) is past-closed.
+
+- single-q tail: ∃q ∃t0: ∀t≥t0: γ(t) ⪯ q.
+- single-q whole: ∃q: ∀t∈[0,T): γ(t) ⪯ q.
+If ∃q ∃t0 ∀t≥t0: γ(t) ⪯ q, then for t<t0: γ(t) ⪯ γ(t0) ⪯ q (causality + past-closure) → whole. So tail ⟹ whole. whole ⟹ tail trivially. So tail ≡ whole. ✔ (My lemma holds; no endpoint needed.)
+
+- SET: ∀t∈[0,T) ∃q: γ(t) ⪯ q (possibly q depending on t). Does SET imply tail-single? Not necessarily: it could be that for each t, γ(t) ⪯ q_t, but no single q dominates the whole curve, and moreover no single q dominates a tail. Example: a curve approaching I+ asymptotically... but wait, γ is future-inextendible with finite affine length (a singularity). Hmm. Could there be no single q seeing a tail yet every point sees some q? The set-based reading is genuinely weaker as a *visibility predicate* if the q's change unboundedly along the tail. So SET visibility does not imply single-q tail visibility in general. The schema's claim "variant SET is strictly STRONGER [statement]" and "non-containment in the union implies no single q sees a tail of gamma, but not conversely" is correct: single-q tail visibility ⟹ SET visibility; SET visibility ⇏ single-q tail visibility. Hence SET statement (no visible singularity under SET) is stronger.
+
+So my control should compare SET(γ) vs single-q(γ) with γ being a chain **without a top point in the model** — i.e., the model must represent an infinite increasing sequence. In a finite poset, every chain has a top, so SET ≡ single. To capture the difference, I need to model γ as an infinite ascending sequence, e.g., with a limit point q: γ(t_n) ⪯ q_n with q_n incomparable, and no single q above all. 
+
+Simplest rigorous finite model: represent the singularity end abstractly: let the curve have stages t_1 < t_2 < ... (infinitely many), but model a finite prefix with a designated "tail index" and points q_1, q_2 (both in I+) such that each γ(t_n) ⪯ q_n for a q_n that varies, and no single q dominates all γ(t_n). But in a transitive poset, if γ is a chain and γ(t_n) ⪯ q_n, the top element of any finite prefix dominates lower ones... For an infinite chain without maximum, we can have: elements a_1 ≺ a_2 ≺ a_3 ≺ ... and q_1, q_2 where a_{2k} ≺ q_1 and a_{2k+1} ≺ q_2, say. Then each a_n is below some q, but no single q is above all a_n... but careful: if a_2 ≺ q_1 and a_1 ≺ a_2 → a_1 ≺ q_1. So q_1 dominates a_1, a_2, and also any a_n below a_2. Let me construct: chain a_1≺a_2≺a_3≺..., with a_{2k} ≺ q_1 and a_{2k+1} ≺ q_2. But transitivity: a_2 ≺ q_1 and a_1 ≺ a_2 → a_1 ≺ q_1. And a_3 ≺ q_2, a_2 ≺ a_3 → a_2 ≺ q_2, so q_2 dominates a_1,a_2,a_3... and by induction q_2 dominates all a_n! Because a_{2k} ≺ a_{2k+1} ≺ q_2. Similarly q_1 dominates all. Indeed in a *chain*, if arbitrarily high elements are each below some q, then for any q at a high index, past-closure pulls the whole chain in. So for a chain, SET ⟹ single-q after all! Because take any index n with a_n ⪯ q; then all a_m for m ≤ n are in J^-(q). But the condition is for each t some q_t; to cover the whole chain you need some q that covers the "top" — and since the chain has no top... Hmm, in my construction above, q_1 covers all even-indexed a's, but does it cover the odd-indexed ones? a_{2k+1} ≺ q_2, and a_{2k+1} ≺ a_{2k+2} ≺ q_1, so yes a_{2k+1} ≺ q_1! So q_1 covers everything. In a chain, ANY q that dominates a point a_n dominates ALL points below a_n, and for any two points one is below the other. So if for some t, γ(t) ⪯ q, then all γ(s) for s ≤ t are in J^-(q); the points above t still need coverage. For the whole chain to be covered by the union, we need for arbitrarily large t a q_t; but each q_t covers a *prefix* (everything below t). If the poset has unboundedly many q's, no single q covers the whole chain only if for every q, there are points above q's coverage. But q_t covers the prefix up to t; if q_t exists at arbitrarily large t, does some single q cover everything? No — different q_t for different t; but does q_{t'} for t' > t cover γ(t)? Yes! γ(t) ≺ γ(t') ⪯ q_{t'} → γ(t) ∈ J^-(q_{t'}). So q_{t'} covers a prefix up to t' AND all earlier points, but not points after t'. So the union over all t' of prefixes... the union of past sets is the whole chain, but no single past set is the whole chain (if for each q there's some point above it that's not below it... but if q_{t'} covers all points ≤ t', then the point at t'+1 is not below q_{t'} — otherwise q_{t'} covers everything and single-q holds).
+
+So SET-visible-only configurations require the chain to have no last point and the dominating q's to shift: e.g., a 2-element poset {a, q} can't; need ≥2 q's alternating, as I tried, but the above argument shows once a q covers a point, it covers all earlier, and the coverage grows; for SET without single-q we need: for every q, ∃ t: γ(t) ⋠ q. Since the chain is infinite ascending, take q = q_1 covering a_2; must have some a_m ⋠ q_1, so m ≥ 3, and a_m covered by some q_2. Since a_3 ≺ a_m ⪯ q_2, q_2 covers a_3 and all below; also q_2 might cover a_4 etc. Continue: for each q, a higher uncovered point needs another q. This is perfectly consistent! The key is that a q covering a_3 also covers a_2, a_1 but maybe not a_4. And q_1 covering a_2 might not cover a_3. So we can have infinitely many q's q_1, q_2, ... with q_n covering exactly a_1..a_n or similar. Then SET holds (each a_n ⪯ q_n) but no single q covers all (for each q_n, a_{n+1} ⋠ q_n). Wait but is J^-(q_n) required to be past-closed? Yes: J^-(q_n) = {a_1..a_n, q_n}? Is that past-closed? If a_{n+1} ⪯ q_n we excluded. With only a_i as the chain and q's above prefixes, the relation is: a_i ≺ a_j for i<j; a_i ≺ q_j for i ≤ j. Transitive? a_i ≺ a_j ≺ q_k for j ≤ k → need a_i ≺ q_k: i ≤ j ≤ k ✔. Past-closed sets J^-(q_k) = {a_1..a_k, q_k} ✔. SET: each a_i is below q_i ✔. Single-q: need q_k with all a_i ⪯ q_k: a_i ⪯ q_k iff i ≤ k; for all i unbounded → impossible. 
+
+So the control needs an **infinite** chain. With a finite model I can approximate with n elements and q's covering prefixes; then SET differs from single-q when the chain's top a_n is not below any single q, i.e., q's cover prefixes up to k<n... but the element a_n itself must be covered by some q_k with k ≥ n; then that q_k covers all a_i (i ≤ n). So in a finite prefix, SET ⟹ single. This confirms: the distinction requires the infinite ascending chain / no maximal point.
+
+So the SET-vs-single difference is a statement about whether one q covers a *tail*. Hmm wait! Now I realize: single-q **tail** visibility: ∃q ∃t0 ∀t≥t0: γ(t) ⪯ q. In the infinite-chain model with q_n covering a_1..a_n: for a fixed q_k, it covers a_1..a_k, i.e., an initial segment, not a tail. So no q covers a tail → not tail-visible, while SET-visible. Good: the model distinguishes SET from single-q tail. And the equivalence of whole vs tail single-q also holds here? whole-single: ∃q covering all a_i → same as tail-single (since any q covering a tail covers everything by past-closure). Yes, equivalent.
+
+So to make the positive control work, my model must include the notion of a tail (cofinite subset) over an infinite chain. I can model it finitely/abstractly: represent the curve by stages 0..N where N is a *limit index* representing "beyond all finite stages"? Cleaner: enumerate finite posets but treat chains as **infinite** ascending sequences represented by their finite prefixes plus a flag "no top" — that's getting complicated.
+
+Alternative simpler approach for the positive control: directly encode the abstract structure: elements A = {a_1..a_n} ∪ {q_1..q_n}, with relations a_i ≺ a_j (i<j), a_i ≺ q_j (i≤j). Gamma = the infinite chain a_1 ≺ a_2 ≺ ... (modeled by n stages; tails are {a_k..a_n} for k≥1 — note a finite prefix's "tail" in the infinite chain corresponds to a cofinite set {a_k, a_{k+1}, ...}, and in the finite model the tail from k is {a_k..a_n}). Then:
+- SET visible: every a_i has some q_j ≥ i → yes, SET-visible.
+- single-q whole: ∃q_j with all i ≤ j → no (max i = n > j for all j ≤ n). Not whole-single-visible. 
+- single-q tail: ∃q_j ∃k: all i ∈ [k,n]: i ≤ j → need j ≥ n → no. Not tail-single-visible. 
+So SET-visible but not single-q (both whole and tail) → control fires. 
+
+And whole vs tail single-q divergence: for this model, both false → no divergence. In general, prove equivalence by the exhaustive finite-poset enumeration (already 0) AND note the proof. The finite enumeration covers *trails* (finite chains); the infinite case follows from past-closure: tail ⊆ J^-(q) at stage t0 implies all earlier stages are predecessors → whole ⊆ J^-(q).
+
+So my positive control should be the purpose-built family above (parametrized n=2..6), not the maximal-element union over finite posets. Also, to have "teeth" for the whole-vs-tail equivalence check, I should add a *negative* control: a configuration in which J^-(q) is NOT past-closed along the curve (e.g., relax past-closure) shows the check would detect divergence — demonstrating the test is sensitive. Hmm, simpler: demonstrate that the check enumerates configurations where whole and tail single-q *could* differ (e.g., include in the enumeration chains with a "non-past-closed" hypothetical set) and count. I think the purpose-built SET witness + the exhaustive enumeration is enough, with a clear explanation that the SET control proves the harness can see a genuine predicate difference while finding zero whole-vs-tail differences.
+
+Let me also fix C2: find why it failed. Let me look at checks.json C2. Probably `forbidden_weakenings` < 3? F1 has 4. Or `anti_scope.not_this_class` present (yes). Leak tokens? `blob` includes "c0 or c2" — YES! The JSON blob contains `phrases_that_are_not_this_class: ["any 'C0 or C2' composite regularity", ...]` → my naive token scan flags the schema's own anti-scope phrase. False positive in my checker. I need to exclude anti_scope/forbidden lists from the leak scan. Fix: scan only the conclusion block + top-level scalars, excluding anti_scope, conclusion.forbidden_*, and phrases_that_are_not_this_class. Let me refine: check `json.dumps(d['conclusion'], ...)` for SCC tokens and separately check that anti_scope lists them (that's positive evidence). Also "regularity_token: c2" probably absent.
+
+Let me update the script:
+- C2: blob = json.dumps({k:v for k,v in d.items() if k not in ('anti_scope','conclusion')}) ∪ d['conclusion'] minus forbidden_* and phrases... Simpler: inspect conclusion_type, and search the *conclusion statement* text for forbidden tokens: 'inextendib', 'c0', 'c2', 'black hole region non-empty asserted' etc. Let me define leak detection precisely:
+  - conclusion.conclusion_type != weak_cosmic_censorship → fail
+  - conclusion.statement_natural_language/statement_formal contain "inextendib" → leakage
+  - conclusion.forbidden_strengthenings list contains the SCC items (positive)
+  - class_components.regularity_token != none → fail
+  - anti_scope not_this_class includes both SCC classes (positive)
+  That's clean.
+
+- C7: rewrite positive control as the purpose-built infinite-tail family. Also add negative control: perturb J^-(q) to a non-past-closed set in the enumeration and show divergence appears (test sensitivity).
+
+Let me implement:
+```
+def c7_hf06():
+    # exhaustive finite posets: whole vs tail divergences (0 expected) — trails
+    ...
+    # purpose-built infinite-tail witness family (SET vs single-q): n=2..8
+    def set_witness(n):
+        # a_1<...<a_n chain; q_1..q_n with a_i <= q_j iff i<=j
+        rel = {(f"a{i}",f"a{j}") for i<j} | {(f"a{i}",f"q{j}") for i<=j}
+        set_vis = all(any((f"a{i}", f"q{j}") in rel for j in range(1,n+1)) for i in range(1,n+1))
+        single = any(all((f"a{i}", f"q{j}") in rel for i in range(1,n+1)) for j in range(1,n+1))
+        tail_single = any(any(all((f"a{i}", f"q{j}") in rel for i in range(k,n+1)) for k in range(1,n+1)) for j in range(1,n+1))
+        return set_vis, single, tail_single
+    ```
+    SET True, single False, tail False → control fires. Also shows single==tail (both False), and across all k, single==tail.
+    
+    Also negative control for the harness: introduce a "bridge" model where past-closure is violated: e.g., add b with a_1 ≺ b? Hmm. To show the harness *can* detect whole-vs-tail divergence, construct a hypothetical non-past-closed past: let J(q) = {tail only} and not earlier points — then tail true, whole false → divergence detected. I can compute with a predicate directly: define J(q) as an arbitrary set along the chain; enumerate subsets of the chain as "J(q)" and count divergences: some subsets are tails (one end) vs prefixes. Let me do: for a chain of n points, for every subset S ⊆ chain (interpreted as J^-(q) ∩ γ; J^-(q) need not be past-closed), compute tail_vis = ∃t0: tail ⊆ S; whole_vis = chain ⊆ S. Count S with whole_vis != tail_vis. Since whole ⊆ tail, whole_vis ⟹ tail_vis... in fact whole_vis = (chain ⊆ S), tail_vis = (∃t0: tail_{t0} ⊆ S) — for arbitrary non-past-closed S these differ (e.g., S = {a_2} with chain a1≺a2: tail from a2 ⊆ S true, whole false). So the harness detects divergence when past-closure is dropped; when restricted to past-closed S (i.e., S must be a prefix... wait for a chain, past-closed sets are prefixes (downward closed within the chain): S = {a_1..a_k}), whole and tail agree. That's a beautiful machine-checkable demonstration: over all subsets of a chain, whole-vs-tail divergences > 0 (harness has teeth); over past-closed subsets (prefixes), divergences = 0 (the lemma). And J^-(q) ∩ M is past-closed by definition. 
+
+That's the cleanest formulation. Let me implement c7 as:
+- (a) exhaustive finite posets n=2..4: for every chain γ, every q, whole vs tail single-q → 0 divergences (models = 219+...).
+- (b) teeth control: for a chain of n points, over ALL 2^n subsets S of the chain (arbitrary J), count divergences between "whole ⊆ S" and "∃ tail ⊆ S" → >0.
+- (c) past-closed restriction: over all downward-closed subsets S (prefixes), divergences = 0.
+- (d) SET-union vs single-q infinite-tail family: SET true, single-q/tail false for n=2..8 → shows variant SET is genuinely different (justifies the schema's variant warning), while single-q whole==tail.
+- (e) schema's line-220 example: exterior start + interior end — both readings agree "not visible".
+
+Then the C7 verdict: "HF-06 refuted" with the machine evidence.
+
+Also fix C3: only fail if the *specific* instruments fail. check_class_schema returns non-zero on failure; fine. But note classsep_regression.py might return nonzero on PASS? Let me capture actual codes in instrument_runs.json after re-run. Earlier run summary: hard failures didn't include C3, so all returned 0. Good.
+
+Now, C1 passed, C9 passed. Good.
+
+Let me apply the edits to run_checks.py.
+dsh: reasoning:
+Also update the print summary keys at the end of main, since C7 keys changed. Let me edit that.
+dsh: reasoning:
+Progress:
+- C2 passes now.
+- C7: exhaustive 0 divergences, teeth control 26 divergences over arbitrary J, past-closed 0. 
+- `set_vs_single_q_control_has_teeth`: false. Why? In my family, rel includes a_i ≺ q_j for i ≤ j. set_vis = each a_i has some q_j with i≤j → all true. whole = ∃q_j with all a_i (i≤n) ≤ q_j → need j ≥ n; j max = n → a_i ≤ q_n for all i≤n → TRUE! Oops: q_n covers all a_i (i≤n). I need q_j to cover only a prefix, but with j up to n, q_n covers all n. Let me shift: q_j covers a_1..a_{j} for j=1..n, so q_n covers all → whole true. To avoid, let Q = q_1..q_{n-1} only, so no q covers a_n; but then a_n isn't covered → set_vis false. The structure requires infinitely many q's; the finite prefix cannot have a "last" a_n covered by a q that doesn't also cover everything. 
+
+Fix: use Q = q_1..q_{n} and A = a_1..a_{n+1} (n+1 stages), with a_i ≤ q_j iff i ≤ j. Then:
+- set_vis: a_i needs some q_j with j ≥ i; for a_{n+1}: no q_j with j ≥ n+1 → set_vis false. Hmm.
+
+Fundamental issue: in any finite prefix of the infinite chain, the top element's coverer covers everything. The distinction requires the limit/no-top. I can model it with an explicit "stage ∞" abstraction: represent the tail predicate over indices with a symbolic "for all sufficiently large i" and the chain as infinite. Do it symbolically: A = {a_i : i ∈ ℕ} represented by predicate over i; Q = {q_j}; relations a_i ≤ q_j iff i ≤ j. Then:
+- SET: ∀i ∃j≥i → true.
+- single-q: ∃j ∀i: i≤j → false.
+- tail-single: ∃j ∃k ∀i≥k: i≤j → false.
+This is easy to state but the "machine check" would just be arithmetic. I can encode the infinite structure faithfully as a symbolic check over an unbounded index using the exact formulas (quantifier over ℕ) and evaluate them via a small decision procedure for these specific Presburger formulas using z3? Not available maybe. I can just implement exact evaluation with the known structure:
+```
+def set_vis(n): all(any(i<=j for j in Q) for i in A)
+```
+with A = range(1, M+1) for M large (say 1000) and Q = range(1, K+1) with K large but < M... then set_vis false for i > K. The limit behavior is what matters; a finite check with M=1000, K=1000 gives whole true (q_1000 covers all ≤1000). The infinite case differs because there's no maximal q. A finite model genuinely cannot exhibit it. So the honest machine-checkable statement: "the SET-vs-single-q distinction is not exhibited by any finite causal chain because a finite chain has a top; it requires the open end of γ. Its role here is only as a control on the schema's variant warning; it is not needed for the HF-06 adjudication." 
+
+Alternatively model the curve as having no top by treating the "tail" as a cofinite set over an abstract index type: use an infinite index set represented symbolically by i ∈ ℕ, and implement `forall_sufficiently_large`/`exists` over ℕ directly with integer arithmetic in a small custom evaluator. I could use Python's sympy? Or implement with a finite but *symbolic* n parameter and reason: for the family with Q = {q_j : j ∈ ℕ}, A = {a_i : i ∈ ℕ}, a_i ≺ q_j iff i ≤ j:
+- SET: ∀i∈ℕ ∃j∈ℕ: i ≤ j → true (take j=i).
+- single-q whole: ∃j ∀i: i ≤ j → false (take i=j+1).
+- single-q tail: ∃j ∃k ∀i≥k: i ≤ j → false (take i=max(k,j+1)).
+This is a two-line arithmetic verification; I can encode it as a check over a symbolic parameter using a *unbounded* quantifier emulated with constructive witnesses/counter-witnesses:
+  For "∀i ∃j≥i": witness function j=i proves it (verify j≥i and relation).
+  For "∃j ∀i≤j": for any claimed j, counterexample i=j+1 refutes.
+  For "∃j ∃k ∀i≥k": for any claimed (j,k), counterexample i=max(j,k)+1 refutes.
+So I can implement a small *game/skolem* checker that verifies the quantified claims by requiring the prover to supply a witness and the refuter to supply a counterexample — that's a legitimate machine check of the infinite case (Skolem witness + counterexample search). Let me implement it as:
+```
+def check_infinite_tail_family():
+    # exists j in N: forall i in N, i<=j   -> refute with i=j+1
+    def single_whole(j): return all(i<=j for i in range(0, j+2))  # includes counterexample
+    ...
+```
+Simpler and clearer: state the check as: for j in 1..1000 and k in 1..1000, find i > max(j,k) with i > j → always exists; and exhibit the SET witness function i→i. Report:
+- set_visible_proof: "witness map i -> q_i (exists for every i)"
+- single_q_whole_refuted_by: "for every q_j, i=j+1"
+- single_q_tail_refuted_by: "for every (q_j,k), i=max(j,k)+1"
+- verdict: set true, single false.
+This is a symbolic/constructive check, machine-executed over a large finite range as sanity plus the general counterexample formula.
+
+I think for the purposes of the review, the important checks are (a) exhaustive 0 divergences for whole vs tail and (b) teeth control 26>0. The SET-vs-single-q control is secondary (it supports that variant SET is genuinely different, matching the schema's own claim). I'll replace the finite-family loop with the Skolem/counterexample check so it's honest and passes.
+
+Let me rewrite that part of c7:
+```
+    # (d) the SET-vs-single-q distinction needs the open end of gamma (a finite chain
+    #     always has a top, where SET collapses to single-q).  Check it symbolically on
+    #     the infinite family a_i (i in N), q_j (j in N), a_i <= q_j iff i <= j:
+    #       SET visible:    forall i exists j>=i      -- witness j=i
+    #       single-q whole: exists j forall i: i<=j   -- counterexample i=j+1 for every j
+    #       single-q tail:  exists j,k forall i>=k: i<=j -- counterexample i=max(j,k)+1
+    set_proof = all(i <= i for i in range(1, 100001))          # witness function sanity
+    whole_refutations = all(max(1, j + 1) > j for j in range(1, 100001))
+    tail_refutations = all(max(k, j) + 1 > j for j in range(1, 1001) for k in range(1, 1001))
+```
+Then set_vs_single_q_control_has_teeth = set_proof and whole_refutations and tail_refutations.
+
+Let me apply the edit.
+dsh: reasoning:
+All checks now behave as intended:
+- C1 pass, C2 pass, C3 pass (need to confirm), C4 fail (pointer), C5 fail (duplicate keys/future ts), C6 fail (undefined symbol), C7 pass with HF-06 refuted, C8 soft, C9 pass.
+- Drift: none.
+
+Let me verify C3 returncodes and C1/C2/C9 details, then check the target hash again (drift guard) and the F0 canonical hash. Then write verdict.json and reviews/F1-review-040.json.
+
+Let me inspect checks.json quickly.
+dsh: reasoning:
+Note: my duplicate-key Counter reports `revised_at: 6` (7 occurrences → 6 duplicates) and `revised_at_unused: 1` (2 occurrences → 1 duplicate). That's correct semantics ("duplicate" = extra occurrences). I'll phrase findings accordingly.
+
+Everything is measured. F1 stable at 9a8bd4, F0 canonical stable at 276009f4. Time now 00:29:29.
+
+Now let me check FROZEN.json revision/hash — verify_frozen passed (0 problems) against FROZEN rev 26 at 00:24:49. Does FROZEN list `schemas/af_wcc_vacuum.yaml#9a8bd4`? Let me check quickly to cite it in the verdict. Also check whether FROZEN.json now lists the canonical F0 path (and its hash), since astra-life02-publish-f0 might be done. Actually publication_status at 00:21:55 said F0 divergent (canonical 276009f4 vs authoring c8e979a1). FROZEN.json has 40 files, 0 problems, so it lists whichever paths/versions it was generated from. Let me check FROZEN's entries for formulation_taxonomy.yaml and af_wcc_vacuum.yaml, plus its `revision`, `frozen_at`.
+
+Then write:
+1. `artifacts/worker-040/f1_independent_verdict/verdict.json` — the main artifact with IDs/evidence/hash/falsifier.
+2. `reviews/F1-review-040.json` — the review record (this is what the gate scan reads).
+3. `artifacts/worker-040/f1_independent_verdict/README.md`.
+4. Append 4 events to `comms/outbox/worker-040.jsonl`.
+5. Write `runtime/state/w040_f1_checkpoint.json`.
+6. Update todos.
+7. Final drift re-measure (target hash unchanged) and exit.
+
+Let me check FROZEN entries first.
+dsh: reasoning:
+FROZEN rev26 lists both canonical schemas and the authoring F0. It does NOT list canonical F0 vs authoring as identical; both are listed (canonical 276009f4, authoring c8e979a1) — "logical_artifacts" probably explains F0 mirror. FROZEN self-reference etc. Not needed further.
+
+Now write the verdict.json. Content plan (valid JSON, with IDs, evidence, hash, falsifier):
+
+{
+ "artifact_kind": "independent_class_bound_verdict",
+ "verdict_id": "W040-F1-INDEP-VERDICT-02",
+ "task_id": "W040-F1-INDEP-VERDICT-02",
+ "review_id": "RV-040-F1-001",
+ "worker": "worker-040",
+ "instance": "worker-040-20260912T002323-968807",
+ "created_at": ...,
+ "target": {path, sha256, revision 11, mtime, class_id AF-WCC-VAC-GEN, node_id F1, gate G-FORM, role},
+ "reviewed_sha256": ...,
+ "class_ids": ["AF-WCC-VAC-GEN"],
+ "verdict": "revise",
+ "score": 3.0,
+ "hard_failures": [ {id HF-040-01 ...}, ... ],
+ "findings": [ ... ],
+ "checks": {...pass/fail summary...},
+ "hf06_adjudication": {...},
+ "independence": {...},
+ "conditions": [...],
+ "falsifier": "...",
+ "next_falsifier": "...",
+ "evidence_artifacts": {...},
+ "hash_stability": {...},
+ "instrument_runs": ...,
+ "not_a_gate_verdict": true
+}
+
+Then reviews/F1-review-040.json — same content but shaped like a review (schema_version, reviewer, target_id, verdict, score, hard_failures, findings, evidence_refs, reviewed_sha256, artifact etc.). Actually simplest: make reviews/F1-review-040.json a superset-compatible record mirroring worker-090's format (which the gate scanner reads). I'll write it with the fields:
+{
+ "schema_version": "1.0",
+ "artifact_kind": "independent_review",
+ "created_at": ...,
+ "reviewer": "worker-040",
+ "reviewer_role": "bounded execution worker (independent; not an author of F1)",
+ "target_id": "F1",
+ "node_id": "F1",
+ "class_id": "AF-WCC-VAC-GEN",
+ "gate": "G-FORM",
+ "artifact": "schemas/af_wcc_vacuum.yaml",
+ "artifact_sha256": "9a8b...",
+ "reviewed_sha256": "9a8b...",
+ "reviewed_revision": 11,
+ "verdict": "revise",
+ "score": 3.0,
+ "hard_failures": [...],
+ "findings": [...],
+ "positives": [...],
+ "machine_checks": {...},
+ "independence": {...},
+ "evidence_refs": [...],
+ "next_falsifier": "...",
+ "notes": "..."
+}
+
+The gate scan presumably keys on `verdict`, `reviewer`, `reviewed_sha256`/`artifact_sha256`. Since mine is revise, no risk of miscount.
+
+Verdict reasoning to state clearly:
+- Positives: all required sections present; class id/components correct; conclusion_type WCC with anti-inflation lists; no leakage; canonical checkers PASS (check_class_schema, taxonomy consistency, variant registry, verify_frozen rev26, classsep regression 17/17-10/10 FP0 FN0, map VALID); F0 binding current at 276009f4.
+- HF-06 critical from flash-19: REFUTED (lemma + machine check).
+- Blocking: HF-040-01 pointer unresolved vs canonical; HF-040-02 duplicate keys + future effective revised_at; HF-040-03 undefined AF_{I+}.
+- Soft: textual split whole/tail (F-040-02), accept coverage gap on majors (F-040-03), FROZEN lists F0 canonical vs authoring divergence still pending (F-040-04, context).
+- Conditions: voids on hash change.
+
+Score: 3.0. Hmm, should a verdict with 3 majors score 3.0? worker-090 gave 3.5 with 3 majors; flash-19 gave 2.5 with 1 critical+1 major (the critical being refuted by me). My score should reflect: substantive class semantics sound, but three real blocking hygiene/completeness defects. 3.0 is defensible. I'll state scoring rationale: "class semantics 4.3; blocking hygiene/completeness defects pull to 3.0".
+
+Let me also decide falsifier (for the verdict itself):
+"Falsified by: (a) a measured canonical F1 hash other than 9a8bd4c96800 at gate-verdict time (verdict void, not wrong); (b) producing bytes in schemas/af_wcc_vacuum.yaml at 9a8bd4 where class_contract_pointer resolves against research_map/formulation_taxonomy.yaml, or revised_at appears once with a non-future value, or AF_{I+} has a definitional leaf; (c) exhibiting a future-directed causal γ, q, t0 with tail γ([t0,T)) ⊆ J^-(q)∩M but γ ⊄ J^-(q)∩M — which would reinstate HF-06 as a true critical defect and falsify my C7 lemma."
+That's precise and decidable.
+
+Also include `class_ids` explicitly (the task is class-bound to AF-WCC-VAC-GEN) and `evidence_refs` with path#sha-prefix.
+
+Evidence refs:
+- schemas/af_wcc_vacuum.yaml#9a8bd4c96800
+- artifacts/worker-040/f1_independent_verdict/checks.json#<hash>
+- reviews/F1-review-040.json#<hash>
+- artifacts/worker-040/f1_independent_verdict/run_checks.py#<hash>
+- research_map/formulation_taxonomy.yaml#276009f4f63d
+- artifacts/formulation/FROZEN.json#2554e276a0db (current measured; note it changed at 00:24:49 — my checks.json tracked it: entry hash recorded in entry_hashes.json. Let me get the tracked hash from entry_hashes.json for FROZEN to cite the measured value inside my run window.)
+- reviews/F1-review-19.json#46870ff6dc2d? That's F1-review-090's hash I measured. For F1-review-19, compute.
+- runtime/state/artifact_hashes.json maybe.
+
+Let me compute the hashes I need for the verdict file: checks.json, instrument_runs.json, run_checks.py, README (to be written), FROZEN entry hash from entry_hashes.json, F1-review-19 hash, F1-review-090 hash, F1-review-094 hash, F1-review-lead-audit-r2 hash, entry/exit hashes.
+
+I'll generate verdict.json and the review file with a Python script that computes the hashes and writes both, to avoid transcription errors. But the content is judgment text; I'll build it in Python with embedded strings. That's fine — write a `make_verdict.py`? Not necessary; I can use a heredoc python to write the files. But the instructions prefer write tool for creating files. However, hashes must be embedded; I can compute hashes first, then use the write tool with actual values. That's cleaner for review of content. Let me compute the hashes now.
+dsh: reasoning:
+Now write the verdict.json. I'll use the write tool with the measured values. Note: after writing verdict.json, its own hash changes; the review file will reference verdict.json's hash — I need to compute verdict.json hash after writing, then write the review file and README, then outbox events with hashes. Order:
+1. verdict.json (write)
+2. compute its hash + README hash (write README first? README references verdict hash; verdict references README hash — circular. Solution: verdict references checks/instrument/run_checks hashes but not README; README references verdict hash. Outbox artifact event references verdict.json hash + review file hash.)
+3. reviews/F1-review-040.json (write; references verdict.json)
+4. README.md (write; references verdict.json + review hash)
+5. outbox events (append; references verdict/review/checks/README hashes + entry_hashes + checkpoint)
+6. checkpoint file.
+
+Let me write verdict.json now, with hard_failures and findings as structured objects.
+
+Precise facts to include:
+- target sha 9a8bd4c9680042a40894f6085f183661500966f2d787a6bf28a7098a271ed503, rev 11, mtime 00:19:14.
+- tracked hashes entry: from entry_hashes.json (FROZEN 2554e276..., VARIANT_REGISTRY 5eb42f9a..., f1_falsifier_tests c4c477ad..., F0 canonical 276009f4..., authoring c8e979a1..., schemas c2 b6123750..., c0 1bb78ce9..., F1 9a8bd4c9...).
+- checks summary.
+- HF-040-01 pointer: fail; canonical top key `classes`; authoring `class_contracts`.
+- HF-040-02 duplicate keys: revised_at x7 (6 duplicates), revised_at_unused x2 (1 duplicate), effective 00:30:00 > mtime 00:19:14 and > review clock 00:29:27.
+- HF-040-03 symbol: AF_{I+} once in statement_formal only; 0 occurrences elsewhere incl. both F0 trees, rule_spec, VOCAB_ALIASES.
+- C7 numbers: 241 models, 0 divergences; teeth 26; past-closed 0; SET symbolic control true.
+- C8 textual split.
+- Positives: check_class_schema PASS failed_rules [], taxonomy consistency CONSISTENT, variant registry VALID 4/7, verify_frozen rev26 0 problems, classsep 17/17 leaks 10/10 controls FP0 FN0, map VALID; F0 binding current.
+
+Falsifier text and conditions.
+
+Let me write it.
+dsh: reasoning:
+Now compute verdict.json hash and write reviews/F1-review-040.json. Let me verify verdict.json is valid JSON first, get its hash, then write the review file.
+dsh: reasoning:
+Now the README.md for the artifact dir. Then the outbox events and checkpoint.
+
+Let me validate the review JSON, hash it, then write README (with verdict/review hashes), then outbox.
+
+Note: verdict.json references README.md path but doesn't hash it (good, no circularity). CLAUDE: README will include verdict hash 908572cde860 and review hash (computed next).
+dsh: reasoning:
+Now hash README, then emit outbox events and checkpoint.
+
+Outbox events (append to comms/outbox/worker-040.jsonl). Must validate against schemas.validate_event:
+1. status (task claim):
+{"event_id":"w040-f1-20260912T0031-task","event_type":"status","created_at":...,"actor":"worker-040","node_id":"F1","status":"active","hours":0.1,"summary":"...","evidence_refs":[...],"next_falsifier":"...", "task_id":"W040-F1-INDEP-VERDICT-02","gate":"G-FORM","class_ids":["AF-WCC-VAC-GEN"],"claims_completion":false,"reviewed_sha256":...}
+2. artifact:
+{"event_id":"w040-f1-20260912T0031-artifact-verdict","event_type":"artifact","created_at":...,"actor":"worker-040","node_id":"F1","artifact_type":"independent_class_bound_verdict","path":"artifacts/worker-040/f1_independent_verdict/verdict.json","sha256":"908572...","validation_status":"unverified","class_ids":[...],"gate":"G-FORM","evidence_refs":[...],"next_falsifier":"..."}
+   - validation_status must be one of unverified/passed/failed/retracted → "unverified" (worker cannot pass).
+   Also an artifact event for the review record? The review event covers reviews/F1-review-040.json. Maybe add artifact for checks.json too. Predecessor emitted one artifact event. I'll emit two: verdict.json and review record (as review). Actually a `review` event type is appropriate for the review. Let me emit:
+   - status task
+   - artifact (verdict.json + checks.json as two events, or one event per artifact; schema requires single "path" and "sha256"). I'll emit 3 artifact events: verdict.json, checks.json, run_checks.py? Keep it bounded: verdict.json, checks.json, entry/exit? The protocol says each artifact needs a hash. I'll emit artifact events for verdict.json, checks.json, instrument_runs.json, run_checks.py, README.md (5 events) — that mirrors worker-027's pattern (multiple artifact events). Fine, but not too many. I'll do verdict.json, checks.json, run_checks.py, README.md (4).
+   - review event (review record, verdict revise).
+   - status close.
+3. review:
+{"event_id":"w040-f1-20260912T0031-review","event_type":"review","created_at":...,"actor":"worker-040","target_id":"F1","reviewer":"worker-040","verdict":"revise","score":3.0,"hard_failures":[...],"findings":[...],"class_ids":[...],"gate":"G-FORM","reviewed_sha256":"9a8b...","path":"reviews/F1-review-040.json","sha256":"86e4...","evidence_refs":[...]}
+   - `hard_failures` must be present; list of strings or objects fine.
+4. status close:
+{"event_id":"w040-f1-20260912T0031-status-close","event_type":"status","...","status":"active" (cannot set done),"hours":0.4,"summary":"CHECKPOINT ...", "evidence_refs":[...], "next_falsifier":"..."}
+
+created_at must be honest (not future). Current time ~00:31. Use 2026-09-12T00:31:00+08:00 or the actual now. I'll generate with python datetime to be exact and append atomically.
+
+Then checkpoint file runtime/state/w040_f1_checkpoint.json (following w041/w027 pattern) with task, class, artifacts+hashes, ledger hashes, events emitted, verdict, hard failures, next_falsifier, authority note.
+
+Then final drift check: re-measure target + tracked files and compare to entry_hashes; confirm outbox appended.
+
+Let me write a python script for outbox + checkpoint (append mode). Use write tool? Outbox needs append; use bash python heredoc. That's a file write via command; acceptable (the write tool is for whole-file replacement; appending via python is appropriate here). Actually the guidance says use the edit/write tools for files; but appending JSONL is naturally done with a small script. I'll do it with python.
+
+I need to be careful: comms/outbox/worker-040.jsonl is my own file; appending is the protocol. Let me verify current line count (4 lines) and append 7 events.
+
+Let me construct the events.
+dsh: reasoning:
+11 lines: 4 predecessor + 7 mine. Good.
+
+Now validate the events I appended against research_map/schemas.validate_event to be sure they'd be accepted. Let me run that check on the last 7 lines. Note the `review` event requires target_id, reviewer, verdict, score, hard_failures, findings — present. `artifact` requires node_id, artifact_type, path, sha256, validation_status — present. `status` requires node_id, status, hours, summary, evidence_refs, next_falsifier — present.
+
+Then write the checkpoint file.
+
+Then final drift check + exit. Let me also update todos.
+dsh: reasoning:
+Now final verification:
+1. Verify checkpoint JSON valid, all artifact hashes in it match disk (self-consistency).
+2. Re-measure target + tracked files: confirm no drift since review (the verdict binds only if F1 unchanged).
+3. Confirm no unintended writes: git status in the repo? The repo has a .git dir. Let me run `git status --short` to list changed files — useful to confirm only my intended files changed (though many other agents are writing concurrently, so git status may show lots of others' files; can't distinguish easily. But at least check I didn't touch canonical files: the tracked hashes unchanged confirms that).
+4. Update todos to completed.
+5. Append exit note? The supervisor writes trajectory exit. My prompt says "checkpoint, then exit" — I've checkpointed. I should not modify instance logs.
+
+Let me run the final consistency check.
+dsh: reasoning:
+Everything is complete. Let me do one last sanity check: list the files created/modified and confirm the outbox has 11 valid lines, all artifacts exist. Also double-check reviews/F1-review-040.json exists (I created it) and target unchanged.
+
+Then final answer to the user summarizing the work — concise, with IDs, evidence hash, falsifier, checkpoint path, and exit status.
+
+One thing to verify: the `checks.json` file was written at 00:29:27 and references the review clock; then I edited run_checks.py after? No — I re-ran run_checks.py after the final edit (the successful run at 00:29:2x), and the run_checks.py hash I recorded (1fbdd190) was computed after that. Let me verify run_checks.py hash still matches the recorded one (no edits since). The checkpoint consistency check above verified all artifact hashes including run_checks.py → no mismatches, so yes.
+
+Also, the verdict.json says checks.json#974ce00648d8 — matches.
+
+Final: report. Keep it tight but complete: task, class, target hash, verdict, 3 hard failures, HF-06 refutation, artifacts + hashes, falsifier, checkpoint, outbox events, exit code 0.

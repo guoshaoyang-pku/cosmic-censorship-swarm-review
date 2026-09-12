@@ -1,0 +1,870 @@
+dsh: reasoning:
+I need to understand the context first. The user says: "You are a bounded execution worker. Read handoff/map and comms. Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit. worker=012"
+
+Let me explore the workspace to find handoff/map and comms.
+dsh: reasoning:
+The user wants me to read handoff/map and comms. There's a `workdir` directory and a `launch_swarm.sh`, `supervise_swarm.sh` etc. Let me look for "handoff" and "comms" directories.
+dsh: reasoning:
+Found the swarm root: /data3/guoshaoyang/workdir/ai4math-swarm. I'm worker 012. I need to read handoff/map and comms, take one class-bound task, emit valid JSON with IDs, evidence, hash, falsifier, checkpoint, then exit.
+
+Let me explore that directory.
+dsh: reasoning:
+I'm worker=012. There's an inbox with deepseek-flash-12.jsonl and worker-012.jsonl in outbox. Let me read the handoff, protocol, and the assignment for worker 012.
+
+Let me read:
+- HANDOFF.md
+- research_map/ASTRA_HANDOFF.md
+- comms/PROTOCOL.md
+- comms/inbox/deepseek-flash-12.jsonl (probably my task assignment)
+- comms/outbox/worker-012.jsonl (my prior outputs)
+
+Let me check inbox contents first.
+dsh: reasoning:
+I have the assignment. Let me read it fully. The inbox file's tail shows the assignment card. Let me get the full file to understand precisely.
+
+Task: Revision request on accepted candidate numerics/tests/flat_wave.py (sha256 currently 743c73e4...). Add:
+1. `lock_guard(root=None)` function importing numerics.gates, returns gates.evaluate(root) fields verdict/blocking_reasons, treating production_allowed=False as blocked; FAIL CLOSED.
+2. CLI flag `--lock-guard` that prints guard JSON and exits 0 iff guard is correct for current map state (blocked while locked; allowed only if gates actually pass).
+3. Gate `G11_n1_lock_guard` in run_all() requiring guard report blocked AND numerics/spherical_solver/ absent.
+4. Update provenance.assignment to real assignment id.
+Keep existing 10 gates passing. Do not create numerics/spherical_solver/. Re-run --all and --lock-guard, report stdout + new sha256 in an artifact event.
+
+Acceptance: `python3 numerics/tests/flat_wave.py --all` exits 0 with G11 gate added; `--lock-guard` exits 0 and prints verdict N1_BLOCKED while numerics_lock.state == 'locked'; no numerics/spherical_solver/ directory exists.
+
+Stop rule: Stop after one revision; report artifact event with new sha256 and --lock-guard stdout.
+
+I need to:
+1. Read the full assignment card in inbox/deepseek-flash-12.jsonl.
+2. Read HANDOFF.md and ASTRA_HANDOFF.md (map).
+3. Look at numerics/tests/flat_wave.py, numerics/gates.py, numerics/CONVERGENCE_PROTOCOL.md, artifacts/numerics/reviews.jsonl.
+4. Read the event schema (comms/events.schema.json) and figure out where to write outbox. Protocol says agent ids deepseek-flash-01…20, but outbox has worker-012.jsonl (empty? or nonexistent). Actually `wc -l` didn't show worker-012 in the tail listing. Let me check.
+
+Note the outbox listing earlier showed `worker-012.jsonl` exists in the outbox directory listing? Actually that listing was of inbox (comms/inbox) — the files listed astra.jsonl, deepseek-flash-01..20, flash-08, worker-012.jsonl etc. Wait, the `ls` output was for comms/inbox? Let me re-check: I ran `ls /data3/guoshaoyang/workdir/ai4math-swarm/comms/inbox` — yes, the second block listing astra.jsonl ... worker-16.jsonl is inbox. So the inbox has worker-012.jsonl too.
+
+And my tail of outbox/worker-012.jsonl failed (exit 1 = file doesn't exist). So I need to create/append to `comms/outbox/deepseek-flash-12.jsonl` (the canonical agent id per PROTOCOL). But other workers write to worker-NNN.jsonl too. The ingested stream might map by filename. Let me check comms.py to understand which filename is expected. The protocol says agent ids deepseek-flash-01..20, upward path comms/outbox/<agent>.jsonl. So I should write to comms/outbox/deepseek-flash-12.jsonl. But maybe the runtime harness expects worker-012.jsonl. Let me look at astra_lifecycle / comms.py ingest logic.
+
+Let me now read the relevant files. Start with the full assignment and handoff docs.
+dsh: reasoning:
+The HANDOFF.md is the general project handoff (about the swarm in general), not the cosmic censorship one. The research_map/ASTRA_HANDOFF.md is probably the relevant one for this swarm. Let me read that and the ARCHITECTURE.md.
+
+Also I need to check outbox/deepseek-flash-12.jsonl (109KB) — that's probably my prior events. Let me tail it and look at the last few events, to know what has been done.
+
+But first, key: the task assignment says revision request on accepted candidate numerics/tests/flat_wave.py. Let me look at the file, numerics/gates.py, CONVERGENCE_PROTOCOL.md.
+
+Let me read those.
+dsh: reasoning:
+Interesting: flat_wave.py currently has sha256 8b52014dac47..., which matches the N0 declared hash 8b52014dac47 mentioned in the handoff. The task says "sha256 currently 743c73e4..." — that seems to be outdated (the 23:22 revision). Actually wait: the handoff says N0 `8b52014dac47`. The assignment card says "Revision request on the accepted candidate numerics/tests/flat_wave.py (sha256 currently 743c73e4...)". The revision may already have been done? Let me check whether flat_wave.py already has lock_guard, --lock-guard, G11. Maybe worker-12 already did the revision partially, or another worker did. Let me inspect flat_wave.py.
+
+Note: the lead-numerics assignment is addressed to deepseek-flash-12 with event_id lnum-rev-20260911T2333-N0-12, created 23:31. The file mtime is 23:35 and sha is 8b52014dac47. So possibly another worker (worker-12 itself in a previous session) already did it at 23:35? Let me check the file content for lock_guard / G11, and check outbox/deepseek-flash-12.jsonl for events after 23:31.
+
+Let me read the file.
+dsh: reasoning:
+So the flat_wave.py already includes lock_guard, --lock-guard, G11_n1_lock_guard, and provenance assignment. The current sha 8b52014dac47 matches the declared N0 hash mentioned in ASTRA_HANDOFF. So the requested revision appears already done — likely by a previous worker-12 session at 23:35. The assignment card I found might be stale (issued 23:31, done at 23:35).
+
+Wait — the current task prompt says: "You are a bounded execution worker. Read handoff/map and comms. Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit. worker=012". So I'm to do a bounded task and exit. The obvious task is the most recent open assignment to deepseek-flash-12 (i.e., lnum-rev-20260911T2333-N0-12). But it may already be complete. I need to verify whether the acceptance criteria pass, and then emit the artifact event with stdout + new sha256 in comms/outbox/deepseek-flash-12.jsonl if not already emitted.
+
+Let me check outbox events around 23:31-23:50 for the revision artifact event, to see if it was already reported. Let me look at all 63 events with timestamps and types.
+
+Also, note that the last events (00:50) show worker-012 doing C3 discharge work — the prior session of this worker was doing other things. So this worker identity has been running multiple tasks. The "take one class-bound task" instruction: I should pick up the open assignment and complete it verifiably.
+
+First, let me check the assignment status in the map: does research_map.json record assignment lnum-rev-... as open or done? And check the outbox for the artifact event with the flat_wave.py sha 8b52014dac47.
+
+Let me scan the outbox events around that time.
+dsh: reasoning:
+So event 17 at 23:36:31 already emitted artifact flash-12-n0-artifact-0006 for numerics/tests/flat_wave.py sha=8b52014dac47. That appears to be the completion of the lnum-rev assignment. But the latest task instruction says to take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit.
+
+Let me check whether the revision request lnum-rev-20260911T2333-N0-12 is registered in the map as an assignment and its status. Also check the map for assignments to deepseek-flash-12 and any open ones.
+
+Let me query research_map.json. It's 3.8MB. Use python to inspect.
+dsh: reasoning:
+Hmm, lnum-rev-20260911T2333-N0-12 isn't in the map's assignments list (it may have been ingested but perhaps not applied, or applied under a different key). Let me search the map JSON text for that event id and check the events.jsonl. Also check gate_proposals for G11.
+
+But more important: determine what the right bounded task is. The instruction: "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit." Given the assignment card in inbox is the latest downward assignment to me (lnum-rev-...), and the artifact revision appears done and reported at 23:36, my job may be to confirm/verify and emit the completion event with evidence, or to take another open task.
+
+Wait — let me look more carefully. The acceptance for lnum-rev requires:
+1. lock_guard function ✓ (line 422)
+2. --lock-guard flag ✓ (line 594-606)
+3. G11 in run_all ✓ (line 560)
+4. provenance.assignment updated ✓ (line 483)
+5. --all exits 0, --lock-guard exits 0 prints N1_BLOCKED, no numerics/spherical_solver/.
+
+The artifact event 17 reported path numerics/tests/flat_wave.py sha 8b52014dac47. The current sha matches 8b52014dac47. So it's done. But does the file at the declared sha still pass --all and --lock-guard? Let me run it to verify the acceptance criteria independently. That's cheap and is the natural bounded verification task. But "take one class-bound task" suggests working a task, not re-verifying a completed one.
+
+Let me check the latest inbox: the assignment lnum-rev-20260911T2333-N0-12 was created at 23:31:19 but read by worker-12 at... it was the last message in inbox. Was it processed? The outbox event 17 at 23:36:31 (sha 8b52014dac47) likely was the completion of that assignment (flat_wave.py mtime 23:35:44). Let me read the event 17 and 18 payloads to check they reference the assignment id lnum-rev.
+
+Also check whether the lead has since moved on. The ASTRA_HANDOFF says G-NUM: "C8 is MET (rev3 protocol accept 4.5) and C4 registration is repaired, so the only open item is the N0 node verdict (reviews/N0-review-lead-audit.json is revise 3.5)". The handoff mentions "lock guard present". So G-NUM's blocker is not the lock guard.
+
+Hmm. But the current context says "Take one class-bound task". Maybe there are newer assignments in the map for worker-012 (astra-life05?). Let me check the newest events in research_map/events.jsonl and inbox files for worker-012/deepseek-flash-12. Also check whether a newer lifecycle pass (05) has issued assignments. ASTRA_HANDOFF mentions pass 04 at 00:38. Current time? Let me check date.
+
+Also, the outbox shows worker-12 last events at 00:50 (C3 discharge). Then at 00:50-00:51 the map was updated. Current time is probably ~00:55. Let me check `date`.
+
+Let me inspect:
+- date
+- latest events in map / events.jsonl
+- any assignment in map with status open and assignee deepseek-flash-12
+- tail of inbox files (including worker-012.jsonl?)
+- runtime/state/current_checkpoint.json
+
+Let me also check if there's an incomplete task that worker-12 started: "w012-c3-discharge" events emitted at 00:50:36 with status done. Hmm, that was a status event "done" (not authoritative).
+
+Let me gather the state.
+dsh: reasoning:
+The current open assignment for worker-012 is `audit-r2-N0-rev3` (created 2026-09-12T00:46:18), superseding `audit-r2-N0`. It's a blind independent G-NUM review of N0 at the rev3 stop-rule hashes. Deliverable: `reviews/N0-review-worker-012.json`, one review event + one checkpoint, exit. Budget 1.0 agent-hour. Deadline 03:00.
+
+That's the class-bound task. It says "class_id": "AF-WCC-SCALAR-SPH", gate G-NUM, node N0.
+
+Note: I am worker-012, and I should check whether I authored any of the reviewed artifacts. The acceptance says "BLIND independent review. You may NOT be an author of the artifact". Well, the full acceptance in the card is what matters: review numerics/results/flat_wave_convergence_rev3.json (hash da7c3607...) plus protocol. Items:
+1. stop_rule_closures.four_rungs_or_scoped, .f0_rebind, .independent_replication_verdict
+2. certification_basis.dr_values must have 4 rungs at fixed dt=1e-4 for 3 schemes
+3. class_binding pin must equal F0 rev5 0abb9ed8a961
+4. independent_replication.verdicts hash-pinned and not gate verdicts
+5. lock_guard: lock_state locked, production_allowed false, numerics/spherical_solver absent, no N1
+6. registration_state.unregistered_paths (PROTOCOL rule 2 C4 gap)
+7. review_state_at_generation contest (2 dissent revises at the protocol hash) and the withdrawn-accept guard finding. Pin every hash you cite. Revise is acceptable closure; name each open item.
+
+Falsifier: "A verdict at a stale hash, an accept that leaves a stop-rule item open, any spherical_solver file, or any N1 artifact in the reviewed evidence."
+
+Stop rule: 1 agent-hour; one verdict file + one review event + one checkpoint, then exit.
+
+Now, is there a conflict: worker-012 authored flat_wave.py? Yes — outbox event 17 shows flash-12 (me/worker 012) authored numerics/tests/flat_wave.py revision. And the C3 discharge/c4 verify work. The rev3 convergence results file — who authored it? Let me check. The assignment says "BLIND independent review. You may NOT be an author of the artifact". Hmm, but the assignment explicitly addressed to worker-012 after superseding audit-r2-N0. The audit lead assigned it to worker-012 knowingly. But item (7) asks about "review_state_at_generation contest (2 dissent revises at the protocol hash) and the withdrawn-accept guard finding". Hmm.
+
+Wait — the assignment is from astra-lead-audit to worker-012. That means the audit lead wants my review. I should be careful to be genuinely independent: I should not rubber-stamp. Since I authored flat_wave.py (which is N0's test harness), do I have a conflict? The review target is numerics/results/flat_wave_convergence_rev3.json and CONVERGENCE_PROTOCOL.md (protocol authored by lead-numerics). I authored the flat_wave.py test harness but the rev3 results may have been produced by the lead-numerics or another worker. I should disclose authorship relations in the verdict.
+
+Actually, let me check: the previous assignment audit-r2-N0 was also to worker-012 (blind independent review of N0 protocol). The superseding card says rev3 artifact now exists. So the audit lead considers worker-012 the reviewer. But wait — "You may NOT be an author of the artifact" is for the generic blind review card template; the specific acceptance for rev3 doesn't repeat it. Still, I should be transparent about which artifacts I authored and only review the target ones I didn't author... but I should not refuse: the assignment is explicit.
+
+Let me check first: did worker-012 produce numerics/results/flat_wave_convergence_rev3.json? Check file mtimes, and search events for that path. Also check reviews/N0-review-worker-012.json existence (maybe I already wrote it in a prior session? The inbox card created 00:46, and worker-12's last events at 00:50 were C3 discharge — not this review. So not yet done).
+
+Let me now:
+1. Read the full audit-r2-N0-rev3 card (inbox/worker-012.jsonl, both lines).
+2. Check state: numerics/results/flat_wave_convergence_rev3.json, protocol, reviews dir.
+3. Check whether I authored it.
+4. Plan the review.
+
+Let me read the inbox file fully.
+dsh: reasoning:
+Now I have the task: audit-r2-N0-rev3. I need to:
+1. Hash the target artifacts myself (immediately before and after reading): numerics/results/flat_wave_convergence_rev3.json (expected da7c3607...), numerics/CONVERGENCE_PROTOCOL.md (expected 1e6cdf04d7a2), numerics/protocol/n0_fixed_dt_certification.json, plus flat_wave_convergence.json, flat_wave_replication.json.
+2. Review the rev3 closure artifact against the 7 acceptance items.
+3. Check lock guard, spherical_solver absence, no N1 artifact.
+4. Write reviews/N0-review-worker-012.json.
+5. Emit one review event to my outbox. Which outbox file? The assignment was addressed to worker-012 and placed in comms/inbox/worker-012.jsonl. The protocol says comms/outbox/<agent>.jsonl with agent ids deepseek-flash-XX. But there is a comms/outbox/deepseek-flash-12.jsonl which is my outbox. For the newer "worker-012" identity, other workers write to outbox/worker-NNN.jsonl (e.g., worker-016.jsonl, worker-071.jsonl). Since the assignment is addressed to worker-012, and prior worker-12 events went to deepseek-flash-12.jsonl (older identity) — the latest events (w012-*) also went into deepseek-flash-12.jsonl. Hmm, but there's also an outbox/worker-012.jsonl? Earlier `ls outbox | grep -i -- '-12'` returned only deepseek-flash-12.jsonl. So outbox/worker-012.jsonl doesn't exist. Let me double-check: `ls comms/outbox | grep 012`. Earlier the listing of comms/outbox from the first `ls` was actually... wait, I did `ls -la comms` first, which showed inbox and outbox dirs. Then `ls comms/inbox | head -50` listed deepseek-flash-*.jsonl etc. Hmm no — my third command was `ls /data3/.../comms/inbox | head -50` and it listed astra.jsonl, deepseek-flash-01..20, flash-08, worker-012.jsonl, ..., worker-16.jsonl. So inbox has worker-012.jsonl. The outbox listing I did (`ls outbox | grep -i -- '-12'`) gave only deepseek-flash-12.jsonl — meaning outbox/worker-012.jsonl does not exist.
+
+So I should emit to comms/outbox/worker-012.jsonl (new file) per the assignment addressee convention used by other workers (worker-016.jsonl etc. exist in outbox). But my prior session wrote w012-* events to deepseek-flash-12.jsonl. Which one does the ingest read? Let me check comms.py ingest to see if it scans outbox/*.jsonl. If it scans all files, either works, but to be safe, follow assignment addressee: worker-012. Also convention in this repo: recent assignments are addressed to worker-NNN and those workers write outbox/worker-NNN.jsonl.
+
+Let me check comms.py quickly for how it maps agent and which files it reads. Also check apply_events.py for how review events are validated (required fields).
+
+Also the "checkpoint" requirement: "Write one checkpoint under runtime/state/<you>_<target>_checkpoint.json". So runtime/state/worker-012_N0_checkpoint.json or similar. The first card says runtime/state/<you>_<target>_checkpoint.json. The rev3 card says "emit one review event + one checkpoint". Let me look at prior worker checkpoints for the pattern, e.g. runtime/state/*checkpoint*.json.
+
+Let me gather evidence now. First hash the files (before reading), then read them.
+
+Targets:
+- numerics/results/flat_wave_convergence_rev3.json
+- numerics/results/flat_wave_convergence.json
+- numerics/results/flat_wave_replication.json
+- numerics/CONVERGENCE_PROTOCOL.md
+- numerics/protocol/n0_fixed_dt_certification.json
+- check numerics/spherical_solver absence, and N1 artifacts
+- artifacts/formulation/FROZEN.json (for F0 rev5 hash 0abb9ed8a961)
+- reviews/ (list; must not read other N0 verdicts before writing mine... The card says reviews/*N0* are off-limits until my file is written.) The rev3 card doesn't repeat that but it's implied by "blind". I'll avoid reading other N0 reviews until after writing my verdict.
+
+Let me also check who authored rev3: search outbox for events with path numerics/results/flat_wave_convergence_rev3.json. I can do that without reading other reviewers' verdicts — authoring info is important for the conflict-of-interest/independence statement.
+
+Let me be systematic, and write a todo list since this is multi-step.
+
+Plan:
+1. Recon: hash targets; check absence of spherical_solver; find author of rev3.
+2. Read rev3 JSON + protocol + certification + FROZEN pin; verify each acceptance item.
+3. Independent re-derivation: verify the 4 rungs/dr_values claims by recomputation? The review should check evidence, not just read JSON. Budget 1 agent-hour. Best-effort: parse rev3 JSON, verify internal consistency, check dr_values vs convergence.json/replication.json, verify class binding pin, verify lock guard fields vs map, verify registration paths exist, verify hash pins.
+4. Write reviews/N0-review-worker-012.json.
+5. Emit review event to comms/outbox/worker-012.jsonl (or deepseek-flash-12?) — decide; plus checkpoint runtime/state/worker-012_N0_checkpoint.json.
+6. Exit with summary.
+
+Let me first check the schemas: comms/events.schema.json and how ingest validates; also apply_events.py for review event required fields. And check an existing review event for exact shape (e.g. from a lead). Reading other N0 reviews is off-limits, but reading review event shapes from e.g. audits of F0 is fine? The instruction says reviews/*N0* are off-limits until my file is written. Review events about other targets are fine. But safest: read the schema + apply_events.py.
+
+Let me start.
+dsh: reasoning:
+All hashes match the assignment pins:
+- rev3: da7c3607... ✓ matches pin
+- protocol: 1e6cdf04d7a2... ✓ matches
+- flat_wave_convergence.json: e9e12422...
+- flat_wave_replication.json: 298a4d92...
+- n0_fixed_dt_certification.json: 1677822c...
+- FROZEN.json: 2f358f67...
+
+spherical_solver: ABSENT ✓
+No N1 artifacts (only selfgravity_lock_guard.py, which is a guard test, not N1 code — need to check it's not a solver).
+
+Now let me find the author of rev3 and read the artifacts. Let me search the map events for the rev3 path and check the protocol first.
+
+Let me read the protocol (CONVERGENCE_PROTOCOL.md) and the rev3 JSON. Also check apply_events.py / schemas for review event shape. Let me do this in parallel: read protocol via read tool, and dump rev3 JSON structure via python.
+
+Actually let me first check authors: grep events.jsonl for flat_wave_convergence_rev3.
+dsh: reasoning:
+Rev3 authored by astra-lead-numerics (not me). Good — I can review it as independent (though I authored flat_wave.py scheme A and the rev3 references my work; still, the target is the lead's closure artifact and protocol).
+
+Observation already: The protocol says at line 7 "hash-pinned at research_map/formulation_taxonomy.yaml#66bf917bd368" ... line 158-160 says "The F0 taxonomy pin cited in the controller run (`66bf917b…`) is superseded on disk by `565a6e50…`; the class binding stays provisional". But the assignment requires: "class_binding pin must equal F0 rev5 0abb9ed8a961". Hmm — that's a mismatch! The protocol (1e6cdf04d7a2) cites 66bf917b (provisional) and mentions 565a6e50 superseding it, but the audit assignment says the class_binding pin in the rev3 artifact must equal F0 rev5 0abb9ed8a961.
+
+Wait: ASTRA_HANDOFF says F0 declared taxonomy measured at pass end is 0abb9ed8a961 (rev5) — that's research_map/formulation_taxonomy.yaml. So the protocol's pin is stale (66bf917b), and the rev3 artifact's class_binding must be checked. The acceptance item (3) says "class_binding pin must equal F0 rev5 0abb9ed8a961". If rev3 cites an older taxonomy hash, that's an open item → revise. But maybe rev3 has the correct pin. Let me read rev3 JSON.
+
+Also note: the protocol on disk says the binding stays provisional (not load-bearing). The acceptance says pin must equal 0abb9ed8a961. Let me check FROZEN.json for the F0 rev5 pin and the formulation_taxonomy.yaml actual hash on disk.
+
+Let me now read rev3 JSON. 35KB, let me dump its top-level structure and key fields.
+dsh: reasoning:
+Rev3 artifact looks thorough. Class binding pin = 0abb9ed8a961 ✓ matches F0 rev5 on disk (my own hash of formulation_taxonomy.yaml = 0abb9ed8a961...). Good.
+
+Now I need to verify the acceptance items in detail:
+
+(1) stop_rule_closures:
+- four_rungs_or_scoped: CLOSED by fourth rung — need to verify certification_basis.dr_values has 4 rungs at fixed dt=1e-4 for 3 schemes, and that the errors are monotone with the claimed order.
+- f0_rebind: CLOSED — pin equals 0abb9ed8a961 ✓ (need to verify the artifact's class_binding.sha256 matches).
+- independent_replication_verdict: CLOSED with worker-046 and worker-057 verdicts + presumably one more. Need to check `independent_replication.verdicts` are hash-pinned and not gate verdicts.
+
+(2) certification_basis.dr_values must have 4 rungs at fixed dt=1e-4 for 3 schemes — check dr_values list, schemes dict with errors per scheme, dt=1e-4, order per scheme.
+
+(3) class_binding pin must equal F0 rev5 0abb9ed8a961 ✓ already seen.
+
+(4) independent_replication.verdicts hash-pinned and not gate verdicts — check each verdict has sha256 of its artifact and a "not a gate verdict" caveat.
+
+(5) lock_guard: lock_state locked, production_allowed false, spherical_solver absent, no N1 ✓ (absent confirmed). Need no N1 artifact in reviewed evidence.
+
+(6) registration_state.unregistered_paths (PROTOCOL rule 2 C4 gap) — inspect which 6 paths unregistered.
+
+(7) review_state_at_generation contest (2 dissent revises at protocol hash) and withdrawn-accept guard finding. Need to inspect.
+
+Additionally, the independence requirement: "You may NOT be an author of the artifact". The reviewed artifact rev3 is authored by astra-lead-numerics (generator: astra-lead-numerics). I did not author it. But I authored numerics/tests/flat_wave.py (scheme A canonical artifact). Does that disqualify me? The target for review is rev3 report + protocol. The protocol is authored by lead-numerics. I authored the scheme-A harness, which rev3 consolidates. That is a material interest but not authorship of the reviewed artifact. The audit lead assigned this to worker-012 knowing the history (the assignment even references "any N1 artifact in the reviewed evidence"). I will disclose my authorship relation in the verdict as a finding/independence disclosure: I authored numerics/tests/flat_wave.py (scheme A harness, revision 23:36) and the lock-guard revision, but not rev3, the protocol, or the certification generator. That's honest and important.
+
+Also "you may NOT read any other reviewer's verdict for this target before writing yours (reviews/*N0* are off-limits until your file is written)". There's a review_being_closed.path = reviews/N0-review-lead-audit.json inside the rev3 artifact (it's a summary pointer, not the full verdict). The rev3 artifact includes review_state_at_generation with dissent summaries — that's part of the artifact under review, which I'm required to inspect per acceptance item 7. That's allowed: I'm reading the artifact, not the reviews/*N0* files themselves. I must avoid opening reviews/N0-review-*.json files until my verdict is written.
+
+Wait, is reviews/N0-review-lead-audit.json an N0 review file? Yes. I should not read it. The artifact gives its sha256 and verdict summary. I can verify the sha256 of the file on disk without reading content! That's a good approach: hash it, check it matches, but don't read it. Though hashing requires reading bytes... The intent is blindness to other reviewers' verdicts. Hashing it to verify the pin is legitimate and doesn't reveal the verdict. I'll hash without displaying content.
+
+Let me now dig into the details with a python analysis script that verifies internal consistency. Key checks:
+
+A. certification_basis:
+- dr_values: list of 4
+- dt == 1e-4
+- rungs_per_scheme == 4
+- schemes: 3 schemes, each with errors and orders. Compute order from errors to verify fitted order claims. Verify monotone errors.
+- frozen_module details.
+- supersedes_evidence_basis.
+
+B. order_claim: p_by_scheme, delta_R5_by_scheme, max_cross_scheme_abs_dp, statement. Verify within tolerance |p-2|<=0.3 and cross-scheme agreement per R5.
+
+C. independent_replication.verdicts: 3 entries — check each has sha256 of artifact, actor, verdict, and "not gate verdict" language.
+
+D. lock_guard: verdict N1_BLOCKED, lock_state locked, production_allowed False, blocking_reasons.
+
+E. registration_state: unregistered_paths list of 6, registry_generated_paths. Check whether any of the reviewed evidence is unregistered — that's the PROTOCOL rule 2 C4 gap.
+
+F. review_state_at_generation: contest True, accepting_reviews (3), dissenting_reviews (2) — verify the pins (protocol sha256 1e6cdf04 ✓). guard_finding.
+
+G. internal_checks: 58 checks all pass, failures [].
+
+H. Rehash every pin cited in the artifact: protocol_sha256, certification sha256, generator_script_sha256, class_binding sha256, temporal_control sha256, registration source. Also `artifact` = numerics/tests/flat_wave.py — check hash recorded somewhere.
+
+Let me write a verification script that does all of that and prints a compact report. Also I should cross-check the certification JSON directly (n0_fixed_dt_certification.json) against rev3's certification_basis: are the dr_values/errors the same? And is the certification JSON produced by the frozen module?
+
+Also independent re-derivation: can I recompute orders from the raw errors? Yes, from rev3's embedded rows or from n0_fixed_dt_certification.json. Also maybe rerun the certification generator? The generator is numerics/protocol/n0_fixed_dt_certification.py? Let me check what files exist in numerics/protocol/. Budget is 1 agent-hour; a quick rerun of the 4-rung certification could be strong evidence but may be expensive. Let me first inspect sizes and the frozen module.
+
+Let me look at the rev3 JSON in detail. I'll dump the relevant sections.
+dsh: reasoning:
+Good. Now let me independently recompute the fits from l2_error_by_dr and verify:
+- pair orders
+- least-squares fit and SE
+- delta_R5 = max(pair_spread_half_range, ls_se)
+- within band
+- cross-scheme max |dp| and R5 agreement
+
+Then check `rungs` sub-block, independent_replication.verdicts, lock_guard, registration_state, review_state_at_generation, internal_checks, and cross-check certification JSON.
+
+Let me write a thorough verification script.
+dsh: reasoning:
+Recomputation matches exactly. Now check the first replication verdict (worker-046) and the remaining sections: lock_guard, registration_state, review_state_at_generation, internal_checks, claims_not_made, falsifiers, supporting_diagnostics, temporal_control.
+
+Also verify the pins on disk:
+- n0_fixed_dt_certification.json sha 1677822c... ✓ (matches)
+- flat_wave_replication.py sha 8ade1cdc163ea420... — verify on disk
+- replication frozen_module_sha256 81bf38a4... — check what file that is
+- generator_script sha 87f0c6f2... — verify on disk
+- temporal_control sha 334f5b71... — verify on disk
+- class_binding 0abb9ed8... ✓
+- protocol 1e6cdf04... ✓
+- review files pins: reviews/N0-review-lead-audit.json e3c314f8..., worker-046 artifact, worker-057 artifact b9064458..., worker-081 artifact 65ae766d..., lead-audit protocol review artifact (review_state_at_generation) etc.
+- registration source runtime/state/artifact_hashes.json.
+- artifact numerics/tests/flat_wave.py — what hash does rev3 cite? It's just a path in 'artifact' field; maybe inside certification_basis or internal checks.
+
+Let me dump those sections and cross-check hashes on disk. Also examine registration_state.unregistered_paths list of 6 and registry_generated_paths dict[11].
+dsh: reasoning:
+Very thorough. Note two things I should check carefully:
+
+1. The `independent_replication.verdicts[0]` (worker-046) hash-pin: it cites `frozen_module_sha256: 81bf38a4...` but the certification_basis frozen_module sha is `8ade1cdc...` for numerics/tests/flat_wave_replication.py. Hmm, worker-046's verdict says frozen_module_sha256 81bf38a4... Which file is that? It might be a different frozen module (the "frozen_module" in worker-046's own harness). Need to check. Potential inconsistency, but likely a different artifact (the frozen replication harness snapshot worker-046 used).
+
+2. The registration_state shows 6 unregistered paths including CONVERGENCE_PROTOCOL.md, numerics/gates.py, worker-046/057/081 artifacts, flat_wave_convergence.json. That's the C4 gap (PROTOCOL rule 2: a node done only when artifact carries sha256 in runtime/state/artifact_hashes.json). The rev3 artifact records it as a gap for the controller. Good — the assignment asks to check registration_state.unregistered_paths.
+
+3. lock_guard.blocking_reasons says protocol is contested at current hash by two revise verdicts (worker-067, worker-081). Wait — the review_state_at_generation says accepting_reviews include w081-20260912T0042050800-adj2-review (accept), while dissenting includes w081-2026-09-12T00:29:19+0800-f1-review (revise) and w067 revise. So the guard is correct: N1_BLOCKED because G-FORM/G-AUDIT not satisfied anyway.
+
+Now let me verify all hashes on disk that the report pins, and check for any stale pins. Also check the N0 stop-rule items at the *one* hash: the certification basis.
+
+Key evidence to verify on disk:
+- numerics/protocol/n0_fixed_dt_certification.json sha == 1677822c... ✓
+- numerics/protocol/n0_fixed_dt_certification.py exists? generator
+- numerics/protocol/build_convergence_rev3.py sha == 87f0c6f2...
+- numerics/protocol/temporal_subdominance_control.json sha == 334f5b71...
+- numerics/tests/flat_wave_replication.py sha == 8ade1cdc...
+- artifacts/worker-046/n0_fixed_dt_independent/verification.json sha == 814452111bc8...
+- artifacts/worker-057/n0_fixeddt_verify/report.json sha == b9064458...
+- artifacts/worker-081/n0_c8_adjudication_rev2/adjudication.json sha == 65ae766d...
+- reviews/N0-review-lead-audit.json sha == e3c314f8... (hash only, don't read)
+- research_map/formulation_taxonomy.yaml == 0abb9ed8... ✓
+- numerics/tests/flat_wave.py == 8b52014d... ✓
+- numerics/results/flat_wave_convergence.json == e9e12422 ✓, flat_wave_replication.json == 298a4d92 ✓
+- runtime/state/artifact_hashes.json — check registration entries for the C4 gap claims.
+
+Also need to check "4 rungs at fixed dt=1e-4 for 3 schemes": certification JSON rows. Let me independently load numerics/protocol/n0_fixed_dt_certification.json and recompute — this is the primary evidence (not just rev3's summary). That's the strongest independent check: the certification file, generated by the frozen module at fixed dt.
+
+Let me look at its structure and recompute orders, verify dt values, monotonicity, and the claim that 4 rungs exist per scheme.
+
+Also check temporal control and the constant-CFL supersession rationale.
+
+Let me run the cross-check script.
+dsh: reasoning:
+All pinned files match on disk. Registration entries: the search found keys (path as key) but my extraction was wrong; let me inspect artifact_hashes.json structure properly to confirm which paths are registered (the rev3 claims 6 unregistered). Note worker-046/057/081 artifacts have 0 entries → consistent with unregistered claims.
+
+Let me inspect registration more carefully, then check the certification JSON rows independently.
+
+Also check the greps:
+- Does numerics/spherical_solver exist? ABSENT ✓
+- N1 artifacts: search for files/events naming N1 solver. The selfgravity_lock_guard.py is a guard. Check whether any events claim N1 production.
+- Check that no *reviewed evidence* includes an N1 artifact. The reviewed evidence is rev3 + protocol + cert + FROZEN + replication verdicts. None appear to be N1.
+
+Next: certification JSON recompute. Let me inspect its structure.
+dsh: reasoning:
+The certification file is the real source. Let me recompute from raw rows in the certification file for fixed_dt_certification rows: 4 rungs per scheme, dt=1e-4 all, monotone, fit order, delta, within band, cross-scheme. That is the strongest independent check, entirely from the raw rows.
+
+Let me do that now. Also check config.dt_fixed=1e-4 and dr_values.
+dsh: reasoning:
+Excellent. All certification claims recompute exactly. Now let's verify remaining items:
+
+1. The stop-rule item 1: "a fourth resolution rung OR explicit 3-level scoping" — CLOSED by fourth rung. Verified: 4 rungs at fixed dt for 3 schemes. ✓
+
+2. Stop-rule item 2: class binding re-bound to F0 rev5 0abb9ed8a961 — verified on disk and in artifact. But note: protocol text still cites stale pin 66bf917b in the preamble. The rev3 records it as not load-bearing and a blocker. The acceptance says "class_binding pin must equal F0 rev5 0abb9ed8a961" — the rev3's class_binding.sha256 does. Is the protocol's stale citation an open stop-rule item? The stop rule said "re-bind the F0 revision". The artifact re-bound it; protocol preamble drift is recorded as a blocker. I should assess: is the stop-rule item closed? I'd say yes at the artifact level, with a named residual (protocol preamble stale pin + registration gap). But being strict: acceptance item (3) says "class_binding pin must equal F0 rev5 0abb9ed8a961" — satisfied in rev3. The protocol preamble citing 66bf917b is a defect recorded in the artifact itself; it's not a false claim but a stale citation. Should my verdict be accept or revise? Let me weigh all items first.
+
+3. Stop-rule item 3: one independent replication verdict of the order. Rev3 cites three: worker-046 (from-scratch replication SUPPORTED 8/8), worker-057 (independent re-analysis REPRODUCED 0 findings), worker-081 (adjudication accept). All hash-pinned. Need to verify the worker-046 artifact contents (it's independent verification) and the worker-081 adjudication. But careful: the acceptance says "You may NOT read any other reviewer's verdict for this target... reviews/*N0* are off-limits". The replication artifacts under artifacts/worker-046 etc. are not in reviews/ and are cited evidence I'm asked to verify ("independent_replication.verdicts hash-pinned and not gate verdicts"). Reading them is required for the review. I'll read them (they're not reviews/*N0* files).
+
+4. Lock guard: locked, production_allowed false, spherical_solver absent, no N1. Need to also verify numerically: gates.evaluate() should report production_allowed false and N1 blocked. Let me run the lock guard evaluation (read-only) via numerics/gates.py evaluate. That's a strong independent check.
+
+5. registration_state.unregistered_paths: verify the 6 paths genuinely unregistered in runtime/state/artifact_hashes.json. Let me inspect the registry structure properly.
+
+6. review_state_at_generation: contest with 2 dissent revises at protocol hash, withdrawn-accept guard finding. Verify from events.jsonl: w081-20260912T002140-c8-review (accept), w081-2026-09-12T00:29:19+0800-f1-review (revise), w081-20260912T0042050800-adj2-review (accept), w067 revise, audit-review-gnum-protocol-final-20260912T0027 (accept). Check that the dissenting reviews target the same protocol hash 1e6cdf04. Also verify gates.py::_protocol_review behavior claim (withdrawn accept still counted)? That's a code-reading check. Let me read gates.py relevant function.
+
+7. Check `claims_not_made` and `falsifiers` for class leakage / conclusion inflation: rev3 conclusion_type = numerical_evidence ✓; no theorem/counterexample claims. Class id AF-WCC-SCALAR-SPH ✓ (matches assignment class).
+
+Also, verify the "artifact" field numerics/tests/flat_wave.py sha is pinned: registration_state shows it registered at 8b52014dac47. Note: flat_wave.py is my own artifact (I authored the revision). The rev3 uses it as canonical artifact. I should disclose: I authored numerics/tests/flat_wave.py rev-1 (lock guard). That's not the reviewed artifact (rev3), but it's the canonical harness. Also earlier flat_wave.py drafts. I'll disclose in the verdict.
+
+One more possible issue: acceptance item (2) says "certification_basis.dr_values must have 4 rungs at fixed dt=1e-4 for 3 schemes" ✓.
+Item (4): "independent_replication.verdicts hash-pinned and not gate verdicts" — check each verdict contains explicit "no gate verdict" language and its own artifact sha; the rev3 entries: worker-046 entry — I saw claims_not_made with "no gate verdict..." ✓ and sha? The first verdict entry printed didn't show a `sha256` field at top level in the truncated output... Let me check: worker-046 entry keys. The truncated print showed claims_not_made, criteria_passed/total, frozen_module_sha256, headline... It got truncated before path/sha256 maybe. Let me print keys and sha256/path for all three verdicts.
+
+Also check that `independent_replication.caveat` exists ✓.
+
+Let me now:
+- inspect registry structure
+- print replication verdicts' pins/roles/verdicts
+- run the gate lock guard evaluation
+- inspect gates.py _protocol_review
+- verify dissent review events target protocol hash
+- check no N1 artifacts in reviewed evidence (search map events for N1/spherical_solver after lock; check artifacts dir).
+
+Let me do a batch.
+dsh: reasoning:
+All three verdict pins match disk. All have explicit "not gate verdicts" caveat? worker-057 and worker-081 don't have `claims_not_made` with "gate verdict" in that field, but the top-level `caveat` says all worker-local verdicts are not gate verdicts. Also worker-057's artifact has "advisories" and role says independent re-analysis; the top-level caveat covers it. Also the assignment item (4) says "independent_replication.verdicts hash-pinned and not gate verdicts". The rev3 top-level caveat explicitly states that. I might note that worker-057/worker-081 entries lack the per-verdict claims_not_made list, but the aggregate caveat plus the fact they are worker events suffices? Hmm, for a strict review I should check the worker-081 entry: it's an "adjudication review ... accept" — but is it a gate verdict? It says role = independent adjudication review of the protocol/evidence contest; verdict accept. The rev3 caveat says worker-local replication verdicts not gate verdicts. Fine.
+
+Actually wait: worker-081's accept is a *review* verdict (accept of the protocol), not a gate verdict. Gate verdicts belong to Astra. So the artifact correctly labels it as advisory/evidence.
+
+Now let me check the registry for unregistered paths. The registry has `hashes` (mapping path→{sha256,...}) and probably `registry` and `soft`. Rev3's registration_state says 6 unregistered: worker-046 verification, worker-057 report, worker-081 adjudication, CONVERGENCE_PROTOCOL.md, numerics/gates.py, flat_wave_convergence.json. Let me verify against registry['hashes']: which of these appear? And check the registered ones (cert, temporal, flat_wave.py, flat_wave_replication.py, taxonomy, probably reviews/N0-review-lead-audit.json).
+
+Also check the registry checked_at is 00:52, after rev3 built at 00:44. Interesting: rev3 says n0_fixed_dt_certification.json registered (match true) — registry probably has it at 00:37. And CONVERGENCE_PROTOCOL.md unregistered.
+
+Let me verify precisely.
+
+Then: read worker-046 / worker-057 / worker-081 artifact contents enough to confirm the verdicts and that they're independent (not authored by lead-numerics) — I already have rev3 summaries; reading the raw artifacts is needed for genuine review. Let me look at key fields (not full).
+
+Then run gates.evaluate and lock-guard.
+
+Then read gates.py::_protocol_review for the guard finding claim.
+
+Then verify dissent review events at protocol hash from events.jsonl.
+
+Then check no N1 artifact: search artifacts/ for N1/solver-ish; check events for spherical_solver paths.
+
+Let me proceed.
+dsh: reasoning:
+Important nuance: the rev3 artifact's `registration_state.unregistered_paths` lists 6 paths, verified true at the registry read (checked_at 00:52). But note `numerics/protocol/n0_fixed_dt_certification.json` and `temporal_subdominance_control.json` are also UNREG in my check — wait, rev3's registration_state.registry_generated_paths says cert match=true registered=true. But my direct registry lookup shows n0_fixed_dt_certification.json UNREG. Hmm! Let me look at the registry more carefully — maybe paths are stored with different keys (e.g., absolute or with leading "./"), or in `registry` / `soft` sections. The registry `hashes` dict has 11 entries. Let me print all 11 keys. The rev3 said cert registered at 1677822c; maybe the registry key is different or it was removed after 00:44 (registry checked_at 00:52 — after rev3 built at 00:44).
+
+Wait, rev3's registry_generated_paths has match=true registered=true for:
+- n0_fixed_dt_certification.json (1677822c)
+- temporal_subdominance_control.json (334f5b71)
+- numerics/tests/flat_wave.py (8b52014d)
+- and flat_wave_replication.py (8ade1cdc, truncated in output)
+
+But my check shows only flat_wave.py and formulation_taxonomy.yaml registered among my target list. So either the registry changed between 00:44 (rev3's read) and 00:52 (current), or the rev3's registry_generated_paths is wrong/stale.
+
+Let me print all registry keys and their hashes. Also check registry['registry'] and ['soft']. This could be a material finding: rev3 claims two paths are registered that are not currently in the registry, or the registry re-generated at 00:52 dropped them. Actually the registry was regenerated at 00:52 (checked_at 00:52:00). Hmm, but note the map updated_at is 00:51:24 and my current time is ~00:52-00:55.
+
+Hold on — "checked_at": "2026-09-12T00:52:00+08:00" is in the *future* relative to rev3 (00:44) but around now. The registry has 11 entries. Let me list them all.
+
+If the registry at 00:52 genuinely lacks cert and temporal control, then rev3's registration_state (measured at 00:44) may have been accurate then, and the controller rewrote the registry afterward dropping them. That's a moving-target situation, but registration_state.source says runtime/state/artifact_hashes.json. The assignment item (6) says check registration_state.unregistered_paths (PROTOCOL rule 2 C4 gap). The gap is recorded. But if rev3 claims cert registered and now it isn't, that's a drift I should report as a finding (and the falsifier "A verdict at a stale hash" concerns the reviewed artifacts; the registry is an auxiliary).
+
+Let me list the registry keys.
+dsh: reasoning:
+Confirmed: the canonical `hashes` registry (11 entries) does NOT contain n0_fixed_dt_certification.json or temporal_subdominance_control.json, though rev3's `registration_state.registry_generated_paths` claimed match=true registered=true for both. The `registry` section is a different catalog (artifacts/numerics/*). So rev3's registration_state is inaccurate on those two entries: it looked in a different section (`registry`?) and treated those as registered? Let me check: does reg['registry'] contain numerics/protocol/n0_fixed_dt_certification.json? The keys shown start with artifacts/numerics/... Let me search the whole JSON for the cert path.
+
+Actually the rev3's registration_state.source = runtime/state/artifact_hashes.json and registry_generated_paths has 11 entries (matching the 11 canonical hashes? Let's count: rev3's registry_generated_paths dict had 11 entries: worker-046, worker-057, worker-081, CONVERGENCE_PROTOCOL, gates.py, cert, temporal, convergence, flat_wave.py, flat_wave_replication.py, ... that's 10; plus maybe replication results or reviews). The registry's 11 canonical hashes are different files. Hmm.
+
+Wait — registry_generated_paths showed:
+1. artifacts/worker-046/... (unreg)
+2. artifacts/worker-057/... (unreg)
+3. artifacts/worker-081/... (unreg)
+4. numerics/CONVERGENCE_PROTOCOL.md (unreg)
+5. numerics/gates.py (unreg)
+6. numerics/protocol/n0_fixed_dt_certification.json match=true registered=true
+7. numerics/protocol/temporal_subdominance_control.json match=true registered=true
+8. numerics/results/flat_wave_convergence.json (unreg)
+9. numerics/tests/flat_wave.py match=true registered=true
+10. numerics/tests/flat_wave_replication.py match=true registered=true (truncated — need to verify)
+11. (truncated — possibly reviews/N0-review-lead-audit.json or flat_wave_convergence_rev3.json)
+
+So rev3 claims cert+temporal+replication script are registered. But the current registry hashes section only lists flat_wave.py among those. Maybe the registry had more entries at 00:44 and was *regenerated* at 00:52 by a controller step (checkpoint?) that only keeps a different set. The registry has "hashes" (11), "registry" (artifact catalog), "soft" ([]).
+
+Hmm — is it possible the rev3 read the `registry` section (which lists artifacts/numerics/*, including maybe a copy of the cert)? Let me search the full registry JSON text for "n0_fixed_dt" and "temporal_subdominance".
+
+This matters for acceptance item (6): registration_state.unregistered_paths must be checked. The rev3 lists 6 unregistered paths — all 6 verified unregistered in the canonical hashes. So the "C4 gap" claim is accurate for those 6. But rev3 also claims cert/temporal/replication registered — which, if false at current registry, is a finding (registration_state partially stale/incorrect). Let me check whether the canonical registry changed after rev3 was built: registry checked_at=00:52:00, rev3 generated_at=00:44:23. A checkpoint/audit at 00:52 regenerated it. Let me check history: runtime/state/artifact_hashes.json mtime, and whether an event at 00:52 rewrote it. The registry lists flat_wave.py at 8b52014d — that was registered at 23:36. If a regeneration at 00:52 dropped cert/temporal, that's the controller's doing, and rev3 (built 00:44) recorded them as registered (true at that time). I can check git or backups? Let me check mtime and maybe the runtime/state dir for prior versions.
+
+Let me search registry for cert/temporal and check file mtime. Also check `runtime/state/artifact_hashes.json` history via git (repo has .git). If registered at 00:37 by lead-numerics... Actually can't easily reconstruct.
+
+The key review question: acceptance item (6) is "registration_state.unregistered_paths (PROTOCOL rule 2 C4 gap)" — i.e., verify the gap list. All 6 are indeed unregistered. The registry_generated_paths match=true entries: flat_wave.py ✓ registered; flat_wave_replication.py ✗ currently unregistered; cert ✗; temporal ✗. Those three discrepancies are a genuine finding: three paths rev3 reports as registered are not in the current canonical registry (either the registry was regenerated between 00:44 and 00:52, or rev3 misread the registry).
+
+Let me check:
+- mtime of runtime/state/artifact_hashes.json
+- grep the registry JSON for those paths
+- git log/diff of the file if tracked (probably runtime is not tracked)
+- check `checked_at` semantics.
+
+This is worth investigating carefully since my verdict hinges partly on it.
+dsh: reasoning:
+The registry file was modified at 00:53:28 (just now) — it is regenerated continuously (probably by a checkpoint daemon, every second/minute). The `registry` section contains the numerics catalog entries including n0_fixed_dt_certification.json, temporal_subdominance_control.json, flat_wave_replication.py. So rev3's registration_state probably scanned `registry` section (the full catalog) rather than `hashes` (canonical node hashes). Let me check:
+
+- In registry['registry'], does numerics/protocol/n0_fixed_dt_certification.json have sha 1677822c? Let me check.
+- Does registry['registry'] contain numerics/tests/flat_wave.py, flat_wave_replication.py?
+
+If rev3's `registry_generated_paths` draws from the `registry` catalog with match=true, then "registered" means "present anywhere in artifact_hashes.json" — while PROTOCOL rule 2 specifically requires the sha256 in `runtime/state/artifact_hashes.json` (the file, not the `hashes` map). The distinction matters: rule 2 says "carries a sha256 in runtime/state/artifact_hashes.json". Both sections are in that file.
+
+Let me check the actual entries in registry['registry'] for the paths in question and their shas, and see if flat_wave_replication.py sha matches 8ade1cdc. If yes, rev3's registration claims are defensible (present in the file's `registry` catalog), while the 6 `unregistered_paths` are absent from both sections. Let me verify.
+
+Note the registry is being regenerated live by a daemon (mtime keeps changing). This is a moving target for registration_state. The reviewed artifacts themselves (rev3, protocol, cert, replication verdicts) are stable — my before/after hashing will cover the ones I read.
+
+Let me now check registry['registry'] entries.
+dsh: reasoning:
+OK so the `registry` catalog is a broad scan of files (394 entries) that includes the numerics artifacts, and the `hashes` map (11 entries) is the canonical node registry. rev3's registration_state "registered=true" for cert/temporal/flat_wave.py/flat_wave_replication.py was based on the catalog view (all in the file), while unregistered_paths are absent from the catalog entirely (the three worker artifacts — let me verify: worker-046/057/081 artifacts are ABSENT from catalog too!). So rev3's claim is internally consistent: "registered" = present anywhere in artifact_hashes.json; "unregistered_paths" = absent from it. My earlier check used only `hashes`, hence the discrepancy. Good — no finding there. But the protocol rule 2 reference is to `runtime/state/artifact_hashes.json` as a whole; the C4 gap = 6 paths absent entirely. Consistent.
+
+But hold on: is `flat_wave_convergence_rev3.json` itself registered? Yes, in catalog at da7c3607 (but not in canonical `hashes`). The rev3 built at 00:44 couldn't have known about its own registry entry at 00:44; registration_state's registry_generated_paths didn't include itself. Fine.
+
+Now, "hash_drift_paths": [] — need to verify no catalog entry contradicts disk hash for the cited paths. I verified all pins on disk directly. The catalog shows matching shas for cert/temporal/flat_wave/replication/protocol/gates/convergence/review. Good.
+
+Potential finding: the registry catalog is regenerated continuously (mtime 00:53:28), and `checked_at` says 00:52:00 — the file's meta is potentially inconsistent with its own content mtime. Minor, not relevant.
+
+Now the review_state_at_generation claim: "2 dissent revises at the protocol hash" — verified: w067 revise target protocol#1e6cdf04..., w081-f1-review revise target protocol#1e6cdf04... ✓. Accepting reviews: w081-c8-review (target G-NUM-protocol, not hash-specific), audit-review-gnum-protocol-final (target G-NUM-protocol), w081-adj2-review (target protocol#1e6cdf04). The guard finding says gates.py::_protocol_review counts the withdrawn accept w081-...-c8-review; author withdrew it in w081-...-f1-review, and later accept by same reviewer doesn't rescind. Let me verify:
+- Was w081-c8-review withdrawn? Check w081-2026-09-12T00:29:19+0800-f1-review payload for references to withdrawing the earlier c8 review.
+- Read gates.py::_protocol_review implementation to confirm counting semantics.
+
+Let me read the review events' full payloads and the gates.py function. Also run the lock guard evaluation.
+
+Then I'll compose the verdict.
+
+Let me also check the map's gates / numerics_lock at the current hash to confirm lock_state and production_allowed = false via gates.evaluate() — that's the independent check of the guard.
+
+Let me run:
+python3 -c "import numerics.gates as g; print(json.dumps(g.evaluate()))"
+
+Look at gates.py first quickly to know the API (evaluate(root=None)).
+dsh: reasoning:
+Now the guard finding: `_protocol_review` dedups by event_id only, no supersession. It counts w081-c8-review as accept (target "G-NUM-protocol" → _targets_protocol matches; cited? reviewed_sha256=1e6cdf04 → _review_cited_hashes probably picks up reviewed_sha256; binds true if reviewed_sha256=1e6cdf04 which was the protocol at that time... but wait, at 00:21:40, was the protocol already 1e6cdf04? The rev3 protocol log says rev3 is 2026-09-12 and rev2 hash was 3345e17d. The c8 review at 00:21:40 says reviewed_sha256=1e6cdf04. Hmm, so protocol was already rev3 at 00:21? The revision log says rev3 written 2026-09-12 and the audit pin 01b20724 predates rev2. Actually the rev3 protocol may have been written at ~00:20 (before 00:22 worker-067 review). The map handoff says protocol measured 1e6cdf04 at pass end 00:38. So yes, 1e6cdf04 existed at 00:21.
+
+So w081-c8-review (accept at protocol hash 1e6cdf04) → counted as accept. Then at 00:29:19 worker-081 issued a revise at the same hash — explicitly withdrawing the earlier accept (the guard_finding claims the author withdrew it; the f1-review findings indicate "F1' major ... confirms worker-067 F1"). Does the f1-review explicitly say it withdraws the earlier accept? Let me read the full payload fields (I only printed selected keys; the "disposition" of the review may include a withdraw statement). Actually the guard_finding in rev3 states: "counts the accept w081-...-c8-review even though its author withdrew it in w081-...-f1-review". Let me check the f1-review event for a withdrawal field or mention. Let me grep the raw line for "withdraw".
+
+Then at 00:42:05, worker-081 accepts again (adj2) at the same hash → counted as accept. `_protocol_review` has no supersession rule: it keeps both the earlier accept and both dissents. So contest=true (2 dissents), reviewed=true (2 accepts) — that matches rev3's report exactly. The guard finding is a faithful description of the code behavior and the event history.
+
+Let me confirm the withdrawal mention in the raw f1-review event, and also verify _targets_protocol/PROTOCOL_REVIEW_TARGETS and PROTOCOL_REVIEW_SELF. Then run gates.evaluate() to independently check the lock guard output.
+
+Note also the worker-081 adjudication says "F1' SELF-FALSIFIER MET: 9 filed constant-dt <= 1e-3 ladders with four rungs each exist (3 at dt=1e-4 in the certification; 6 at dt=1e-3/5e-4 in temporal_subdominance_control.json)". This is evidence that the temporal confound concern was addressed. But the protocol remains contested (w067 revise + w081 f1 revise at the same hash, neither explicitly superseded by a rule). The lock_guard lists the contest as a blocking reason. Since lock is locked anyway due to G-FORM/G-AUDIT, the guard is correct.
+
+Then the question for the review verdict: accept or revise?
+
+Acceptance items:
+(1) stop_rule_closures three items: all marked CLOSED. Verified:
+   - four rungs: verified independently from raw certification rows (4 rungs, dt=1e-4, 3 schemes, recomputed fits match).
+   - f0_rebind: verified class_binding.sha256 equals on-disk F0 rev5 0abb9ed8a961. Residual: protocol preamble still cites stale 66bf917b/565a6e50, disclosed in class_binding.note and recorded as a blocker. Is that an "open stop-rule item"? The stop rule (from reviews/N0-review-lead-audit.json per rev3 summary): "add a 4th resolution, re-bind the F0 revision, and obtain one independent replication verdict". Re-bind done in the artifact. The protocol text wasn't rewritten due to hash-binding constraints (rewriting would invalidate review verdicts). The rev3 explicitly names it. I'd call the stop-rule item closed in the closure artifact, with a named residual drift recorded as a blocker. But hmm — item (3) of the acceptance says "class_binding pin must equal F0 rev5 0abb9ed8a961" — yes it does.
+   - independent replication verdict: 3 verdicts, hash-pinned, verified on disk. At least one independent replication verdict of the order: worker-046 from-scratch re-execution, 8/8 criteria, SUPPORTED. ✓
+
+(2) certification_basis.dr_values 4 rungs at fixed dt=1e-4 for 3 schemes: verified from raw rows ✓.
+
+(3) class binding pin: ✓.
+
+(4) independent_replication.verdicts hash-pinned and not gate verdicts: pins match disk; caveat present. worker-057/worker-081 entries lack per-entry claims_not_made, but aggregate caveat covers; worker-081's entry is a review accept (advisory), and the rev3 top-level caveat says not gate verdicts. I could note as a minor finding: per-verdict "not a gate verdict" language is present only for worker-046; aggregate caveat covers all. Not a hard failure.
+
+(5) lock_guard: lock_state locked ✓, production_allowed false ✓, spherical_solver absent ✓, no N1 ✓. Need to also independently run gates.evaluate() to confirm the guard's live output matches. Let me do that.
+
+(6) registration_state.unregistered_paths: 6 paths, all absent from artifact_hashes.json (both catalog and hashes), so accurate. But note the rev3's "registered" determination for 4 paths used the broader catalog; the 4 are present in the catalog with matching sha. The C4 gap: PROTOCOL rule 2 requires registration in runtime/state/artifact_hashes.json; 6 reviewed paths are absent. This is a genuine open item for the controller — but is it an open *stop-rule* item? No; stop rule was 4th rung + F0 rebind + replication verdict. The registration gap is a node-completion requirement (rule 2), not part of the N0 stop rule. The rev3 records it; my verdict should name it as an open item that blocks *node completion* (N0 status=done), not the stop-rule closure. Since the acceptance says "Revise is acceptable closure; name each open item", I need to decide accept vs revise.
+
+Potential genuine defects found so far:
+a) Protocol preamble stale F0 pin 66bf917b (disclosed, non-load-bearing, recorded as blocker). If I accept, I should name it.
+b) The withdrawn-accept guard finding: gates.py counts a withdrawn accept with no supersession rule; needs controller adjudication. Disclosed in rev3.
+c) registration C4 gap for 6 paths (including the protocol itself, gates.py, and the three replication/adjudication artifacts). Disclosed, controller step needed. This means N0 cannot be marked done yet under rule 2.
+d) The protocol's certification-basis clause §3.2 references `numerics/tests/n0_order_4rung.json` (the constant-CFL addendum) as the replication order claim carrier while rev3 supersedes that with fixed-dt cert. In §3.2 line 54: "(Revision 3 closes audit finding C2: the A0 rubric's G-NUM criterion requires >= 4 resolutions, and the replication order claim is carried at four rungs in `numerics/tests/n0_order_4rung.json`.)" But rev3's certification_basis.supersedes_evidence_basis says the constant-CFL ladder is *not* the certification basis and is relabelled as mixed-order corroborating control. So the protocol text §3.2 still names n0_order_4rung.json (constant-CFL) as carrying the replication order claim, which rev3 explicitly supersedes. §3.8/§6(e) similarly say "The controller's 3-rung replication run is supporting evidence; the certified fit is the 4-rung addendum numerics/tests/n0_order_4rung.json". Is n0_order_4rung.json constant-CFL? From the supersedes_evidence_basis: "constant_cfl_ladder: numerics/tests/n0_order_4rung.json#c88146a1375c50f0". Yes! The protocol text (rev3) points the order-certification claim at the constant-CFL 4-rung addendum, while rev3 (the closure artifact) certifies with fixed-dt 4-rung and demotes the constant-CFL ladder to a corroborating diagnostic. That is a real textual inconsistency between the protocol of record (1e6cdf04) and the closure artifact. The rev3 artifact's certification_basis.protocol_clause says "rev 3 section 3 item 2 (>= 4 rungs ...) and item 4 (spatial order at fixed small dt = 1e-4)", and §3.2 does say >=4; but the parenthetical in §3.2 names n0_order_4rung.json as *the* carrier of the replication order claim. So the protocol's §3.2/§3.8/§6(e) references to n0_order_4rung.json as the certified fit are stale relative to the rev3 certification basis.
+
+Is that an open item? The rev3 class_binding.note says the protocol preamble stale pins are not load-bearing; but this is a different drift (evidence-basis pointer), not mentioned in rev3. Hmm, actually §6(e) says "the certified fit is the 4-rung addendum numerics/tests/n0_order_4rung.json, which extends the frozen run without editing it" — that's the constant-CFL evidence. Rev3 says constant-CFL is NOT the certification basis. So protocol text and rev3 conflict on what carries the certified fit.
+
+The acceptance item (2) explicitly requires "certification_basis.dr_values must have 4 rungs at fixed dt=1e-4 for 3 schemes" — rev3 satisfies. And item (1) says check stop_rule_closures.four_rungs_or_scoped — rev3 says "CLOSED by a fourth rung, not by scoping: the certification basis has four rungs per scheme at fixed dt = 1e-4 for three schemes." Consistent with the artifact.
+
+So does the protocol-text mismatch make the closure "revise"? The rev3's own review_state_at_generation notes the protocol is contested at the current hash by 2 revise verdicts (which concern the temporal confound — now discharged per worker-081 adj2, but no supersession rule). Rev3 also names the withdrawn-accept guard finding. The lock_guard.blocking_reasons include the contest. So rev3 is honest: it does not claim the protocol is uncontested.
+
+Given the acceptance says "Revise is acceptable closure; name each open item", and there are genuinely open items that are *disclosed but unresolved*:
+- protocol text still points at constant-CFL addendum as the certified fit (§3.2/§3.8/§6e) while rev3 certifies fixed-dt (potential contradiction, unless §3.2's parenthetical is read as historical).
+- protocol preamble stale F0 pins (disclosed).
+- withdrawn-accept guard counting (needs controller adjudication; disclosed).
+- C4 registration gap (6 paths; disclosed).
+- N0 node completion requires registration + review verdicts, and G-NUM gate is pending: not claimed by rev3.
+
+The acceptance says accept only if... hmm, the *rev3 card* acceptance doesn't have an explicit "accept only if" (the audit-r2-N0 card did: "Accept only if every stop-rule item is closed at one hash; otherwise revise and name the open item"). The rev3 card says: "Revise is acceptable closure; name each open item." That suggests the expected outcome is either accept (if items closed) or revise (naming open items). Given the stop-rule items ARE closed at one hash (cert hash 1677822c, class binding 0abb9ed8; replication verdicts pinned), and the residual issues are disclosed and mostly controller-side, I lean... Let me think about what's most accurate.
+
+My role: independent blind reviewer. The falsifier for my verdict: "A verdict at a stale hash, an accept that leaves a stop-rule item open, any spherical_solver file, or any N1 artifact in the reviewed evidence." The danger for an accept is "an accept that leaves a stop-rule item open". Are any of the three stop-rule items open?
+
+Stop-rule item 1: fourth resolution rung. Closed — verified independently (4 rungs fixed dt, 3 schemes).
+Stop-rule item 2: re-bind the F0 revision. The rev3 class_binding is bound to F0 rev5 0abb9ed8a961 verified. But the *protocol of record* still carries the stale pin in its preamble. The stop rule said "re-bind the F0 revision" — as a closure artifact, rev3 re-binds it; the protocol preamble drift is named as a blocker. I'd call it closed with a named residual, not open. However, a strict reader could say the re-bind isn't complete until the protocol text stops citing the stale pin — but rewriting the protocol invalidates the hash-bound verdicts, which is why they didn't. That's a defensible engineering trade-off, explicitly recorded. So: closed-with-residual.
+Stop-rule item 3: one independent replication verdict. Closed — three, hash-pinned, verified on disk (worker-046 from-scratch SUPPORTED 8/8).
+
+So no stop-rule item is open. The other acceptance items (2)-(7) all check out, with disclosures. Therefore an accept is defensible — but with named open items that block *node completion* (not the stop-rule closure):
+- C4 registration gap for 6 paths (rule 2): N0 cannot be `done`.
+- withdrawn-accept guard semantics: controller adjudication needed; contest remains flagged in the guard (correctly fail-closed).
+- protocol §3.2/§3.8/§6(e) still point at n0_order_4rung.json as the certified fit while the certification basis is fixed-dt; needs a protocol revision (which will re-pin and invalidate verdicts) or an explicit erratum; the rev3 notes the preamble pins but not this evidence-basis pointer.
+- F0 protocol preamble stale pin 66bf917b/565a6e50 (disclosed).
+
+Hmm. Wait. Is the §3.2 pointer really wrong? Let me re-read: §3.2: "(Revision 3 closes audit finding C2: the A0 rubric's G-NUM criterion requires >= 4 resolutions, and the replication order claim is carried at four rungs in `numerics/tests/n0_order_4rung.json`.)" — At the time rev3 was written, the 4-rung evidence was n0_order_4rung.json. Then the certification basis was rebuilt at fixed dt (cert built 00:37, rev3 closure built 00:44). The protocol was last written before that? The protocol file mtime? Let me check. If protocol mtime is before the certification, then the protocol's pointer is simply older than the new cert; rev3's supersedes_evidence_basis explains the substitution. The protocol clause cited in certification_basis says "rev 3 section 3 item 2 (>= 4 rungs ...) and item 4 (spatial order at fixed small dt = 1e-4)" — §3.4 (item 4) does define fixed dt. So the cert follows §3.4. The protocol text naming n0_order_4rung.json in §3.2/§3.8/§6(e) as the carrier of the replication order claim is inconsistent with the new certification basis; it's a stale pointer that should be flagged. The rev3 artifact... let me check whether it mentions this. The `certification_basis.protocol_clause` and `supersedes_evidence_basis` cover it: supersedes_evidence_basis.constant_cfl_ladder = n0_order_4rung.json#c88146a1375c50f0, reason = cfl=0.5 confound, relabelled_as = mixed-order corroborating control (NOT a spatial claim). So rev3 does explicitly supersede the protocol's pointer. But the protocol text itself still says the certified fit is n0_order_4rung.json. Since the protocol is hash-frozen and the reviewers bound verdicts to 1e6cdf04, the correct move is exactly what rev3 did: record the supersession in the closure artifact and record a blocker. It did record supersedes_evidence_basis but did it record a *blocker* for the protocol text? Let me check rev3's blockers/claims and the lead-numerics blockers in numerics/blockers.md. Also rev3's falsifiers list. Let me look at those to see what it names.
+
+Actually, my finding (c') is that the protocol's §3.2/§3.8/§6(e) references to n0_order_4rung.json are superseded by the certification basis; rev3 documents the supersession in certification_basis.supersedes_evidence_basis. So it IS disclosed. I can name it as a residual requiring a protocol erratum/rev4 — not a reason to reject the closure. That supports an accept with named open items.
+
+Now, before deciding, let me also independently run gates.evaluate() to compare with rev3's lock_guard block, and double-check the map's numerics_lock + gates states. Also confirm no N1 artifacts anywhere (search artifacts for solver code). And verify no spherical_solver in reviewed evidence (absent). Also check the "no N1 artifact in reviewed evidence": the reviewed evidence paths are fine.
+
+Let me run gates.evaluate() (read-only). Also read its output fields.
+
+One more check: the rev3 review_being_closed cites reviews/N0-review-lead-audit.json sha e3c314f8 — verified hash matches. I must not read it. Fine.
+
+Also I should check the assignment's requirement "(5) lock_guard: lock_state locked, production_allowed false, numerics/spherical_solver absent, no N1" against rev3's lock_guard and against live gates.evaluate().
+
+Let me run it.
+dsh: reasoning:
+Live guard: N1_BLOCKED, production_allowed False. Note it changed since rev3 (00:44): more reviews landed (w067-provledger revise, w042 revise, w012-c3-review accept). The live guard is still blocked, so rev3's lock_guard verdict is not stale in the sense that matters (it's a snapshot at 00:44:23, and it says evaluated_at). The lock state field: rep.get('lock_state') is None — the evaluate() report may name it differently (maybe 'lock' or 'numerics_lock'). But rev3's lock_guard block says lock_state locked. Let me check the report's keys to see the actual lock state field, to make sure production_allowed False is indeed due to lock. blocking_reasons[0] confirms lock.
+
+Now, the lock guard requirement in my review: "lock_state locked, production_allowed false, numerics/spherical_solver absent, no N1". Rev3's embedded lock_guard: lock_state "locked" ✓, production_allowed false ✓, spherical_solver absent ✓, no N1 in evidence ✓. Live guard also blocked ✓. But wait — rev3's lock_guard.blocking_reasons differs from live (it had 2 dissents; live has 4, plus w012-c3 accept). This is expected as traffic continues; rev3's is a timestamped snapshot. I should note the snapshot's contest list is superseded by newer reviews but the verdict is unchanged (fail-closed). Not a falsifier.
+
+Interesting: w012-c3-review-0001-adjudication is in accepts — that's from my prior session (C3 discharge review). Fine.
+
+Now, the guard finding (withdrawn accept): live still counts w081-c8-review as accept despite the f1 revise. That confirms rev3's guard finding. Also the later adj2 accept. Good.
+
+Let me check the review event fields that _review_cited_hashes uses, and whether w081-f1-review explicitly withdraws the c8 accept. Let me grep the raw event for "withdraw".
+
+Also I should check `numerics/gates.py` PROTOCOL_REVIEW_TARGETS/SELF constants, quickly. And the lock field name in evaluate() output.
+
+Then compose verdict. Let me also verify the artifact `flat_wave_convergence_rev3.json` was authored by astra-lead-numerics (yes, generator) and that I didn't author it (I didn't). Also confirm I haven't read reviews/*N0* files: I only hashed reviews/N0-review-lead-audit.json. Good — I must write my verdict before reading any.
+
+One more check: the acceptance says "Pin every hash you cite." My verdict should include a `reviewed_hashes` map with all measured hashes. I'll include:
+- target: numerics/results/flat_wave_convergence_rev3.json da7c3607...
+- numerics/CONVERGENCE_PROTOCOL.md 1e6cdf04...
+- numerics/protocol/n0_fixed_dt_certification.json 1677822c...
+- numerics/tests/flat_wave_replication.py 8ade1cdc...
+- numerics/results/flat_wave_convergence.json e9e12422...
+- numerics/results/flat_wave_replication.json 298a4d92...
+- research_map/formulation_taxonomy.yaml 0abb9ed8...
+- artifacts/worker-046/.../verification.json 81445211...
+- artifacts/worker-057/.../report.json b9064458...
+- artifacts/worker-081/.../adjudication.json 65ae766d...
+- reviews/N0-review-lead-audit.json e3c314f8... (hashed only)
+- numerics/tests/flat_wave.py 8b52014d...
+- numerics/gates.py fcd1d709...
+- numerics/protocol/temporal_subdominance_control.json 334f5b71...
+- numerics/protocol/build_convergence_rev3.py 87f0c6f2...
+- runtime/state/artifact_hashes.json (moving) — hash at read time; I should measure it now and cite prefix.
+- map research_map.json sha ed28b714464e (measured) — moving; cite at read.
+
+For the review event: required fields per PROTOCOL: event_id, event_type, created_at, actor; review type: target_id, reviewer, verdict, score 0-5, hard_failures, findings. Plus reviewed_sha256 per the acceptance. I'll add reviewed_sha256, class_id, node_id, gate, evidence_refs, next_falsifier, hours. Let me check apply_events.py / schemas for validation requirements to avoid rejection. Let me read events.schema.json and grep apply_events.py for review validation.
+
+Also decide outbox file: assignment addressed to worker-012; other workers write comms/outbox/worker-NNN.jsonl. I'll write to comms/outbox/worker-012.jsonl (new file) and note it in the event. But does ingest pick up any outbox/*.jsonl? Let me check comms.py ingest quickly. If it reads all outbox files, fine. My previous session wrote to deepseek-flash-12.jsonl; the controller maps actors by event actor field. To maximize the chance it's applied, I could append to both? No — duplication is bad (dedup by event_id is handled, but "one review event" required). I'll write one event to comms/outbox/worker-012.jsonl (the assignment's addressee convention) — and mention in the event. Actually, wait: the prior session's events went to deepseek-flash-12.jsonl and they were ingested (I found w012-c3-review in the live guard, which is my prior event; it might have come from deepseek-flash-12.jsonl). Let me check where w012-c3-review-0001-adjudication came from: grep outbox files.
+
+Let me check comms.py ingest logic to see which files it scans.
+dsh: reasoning:
+The w081 f1-review's `reviewer_independence` explicitly says "authored W081-N0-C8-01 (an earlier accept at the same hash, now withdrawn)". So the withdrawal is explicit in the event. The guard finding in rev3 is accurate: `_protocol_review` counts the earlier accept anyway (no supersession rule), and both dissents too.
+
+Note also: the f1-review's next_falsifier is interesting: "It is falsified if a filed study with constant dt<=1e-3 across >=3 rungs exists (then section 3.4 describes real practice)". And worker-081's adj2 says "F1' SELF-FALSIFIER MET: 9 filed constant-dt <= 1e-3 ladders with four rungs each exist (3 at dt=1e-4 in the certification; 6 at dt=1e-3/5e-4 in temporal_subdominance_control.json)". So the dissent was discharged by its own falsifier per worker-081's later accept; but the guard still records the revise (no supersession rule), correctly fail-closed.
+
+Now let's check the review event schema/validation: apply_events.py and schemas.py. My review event needs to pass `schemas.validate_event`. Let me read schemas.py and the events schema (research_map/events.schema.json).
+
+Also comms.py ingests any *.jsonl in outbox (rglob), so writing to comms/outbox/worker-012.jsonl works.
+
+Let me read research_map/events.schema.json and schemas.py to know required fields for review events, and check how apply_events.py processes review events (e.g., required target_id/verdict/score).
+
+Then write the verdict file and event.
+
+Also the checkpoint: "Write one checkpoint under runtime/state/<you>_<target>_checkpoint.json". I'll write runtime/state/worker-012_N0_checkpoint.json with fields: checkpoint_id, agent, task_id, target, reviewed_sha256, verdict, evidence hashes, timestamp, open items, stop rule. Let me check an existing worker checkpoint for the local convention (e.g., runtime/state/w003_checkpoint_*.json).
+
+Let me look at schemas.py and a sample checkpoint.
+dsh: reasoning:
+Good. Review event required: target_id, reviewer, verdict, score, hard_failures, findings, plus base. I'll add reviewed_sha256, evidence_refs, node_id, class_id, gate, next_falsifier, hours, summary maybe.
+
+Now, before writing, let me finalize the review's open items and verdict decision.
+
+Let me do one more check: the rev3 artifact's internal_checks (58 checks all pass, failures []) and its `falsifiers`/`claims_not_made`. Also check that rev3 does not claim gate verdicts/node done. And check the `supersedes` chain: rev3 references reviews/N0-review-lead-audit.json (revise, stop rule) — hash matches.
+
+Also verify the acceptance item "certification_basis.dr_values must have 4 rungs at fixed dt=1e-4 for 3 schemes" — yes.
+
+One important independence question: The acceptance for the *first* card said the reviewer may not be an author of the artifact. For rev3, the target artifact is by astra-lead-numerics. I (worker-012/deepseek-flash-12) authored numerics/tests/flat_wave.py (scheme A harness) and its lock-guard revision, and the rev3 references flat_wave.py as the canonical artifact and uses it in order_agreement. Do I have an authorship conflict? Strictly, I'm not an author of rev3 or the protocol or the certification generator. But my harness is part of the evidence chain. The audit lead assigned me anyway. To be scrupulous, I will disclose this in the verdict's findings/independence section rather than refuse: I did not author the reviewed artifact; I authored a harness it cites; all my checks are recomputations from raw rows and disk hashes, and I did not edit any reviewed artifact.
+
+Actually — wait. Is it possible that I (as the persistent worker-012) authored the certification generator? Let me check: numerics/protocol/n0_fixed_dt_certification.py — grep outbox for its author. The events show worker-081 claimed "w081-...-fdt02-task-claim" and lead-numerics emitted the artifact event. Let me check who wrote the generator script: search outbox for "n0_fixed_dt_certification.py". The events at 00:37:22 show astra-lead-numerics artifact event for both the json and .py. So lead-numerics authored. My prior session (deepseek-flash-12) authored flat_wave.py revision at 23:36 and the lock guard. Let me verify there's no w012 event for the certification. grep outbox/deepseek-flash-12.jsonl for n0_fixed.
+
+Also confirm that flat_wave.py's scheme A is one of the three certified schemes? The certification schemes are cnfd (Crank–Nicolson FD), cnfem, lffd (leapfrog FD) — these are in flat_wave_replication.py (the frozen module), not flat_wave.py. flat_wave.py (scheme A) is the canonical artifact used in order_agreement. So my authored artifact is *not* one of the certified 3 schemes. Good — my independence is stronger: the certification's three schemes come from flat_wave_replication.py (authored by lead-numerics/worker-13), and my flat_wave.py is only the separate scheme-A control in order_agreement. Still disclose.
+
+Let me check the author of flat_wave_replication.py: grep events for it.
+
+Then finalize. Let me also read the rev3 internal_checks summary + falsifiers + claims_not_made + supporting_diagnostics, and the review_being_closed summary, to cite accurately.
+
+Let me batch these.
+dsh: reasoning:
+The grep for flat_wave_replication.py matched lines mentioning it in different contexts (my old events). Let me find the artifact event specifically with path=numerics/tests/flat_wave_replication.py. Actually, the author is likely deepseek-flash-13 (assignment asg-...-13). Let me check quickly. But it doesn't matter much for my independence.
+
+More important: my worker-12 outbox mentions n0_fixed_dt_certification 3 times — likely in my C3 discharge review/adjudication (the one now counted as accept w012-c3-review). Let me check what those mentions are — they could be my prior review event for the protocol (w012-c3-review-0001-adjudication). That's an *accepting review* of the protocol at hash 1e6cdf04, authored by me. Hmm! That's an authorship issue for a *blind* reviewer of the protocol: I previously reviewed the protocol (accept) in my prior session. The rev3 card's blind requirement concerns the rev3 closure artifact; but my prior accept is part of the review_state_at_generation (it appeared in live evaluates accepts, but did it appear in rev3? rev3's review_state_at_generation.accepting_reviews = [w081-c8, audit-final, w081-adj2] — it does NOT include w012-c3-review. The live guard does include it because it landed at 00:50:36, after rev3's 00:44 snapshot).
+
+So: in my prior session I wrote a review of the protocol (accept) and now I'm asked to write an N0 verdict at the same protocol hash. Is that a conflict? The card says "Independent blind G-NUM N0 verdict at the rev3 stop-rule hashes" — it asks me to review rev3 + protocol. My prior session already reviewed the protocol (accept). Disclosing this is essential. The person/process assigning may not have noticed, or the persistent worker identity is intended to continue.
+
+Let me check what w012-c3-review-0001-adjudication actually says (it's my own event; reading it is not reading *another* reviewer's verdict). Let me look at it to understand what I concluded before, so I can disclose and avoid inconsistent double-counting. Also the C3 discharge artifacts.
+
+Actually, hold on. Let me re-read the acceptance: "You may NOT be an author of the artifact and you may NOT read any other reviewer's verdict for this target before writing yours (reviews/*N0* are off-limits until your file is written)." "This target" = the rev3 closure artifact / N0. My own prior review is not "another reviewer's". And the rule against prior review... the first card says "You may NOT be an author of the artifact". I'm not an author of rev3 or the protocol. I did write a protocol review in a prior task (w012-c3), which is a review, not authorship. Still, the blind-review norm would prefer a reviewer who hasn't already accepted the protocol. I must disclose "reviewer_independence": prior author of numerics/tests/flat_wave.py (harness, not one of the 3 certified schemes), and prior author of the protocol review w012-c3-review-0001-adjudication (accept) — I will note that in my verdict and let the controller weigh it. But should I recuse instead? The task says take one class-bound task and emit a verdict; the audit lead explicitly assigned it to worker-012 twice (audit-r2-N0 and rev3). Recusal would waste a bounded task. The stronger move: perform the review with full independent recomputation, disclose everything, and decide on evidence. If any acceptance item were open, I'd revise.
+
+Hmm, but one could argue that having previously accepted the protocol at the same hash makes my "accept" less independent. The verifiable content of my review (recomputed from raw rows) is what matters; I'll state the disclosure plainly.
+
+Let me check w012-c3-review payload quickly (my own).
+
+Then finalize verdict. I'm leaning "accept" with named open items? Let's carefully re-read the rev3 card acceptance once more:
+
+"SUPERSEDES audit-r2-N0. The post-stoprule closure artifact now exists: numerics/results/flat_wave_convergence_rev3.json (hash above; measure it yourself). Review IT plus the protocol: (1) stop_rule_closures.four_rungs_or_scoped, .f0_rebind, .independent_replication_verdict; (2) certification_basis.dr_values must have 4 rungs at fixed dt=1e-4 for 3 schemes; (3) class_binding pin must equal F0 rev5 0abb9ed8a961; (4) independent_replication.verdicts hash-pinned and not gate verdicts; (5) lock_guard: lock_state locked, production_allowed false, numerics/spherical_solver absent, no N1; (6) registration_state.unregistered_paths (PROTOCOL rule 2 C4 gap); (7) review_state_at_generation contest (2 dissent revises at the protocol hash) and the withdrawn-accept guard finding. Pin every hash you cite. Revise is acceptable closure; name each open item."
+
+All 7 items check out factually as reported:
+(1) three closures marked CLOSED, and each is backed by verifiable evidence at pinned hashes. ✓
+(2) 4 rungs fixed dt for 3 schemes, recomputed ✓
+(3) 0abb9ed8a961 ✓
+(4) 3 verdict pins match disk; caveat "not gate verdicts" present ✓
+(5) locked/False/absent/no N1 ✓
+(6) 6 unregistered paths confirmed absent from artifact_hashes.json ✓
+(7) contest with 2 dissents at protocol hash confirmed; withdrawn-accept guard finding confirmed via code + event payload ✓
+
+So a "revise" would have to be based on residual issues beyond the acceptance list:
+- protocol §3.2/§3.8/§6e naming n0_order_4rung.json as the certified fit while rev3 supersedes it → the rev3 artifact *does* document the supersession (certification_basis.supersedes_evidence_basis) but the protocol text remains stale; this needs a protocol rev4 erratum or controller note. Is it "an open stop-rule item"? No. Is it a real finding? Yes — a textual inconsistency between protocol of record and the closure artifact. But the acceptance says "Revise is acceptable closure; name each open item" — meaning the reviewer may choose revise and name items; or accept. If I accept, I must not leave a stop-rule item open. The §3.2 pointer is not a stop-rule item.
+- F0 preamble stale pin (disclosed in rev3).
+- withdrawn-accept guard semantics (needs controller adjudication; disclosed).
+- registration C4 gap (blocks node completion, not the stop-rule; disclosed; the rev3 falsifier even says a gate pass while protocol unregistered would falsify its registration statement).
+
+Given all that, the honest verdict: **accept** for the stop-rule closure at these hashes, with named open items that must not be confused with closure (registration/C4 gap and withdrawn-accept adjudication and protocol-text erratum). Score: 4.0 (like other accepting reviews in this project). Hard failures: none. The verdict file must name each open item.
+
+Hmm, but wait. Let me consider whether the *first* card's requirement still applies: "Accept only if every stop-rule item is closed at one hash; otherwise revise and name the open item." The rev3 card supersedes it. Stop-rule items are closed at one hash (cert 1677822c + protocol 1e6cdf04 + class binding 0abb9ed8). So accept is consistent with both.
+
+One more consideration: the rev3 artifact's `lock_guard.blocking_reasons` was accurate at 00:44 but the live guard has *more* dissents (4 now). Does that make rev3's snapshot stale? The artifact records evaluated_at 00:44:23; it's a timestamped snapshot, and the live guard still returns N1_BLOCKED. Not a falsifier (the guard verdict is unchanged). I'll note it.
+
+Also note the live order_agreement: delta 0.0101, tolerance 0.35, agreed True; implemented 2.00000820, replicated 1.98990064. Consistent with rev3's lock_guard.order_agreement. ✓
+
+Now, an important check on the review event I'll emit: `target_id` should be the rev3 artifact with hash: "numerics/results/flat_wave_convergence_rev3.json#da7c360719950f7ef6be2624391dee464f8c818a0be74ec44f0f8c70d2b28ac3". Reviewer = "worker-012" (the assigned identity). actor = "worker-012". But PROTOCOL lists agent ids deepseek-flash-01…20; however newer cards use worker-NNN and other workers emit actor=worker-NNN (verified live: worker-067, worker-081 reviews are counted). So actor=worker-012 is right.
+
+Outbox file: comms/outbox/worker-012.jsonl (new file). The assignment addressee is worker-012, and inbound is comms/inbox/worker-012.jsonl. I'll write there.
+
+Wait — one concern: if I write to a *new* outbox file, will the ingest dedup/apply it? comms.py rglob("*.jsonl") under comms/outbox — yes, any file. And apply_events maps actor by name. Other worker-NNN files are being ingested (worker-067's reviews are in events.jsonl). Good.
+
+Before writing the verdict, let me double check the exact verdict-file naming and whether a reviews/ directory file with my name already exists (must not overwrite someone else's; and if reviews/N0-review-worker-012.json already exists from a previous partial run, I need to check — it would be my own; the card says write it). Let me list reviews/*N0* filenames only (I must not read their contents). Listing filenames is fine.
+
+Also check runtime/state for an existing worker-012 checkpoint to avoid clobbering.
+
+Then measure the moving-target hashes one final time right before/after reading the target (the acceptance says hash immediately before and after reading; I already read the rev3 JSON several times). I'll do a final "before writing verdict" hash of rev3 + protocol, and then after writing, re-hash to confirm unchanged. If they differ, I must emit a blocker instead of a verdict. Let me capture the hashes now (they've been stable: da7c3607, 1e6cdf04).
+
+Let me also record runtime/state/artifact_hashes.json hash and research_map.json hash for the record (moving targets, hash at read).
+
+Let me check reviews dir listing and existing checkpoints.
+dsh: reasoning:
+Important: my prior review (w012-c3-review-0001-adjudication, 00:50:36) was an accept of the protocol at 1e6cdf04 with explicit "counts_as_g_num_protocol_accept: False" and "not_a_gate_verdict: True". It discharged the same contest findings. So my prior session already did a related review. The live guard counts it as an accept (it doesn't read the "counts_as..." flag). That's actually another instance of the guard's counting issue: it counts an accept that self-declares "counts_as_g_num_protocol_accept: False". Hmm! Wait, does `_protocol_review` count it? Live evaluates accepts include 'w012-c3-review-0001-adjudication'. So yes, the guard counts an event that explicitly says it does not count as a G-NUM protocol accept. That's a second instance of the same class of guard defect as the withdrawn-accept finding: the binder counts by event_type/target/cited-hash, ignoring self-declared non-counting flags and withdrawals.
+
+This strengthens the rev3 guard finding and gives me a concrete, verifiable additional finding: the guard's accept list at the current registry includes both (a) the withdrawn accept w081-c8-review and (b) the self-declared non-counting accept w012-c3-review. The rev3's review_state_at_generation snapshot at 00:44 listed only 3 accepts (before my c3 event landed at 00:50:36), so the rev3 didn't see (b), but its guard finding predicts the class of problem. As the reviewer, I should report it as an open item requiring controller adjudication — without letting it corrupt my verdict (I'm not accepting the protocol here; I'm accepting the rev3 closure artifact).
+
+Careful: does my prior accept compromise my independence? I'll disclose. The review I'm doing now is of the rev3 closure artifact, and I'm assessing whether the *guard* is correct, not voting the protocol. My verdict's target is rev3.
+
+Now also note reviews/N0-review-worker-042.json (00:52) exists — that's another reviewer's N0 verdict; I must not read it. Fine. reviews/N0-review-final-verify.json exists too, don't read.
+
+There's no existing reviews/N0-review-worker-012.json — good, I'll write it.
+
+Now let me also double check the two dissent+accept dynamics as of the writing time. The live guard has 4 dissents and 4 accepts. None of that changes my acceptance of rev3.
+
+One more check before writing: the acceptance item (5) says "no N1". Let me do a final scan for any N1 artifact/solver: 
+- numerics/spherical_solver absent ✓
+- search whole repo for files/dirs matching spherical_solver or self-gravity solver code created after lock. Let me check artifacts/ for any "n1" paths and events for paths containing spherical_solver or n1 (excluding N1-BLOCK node). Also check numerics/blockers.md (registry node N1-BLOCK). Quick scan.
+
+Also confirm no file under numerics/ mentions a solver implementation. `numerics/tests/selfgravity_lock_guard.py` is a guard test — check its content briefly to ensure it's not a solver (name suggests guard).
+
+Then write:
+1. reviews/N0-review-worker-012.json (verdict file)
+2. comms/outbox/worker-012.jsonl (one review event)
+3. runtime/state/worker-012_N0_checkpoint.json (checkpoint)
+
+Then re-hash targets to confirm unchanged after writing (before/after). If changed → blocker.
+
+Let me do the N1 scan + read selfgravity_lock_guard.py header.
+dsh: reasoning:
+No spherical_solver directory, no solver files. The 102 mentions are all naming the absent path (blockers/guards). Good.
+
+Now let me run the selfgravity_lock_guard.py to independently confirm exit 0 (lock intact). It reads the map. Also maybe run numerics/tests/flat_wave.py --lock-guard? That's my authored file, but it's part of the reviewed evidence chain (the card item 5's guard). Running it verifies the guard works. But careful — running flat_wave.py --lock-guard is a test of my own artifact; the rev3 lock_guard is computed by gates.evaluate. I already ran gates.evaluate. Running selfgravity_lock_guard.py adds an independent guard check. Let me do both quickly (flat_wave.py --lock-guard should exit 0 and print verdict N1_BLOCKED per the old assignment; it's read-only).
+
+Time budget: fine.
+
+Let me run:
+- python3 numerics/tests/selfgravity_lock_guard.py; echo exit=$?
+- python3 numerics/tests/flat_wave.py --lock-guard; echo exit=$?
+
+Then finalize.
+dsh: reasoning:
+Both guards pass: N1_BLOCKED, exit 0, spherical_solver absent.
+
+Now let me write the verdict file. I need to decide the verdict: accept, score 4.0, hard_failures [], findings list with the open items named.
+
+Findings to include:
+1. ACCEPT basis: all 7 acceptance items verified, with exact recomputations.
+2. OPEN-1 (registration/C4 gap): 6 cited paths absent from runtime/state/artifact_hashes.json (protocol, gates.py, convergence.json, worker-046/057/081 artifacts). This blocks PROTOCOL rule 2 node completion for N0. Note the 4 paths rev3 reports registered are present in the file's `registry` catalog with matching sha (cert 1677822c, temporal 334f5b71, flat_wave.py 8b52014d, replication 8ade1cdc) — consistent reading; but the canonical `hashes` map lists only flat_wave.py among them. The gap is honestly reported; controller registration action needed.
+3. OPEN-2 (withdrawn/non-counting accepts): gates.py::_protocol_review has no supersession/withdrawal rule. At review time the live guard counts w081-20260912T002140-c8-review as an accept though its author withdrew it in w081-2026-09-12T00:29:19+0800-f1-review, and also counts w012-c3-review-0001-adjudication which self-declares counts_as_g_num_protocol_accept=False / not_a_gate_verdict=True. Fail-closed so no gate moves, but the accept list overstates protocol support. Needs controller adjudication; the contest flag is correct.
+4. OPEN-3 (protocol text vs certification basis): protocol §3.2/§3.8/§6(e) name numerics/tests/n0_order_4rung.json (constant-CFL cfl=0.5 ladder) as the carrier of the certified order claim, while rev3 certifies from fixed-dt cert and explicitly demotes the constant-CFL ladder to a mixed-order diagnostic. Rev3 documents the supersession in certification_basis.supersedes_evidence_basis, but the protocol of record still points at the demoted file. Requires protocol rev4/erratum; not a stop-rule item.
+5. OPEN-4 (stale F0 pin in protocol preamble): protocol cites 66bf917b/565a6e50, superseded by 0abb9ed8a961; rev3 re-binds in class_binding and records the drift. Not load-bearing; requires protocol rev4 or erratum.
+6. NOTE (lock guard snapshot drift): rev3's lock_guard.blocking_reasons lists 2 dissents at 00:44:23; the live guard at 00:55 lists 4 dissents + extra accepts. Verdict unchanged (N1_BLOCKED, production_allowed false, spherical_solver absent, guard exits 0). Snapshot is correctly timestamped; not a stale-hash falsifier.
+7. NOTE (independence disclosure): reviewer worker-012 authored numerics/tests/flat_wave.py (scheme A harness, registered 8b52014d) and the lock-guard revision, and authored prior review w012-c3-review-0001-adjudication (accept of the protocol at 1e6cdf04, self-declared non-counting). Reviewer did not author numerics/results/flat_wave_convergence_rev3.json (generator astra-lead-numerics), numerics/CONVERGENCE_PROTOCOL.md, or numerics/protocol/n0_fixed_dt_certification.json; the three certified schemes (lffd/cnfd/cnfem) come from the frozen module numerics/tests/flat_wave_replication.py, not from the reviewer's harness. All checks are recomputation from raw rows and disk hashes; no reviewed artifact was edited. Reviews/*N0* were not read (only hashed).
+
+Also findings about class binding, conclusion type: class_id AF-WCC-SCALAR-SPH matches; conclusion_type numerical_evidence; no theorem/counterexample inflation; no C0/C2 leakage (flat-space scalar calibration, explicitly not WCC/SCC).
+
+Also note rev3's internal 58 checks all pass, 0 failures; recomputed certification statistics match to <1e-9 / exact.
+
+Verdict file fields (per prior verdict files' likely shape). Let me choose a self-describing JSON:
+{
+  "schema": "n0-review-verdict/v1",
+  "verdict_id": "w012-n0rev3-verdict-...",
+  "task_id": "audit-r2-N0-rev3",
+  "reviewer": "worker-012",
+  "actor": "worker-012",
+  "reviewer_independence": "...",
+  "target_id": "numerics/results/flat_wave_convergence_rev3.json#da7c...",
+  "target_sha256": "da7c...",
+  "protocol_sha256": "1e6cdf04...",
+  "node_id": "N0",
+  "class_id": "AF-WCC-SCALAR-SPH",
+  "gate": "G-NUM",
+  "verdict": "accept",
+  "score": 4.0,
+  "hard_failures": [],
+  "criteria_checked": {...7 items with pass + evidence...},
+  "reviewed_hashes": {...},
+  "recomputations": {...},
+  "open_items": [...],
+  "falsifier": "...",
+  "not_a_gate_verdict": true,
+  "created_at": "..."
+}
+
+The falsifier for my verdict: "This verdict is void if any cited path re-hashes to a different sha256, if the 4-rung fixed-dt certification rows change, if numerics/spherical_solver appears, or if a gate moves on this review (worker events cannot move gates)."
+
+Checkpoint file: runtime/state/worker-012_N0_checkpoint.json with checkpoint_id, agent, task_id, target/hash, verdict summary, evidence hashes, open items, created_at, stop rule honored.
+
+Review event: 
+{
+ "event_id": "w012-n0rev3-review-20260912T<time>",
+ "event_type": "review",
+ "created_at": "2026-09-12T00:5X:XX+08:00",
+ "actor": "worker-012",
+ "reviewer": "worker-012",
+ "target_id": "numerics/results/flat_wave_convergence_rev3.json#da7c360719950f7ef6be2624391dee464f8c818a0be74ec44f0f8c70d2b28ac3",
+ "verdict": "accept",
+ "score": 4.0,
+ "hard_failures": [],
+ "findings": [ ... ],
+ "reviewed_sha256": "da7c...",
+ "protocol_sha256": "1e6cdf04...",
+ "node_id": "N0",
+ "class_id": "AF-WCC-SCALAR-SPH",
+ "gate": "G-NUM",
+ "task_id": "audit-r2-N0-rev3",
+ "artifact": "reviews/N0-review-worker-012.json",
+ "verdict_path_sha256": "<sha of my verdict file>",
+ "not_a_gate_verdict": true,
+ "evidence_refs": [...],
+ "next_falsifier": "...",
+ "hours": 0.6
+}
+
+"score 0-5" — accept 4.0.
+
+Now, the events schema requires only the listed fields; extra allowed. Good.
+
+Let me also double check: does apply_events.py require `reviewer` or use `actor`? Schema requires both actor and reviewer. Fine.
+
+Before writing, capture the final pre-write hashes of target+protocol (and the verdict isn't written yet). Then write files, then re-hash to confirm unchanged. Let me do the pre-write hash capture and create the verdict file.
+
+Let me now compose the verdict JSON carefully. I'll generate it with a Python script to include measured hashes programmatically, ensuring accuracy. The script will:
+1. measure hashes of all cited paths
+2. verify they match expected pins (fail hard if not)
+3. write reviews/N0-review-worker-012.json
+4. print its sha256
+
+Then a second script writes the outbox event + checkpoint using the verdict sha.
+
+Let me write the verdict now. I'll be careful with the open items and findings.
+
+One more consideration on score: other accepts were 4.0–4.5. My accept with 4 named open items → 4.0. Fine.
+
+Let me write the generator script to a tmp file? The instruction says bounded worker; I can write a small script under my artifacts dir (artifacts/worker-012/n0/rev3_review/) for reproducibility. That's good practice (evidence emitter). But the stop rule says "one verdict file + one review event + one checkpoint, then exit" — adding an emitter script under artifacts/ is extra but consistent with the project's norm (events need emitters). Hmm, "Write ONLY the JSON verdict file named below, then emit ONE review event... (4) Write one checkpoint... (5) Exit." The first card said write ONLY the JSON verdict file. To respect that, I'll write the three files only: reviews/N0-review-worker-012.json, comms/outbox/worker-012.jsonl, runtime/state/worker-012_N0_checkpoint.json. I can generate them via a heredoc python without creating a script file.
+
+Let me build the verdict with a Python heredoc that asserts pins. Long but fine.
+
+Let me first capture the pre-write hashes.
+dsh: reasoning:
+Verdict written with sha 827399bc7dd3c71d672efa9129bb93b955f00332398f75524000e84ab0b475fe. Targets unchanged.
+
+Note: the map hash changed to 56478e3f1d19 (was ed28b714464e at my first read) — traffic continues, expected. Registry be594e23.
+
+Now write the review event to comms/outbox/worker-012.jsonl and the checkpoint to runtime/state/worker-012_N0_checkpoint.json.
+
+Review event must pass schema: event_id, event_type=review, created_at, actor, target_id, reviewer, verdict, score, hard_failures, findings. Findings should be a list of strings (like other events) — I'll use concise strings. The verdict file has the detail. Let me include the 4 open items as findings plus the accept basis.
+
+Event id: "w012-n0rev3-review-20260912T<HHMMSS>". Use a fixed timestamp derived from now.
+
+Then checkpoint: runtime/state/worker-012_N0_checkpoint.json.
+
+Then final validate: run schemas.validate_event on the event (without ingesting — ingestion is controller's step; but I can dry-run validate). Also verify the outbox file is valid JSONL. Also re-hash everything at the end.
+
+Should I run `python3 research_map/comms.py ingest --dry-run`? The PROTOCOL says the controller runs ingest; the outbox is my channel. Running ingest myself might apply events globally — no, ingest only appends to events.jsonl, and apply_events is the controller's step. The protocol's controller command `python3 research_map/comms.py ingest` is for the controller. As a worker, I should just write the outbox. But to guarantee my event is schema-valid, I can dry-run validate locally with schemas.validate_event in-memory (no writes). That's safe.
+
+Let me write the event + checkpoint.
+dsh: reasoning:
+Now final consistency checks:
+1. Confirm the outbox event line parses, event fields good, exactly one event in the file.
+2. Confirm the verdict file is readable JSON, has all required sections.
+3. Re-hash the reviewed targets one last time to confirm no drift after writing (the acceptance says hash immediately before and after reading; I did pre/post-writing checks; do a final one now).
+4. Confirm no accidental creation of numerics/spherical_solver (we didn't).
+5. Check whether my outbox event got picked up? Not my job to ingest. But I can verify the event would be accepted by a dry-run ingest? Running `comms.py ingest --dry-run` might be safe and is read-only. Let me check comms.py CLI supports --dry-run. The ingest summary mentions "dry_run": dry_run. Let me run with --dry-run if supported; otherwise skip. Actually running the controller's ingest could be considered overstepping, but a dry-run is read-only (doesn't append). Let me check the argparse quickly, then run dry-run. Hmm — the instruction says bounded worker: emit JSON, checkpoint, exit. A dry-run validation is cheap and confirms acceptance. But if `--dry-run` isn't supported, running plain ingest would append my event to events.jsonl (a controller step). I'd rather not. I already validated with schemas.validate_event. I'll check help first.
+
+Let me do the final checks.
+dsh: reasoning:
+Everything is in place. The bounded task is complete:
+- Assignment: audit-r2-N0-rev3 (take one class-bound task)
+- Verdict file: reviews/N0-review-worker-012.json (sha 827399bc7dd3...)
+- Review event: comms/outbox/worker-012.jsonl with IDs, evidence refs, hash, falsifier
+- Checkpoint: runtime/state/worker-012_N0_checkpoint.json
+- Stop rule honored: 1 agent-hour, one verdict + one event + one checkpoint, then exit.
+
+Should I update the todo list to mark all complete? Yes. Then final summary. No goal was created (this is a bounded single-turn task, per instructions "then exit" — no goal needed). No need to ingest (controller's job). I should exit now with a concise summary.
+
+Let me mark todos complete and give the final answer.

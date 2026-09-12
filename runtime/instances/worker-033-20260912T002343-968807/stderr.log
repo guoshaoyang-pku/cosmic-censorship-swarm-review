@@ -1,0 +1,721 @@
+dsh: reasoning:
+No handoff directory in workspace root. Let me look for it more broadly.
+dsh: reasoning:
+Found the swarm at /data3/guoshaoyang/workdir/ai4math-swarm. Let me explore it.
+dsh: reasoning:
+Now I understand the structure. I'm worker=033. The task says: "Read handoff/map and comms. Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit."
+
+Let me read the ASTRA_HANDOFF.md, the research map, and check comms/inbox for my assignment.
+dsh: reasoning:
+I need to find my assignment. The task says worker=033. Let me check comms/inbox for a worker-033 file, or check the outbox assignments dir. Also check the research map for assignments. Let me look at the worker-*.jsonl files and see how workers are named.
+
+Actually, I notice `comms/outbox/assignments/` exists. Let me look there. Also worker-01, worker-06, worker-16 exist. There's also `citation_audit_scc_worker-009_spotcheck.csv`, so workers are referenced as `worker-009` too.
+
+Let me look for worker 033 anywhere.
+dsh: reasoning:
+There's a `comms/outbox/worker-033.jsonl`. That's my outbox — meaning worker-033 has already emitted something. Let me read it, and look for an inbox file. There's no `worker-033.jsonl` in inbox. Let me check the outbox worker-033 file to see what worker-033 has been doing, and look at a sample worker's outbox/inbox to understand the schema that workers use.
+
+Let me also check the assignments in the map more thoroughly, and find `worker-033` reference in deepseek-flash files (grep matched).
+dsh: reasoning:
+So worker-033 already did a task: W033-F2A-REV11-INDEP-01, and emitted events at 2026-09-12T00:23:05. But my instruction says "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit. worker=033".
+
+So I'm worker-033 continuing. The previous outbox contains completed events. I need to check whether those events were ingested. Let me check if the events got into events.jsonl / applied to research_map.json. Also there may be a new assignment awaiting me — maybe there's an inbox for worker-033 that hasn't been created yet, or a controller message telling me the next task.
+
+Let me check:
+1. Whether my events were ingested (search events.jsonl for w033 event ids).
+2. Whether there's a newer assignment in map.assignments for worker-033.
+3. The rejected.jsonl for my events.
+
+Let me also look at the checkpoint mechanism — `research_map/checkpoint.py`.
+
+The key thing: my task says "Take one class-bound task" — so I likely need to pick up an open task. Since the prior worker-033 run already did the F2a rev11 review, maybe a new revision (rev12?) appeared, or my next falsifier is: "Re-run check_f2a_class_binding.py against the next canonical F2a/F0 hash pair and record the delta."
+
+Let me be systematic. First check ingestion status and current hashes.
+dsh: reasoning:
+My prior events are ingested. The hashes are unchanged since my last review — F2a rev11 b6123750b37d8bee, F0 276009f4f63dbf83, F2b 1bb78ce9b3572cda.
+
+Wait, `grep -c "w033-" comms/rejected.jsonl` returned exit code 1 with no output = 0 matches. So no rejects. Good.
+
+Now, "Take one class-bound task". I need to determine what task is currently open and class-bound, suitable for a worker. The instruction says "bounded execution worker... Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit."
+
+Let me look at what the controller/leads have newly sent that might be for me. Let me check the outbox of leads newer than 00:23 (after my last events), and check my inbox more carefully. There's no comms/inbox/worker-033.jsonl, but maybe the lead expects me to look at tasks in the map or the assignment files.
+
+Let me check the most recent events in events.jsonl (after 00:23) to see what's happening now, and check the runtime state for checkpoint.
+
+Also important: The task mentions "checkpoint". There's `research_map/checkpoint.py`. Perhaps workers are expected to write their state to a checkpoint. Let me read checkpoint.py to understand.
+
+Let me first look at recent traffic after 00:23.
+dsh: reasoning:
+Now I see the pattern: many workers (088, 029, 068, 038, 031, 048) are taking class-bound tasks and emitting status/artifact/review/blocker events plus a "CHECKPOINT" status. So my job as worker-033 is similar: pick one class-bound task that isn't already claimed/duplicated, do a bounded review/verification, emit valid JSON with IDs/evidence/hash/falsifier, checkpoint, then exit.
+
+Important constraint from ASTRA_HANDOFF: "worker events cannot set status=done, validation_status=passed, or a gate verdict." And "one canonical path has exactly one owner (CF-12)" — I must not duplicate a canonical path already owned. Also G-F0 needs "two independent accepts at the published F0 hash" — worker-033's prior review was one revise verdict. 
+
+Key consideration: My prior task was F2a rev11 independent review. Other workers have now also reviewed F2a (worker-088) and F2b (worker-029, worker-048), A0 (worker-038), A1 held-out (worker-068). I should pick a class-bound task that is NOT duplicated. 
+
+Let me check what class-bound work is in demand that's not yet claimed. Let me look at:
+1. The gate audit — G-F0 needs two independent accepts at the published F0 hash. G-FORM needs full-schema accepts at rev21 hashes + F1 soft flag. G-LIT needs L0 accept at ce42d205e761 and 3 L1 spot checks at 315c19145065 (2 recorded). G-NUM needs criterion C8. G-AUDIT has 0/2 independent accepts per target.
+
+2. Assignments in map — what's open and unowned.
+
+Let me check the newest messages in the leads' outboxes (astra-lead-*) addressed to workers, plus the newest traffic to find what task is most needed and not duplicated.
+
+Let me look at rejected.jsonl too — to see what kinds of events get rejected so I emit valid JSON.
+
+Let me first check the most recent inbox messages for the fleet — the message that launched "100-worker fleet launched 00:12/00:16". Worker-068 said "No assignment card exists in comms/inbox for worker-068 (100-worker fleet launched 00:12/00:16). Taking one bounded..." So the fleet was launched but individual assignment cards may not exist. Workers self-select a bounded class-bound task.
+
+Given my prior work was F2a rev11 class-binding, and worker-088 has now also reviewed F2a (with HF-088-1 about quantifiers.domains.D0 two-member disjunction), and worker-029/048 reviewed F2b — I need a non-duplicated canonical path.
+
+Let me see which classes/targets are least covered. The map has class_coverage.csv and reviews/. Let me check reviews coverage for F0 — G-F0 needs two independent accepts at published F0 hash plus 2 soft-flag dispositions. My prior review was of F2a, not F0.
+
+Actually wait — let me re-read the priority: "G-F0 needs two independent accepts at the published F0 hash plus 2 soft-flag dispositions". The F0 canonical hash was 276009f4f63d at 00:19. Let me re-measure current F0 hash (may have moved).
+
+Also the open assignments: `astra-life02-publish-f0` (lead-formulation, F0 only), `astra-life02-softflag-f0f1` (lead-audit), `astra-life02-n0-c8`/`-refresh` (lead-audit), `astra-life02-l1-spotcheck` (lead-literature). These are lead-owned.
+
+Workers pick bounded class-bound tasks. A high-value, non-duplicated, class-bound task: independent F0 full-schema/class-binding review at the current canonical F0 hash 276009f4f63d, contributing to G-F0's "two independent accepts". But wait — is there already a worker doing F0? Let me check recent events for F0 reviews.
+
+Let me search events for F0 reviews and check the review corpus.
+
+Also, my prior review found HF-02: conclusion_type vocabulary mismatch. My falsifier was: "Re-run check_f2a_class_binding.py against the next canonical F2a/F0 hash pair and record the delta." The hashes haven't changed. So re-running would produce the same result — that's not new information.
+
+Better: pick a genuinely new class-bound task. Let me survey what's claimed and what's needed. Let me check the gate audit and recent worker events for their targets.
+
+Let me do a broad scan.
+dsh: reasoning:
+Massive duplication across the fleet. F0 has many workers (002, 035, 040, 045, 053, 054, 064, 072, 082, 085, 087). F2a has many (033, 043, 047, 050, 061, 078, 088, 098). F2b has many. F1 has many.
+
+Key insight: The critical unmet need per G-AUDIT is "A1 coverage at measured hashes: F0 0, F1 0, F2a 0, F2b 0, L0 0 distinct accepts (need >=2 each)". And G-F0 needs *two distinct independent accepts* at F0 canonical hash 276009f4f63d.
+
+So the single most valuable bounded class-bound task: an independent full-schema ACCEPT-quality review of canonical F0 (research_map/formulation_taxonomy.yaml, class AF-WCC-VAC-GEN family / the taxonomy F0) at the measured canonical hash — but only if it's genuinely independent and non-duplicative. However there are many F0 workers already. Let me check whether the F0 reviews produced any accepts at the current hash. Gate audit says "review scan at this hash: 0 distinct accept reviewer(s) [none]".
+
+Hmm — because verdicts bound to superseded hashes don't count, and the canonical hash moved (F0 was 0fcc6a1928fd at pass end, then 276009f4f63d at 00:19). Workers that reviewed F0 before 00:19 are bound to stale hashes. Workers 002, 035, etc. — are their reviews bound to 276009f4f63d? Let me check.
+
+Actually, important: "Authority: worker events cannot set status=done, validation_status=passed, or a gate verdict." But workers CAN emit `review` with verdict accept — that's what the gate audit scans ("0 distinct accept reviewer(s)"). So a worker review with verdict=accept at the current hash counts toward the two independent accepts.
+
+So my best contribution: an independent, hash-pinned **accept** review of canonical F0 at 276009f4f63d — IF the schema actually warrants accept. My prior F2a review found HF-02: F2a uses conclusion token `scc_c2_future_inextendibility` not in F0's allowed vocabulary. That's an F2a defect (or F0 defect). But importantly, my prior review of F2a concluded "revise" and that HF-02 is a class_leakage mismatch.
+
+Hmm, but wait. Let me reconsider — with 100 workers and massive duplication, the highest-value thing is to find the *counter-signal*: most F0 reviews probably returned revise due to specific findings. Let me check what F0 reviewers found at the current hash, to know whether F0 can be accepted.
+
+Let me look at the F0 reviews' verdicts bound to 276009f4f63d or current hash. Let me check the review corpus and the current canonical F0 hash.
+
+Actually, let me re-measure the current hashes first — the formulation lead kept publishing. Let me check now.
+
+Then decide the task. Let me look at:
+1. Current hash of research_map/formulation_taxonomy.yaml (F0 canonical) and schemas/*.yaml.
+2. F0 reviews at current hash and their verdicts/score.
+3. Whether an independent accept at F0 is achievable, or whether there's a concrete blocker.
+
+Let me also read the rejected.jsonl to see valid event patterns. And check the events schema.
+
+Let me run a combined scan.
+dsh: reasoning:
+Now the picture is clearer. F0 has:
+- worker-040: accept score 4.0 at 00:22:41 — need to check which hash it's pinned to.
+- lead-audit accept at 00:07:29 — binds to an older hash (stale).
+- Various revises.
+
+Gate audit at 00:21:55 said 0 distinct accepts at 276009f4f63d — but worker-040's accept at 00:22:41 came AFTER the audit. So worker-040 may be the first accept at the current hash. If so, G-F0 needs ONE MORE independent accept at 276009f4f63d.
+
+That's the perfect single bounded class-bound task: an independent, hash-pinned full-schema review of canonical F0 at 276009f4f63d that either accepts or produces concrete falsifiable blockers.
+
+But caution: is worker-040's accept real and at that hash? Let me check. Also I must ensure independence — I'm worker-033, a different worker, and I have my own checker. I should not reuse worker-040's evidence.
+
+Let me examine worker-040's review event in detail, plus the F0 document itself. Also let me check the "2 soft-flag dispositions" required.
+
+The task then: Take class-bound task W033-F0-REV-INDEP-01: independent full-schema class-binding review of canonical F0 (research_map/formulation_taxonomy.yaml) at sha256 276009f4f63dbf83, covering class AF-WCC-VAC-GEN and the taxonomy registry. Emit review with IDs, evidence refs, hashes, falsifier. Then checkpoint, then exit.
+
+Let me look at the F0 document. It's 35KB YAML. Let me read it, and check the validator schemas.py to see what F0 checks exist.
+
+Let me first check worker-040's review event and the F0 soft flags in controller findings.
+dsh: reasoning:
+This is a rich picture. Key findings:
+
+- worker-040: F0 accept at 276009f4f63d, with soft flags F0-40-01..05. counts_as_independent_verdict=true.
+- worker-082: F0 revise at 276009f4f63d with blocking findings W082-F-01 (AF-WCC-SCALAR-SPH conclusion quantifies bare "generic data" while H4 declares genericity unresolved), W082-F-02 (class_scope_adjudication.resolved_divergences[D3] claims comeager quantifier explicit in "each class conclusion text" — false for AF-WCC-SCALAR-SPH; checker certifies CONSISTENT without inspecting that class). W082-F-04 notes the very alias issue my prior review flagged (HF-02) but calls it non-blocking since equivalent under alias table.
+
+So the gate is: G-F0 needs two distinct independent accepts at 276009f4f63d. One exists (worker-040). The central open dispute: is worker-082's W082-F-01/02 actually blocking? That's a genuinely decision-relevant, non-duplicated, bounded class-bound task: independently adjudicate the F0 accept/revise split at the pinned hash — specifically, test W082-F-01/F-02 claims against the document and the checker, then emit my own verdict.
+
+But careful: my prior review was F2a, and I found HF-02 (conclusion vocab mismatch). worker-082 calls that non-blocking (alias table). Hmm, my prior review classified it as critical class_leakage. There's a genuine divergence here worth resolving, and it's decision-relevant: if the alias resolves, my HF-02 was miscalibrated; if not, worker-040/082 are wrong. That's a falsifiable adjudication task.
+
+However, the instruction: "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit." So I should pick ONE task and do it well.
+
+Best choice: **Adjudicate the F0 accept/revise divergence at 276009f4f63d, class-bound to AF-WCC-VAC-GEN and the other three frozen classes** — i.e., an independent third verdict on F0 that specifically tests:
+1. W082-F-01: does AF-WCC-SCALAR-SPH's conclusion quantify bare 'generic data'? Is the H4 genericity-unresolved declaration contradictory? Is the "equivalently" unsourced?
+2. W082-F-02: does resolved_divergences[D3] claim comeager quantifier explicit in each class conclusion text, and is that true/false for AF-WCC-SCALAR-SPH? Does check_taxonomy_consistency.py:59 inspect that class?
+3. W082-F-04 / my prior HF-02: does the alias table make F2a/F2b tokens equivalent to canonical F0 tokens, or is it class leakage?
+
+This is precisely the kind of thing the gate needs: a second independent accept requires either confirming F0 is acceptable despite W082's findings (which requires disposing them) or confirming they block.
+
+Let me now verify the primary evidence myself — read the taxonomy YAML around the relevant lines, read check_taxonomy_consistency.py, and test the claims. That's the actual bounded work.
+
+Let me be efficient. First read the key parts of formulation_taxonomy.yaml: AF-WCC-SCALAR-SPH class (lines ~380-420), H4 genericity declaration, class_scope_adjudication.resolved_divergences[D3], VOCAB_ALIASES.
+
+Let me grep for relevant sections.
+dsh: reasoning:
+W082-F-02 has substance: `resolved_divergences[D3]` says "the comeager quantifier is now stated explicitly in **each class conclusion text** and bound before the data". If AF-WCC-SCALAR-SPH's conclusion text does NOT state the comeager quantifier explicitly, then D3 is false as written. Let me read the AF-WCC-SCALAR-SPH class block (lines ~376-445) and H4 declaration.
+
+Also, W082-F-01: conclusion lines 404-407 quantify bare 'generic data' while H4 declares genericity notion unresolved.
+
+Let me read lines 376-445 and search for H4.
+dsh: reasoning:
+Now I can verify W082-F-01 and W082-F-02 directly:
+
+**W082-F-01**: AF-WCC-SCALAR-SPH conclusion (lines 404-407): "For generic data in the class, the MGHD admits I+ and every future-inextendible causal geodesic contained in J-(I+) is complete; equivalently, the singularities that form are hidden behind an event horizon and no singularity is visible from I+."
+- H4 (line 397-401): "Genericity notion for the symmetry-reduced data space (dense-open versus full-measure) is unresolved and must be named before any claim is filed." unresolved: true.
+- So the conclusion quantifies over "generic data in the class" while the genericity notion is declared unresolved and "must be named before any claim is filed". This is a real internal contradiction — the conclusion text uses the unresolved quantifier.
+- Also "equivalently, the singularities that form are hidden behind an event horizon and no singularity is visible from I+" — an asserted equivalence with no source. line 406: "equivalently". Is it sourced? No citation. So W082-F-01 is verified as a genuine defect.
+
+Wait — but does this block G-F0? Compare AF-WCC-VAC-GEN conclusion at line 181-184: "For every admissible (s,delta) there is a comeager set G_{s,delta} of data such that for every data set in G_{s,delta}..." — that's explicit. AF-WCC-SCALAR-SPH is not.
+
+**W082-F-02**: `resolved_divergences[D3]` (line 70-72): resolution: "the comeager quantifier is now stated explicitly in **each class conclusion text** and bound before the data". comeager mentions: lines 184, 265, 337 (three classes: WCC-VAC-GEN, SCC-C2, SCC-C0) — NOT in AF-WCC-SCALAR-SPH (404-407). So D3's "each class conclusion text" is false as written, because AF-WCC-SCALAR-SPH is a class in the taxonomy and its conclusion lacks the comeager quantifier (its genericity_kind is "unresolved" anyway, so it couldn't be comeager).
+
+Hold on — is AF-WCC-SCALAR-SPH in scope of D3? D3 is in `class_scope_adjudication.resolved_divergences`. Let me read the full `class_scope_adjudication` block lines 56-78 to see its scope. The D1/D2/D3 divergences may be scoped to specific classes. Let me read lines 43-78.
+
+Also let me check `check_taxonomy_consistency.py:59` to verify W082-F-02's claim that the checker certifies CONSISTENT without inspecting that class.
+
+Let me read both.
+dsh: reasoning:
+Now I have hard evidence for both W082 findings:
+
+**W082-F-02 verified with precision.** The checker's own D3 detector (line 59) scopes its comeager check to only `("AF-SCC-C2-VAC-GEN","AF-SCC-C0-VAC-GEN")` — it never inspects AF-WCC-SCALAR-SPH (grep "SCALAR" count = 0). Yet the F0 document's `resolved_divergences[D3].resolution` claims "the comeager quantifier is now stated explicitly in **each class conclusion text**". So:
+- D3 as recorded is broader than the detector that certified it.
+- AF-WCC-SCALAR-SPH's conclusion (line 405: "For generic data in the class") does not bind an explicit comeager/named quantifier, consistent with its own H4 being `unresolved: true`.
+- Therefore `class_scope_adjudication.resolved_divergences[D3].status = resolved` is not supported at the reviewed hash: it overstates scope. This is a genuine, hash-pinned finding.
+
+Also interesting: checker line 16 requires `set(A["class_ids"]) == set(B["class_contracts"])`. The F0 canonical has 4 class_ids including AF-WCC-SCALAR-SPH, but the authoring mirror B has class_contracts — does it have AF-WCC-SCALAR-SPH? If class id sets differ, errs would be non-empty and consistent=false. But worker-040 says "consistency CONSISTENT with 0 contract-text divergences". Hmm — let me check whether the authoring taxonomy has SCALAR-SPH. Actually `artifacts/formulation/formulation_taxonomy.yaml` — let me check. And `taxonomy_consistency.json` claims classes_compared. Let me measure.
+
+Wait, actually — important: if the authoring `B` lacks AF-WCC-SCALAR-SPH, then `set(A['class_ids']) != set(B['class_contracts'])` → errs → consistent false. But worker-040 reported CONSISTENT. Let me check the actual evidence file.
+
+Let me also check W082-F-01's "unsourced equivalently" claim: line 406 "equivalently, the singularities that form are hidden behind an event horizon and no singularity is visible from I+". Is there a source anywhere? The provenance just says ASTRA_HANDOFF hard decision 1, literature_status unresolved_pending_L1. So yes, the equivalence is unsourced. Compare with AF-WCC-VAC-GEN which presumably has a sourced conclusion. Let me check lines 181-200 to compare.
+
+Now let me decide: this is my task. I'll do an independent adjudication of the F0 accept/revise split at 276009f4f63d, class-bound, with:
+- W033-F0-DIVERGENCE-ADJ-01
+- Tests of W082-F-01, F-02, F-04, and worker-040's green claims
+- My own checker script + mutation controls (falsifier)
+- Verdict + report + review events
+- Checkpoint status event
+
+Let me continue gathering the remaining primary evidence:
+1. `artifacts/formulation/formulation_taxonomy.yaml` class_contracts — does it include AF-WCC-SCALAR-SPH?
+2. `artifacts/formulation/evidence/taxonomy_consistency.json` — classes_compared and consistent.
+3. AF-WCC-VAC-GEN conclusion (lines 181-200) to compare.
+4. The alias table — `field_vocabulary` (lines 115-149) to adjudicate F-04 vs my prior HF-02.
+
+Let me get all these.
+dsh: reasoning:
+Excellent. This is decisive evidence:
+
+1. **The authoring mirror has AF-WCC-SCALAR-SPH with genericity `unresolved`** — same as canonical. So the two trees agree: SCALAR-SPH genericity is unresolved.
+
+2. **The consistency checker DOES compare AF-WCC-SCALAR-SPH** (classes_compared includes it) — via `canon("genericity_kind", ...)` at lines 31-33. Note: canonical axes value is `"unresolved"`, but the authoring frozen value is also `"unresolved"` → they match, so no error. So W082-F-02's claim "check_taxonomy_consistency.py:59 certifies CONSISTENT without inspecting that class" is *partially* wrong: line 59's D3 detector doesn't inspect it, but line 31-33 does compare its genericity axis. Precisely: the checker compares `unresolved == unresolved` and passes; it never checks whether the *conclusion text* of SCALAR-SPH binds a quantifier. So the refinement is: the checker verifies axis *label* agreement, not conclusion-text quantifier binding. The D3 detector at line 59 hard-codes only the two SCC classes. So W082-F-02's core claim (the D3 certification cannot detect the SCALAR-SPH conclusion gap) is TRUE; its supporting sentence ("without inspecting that class") is imprecise — the class IS inspected for genericity axis agreement, but not for conclusion-text binding.
+
+This is exactly the kind of independent adjudication value I can add: confirm the finding, correct its scope.
+
+3. **alias_policy**: "canonical token first; accepted aliases are equivalent for consistency checks only and must never appear in a new canonical artifact". This adjudicates W082-F-04 and my prior HF-02:
+   - `strong_cosmic_censorship_C2` (canonical F0 token) vs `scc_c2_future_inextendibility` (F2a schema token): the policy says aliases are equivalent for consistency checks but must never appear in a NEW canonical artifact. F2a (schemas/af_scc_c2_vacuum.yaml) IS a new canonical artifact and uses `scc_c2_future_inextendibility`... 
+   
+   Wait — I need to check the alias registry. The policy mentions `VOCAB_ALIASES`. Let me find it. My prior review said F0's `field_vocabulary.conclusion_type.allowed` = [weak_cosmic_censorship, strong_cosmic_censorship_C2, strong_cosmic_censorship_C0] and F2a uses scc_c2_future_inextendibility. Let me find where VOCAB_ALIASES is defined (maybe in the authoring taxonomy or another file: field_vocabulary in canonical F0 lines 139-144 has no aliases!). So the canonical F0 has NO alias table. The authoring mirror likely has one. Let me check.
+
+   This is the crux of my prior HF-02 and W082-F-04: if the alias table lives only in the AUTHORING tree (not canonical F0), then the canonical pair (F0 canonical + F2a canonical) has a genuine unresolved vocabulary mismatch — my HF-02 was correct as to the canonical pair, and worker-082's "equivalent under the alias table" only holds if you import the authoring alias table. Per the canonical-path policy ("schemas/*.yaml and research_map/formulation_taxonomy.yaml are authoritative"), an alias table that exists only in `artifacts/formulation/**` cannot bind the canonical pair.
+
+That's a genuinely sharp, decision-relevant adjudication. Let me verify where VOCAB_ALIASES lives.
+
+Let me check:
+- grep VOCAB_ALIASES across the repo (in artifacts/formulation/formulation_taxonomy.yaml and tools).
+- The canonical F0 `field_vocabulary.conclusion_type` (lines 139-144) — confirmed NO alias entry.
+- schemas/af_scc_c2_vacuum.yaml conclusion_type value.
+
+This gives me my task's core contribution: adjudicate the F0 accept-vs-revise split with three sub-findings, all hash-pinned.
+
+Let me gather this last piece of evidence, then write the artifacts.
+
+Actually, let me now be careful about my time budget and the instruction: "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit." I should do this efficiently and well. Let me collect the final evidence pieces, then build:
+1. `artifacts/worker-033/f0_divergence_adjudication/` directory with:
+   - `check_f0_acceptance.py` — independent checker
+   - `mutation_controls.json` — planted-defect falsification of the checker
+   - `report.json` — full adjudication
+   - `review.json` — verdict
+   - `pinned/SHA256SUMS`
+2. Outbox events: status (claim), artifact x4-5, review, blocker (if blocking), status (checkpoint), status (complete).
+
+Let me first check the remaining evidence.
+dsh: reasoning:
+Now I have the full picture and can adjudicate precisely. Key facts pinned:
+
+1. **Alias table location**: `artifacts/formulation/VOCAB_ALIASES.json` (sha 46cd9f1eb534 per map refs). It lives in the **authoring tree** (`artifacts/formulation/**`), NOT in canonical `research_map/formulation_taxonomy.yaml` (canonical F0 field_vocabulary.conclusion_type.allowed has no aliases, lines 139-144) and NOT in `schemas/*.yaml`. Per canonical-path policy, `artifacts/formulation/**` must be published byte-identically before verdicts bind.
+   - F1 canonical resolves the alias by pointer: `schemas/af_wcc_vacuum.yaml:157: vocabulary_aliases_ref: artifacts/formulation/VOCAB_ALIASES.json`. So F1 uses the CANONICAL token `weak_cosmic_censorship` and points at the alias registry.
+   - F2a uses `scc_c2_future_inextendibility`, F2b uses `scc_c0_future_inextendibility` — the ALIAS tokens, not the canonical F0 tokens `strong_cosmic_censorship_C2/C0`.
+   - The alias policy itself says aliases "must never appear in a new canonical artifact". F2a/F2b are canonical artifacts (in `schemas/`) and they use alias tokens in the `conclusion_type` field. So per the policy's own wording, F2a/F2b violate it. W082-F-04 calls it non-blocking because equivalence holds for consistency checks. But the policy has two clauses: equivalence for checks AND prohibition in new canonical artifacts. F1 honors both (canonical token + pointer to registry); F2a/F2b honor only the first.
+   
+   Also note the alias token appears in the `conclusion_type` FIELD of a canonical schema, not merely in a cross-reference table. So my prior HF-02 (class_leakage, critical) was directionally right that there's a canonical-pair vocabulary nonconformance — but the label "class_leakage" was too strong; it's a **policy-conformance / vocabulary-binding defect**, not evidence that the class identity is wrong. The alias table does resolve semantics. So the correct adjudication: my HF-02 severity was miscalibrated (should be major/conformance, not critical/class-leakage), while direction (a real canonical-pair defect exists) was right. Intellectual honesty requires me to record this.
+
+2. **W082-F-01 verified** — AF-WCC-SCALAR-SPH conclusion (canonical lines 404-407) quantifies "For generic data in the class" while its own H4 (397-401) is `unresolved: true` and says the genericity notion "must be named before any claim is filed". Plus an unsourced "equivalently" asserting equivalence between geodesic completeness in J-(I+) and horizon-hidden/no-visible-singularity. Compare: the three vacuum classes bind "For every admissible (s,delta) there is a comeager set G_{s,delta}..." (lines 184, 265, 337).
+   - Note: the authoring mirror's genericity_axis frozen also has SCALAR-SPH: unresolved. So both trees agree the genericity notion is unresolved.
+
+3. **W082-F-02 verified with a scope correction** — `resolved_divergences[D3].resolution` says "stated explicitly in each class conclusion text", but the D3 detector (`check_taxonomy_consistency.py:59`) hard-codes only `("AF-SCC-C2-VAC-GEN","AF-SCC-C0-VAC-GEN")`; grep SCALAR in that file = 0 hits. The checker DOES compare SCALAR-SPH's genericity *axis label* (lines 31-33, `classes_compared` includes it) but never its conclusion *text*. So W082-F-02's claim "certifies CONSISTENT without inspecting that class" is **imprecise**; the accurate statement is "certifies CONSISTENT by comparing its axis label only, and its D3 detector never inspects the SCALAR-SPH conclusion text". Core defect confirmed: D3's recorded "each class" scope is unsupported.
+
+4. **worker-040's green claims** — I should test which hold. worker-040 says: validate_map VALID; validate_taxonomy 253/253; consistency CONSISTENT; variant registry VALID; verify_frozen rev25 0 drift; class_separation regression fp=0 fn=0. I can independently re-run validate_map.py and class_separation.py regression and validate_taxonomy if it exists. That's valuable: does the document still validate, and does class_separation flag claims[36] (CF-16)?
+
+Let me now build the artifacts. Plan:
+
+Task: `W033-F0-ACCEPT-SPLIT-ADJ-01` — independent adjudication of the F0 accept/revise split at canonical hash 276009f4f63d, class-bound to all four frozen classes, focused on AF-WCC-SCALAR-SPH.
+
+Artifacts under `artifacts/worker-033/f0_accept_split_adjudication/`:
+- `check_f0_split.py` — independent checker implementing adjudication tests ADJ-01..ADJ-08
+- `mutation_controls.json` + `mutation_controls.py` — planted-defect falsification
+- `report.json` — full report with findings, hashes
+- `review.json` — verdict bound to hash
+- `pinned/SHA256SUMS` — pinned inputs
+- `run.log`
+
+Events to outbox:
+- status (claim / took task)
+- artifact (each)
+- review (verdict)
+- status (checkpoint)
+- status (complete/exit)
+
+Let me write the checker. It must be independent and deterministic. Let me design the checks:
+
+ADJ-01: F0 canonical hash matches 276009f4f63d (binding).
+ADJ-02: W082-F-01a — SCALAR-SPH conclusion text contains a bare "generic" quantifier with no explicit named genericity set. Test: conclusion.text contains "generic data" and does not contain "comeager"/"residual"/"dense open" bound set.
+ADJ-03: W082-F-01b — H4 of SCALAR-SPH has unresolved: true and text says "must be named before any claim is filed". → internal contradiction with conclusion quantifying generically.
+ADJ-04: W082-F-01c — unsourced "equivalently" in SCALAR-SPH conclusion: no evidence/provenance binding for the equivalence. Test: provenance has no source for equivalence; literature_status unresolved_pending_L1.
+ADJ-05: W082-F-02 — resolved_divergences[D3].resolution contains "each class conclusion text"; count classes whose conclusion text binds comeager; SCALAR-SPH excluded → overstatement. Also detect the checker's D3 detector scope.
+ADJ-06: W082-F-04 / HF-02 — alias policy conformance: F0 canonical field_vocabulary.conclusion_type.allowed has no scc_c2_future_inextendibility; F2a/F2b use alias tokens; VOCAB_ALIASES.json is in artifacts/formulation (authoring tree) and referenced by F1 pointer; policy says aliases must never appear in a new canonical artifact. Test which canonical schemas use raw alias tokens in `conclusion_type`.
+ADJ-07: worker-040's green claims reproduce: run validate_map.py? That's heavy. Maybe just class_separation regression. Let me keep the checker self-contained deterministic parsing + one subprocess re-run of validate_map/class_separation optionally.
+ADJ-08: mutation controls — planted defects must flip specific checks.
+
+Let me keep it deterministic and self-contained: pure parsing of YAML + JSON, no network. Use PyYAML. Then mutation controls: apply small in-memory mutations and assert that the relevant check flips.
+
+Let me check python/yaml availability first and the class_separation regression entry point.
+
+Actually, time to build. Let me write the checker script.
+
+Let me first check `validate_map.py` / `class_separation.py` CLI so I can optionally cite reproducible commands. And check whether `validate_taxonomy.py` exists.
+
+Let me do a quick check and then write files.
+dsh: reasoning:
+Now the alias picture is fully clear and it *refutes* part of W082-F-04 and partially refutes my own prior HF-02:
+
+VOCAB_ALIASES.json says:
+- `scc_c2_future_inextendibility` is the CANONICAL token; `strong_cosmic_censorship_C2` is the ALIAS.
+- `scc_c0_future_inextendibility` is canonical; `strong_cosmic_censorship_C0` is alias.
+- `weak_cosmic_censorship` canonical (self).
+- `residual_comeager` canonical; `baire_residual` is the alias.
+
+So the polarity is REVERSED from what W082-F-04 and my prior HF-02 assumed:
+- W082-F-04 said "F0 uses the alias conclusion_type tokens strong_cosmic_censorship_C2/C0 while VOCAB_ALIASES canonicalises to scc_c2/scc_c0_future_inextendibility" — wait, that's actually CORRECT. F0 canonical uses `strong_cosmic_censorship_C2` which IS the alias per the registry. So W082-F-04's statement is right.
+- My prior HF-02 said F2a's `scc_c2_future_inextendibility` is "not in canonical F0 field_vocabulary.conclusion_type.allowed [...] and not equal to canonical classes...axes.conclusion_type='strong_cosmic_censorship_C2'". That framing is INVERTED relative to the registry's canonical direction: `scc_c2_future_inextendibility` is the registry-canonical token, and F0's `strong_cosmic_censorship_C2` is the alias. So the defect is actually in **F0** (it uses alias tokens as its allowed vocabulary), not primarily in F2a/F2b which use registry-canonical tokens.
+   
+   Wait — but there's a twist. The canonical F0 `field_vocabulary.conclusion_type.allowed` only lists `[weak_cosmic_censorship, strong_cosmic_censorship_C2, strong_cosmic_censorship_C0]` — F0 does NOT carry the alias table. And the policy says "canonical token first; accepted aliases are equivalent for consistency checks only and must never appear in a new canonical artifact."
+   
+   So: F0 canonical (research_map/formulation_taxonomy.yaml @276009f4f63d) uses alias tokens AND does not carry/point to the alias registry. Meanwhile F1 canonical correctly uses the registry-canonical `weak_cosmic_censorship` and points at the registry. F2a/F2b canonical use registry-canonical tokens but do NOT point at the registry (need to check whether F2a/F2b have vocabulary_aliases_ref too).
+
+Let me check F2a/F2b for vocabulary_aliases_ref.
+
+So the sharp, corrected adjudication:
+- The canonical vocabulary direction is fixed by VOCAB_ALIASES.json (owner lead-formulation).
+- F0's `allowed` list contains alias tokens; by the policy's own words, aliases "must never appear in a new canonical artifact" — F0 is a canonical artifact (research_map/formulation_taxonomy.yaml).
+- Therefore the vocabulary nonconformance is **F0's**, not F2a/F2b's. My prior HF-02 attributed it to F2a ("class_leakage critical") — mis-attributed and over-severe. I must self-correct this in my report. That's exactly the kind of epistemic value the map wants (the project values refuted hypotheses as progress).
+- W082-F-04 direction is right (F0 uses alias tokens) but its remedy list ("Adopt the canonical tokens in F0 on the next revision, or record F0's alias usage as grandfathered") is right. Good.
+- Also note W082-F-04 calls it "non-blocking". Is it? The gate criterion G-FORM is "exact conclusion_type". If "exact" means registry-canonical, F0 is nonconformant. But G-F0's criterion is about F0's own acceptance. Hmm.
+
+Let me check whether F2a/F2b carry vocabulary_aliases_ref.
+
+Also let me check the gate criterion for G-F0 in the map, to see exactly what F0 acceptance requires — that determines whether W082-F-01/02/04 block.
+
+Let me check these, then write artifacts. I need to be mindful of budget — I've done a lot of investigation. Let me get the last pieces and build.
+dsh: reasoning:
+Now I have the decisive criteria:
+
+**G-F0 criterion**: "formulation_taxonomy.yaml exists; exactly 4 separate class ids; disjointness tests; 2 independent reviewer verdicts".
+- It does NOT require each class conclusion to bind an explicit quantifier. So W082-F-01 (SCALAR-SPH bare generic) is a substantive *documentation* defect but arguably not a literal G-F0 criterion failure. However, "exactly 4 separate class ids" + disjointness tests + 2 reviewers. Hmm.
+- Yet W082-F-02's D3 overstatement matters because D3 is the *evidence* that a divergence was resolved; a false resolution record is an evidence-integrity defect.
+- W082-F-04 (alias tokens in F0) — G-F0 criterion doesn't mention conclusion_type vocabulary. G-FORM does ("exact ... conclusion_type").
+
+**G-FORM criterion**: "all three schemas exist with exact quantifiers/topology/regularity/genericity/I+/visibility/conclusion_type; no C0/C2 merge; reviewers 17,18 accept with cited sha256".
+- F2a/F2b use registry-canonical tokens but do NOT carry a `vocabulary_aliases_ref` (only F1 does). So under "exact conclusion_type", an auditor reading ONLY the canonical schemas has: F0 allowed = strong_cosmic_censorship_C2/C0; F2a field = scc_c2_future_inextendibility. The only bridge is `artifacts/formulation/VOCAB_ALIASES.json`, which is an authoring-tree artifact that (per canonical-path policy) must be published byte-identically before verdicts bind — AND only F1 points to it.
+- So the *binding* defect for G-FORM is: F2a/F2b lack the alias-registry pointer that F1 has, and canonical F0's allowed vocabulary uses the alias direction. Therefore "exact conclusion_type" is not machine-decidable from the canonical pair alone. This is a real, sharp finding — sharper than both worker-082's F-04 ("non-blocking") and my prior HF-02 ("class leakage in F2a").
+
+**So my review verdict**: `revise` — F0 is NOT acceptable *as-is* at 276009f4f63d, but not for the reason I previously gave. Concretely:
+- BLOCKING-1 (my finding W033-F0-01): vocabulary bridge is not closed on the canonical pair. F0's allowed conclusion_type values are the *alias* direction per VOCAB_ALIASES.json (46cd9f1eb534); the registry has no canonical-path home; F2a/F2b bind registry-canonical tokens with no pointer; only F1 carries `vocabulary_aliases_ref`. So G-FORM's "exact conclusion_type" cannot be evaluated from canonical artifacts alone. My prior HF-02 is **withdrawn and re-scoped**: F2a's token is registry-canonical, not a leak; the defect belongs to the F0↔registry binding. This is a self-correction.
+- BLOCKING-2 (W082-F-01 confirmed): AF-WCC-SCALAR-SPH conclusion quantifies bare "generic data" while its own H4 is unresolved and forbids filing a claim before the notion is named; plus an unsourced "equivalently". This is an internal inconsistency in the canonical artifact.
+- CONFIRMED-WITH-SCOPE-CORRECTION (W082-F-02): D3's "each class conclusion text" is unsupported; the checker's D3 detector hard-codes only the two SCC classes (SCALAR = 0 hits), though the checker does compare SCALAR-SPH's genericity axis label. So W082-F-02's core is right, its "without inspecting that class" wording is imprecise.
+- NON-BLOCKING-PROCESS (F0-40-01, F0-40-03): canonical/authoring divergence; class_contract_pointer resolves only to authoring tree — these are already known CF-13/CF-7 and are process blockers, not content errors.
+- GREEN REPRODUCED: whatever I independently re-run.
+
+This means G-F0 does NOT yet have two accepts — worker-040's accept should be treated as one accept *with unadjudicated soft flags*, and worker-082's blocking findings are substantiated by my independent test. My verdict: **revise**, which contributes a third independent verdict and disposes the split.
+
+Now, before I write: the instruction says "emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit." I must not set gate verdicts, done statuses, or validation_status=passed. So `validation_status: unverified` for artifacts, review verdict = revise, and status events only.
+
+Let me now write the artifacts. I'll build:
+
+`artifacts/worker-033/f0_accept_split_adjudication/`
+- `check_f0_accept_split.py` — deterministic checker, emits report.json
+- `mutation_controls.py` — planted-defect controls; emits mutation_controls.json
+- `report.json`
+- `review.json`
+- `pinned/SHA256SUMS`
+- `run.log`
+
+Let me write the checker now. It should:
+1. Load canonical F0, VOCAB_ALIASES.json, F1/F2a/F2b schemas, checker source.
+2. Compute/verify sha256 of each pinned input against expected.
+3. Run checks ADJ-01..ADJ-12, each with id, description, expected, observed, pass/fail.
+4. Emit report.json with findings.
+
+Then mutation controls: load the checker as a module or re-implement mutations on the data structures. Simpler: write mutation_controls.py that copies inputs to a temp dir with a planted defect, runs a parameterized version of the checker core function, and asserts the specific check flips. To do that cleanly, `check_f0_accept_split.py` should expose `run_checks(root)` returning results, so mutation_controls can point it at a mutated root. That's the "falsifier actually falsifies" requirement.
+
+Let me design so `run_checks(root)` takes a root path and reads files relative to it. Mutation controls build a temp root with copies + mutations.
+
+Let me write it.
+
+Checks list (class-bound):
+- ADJ-01 BIND: canonical F0 sha256 == 276009f4f63d...
+- ADJ-02 EXIST4: exactly 4 class ids, all four named.
+- ADJ-03 SPLIT: count independent F0 reviews at the pinned hash and their verdicts (from events.jsonl), report accept/revise split. (evidence, not pass/fail)
+- ADJ-04 W082F01a: SCALAR-SPH conclusion binds a bare generic quantifier with no explicit named genericity set.
+- ADJ-05 W082F01b: SCALAR-SPH H4 unresolved=true and text requires naming before claim → contradiction with ADJ-04.
+- ADJ-06 W082F01c: SCALAR-SPH conclusion asserts "equivalently" with no evidence/provenance source for the equivalence.
+- ADJ-07 W082F02a: D3 resolution text claims "each class conclusion text".
+- ADJ-08 W082F02b: D3 detector scope in check_taxonomy_consistency.py excludes SCALAR-SPH.
+- ADJ-09 W082F02c: checker compares SCALAR-SPH genericity axis label (scope correction to W082-F-02).
+- ADJ-10 VOCAB: registry canonical direction vs F0 allowed tokens; F0 uses aliases.
+- ADJ-11 PTR: which canonical schemas carry vocabulary_aliases_ref (F1 only).
+- ADJ-12 COMPARE: three vacuum classes bind explicit comeager; SCALAR-SPH does not.
+
+Each check emits pass/fail where pass = "defect confirmed" for defect checks. I need to be careful about semantics: for a defect-confirmation check, `pass` means the defect is present. I'll name the field `finding_confirmed` to avoid confusion, and use `status: confirmed|refuted|info`.
+
+Mutation controls (planted defects must flip):
+- M1: change SCALAR-SPH conclusion text to bind "there is a comeager set G of data such that for every data set in G" → ADJ-04 and ADJ-12 must flip to refuted (defect gone).
+- M2: change H4 unresolved: false → ADJ-05 flips.
+- M3: change D3 resolution to name only the two SCC classes → ADJ-07 flips.
+- M4: change F2a conclusion_type to strong_cosmic_censorship_C2 (matching F0 allowed) → ADJ-10/ADJ-11 finding changes.
+- M5: add vocabulary_aliases_ref to F2a → ADJ-11 flips.
+- M6: change F0 allowed list to registry-canonical tokens → ADJ-10 flips.
+- Plus 2 negative controls (unrelated edits must NOT flip the check).
+
+That's a solid falsifier matrix.
+
+Let me now write the files. I'll write the checker first.
+
+Let me be careful with the YAML parsing of the SCALAR-SPH class: `A['classes']['AF-WCC-SCALAR-SPH']`.
+
+Also for the events file, the F0 reviews at the pinned hash: I need to parse events.jsonl and find reviews whose evidence_refs contain the pinned hash or artifact_sha256 == pinned. Let me implement.
+
+Let me write it now.
+dsh: reasoning:
+ADJ-10 and ADJ-11 did not confirm. Let me check why.
+
+ADJ-10: F0 allowed = [weak_cosmic_censorship, strong_cosmic_censorship_C2, strong_cosmic_censorship_C0]. Registry canonical keys = [weak_cosmic_censorship, scc_c2_future_inextendibility, scc_c0_future_inextendibility]. alias_of maps alias→canonical: strong_cosmic_censorship_C2→scc_c2..., etc. So f0_uses_alias should be [strong_cosmic_censorship_C2, strong_cosmic_censorship_C0] (non-empty) and f0_uses_registry_canonical = [weak_cosmic_censorship] (non-empty). My condition was `f0_uses_alias and not f0_uses_registry_canonical` — but weak_cosmic_censorship IS both canonical and not an alias, so f0_uses_registry_canonical is non-empty → refuted. I need to fix the condition: the defect is that any allowed token is an alias. Condition should be `f0_uses_alias` non-empty.
+
+ADJ-11: refs_present == ["F1"] should be true. Let me check: ptr F1 = 'artifacts/formulation/VOCAB_ALIASES.json', F2a/F2b None. refs_present = ["F1"]. So that should confirm. Unless f1/f2a didn't parse `vocabulary_aliases_ref` at top level — F1 line 157 has it indented, maybe nested. Let me check the YAML structure — it might be nested under something. Let me inspect.
+
+Also ADJ-08 process_defects is empty — meaning ADJ-08 was refuted. Let me check: d3_scope extraction. My regex logic may be broken. Let me check what d3_scope found. Let me debug.
+
+Let me print the report checks for ADJ-08, ADJ-10, ADJ-11.
+dsh: reasoning:
+Now I see the bugs — all in my checker, not in the evidence:
+
+1. **ADJ-11**: `vocabulary_aliases_ref` is nested under `/genericity/` in F1, not at top level. And F2a/F2b conclusion_type is nested too. I need to search recursively.
+
+2. **ADJ-10**: my condition was wrong — `weak_cosmic_censorship` is BOTH registry-canonical and... wait, `f0_tokens_that_are_aliases` includes `weak_cosmic_censorship`?? That's because `alias_of` maps aliases from the JSON: for canonical `weak_cosmic_censorship`, aliases are `["weak_cosmic_censorship", "WCC"]` — the registry lists the canonical token itself in its own alias list! So my `alias_of` dict incorrectly maps the canonical to itself. I need to exclude self-maps: `alias_of = {a: c for c, al in canon_tokens.items() for a in al if a != c}`.
+
+   Then f0_uses_alias = [strong_cosmic_censorship_C0, strong_cosmic_censorship_C2] non-empty → confirmed. And the defect condition should be: f0_uses_alias non-empty. Good.
+
+3. **ADJ-08**: the D3 detector segment is `seg` but the class ids are in the `"class":"AF-SCC-C2-VAC-GEN/AF-SCC-C0-VAC-GEN/AF-WCC-VAC-GEN"` string — slash-separated in ONE string, so `re.findall(r'"(AF-[A-Z0-9\-]+)"')` fails because the quoted value contains slashes. I need to split on `/` inside the class string. Better: parse the D3 detection condition directly: find the `if "for every data set in the class" in ctext(...)` guard and extract the tuple of ctext args.
+
+   The real D3 detector scope: the `if` guard references `ctext("AF-SCC-C0-VAC-GEN")` and the join over `("AF-SCC-C2-VAC-GEN","AF-SCC-C0-VAC-GEN")`. So the scope is the two SCC classes. Let me extract via regex on the `if "for every data set in the class"` line.
+
+   Let me get the exact source lines 59-64 to write a robust extraction. From the earlier read:
+   ```
+   if "for every data set in the class" in ctext("AF-SCC-C0-VAC-GEN").lower() and "comeager" not in " ".join(ctext(c) for c in ("AF-SCC-C2-VAC-GEN","AF-SCC-C0-VAC-GEN")).lower():
+       div.append({"id":"D3","class":"AF-SCC-C2-VAC-GEN/AF-SCC-C0-VAC-GEN/AF-WCC-VAC-GEN",
+   ```
+   So: extract the `if` line containing `"for every data set in the class"`, then findall ctext("X") and the tuple. 
+
+   Note also: the D3 detector's *declared* class string says all three vacuum classes, but it never inspects AF-WCC-SCALAR-SPH or AF-WCC-VAC-GEN's conclusion text directly (the guard checks C0 for the phrase and the join over C2/C0 for "comeager"). AF-WCC-VAC-GEN is mentioned only in the label. So the finding is even sharper: the detector's own declared class label is wider than the texts it reads.
+
+Let me fix the checker. Also I should make ADJ-08 robust and confirm.
+
+Let me patch the script.
+dsh: reasoning:
+All 12 checks now produce the expected results. 11 confirmed, 1 refuted (ADJ-01? no — the refuted one must be ADJ-09? Let me see: 12 checks, 11 confirmed. ADJ-03 is "info", ADJ-01 confirmed, ADJ-02 confirmed, ADJ-04..12 mostly confirmed. So the one refuted is probably ADJ-09 — whose semantics were inverted. ADJ-09's status asserts "confirmed" if generic_loop: I named it "scope correction ... IS inspected" and confirmed if the axis-label loop is present. It showed confirmed earlier. Let me count: ADJ-01,02 confirmed; ADJ-03 info; ADJ-04,05,06,07 confirmed; ADJ-08 confirmed; ADJ-09 confirmed; ADJ-10,11,12 confirmed = 11 confirmed. Good, only "info" non-confirmed. 
+
+ADJ-03 shows 30 reviews "at hash" — that's because my matcher `pinned_hash[:12] in refs` matches any review referencing `276009f4f63d`, which many do. That's noisy: it includes reviews of other targets that merely cite F0's hash. I should restrict to reviews whose *target* is F0 (target_id == 'F0' or node_id == 'F0') to get a clean split. Let me fix that for accuracy — it matters because ADJ-03 is the recorded accept/revise split.
+
+Let me refine load_f0_reviews to require target F0.
+
+Then build mutation_controls.py.
+
+Let me fix ADJ-03.
+dsh: reasoning:
+Now ADJ-03 is accurate: 6 F0-targeted reviews at the pinned hash, with verdicts accept/inconclusive/revise. 
+
+Now let me write the mutation controls — the falsifier. The requirement from the protocol: "does the falsifier actually falsify?" So my checker must fail when the defect is removed, and specifically the named check must flip.
+
+Mutation controls design:
+- M1 (repair SCALAR-SPH conclusion): replace the bare-generic conclusion with an explicit comeager binding → ADJ-04, ADJ-05, ADJ-12 must flip to refuted.
+- M2 (H4 resolved): set H4.unresolved=false → ADJ-05 flips to refuted (given M1 absent? careful: ADJ-05 = h4.unresolved and bare. With M2 alone, h4.unresolved=False → ADJ-05 refuted, ADJ-04 still confirmed).
+- M3 (D3 scoped correctly): change D3 resolution to name the two SCC classes → ADJ-07 flips to refuted.
+- M4 (F0 uses registry-canonical tokens): replace allowed with scc_c2/scc_c0 → ADJ-10 flips to refuted.
+- M5 (F2a carries alias pointer): add vocabulary_aliases_ref under genericity → ADJ-11 flips to refuted.
+- Negative control N1: change an unrelated field (e.g., a class label) → the ADJ-04..12 checks must NOT flip (checker not over-sensitive).
+- Negative control N2: change F0 hash (append comment) → ADJ-01 must flip, others unaffected in status.
+
+I'll implement by copying the repo inputs into a temp dir structure, applying mutations, and calling run_checks(temp_root).
+
+To make mutation copying efficient, I only need the 7 pinned files + events (for ADJ-03, optional). Let me implement.
+
+Let me write mutation_controls.py.
+dsh: reasoning:
+Two issues:
+
+1. **ADJ-01 flips in every mutation** — because `run_checks` compares the file hash against PINNED, so any edit flips ADJ-01. That's expected behavior for a hash-binding check, but it pollutes the control reporting and makes "must_not_flip" semantics awkward. It's not a failure per se (the control's `flipped_expected` only checks the named checks, and `must_not_flip` excludes ADJ-01). All controls passed except M6. But it's cleaner to note that ADJ-01 is *expected* to flip on every byte edit — that's its job. Let me add ADJ-01 to a documented "always flips by design" note rather than treating it as noise. Actually the `flips` reporting is fine — it demonstrates the hash binding is live. I'll document it.
+
+2. **M6 fails**: the D3 detector repair didn't flip ADJ-08. Why? My `guard` extraction finds the line containing 'for every data set in the class' — the replacement adds `"AF-WCC-SCALAR-SPH"` to the tuple, so `d3_scope` should now include SCALAR. Then ADJ-08 status = confirmed if (d3_scope and not inspects_scalar) → with SCALAR now in scope, inspects_scalar=True → status should become "refuted" → flip. But flips=[] means the edit didn't apply or the guard wasn't found.
+
+Let me check: the replacement string must match exactly. The source line is:
+```
+if "for every data set in the class" in ctext("AF-SCC-C0-VAC-GEN").lower() and "comeager" not in " ".join(ctext(c) for c in ("AF-SCC-C2-VAC-GEN","AF-SCC-C0-VAC-GEN")).lower():
+```
+My search string: `'ctext("AF-SCC-C0-VAC-GEN").lower() and "comeager" not in " ".join(ctext(c) for c in ("AF-SCC-C2-VAC-GEN","AF-SCC-C0-VAC-GEN")).lower()'`.
+
+Hmm — in the actual source, is there a space after the comma in the tuple? From the earlier read: `("AF-SCC-C2-VAC-GEN","AF-SCC-C0-VAC-GEN")` — no space. And my search string matches. Let me verify by checking whether the replacement occurred. Possibly the issue is that `edit_text` on CHECKER works, but `run_checks` re-reads `paths[CHECKER]`... that should be the copied file. 
+
+Wait — actually the issue might be that M6's mutate lambda is `lambda r: edit_text(r / C.CHECKER, repair_d3_detector)` — correct.
+
+Let me debug directly: apply the replace and print whether it changed, and what guard/d3_scope results.
+
+Actually — I bet the problem is that `seed_root` copies CHECKER, but `run_checks` reads `paths[CHECKER]` = root/CHECKER — yes.
+
+Hmm, let me check if the source line actually contains `" ".join(ctext(c) for c in (...)`. Let me grep it exactly. Let me debug.
+dsh: reasoning:
+The needle IS present and the replacement should work. And extraction only finds `AF-SCC-C0-VAC-GEN` because the tuple members are `c` variable, not `ctext("AF-...")` directly. So even after adding SCALAR-SPH to the tuple, my regex `ctext\("(AF-[A-Z0-9\-]+)"\)` only extracts `AF-SCC-C0-VAC-GEN` — the tuple entries appear as bare string literals `"AF-SCC-C2-VAC-GEN"`, not inside ctext("..."). So `d3_scope` never includes the tuple members, and ADJ-08's `inspects_scalar` stays False regardless.
+
+ADJ-08 currently confirms because d3_scope = [AF-SCC-C0-VAC-GEN] (non-empty) and SCALAR not in it. But the *evidence* for "declared_but_unread" came from `declared_classes` (the class label string) — that's the right evidence. My `inspects_scalar` should be computed from BOTH ctext(...) direct args AND tuple string literals in the guard.
+
+Fix: extract all AF- class strings appearing in the guard line (whether in ctext("...") or bare "..." within the tuple). Then d3_scope = all classes the guard reads. Let me change:
+
+```python
+d3_scope = sorted(set(re.findall(r'(AF-[A-Z0-9\-]+)', guard)))
+```
+
+That will catch C0 (from ctext) and C2, C0 (from tuple). Then after M6 adds SCALAR, d3_scope includes SCALAR → inspects_scalar True → ADJ-08 refuted. And in baseline, d3_scope = [C0, C2] and declared = [C0, C2, WCC]; declared_but_unread = [WCC-VAC-GEN, and SCALAR isn't declared]. 
+
+I should also record explicitly that SCALAR-SPH is absent from both the guard's read set and the declared label — the strongest form of the finding: the D3 detector neither reads nor names AF-WCC-SCALAR-SPH, while the F0 document's D3 resolution claims "each class conclusion text". Let me compute `scalar_named_in_d3 = SCALAR in declared_classes` and `scalar_named_in_guard`.
+
+Let me update the ADJ-08 block.
+dsh: reasoning:
+M6 now passes. M1 fails because ADJ-06 and ADJ-07 also flip — but wait, M1's `must_not_flip` is `("ADJ-07","ADJ-10","ADJ-11")`. ADJ-07 flipped! Why? Because M1 replaced the whole SCALAR-SPH class dict with `probe = dict(...)` and set provenance — and ADJ-06 flipped because provenance now mentions equivalence, which is expected/fine. But ADJ-07 flipped because... ADJ-07 checks D3 "each class" vs `missing_explicit` (classes without explicit quantifier). After M1, SCALAR-SPH now has an explicit comeager → missing_explicit becomes empty → ADJ-07 refuted. So ADJ-07 flipping is *correct causal behavior*: the D3 claim becomes true once the SCALAR-SPH gap is repaired.
+
+So my `must_not_flip=("ADJ-07",...)` for M1 was wrong. ADJ-07 legitimately flips because repairing the class removes the overstatement. Let me adjust M1's must_not_flip to ("ADJ-10","ADJ-11") and document that ADJ-06/ADJ-07 flip as downstream consequences of the repair.
+
+Also ADJ-06 flipping: my repair set provenance equivalence_source "stated" → sourced=True → ADJ-06 refuted. That's intended.
+
+Also every mutation flips ADJ-01 by design (hash binding). I should note that explicitly in the output so it isn't read as noise. Let me add an `expected_always` field documenting ADJ-01.
+
+Let me fix M1's must_not_flip and add the design note.
+
+Let me update mutation_controls.py.
+dsh: reasoning:
+8/8 mutation controls pass. The falsifier works.
+
+Now let me produce the final report.json (regenerated), review.json, README.md, pinned/SHA256SUMS, and run.log. Then emit outbox events and checkpoint.
+
+Let me write review.json and README.md, plus a run.log capturing the command outputs. Then compute SHA256SUMS.
+
+Let me first regenerate report.json (already done), then create review.json.
+
+The review.json should be a proper review verdict:
+- reviewer: worker-033
+- target_id: F0
+- class_id: all four
+- verdict: revise
+- score: 3.0 (say 3.0 — worker-035 gave 3.0, worker-082 revise; my assessment: content defects are real but the document is largely sound — 3.0)
+- hard_failures: the blocking ones
+- findings
+- falsifier
+- scope, assumptions, non_claims
+
+Let me now assemble the events I'll emit. Following worker-088 / worker-068 pattern:
+1. status (claim)
+2. artifact (report.json)
+3. artifact (review.json)
+4. artifact (mutation_controls.json)
+5. artifact (checker source)
+6. artifact (pinned/SHA256SUMS)
+7. review (the verdict)
+8. blocker (the blocking finding) — optional but worker-088 did it
+9. status (checkpoint)
+10. status (complete/exit)
+
+The protocol says every event needs event_id, event_type, created_at, actor. Downward/upward rules: `artifact` — node_id, artifact_type, path, sha256, validation_status. `review` — target_id, reviewer, verdict, score, hard_failures, findings. `status` — node_id, status, hours, summary, evidence_refs, next_falsifier.
+
+Important: validation_status must NOT be "passed" (worker authority). Use "unverified".
+Also: `claim` with conclusion_type theorem requires artifact_refs — I'm not claiming a theorem, so I'll use `review` not `claim`, or use a status. I'll emit a `claim` only if I mark it clearly as a formal-model-level finding (like worker-048 did). Let me avoid `claim` to reduce rejection risk, or emit claim with explicit "not a theorem". Actually worker-029/048 emitted `claim` successfully. I'll emit one `claim` with conclusion_type not theorem (the schema may require the field). Let me check the events schema and what fields validators require.
+
+Let me read events.schema.json and schemas.py to be safe. Also let me check rejected.jsonl entries to see common rejection reasons.
+dsh: reasoning:
+Now I know the exact required fields. Rejection reasons:
+- status: missing node_id, status, hours, summary, evidence_refs, next_falsifier
+- blocker: node_id, description, needed_to_unblock
+- claim: conclusion_type must be valid
+- status: status must be a valid node status (queued|active|blocked|done|rejected|killed)
+
+Let me check the valid conclusion_type values and how the applier validates. Let me look at schemas.py / apply_events.py for validation.
+
+Let me check `schemas.py` and the apply_events validation to get the exact enums.
+dsh: reasoning:
+Now I know all the validation rules. Let me now write the final artifacts:
+
+1. `report.json` — regenerate (done, will re-run).
+2. `review.json` — the review verdict.
+3. `README.md` — human-readable summary.
+4. `pinned/SHA256SUMS` — pinned inputs.
+5. `run.log` — reproduction log.
+
+Then events, then checkpoint.
+
+Let me write review.json and README.md now. Then get the hashes for all artifacts and write the events.
+
+For the review:
+- verdict: revise
+- score: 3.0
+- hard_failures: I'll list the blocking findings. Note worker-082's blocking ones + mine. But careful: "hard_failures" is a required field. I'll list my confirmed blocking items.
+- target_id: "F0"
+- reviewer: "worker-033"
+
+Let me write the review as JSON.
+
+Key content — my adjudication:
+
+Findings:
+- [A] W082-F-01 CONFIRMED (blocking, content): AF-WCC-SCALAR-SPH conclusion at canonical lines 404-407 quantifies "For generic data in the class" while its own H4 (lines 397-401) is unresolved:true and requires the genericity notion to be named before any claim is filed; both canonical F0 and the authoring mirror record genericity_kind=unresolved for this class. The three vacuum classes bind "For every admissible (s,delta) there is a comeager set G_{s,delta}" (ADJ-12).
+- [B] W082-F-02 CONFIRMED WITH SCOPE CORRECTION (blocking, evidence integrity): class_scope_adjudication.resolved_divergences[D3].resolution claims "each class conclusion text", but only 3 of 4 classes bind an explicit quantifier. The D3 detector in check_taxonomy_consistency.py reads only AF-SCC-C0-VAC-GEN and AF-SCC-C2-VAC-GEN and does not name AF-WCC-SCALAR-SPH at all; it does, however, compare SCALAR-SPH's genericity axis label in the generic class loop, so W082-F-02's phrase "without inspecting that class" is imprecise.
+- [C] W033-F0-01 (blocking, vocabulary binding, NEW + self-correction): registry polarity. VOCAB_ALIASES.json (46cd9f1eb534) declares scc_c2_future_inextendibility / scc_c0_future_inextendibility canonical and strong_cosmic_censorship_C2/C0 as their aliases. F0's field_vocabulary.conclusion_type.allowed lists the alias tokens; the policy says aliases "must never appear in a new canonical artifact". F1 uses the registry-canonical weak_cosmic_censorship and carries vocabulary_aliases_ref; F2a/F2b use registry-canonical tokens but carry no pointer, so the bridge exists only through an authoring-tree artifact. G-FORM's "exact conclusion_type" is therefore not decidable from canonical artifacts alone.
+- [D] SELF-CORRECTION: my own prior review w033-2026-09-12T002305-review-F2a graded this as HF-02 class_leakage/critical against F2a. That attribution is withdrawn and re-scoped: F2a's token is the registry-canonical one, so the nonconformance sits with F0's allowed list and the missing registry pointer, not with F2a's class identity. Direction survives; severity and target do not.
+- [E] W082-F-04 direction correct, severity understated: alias-token use in a canonical artifact is a policy breach, not merely "info".
+- [F] worker-040's accept is not reproducible as-is: its own soft flags F0-40-01/03 (canonical/authoring divergence, pointer to authoring tree) are the same process blockers as CF-13/CF-7; content green claims that do not depend on the SCALAR-SPH conclusion stand.
+- POSITIVE: exactly 4 distinct class ids; disjointness intact; all 12 ADJ checks run; 8/8 mutation controls pass.
+
+Falsifier: "Republishing canonical F0 at a new hash with (i) AF-WCC-SCALAR-SPH conclusion binding an explicit named genericity set, (ii) D3 resolution scoped to the classes actually checked, and (iii) either registry-canonical tokens in field_vocabulary.conclusion_type.allowed or a canonical vocabulary_aliases_ref in F0 — must flip ADJ-04/05/06/07/10 to refuted when check_f0_accept_split.py is re-run with PINNED updated; if a repaired document still fails a check, the checker is defective."
+
+Not a gate verdict, no done status.
+
+Score: I'll give 3.0. Hmm — worker-040 accept 4.0, worker-082 revise (score?). Let me check worker-082's score. From the events output earlier for w082 review, the JSON was truncated before score. Let me check. Actually not critical. I'll use 3.0 and justify: content largely sound but three blocking conformance/integrity defects at the pinned hash.
+
+Now let me write the files. Also pinned/SHA256SUMS with the hashes of the pinned inputs + evidence_refs.
+
+Let me create review.json and README.md.
+dsh: reasoning:
+Now the README.md and run.log and pinned/SHA256SUMS. Let me write README.md.
+
+Then generate SHA256SUMS by hashing all files in the dir plus pinned inputs.
+
+Let me write README and then run the final regeneration + hashing.
+dsh: reasoning:
+Wait — one issue. The run log shows `schemas/af_scc_c2_vacuum.yaml` and `af_scc_c0_vacuum.yaml` hashes unchanged, and formation_taxonomy canonical? Let me check the top of the log to confirm canonical F0 = 276009f4f63d. The tail cut it off. Let me check.
+
+Also critical: I need to verify the canonical F0 hash is still 276009f4f63d at this moment — the formulation lead kept publishing. Let me re-measure now. If it moved, my verdict binds the old hash (fine — that's the design, hash-bound), but I should report the current delta.
+
+Let me check the head of run.log and current F0 hash.
+dsh: reasoning:
+Canonical F0 is still 276009f4f63d — my verdict is current at this instant. Note the authoring mirror is now c8e979a1eb48 (moved from earlier c8e979a1... it was already c8e979a1 at 00:19 per ASTRA_HANDOFF; consistent).
+
+Now let me generate pinned/SHA256SUMS with all inputs and outputs, then verify it.
+
+Then emit the outbox events and run the checkpoint.
+
+Let me build SHA256SUMS.
+dsh: reasoning:
+All hashes verify (the "3 lines improperly formatted" warning is just the `#` comment lines — harmless).
+
+Now let me emit the outbox events. I need to write to `comms/outbox/worker-033.jsonl` — appending (my prior 8 events are there).
+
+Events (all with actor worker-033, created_at now ~00:29-00:30):
+
+1. status (claim): node_id F0, status active, hours 0.0, summary, evidence_refs, next_falsifier
+2. artifact: report.json
+3. artifact: review.json
+4. artifact: mutation_controls.json
+5. artifact: check_f0_accept_split.py
+6. artifact: pinned/SHA256SUMS
+7. review: target_id F0, reviewer worker-033, verdict revise, score 3.0, hard_failures, findings
+8. blocker: node_id F0, description, needed_to_unblock, evidence_refs
+9. status (checkpoint): node_id F0, status active, hours ~0.4, summary "Checkpoint w033-ckpt-1..."
+10. status (complete/exit): node_id F0, status active, hours ~0.6, summary + next_falsifier
+
+Note: worker cannot set done — so final status stays "active" (or "blocked"? no — active is right; the assignment remains with the lead). Actually the workers in the fleet used status "active" for complete. worker-068 used "active"? Let me not worry; I'll use "active" and explicitly state worker exits.
+
+I must ensure `review.target_id` = "F0". Evidence refs must include the artifact paths with sha256 prefixes.
+
+Let me write a Python script to generate the events with correct hashes and append them. This guarantees valid JSON.
+
+Also, one consideration: `claim` requires conclusion_type valid. My finding is a formal_model level. I could emit a claim with conclusion_type "formal_model" — it's a statement about artifacts/hashes, which fits "formal_model". That adds a claim event that the map can record. worker-048 did exactly this ("FORMAL-MODEL-LEVEL binding finding (not a mathematical theorem...)"). I'll include one claim with conclusion_type "formal_model", class_id, statement, assumptions, falsifier, evidence_refs. That's valuable and safe.
+
+Let me build the events file now.
+
+Let me get the exact hashes for the evidence refs from SHA256SUMS computation.
+
+Let me write the script.
+dsh: reasoning:
+12 events appended. Note artifact event_ids: two of them are `-artifact-report` and `-artifact-review`, `-artifact-mutation_con`, `-artifact-check_f0_acc`, `-artifact-README`, `-artifact-pinned` — the truncation to 12 chars produced "artifact-mutation_con" and "artifact-check_f0_acc" which are fine (unique).
+
+Now let me ingest via comms.py to verify they're accepted (not rejected), then run the checkpoint.
+
+`python3 research_map/comms.py ingest` — this pulls outbox → events.jsonl. It's the controller's command but the protocol lists it. Since I'm a bounded worker and my instruction says "emit valid JSON ... checkpoint", ingesting is the validation step. It should be safe (it's idempotent by event_id). Let me run it.
+
+Then run `python3 research_map/checkpoint.py --label w033-f0-accept-split` to checkpoint.
+
+Actually careful: `comms.py ingest` writes to events.jsonl and rejected.jsonl — that's the controller's channel. But other workers seem to have their events ingested. The instruction explicitly says "emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit" — so ingest + checkpoint is expected. Let me run ingest.
+
+Let me check comms.py ingest CLI first to be safe. From PROTOCOL: `python3 research_map/comms.py ingest`. Let me run it.
+dsh: reasoning:
+The ingest ran and shows other workers' events too. I need to verify MY events were accepted, not rejected. Let me check for w033 events in events.jsonl and rejected.jsonl.
+
+Note worker-092 also did an F0 adjudication at 00:29 — parallel work, fine (different worker id, independent).
+
+Let me verify my 12 events.
+dsh: reasoning:
+All 12 events accepted (12 in events.jsonl, 0 rejected) and all 12 schema-valid.
+
+Now the checkpoint. The instruction says "checkpoint, then exit". I'll run `python3 research_map/checkpoint.py --label w033-f0-accept-split-adj-01`.
+
+Note: checkpoint.py doesn't mutate research_map.json (per its docstring). It writes runtime/state/*. That's the periodic controller snapshot, but as a bounded worker my instruction explicitly tells me to checkpoint. Let me run it.
+
+Note: checkpoint.py's `measure_agents` looks for dsh processes. Fine.
+
+Let me run it.
+dsh: reasoning:
+Checkpoint ran. Let me confirm the checkpoint record includes my events (accepted=4 this pass — those are the new ones since last checkpoint; duplicates 1926 means it skipped already-ingested). The checkpoint says events_pending_application: 406 — meaning events exist in events.jsonl not yet applied to research_map.json. That's the controller's job (apply), not mine.
+
+Let me verify the checkpoint files were written and confirm my checkpoint id. Also verify the artifact hashes registry now includes my artifacts.
+
+Let me check:
+1. runtime/state/current_checkpoint.json — checkpoint_id, map_validator, evidence_hard_failures (does my artifact show as hard failure? My review's hard_failures are event fields, not artifact audit issues).
+2. artifact_hashes.json includes my artifacts.
+3. checkpoint_log.jsonl last line.
+
+Then final verification sweep and exit.
+
+Let me also do one final integrity check: re-run sha256sum -c and confirm the outbox hash claims match actual files (the artifact events claim sha256 — must match).
+dsh: reasoning:
+Everything verified:
+- Checkpoint ckpt-20260912-002943 written, map VALID, classsep PASS fp=0 fn=0.
+- The one evidence hard failure is the pre-existing CF-16 claims[36] CLASSSEP (already adjudicated checker false positive).
+- Soft finding is the known dual-tree divergence (CF-13).
+- All 6 artifact hash claims verify; 13/13 SHA256SUMS entries OK.
+- My artifacts don't appear in artifact_hashes.json registry (count 0) — because checkpoint's `audit_evidence` builds registry from map nodes, and my events are pending application (the controller applies them). That's expected and not my authority. The map's `artifact_sha256_measured` for done-nodes is controller-owned.
+
+One last thing: my events are in the accepted event stream but "pending_application" (406). That's the controller's apply step — not mine. My job per instruction is done: read handoff/map and comms → took one class-bound task → emitted valid JSON with IDs/evidence/hash/falsifier → checkpointed → exit.
+
+Let me do a final quick confirmation that my review event is in the accepted stream and the checkpoint log line exists, then write my final summary.
+
+Actually, let me double check one thing: the instruction said "emit valid JSON with IDs evidence hash falsifier". My events have event_id, evidence_refs, hashes, falsifier. Good.
+
+Let me verify the checkpoint_log last line and confirm my review event present in events.jsonl.
+
+Then exit with a final summary. No goal was created (this is a bounded single task), which is correct per the goal tool policy — "do not create a goal for routine single-turn work". Well, this was multi-step but bounded and instructed to exit; no long-running objective. So no goal.
+
+Let me do the final check.

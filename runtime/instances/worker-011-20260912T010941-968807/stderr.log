@@ -1,0 +1,707 @@
+dsh: reasoning:
+Let me start by understanding the task. I'm a "bounded execution worker" named worker=011. I need to read handoff/map and comms, take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit.
+
+Let me explore the workspace first.
+dsh: reasoning:
+No handoff/map at the root. Let me look at the swarm (ai4math-swarm.tar.gz) and the launch scripts. The task mentions "handoff/map and comms". Let me search for those.
+dsh: reasoning:
+Now let me look at the ai4math-swarm structure, especially handoff, research_map, and comms.
+dsh: reasoning:
+There's a rich swarm running. I'm worker=011. I need to read HANDOFF.md, ASTRA_HANDOFF.md, research_map.json (huge, 6MB), comms PROTOCOL.md, and my inbox file: comms/inbox/deepseek-flash-11.jsonl (8330 bytes) and possibly worker-011... Wait my name is worker=011, and there's flash-11.jsonl and deepseek-flash-11.jsonl in inbox.
+
+Let me read the key docs: HANDOFF.md, ASTRA_HANDOFF.md, comms/PROTOCOL.md, and inbox deepseek-flash-11.jsonl. Also check for latest assignments in comms/outbox/assignments.
+dsh: reasoning:
+Now let me read ASTRA_HANDOFF.md and my inbox file deepseek-flash-11.jsonl, plus the assignments directory. Also check research_map for class definitions (the "class-bound task"). The research_map.json is 6MB, so I should query it with python, not read directly.
+
+Let me read the ASTRA_HANDOFF.md first.
+dsh: reasoning:
+I'm worker 011, agent id `deepseek-flash-11`. There are several assignments:
+
+1. `asg-2026-09-11-L1-deepseek-flash-11-20` — L1 counterexamples ledger (ledger/counterexamples.jsonl), G-LIT gate, deadline 03:15.
+2. `assign-FORM-DIFF-02-20260911T2331` — FORM-DIFF-02: second independently written gate + differential agreement matrix, artifacts under `artifacts/flash-11/f1_aux_class_binding/`, budget 3.0 agent-hours. This one seems most class-bound: class_ids AF-WCC-VAC-GEN, AF-SCC-C2-VAC-GEN, AF-SCC-C0-VAC-GEN.
+3. `astra-glit-01` — G-LIT spot check rows 21-40 of ledger/citation_audit.csv, artifact reviews/L1-spotcheck-11.json, 2 agent-hours.
+
+The worker instruction says: "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit."
+
+The most class-bound task is FORM-DIFF-02 (differential gate implementation with class IDs). But I should check the current state of my previous work. There's an existing artifacts/flash-11/ dir probably. Let me check. Also check whether FORM-DIFF-02 was already completed (the lead said "FORM-DIFF-02 ACCEPTED. Your gate_robustness_crash finding (26/52) is fixed ... Next: re-run the matrix against rev5 and report only verdict deltas").
+
+Let me look at what exists in artifacts/flash-11/, the formulation FROZEN.json (rev5), and the canonical check_class_schema.py. Also check the runtime state for prior worker-011 artifacts and checkpoints.
+
+Let me be careful about budget/time. The task says: take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit. So the deliverable is:
+1. One artifact for a class-bound task.
+2. Valid JSON event(s) in comms/outbox/deepseek-flash-11.jsonl (status/claim/artifact/blocker) with IDs, evidence refs (path#sha256), falsifier.
+3. Checkpoint (run research_map/checkpoint.py? but that's controller-owned... Let me check what checkpoint means for a worker. The worker prompt says "checkpoint, then exit" — probably emit a status event and maybe write a checkpoint record. Let me check runtime/state/checkpoint_log.jsonl and how other workers checkpoint.
+
+Let me first inspect existing artifacts and see the state.
+dsh: reasoning:
+I have extensive prior work as deepseek-flash-11 / worker-011. The last event was at 01:08:47 for rev29. Current time? Let me check. The controller handoff says pass 06 ran 00:55-01:01, and the file timestamps suggest current time is around 01:09+. Let me check current time and the latest inbound messages.
+
+The previous work at rev29 (01:08:47) appears complete for FORM-DIFF-02: "no further work queued" mentioned in the rev28 status. Actually the rev29 status doesn't say stop_rule reached, but FORM-DIFF-02 total ~5.7h now, over budget of 3.0h.
+
+My instruction as worker=011: "Read handoff/map and comms. Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit."
+
+So I need to do one bounded unit of work. Options:
+1. FORM-DIFF-02 (already heavily worked; over budget). 
+2. L1 counterexamples ledger `asg-2026-09-11-L1-deepseek-flash-11-20` (class_id GLOBAL, not class-bound strictly, gate G-LIT, deadline 03:15).
+3. `astra-glit-01` G-LIT spot check rows 21-40 (class GLOBAL, 2h).
+
+The instruction says "one class-bound task". FORM-DIFF-02 is the class-bound one (class_ids: AF-WCC-VAC-GEN, AF-SCC-C2-VAC-GEN, AF-SCC-C0-VAC-GEN). But it's over budget and no further work queued. Hmm.
+
+However, there's likely new inbound traffic since 01:08:47 (rev29 event). Let me check the latest inbox for deepseek-flash-11 and the current time. Also check the new controller pass (pass 07?) for new assignments.
+
+Let me check:
+- date
+- tail of comms/inbox/deepseek-flash-11.jsonl (I read the whole thing; it had 6 messages, last at 23:35:45). But there might be new messages appended since my read? Actually I cat'ed it — it showed 6 lines. Hmm, but perhaps the file wasn't updated. Let me check the file hash/mtime.
+- research_map.json's assignments for deepseek-flash-11 (current).
+- Check for open tasks.
+
+Also check runtime/state/current_checkpoint.json to see what a checkpoint looks like, and how worker checkpoints are recorded. The instruction "checkpoint, then exit" likely means run `python3 research_map/checkpoint.py` (controller command) or write a worker checkpoint. Hmm. Let me check research_map/checkpoint.py usage and see whether worker runs call it. Let me also check how other workers checkpoint (e.g. grep "checkpoint" in outbox files).
+
+Let me gather this efficiently.
+dsh: reasoning:
+Time is 01:10. The controller pass 06 finished at 01:01. Pass 07 may be running now (astra_lifecycle_07_events.py exists at 01:09). Let me check the newest events and the latest controller state. Also check for new assignments in research_map. The map has 127 assignments; my three assignments are:
+
+1. `asg-2026-09-11-L1-deepseek-flash-11-20` — L1 counterexamples (GLOBAL class, G-LIT)
+2. `assign-FORM-DIFF-02-20260911T2331` — FORM-DIFF-02 (class-bound)
+3. `astra-glit-01` — L1 spot check rows 21-40 (GLOBAL, G-LIT)
+
+Since my last run (rev29 at 01:08) just finished the FORM-DIFF-02 rebase, and FORM-DIFF-02 is over budget (~5.7h vs 3h), the remaining un-done class-bound tasks in my inbox are: L1 counterexamples (GLOBAL class — not class-bound) and astra-glit-01 (GLOBAL). Hmm. But the worker instruction says "Take one class-bound task".
+
+Wait — maybe there's fresh traffic from pass 07 (astra_lifecycle_07_events.py at 01:09) with a new assignment. Let me check the latest inbox messages for me (mtime 23:35, so no new inbox). Let me check research_map events tail, and the controller verification directory for pass 07.
+
+Also, importantly, my L1 counterexamples assignment from 23:19 (deadline 03:15) is not done — artifacts/flash-11/L1_counterexamples/build_counterexamples.py exists. Let me check whether output exists (ledger/counterexamples.jsonl). The assignment artifact is `ledger/counterexamples.jsonl`.
+
+Let me look at the current state of the ledger and my L1 work. Note: the class_id is GLOBAL for L1, but the task is about hypothesis-violating examples that bound each class (AF-WCC-VAC-GEN etc.). Hmm, "class-bound" in the worker instruction could mean "bound to a task class/node" rather than physics class. Actually "class-bound task" likely means a task bound to one of the research classes (AF-WCC-VAC-GEN, AF-SCC-C2-VAC-GEN, AF-SCC-C0-VAC-GEN) — the swarm's core discipline is class binding.
+
+Let me check the newest events first, and the state of my L1 artifact and the ledger. Also check whether a controller pass 07 issued new cards.
+dsh: reasoning:
+Interesting. My L1 assignment delivered `ledger/counterexamples.jsonl` (32KB, 23:34) and `L1-spotcheck-11.json` exists. So those two assignments appear already done by earlier iterations of "me" (the same agent id). The controller pass 07 is running now (lifecycle_20260912-010951.json at 01:09).
+
+So what's the remaining class-bound work? Let me check the pass-07 lifecycle report for new assignments, findings, and decisions. Also check my L1 counterexamples status: was it accepted/reviewed? reviews/L1-spotcheck-11.json exists.
+
+Let me look at the newest lifecycle_20260912-010951.json for REC items and assignments concerning deepseek-flash-11. Also check astra-lifecycle-07 events if any. Let me grep the lifecycle json for "flash-11" and new assignment IDs.
+
+Also, the FORM-DIFF-02 task seems exhausted: the rev29 delta was just emitted at 01:08. The natural next bounded step: the class-bound task could be to apply/propose something? No — canonical writes are owner-only.
+
+Wait. The worker prompt is generic boilerplate from the supervisor: "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit." This is likely a fresh worker launch (maybe a supervisor spawned worker=011 again). I should find the current highest-value class-bound task from the map/leads. Let me check the pass-07 lifecycle output for the immediate queue and any new cards addressed to me.
+
+Let me grep the latest lifecycle for "flash-11", "life07", "assignment", REC items.
+dsh: reasoning:
+Pass 07 has no direct mention of flash-11. So no new card for me. Let me check the controller findings (CF-29?) and evidence hard failures — maybe my recent rev29 emission created a hard failure. Actually the worker's output event happened at 01:08:47 and pass-07 ingest at 01:09. Let me check whether my rev29 events got accepted and if there are new findings or evidence failures related to my artifacts.
+
+Also check the classsep_regression - not mine.
+
+Let me look at evidence_hard_failures and controller_findings for anything mentioning flash-11 or my artifact paths (fd13, differential_matrix, rev29).
+dsh: reasoning:
+There's no direct action item for me. So I need to choose the one class-bound task. Let me consider the situation carefully.
+
+The worker instruction: "Read handoff/map and comms. Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit."
+
+Given my assignment history, I have:
+- FORM-DIFF-02 (class-bound: F1, G-CLASSBIND) — completed through rev29 with no further work queued. The lead accepted it at rev5 era; subsequent work was self-directed continuation. Total ~5.7h spent vs 3h budget.
+- L1 counterexamples (GLOBAL) — delivered ledger/counterexamples.jsonl at 23:34.
+- astra-glit-01 spotcheck — reviews/L1-spotcheck-11.json exists.
+
+Since FORM-DIFF-02 is exhausted/over budget, but I must take "one class-bound task" — perhaps I should verify whether my FORM-DIFF-02 latest rev29 result has an actual remaining actionable item: FD-13 is still open with a patch proposal pending owner review. As a worker I cannot modify canonical tool. But I could do a *new* class-bound bounded unit: e.g., the assignment says the falsifier is "Two independent implementations agree on a mutant that is in fact leaky (both false-negative) -> differential testing insufficient for that leak class; report the leak class and a targeted rule proposal." FD-13 is a canonical-only blind spot, not the differential falsifier.
+
+Alternatively, maybe there are newer open assignments in the map that match worker-011 but were added by pass 07 (map now has 127 assignments). My earlier query walked `assignments` and printed only 3 with flash-11. That query was run after pass-07? Pass-07 map_sha after 8d9b9976, at 01:09:52. My query ran at ~01:10, so it reflects pass 07. So only 3 assignments for me.
+
+Hmm, let me check the L1 counterexamples status: is it accepted? There's `ledger/counterexamples.jsonl.sha256` and meta. Maybe the L1 task was completed but never emitted artifact events? Let me check my outbox for L1 events. The outbox tail I saw only had FORM-DIFF-02 events. Let me grep the outbox for L1/counterexamples and spotcheck.
+
+Actually let me check all my outbox events (the file may be long). Let me summarize event types and ids.
+
+Also check whether `reviews/L1-spotcheck-11.json` has a review event in the map. And whether ledger/counterexamples.jsonl is referenced as an accepted artifact.
+
+Given the instruction "one class-bound task," and the fact that my FORM-DIFF-02 rev29 run just finished but is over budget, I think the most defensible plan is:
+
+Option A: Complete a bounded class-bound follow-up to FORM-DIFF-02 that provides new information and is within one worker unit: e.g., test the FD-13 patch against a *non-lexical* rephrasing to establish the lexical ceiling (the next_falsifier in my last status says exactly this: "a non-lexical rephrasing that escapes even the patched R12 would confirm the lexical ceiling and re-open the rule design"). But that's more of the same, and budget is blown.
+
+Option B: Take the L1 counterexamples task — it's still marked incomplete? Let me check its status in the map and whether it needs a *review* to close. The acceptance requires ">=6 known solutions/spacetimes that show genericity or hypothesis necessity; each with source, which hypothesis it violates, which class it bounds." The deliverable exists. Maybe the task remains open because no artifact event was emitted with a current hash. Let me check.
+
+Actually, hold on. Let me re-read the worker bootstrap message: "You are a bounded execution worker. Read handoff/map and comms. Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit. worker=011"
+
+This looks like a supervisor script (independent_supervisor.sh / supervise_loop.sh) that spawns worker sessions with this prompt. Let me read those scripts to understand what's expected — maybe the supervisor assigns tasks and expects a specific checkpoint file. Let me read supervise_loop.sh and independent_supervisor.sh. That will clarify "checkpoint, then exit" — likely a worker checkpoint file in runtime/state or similar.
+dsh: reasoning:
+I see: I already emitted L1 artifact at 23:27 and a review at 23:42 (G-LIT spotcheck). So all three assignments have been handled at least once.
+
+Now, since the supervisor loop restarts me each iteration, I should take one class-bound task available now. Let me examine what the map says about the L1 node / counterexamples artifact status — perhaps it's still unverified and needs a targeted follow-up within budget. But the instruction says "one class-bound task" — L1 counterexamples has class_id GLOBAL though it bounds classes.
+
+Let me check the map's node states and assignments statuses to find an *unclaimed available* class-bound task. The map has 127 assignments total (not just mine). Maybe there's an unassigned/open class-bound task in the immediate queue (e.g., the controller's open cards). But the supervisor says "if none, inspect the immediate queue and propose one artifact-backed task."
+
+Since there is a big pile of open controller assignments (astra-life06-classsep-detector-adjudication, etc.), but those are lead-owned, not worker-owned. As a bounded worker, the appropriate thing: take one class-bound task from the available ones, do a bounded increment, emit artifact + status with hash/falsifier, checkpoint, exit.
+
+Given my own line of work (FORM-DIFF-02, FD-13) is the class-bound task I own and it's over budget with "no further work queued", the best "one available class-bound task" would be something that closes a loop with high information gain and low cost. Options:
+
+1. The `next_falsifier` I recorded: "a non-lexical rephrasing that escapes even the patched R12 would confirm the lexical ceiling and re-open the rule design." This is a bounded, class-bound (F1/G-CLASSBIND) experiment. It directly tests whether the proposed FD-13 fix generalizes beyond the exact tokens. This produces new information: if a C2-inextendibility assertion phrased without "inextendib"/"extension"/"horizon" tokens escapes the patched gate, then the patch is a token patch, not a semantic fix — an important caveat for the owner. This is one artifact-backed bounded unit, and it's exactly the kind of adversarial falsification the swarm values.
+
+2. Check whether my rev29 events were accepted (no reject). Yes events_applied 108.
+
+Also, the L1 counterexamples task: acceptance ">=6 known solutions/spacetimes". The ledger/counterexamples.jsonl exists with 32KB. Was it reviewed? Let me check whether there's an open item. But the deadline for that assignment is 03:15 and it's G-LIT (literature). It was delivered and a review exists.
+
+Alternatively, I could pick up the *class-binding* angle on the counterexamples ledger: verify each row is class-bound (which class it bounds) — that's the "class-bound" part. But the ledger was delivered by me already, and L1's G-LIT gate needs spot checks.
+
+Given the instruction emphasizes "class-bound task," I'll go with option 1: a bounded adversarial test of the FD-13 R12 patch on non-lexical rephrasings, under class_ids AF-SCC-C2-VAC-GEN (+ WCC base), task FORM-DIFF-02, node F1, gate G-CLASSBIND. This is a genuine new measurement, uses existing frozen artifacts, and emits:
+- artifact JSON with per-probe results + hashes
+- status event with evidence_refs (path#sha256), falsifier, next_falsifier
+- checkpoint
+
+But wait — the budget: FORM-DIFF-02 is 3.0 agent-hours and I've used ~5.7h. Emitting more work on an over-budget task is against the stop rule. Hmm. The stop rule says "3.0 agent-hours or when the canonical schema hash appears and one gate run is recorded, whichever is first". Both conditions met. Continuing is against the assignment's stop rule.
+
+Alternative class-bound task: Is there an available class-bound task in the immediate queue that is not FORM-DIFF-02? Let me check the map's assignments list for tasks with statuses and whether any are unassigned/queued and class-bound, particularly ones a worker could do. Let me dump all assignments with their node/gate/assignee/status fields. Maybe pass 07 opened something like "astra-life07-..." targeted at workers.
+
+Let me query the map assignments more fully (fields) and look for recent ones (created_at >= 01:00). Also check the L1 counterexamples status in the map.
+
+Also, I should determine how a *worker* checkpoints. Let me grep the outbox of other workers for "checkpoint". Maybe there's a convention: workers write a checkpoint event or write runtime/state/worker checkpoints. Let me check `runtime/state/` files like `checkpoint_log.jsonl` and see if workers appear. Actually checkpoint.py measures agent hours by processes, so "checkpoint" in the worker prompt probably means: run `python3 research_map/checkpoint.py --label <worker-id>`? But that's controller-owned and writes to runtime/state. Multiple agents running it concurrently could conflict. The supervisor says "checkpoint; finish iteration" for workers too. Let me look at what other workers did (e.g., grep runtime/state/checkpoint_log.jsonl labels).
+dsh: reasoning:
+There's a worker checkpoint convention: `runtime/state/flash-11_checkpoint_rev29.json` already exists (from my prior run), plus w05/w078 checkpoints from other workers. So "checkpoint" = write a worker checkpoint JSON to runtime/state/.
+
+Let me look at `flash-11_checkpoint_rev29.json` to see the format I used previously. Also `w078_checkpoint_5_gf0_criteria_audit.json` for the general convention.
+
+Then decide the task. Let me also check the current F1 node state and L1 node state in the map, to see what's actually open and available. And check review_coverage for F1.
+
+Let me look at the map nodes and their statuses (measured_hashes F1, review_coverage F1) to understand what's needed for G-FORM: "coverage F1 4 accepts, F2a 3, F2b 0; withheld pending astra-life05-verify-gform-r3 non-author independence + F2b ≥2". Not worker-011's to fix (lead-audit assignment).
+
+Given the constraint and the state, let me reconsider: maybe the *best* available class-bound task for me now is not FORM-DIFF-02 continuation but something new that's clearly within scope and useful. Let me look at what the formulation lead asked in the immediate queue: "F2b coverage 0 accepts" — F2b is the C0 class. Worker contributions to F2b review/verification could help. But that's lead-audit's verification.
+
+Hmm. The instruction to me is generic and the supervisor expects a bounded unit. Let me check the L1 counterexamples node: my artifact was delivered. Maybe it's still "unverified" and the literature lead needs a class-binding check: are the counterexamples correctly assigned to hypotheses/classes? A useful bounded class-bound task: audit the 32KB counterexamples ledger for class binding against the frozen F1/F2a/F2b rev13 schemas: does each example actually violate a declared hypothesis of the class it claims to bound? This is *exactly* "class-bound" and it's a falsifier-style audit that fits my role (I built the ledger; independent-ish verification by the builder is weak, but a mechanical class-binding audit is still useful and bounded).
+
+But hold on: the C2/C0 classes are the ones with schema hashes; the counterexamples ledger rows reference hypotheses. A class-binding audit would produce a JSON with per-row verdicts, evidence hashes, and a falsifier. That's a solid deliverable.
+
+Yet the FORM-DIFF-02 falsifier task (non-lexical rephrasing) is more central to my current line and is a *falsifier test* which the swarm prioritizes. And it's cheap: I can generate ~6 non-lexical rephrasings and run 3 gates. But it's over budget on FORM-DIFF-02...
+
+Actually, re-reading my assignment card for FORM-DIFF-02: stop_rule "3.0 agent-hours or when the canonical schema hash appears and one gate run is recorded, whichever is first." The canonical schema hash has appeared and gate runs recorded, so the assignment is stopped. Continuing under the same task_id violates the card. But the worker prompt this iteration says "if none, inspect the immediate queue and propose one artifact-backed task" — the supervisor's worker prompt allows proposing a new task when no assignment is available.
+
+The best interpretation: I take one class-bound task = a bounded follow-up that I explicitly frame as a *new* task proposal (task_id like FORM-DIFF-03 / FD-13-LEXCEIL) under the same class ids and G-CLASSBIND gate, which the lead can accept or reject. That's within the spirit: "Take one class-bound task... if none, inspect the immediate queue and propose one artifact-backed task."
+
+Alternatively, check whether the formulation lead or audit lead has an open call for exactly this. Let me grep the formulation outbox for "lexical" or "R12" or requests to workers.
+
+Let me also check the inbox/astra-lead-formulation.jsonl for open asks. But time-box this. Let me grep for recent (>= 00:50) messages from leads that mention workers/differential/R12.
+
+Let me do a quick targeted search.
+dsh: reasoning:
+The interesting latest: `astra-life07-notice-classsep-r3` — class separation detector adjudication. And there's an assignment `astra-life07-classsep-adjudication-review` (worker-075, ...). Let me read the full message. Also check if there's an assignment for a class-binding review that a worker could take. But my mandate as worker=011 is one class-bound task.
+
+Let me read the full astra-lead-audit inbox tail (last few messages) to see the r3 adjudication and whether a worker-facing task exists.
+
+Actually, let me step back and think about the best use of this iteration given constraints:
+
+1. Time: ~01:10, controller pass 07 done. My last work (rev29) was 2 minutes ago. The supervisor loop restarts workers continuously — this is likely another iteration of deepseek-flash-11.
+
+2. The highest-value, in-scope, bounded, class-bound deliverable I can produce *now* that isn't a duplicate:
+   - The FD-13 lexical-ceiling test (next_falsifier from my own status; class-bound; cheap; new information; directly informs the owner's R12 fix decision).
+   
+3. Alternatively, verify the classsep detector with respect to class binding — but writes are frozen and it's lead-audit's adjudication; not mine.
+
+Given the "class-bound" instruction and my standing FORM-DIFF-02 line, the lexical-ceiling test is the clear next step. I'll frame it as a new bounded task proposal `FORM-DIFF-03` (or `FD13-LEXCEIL-01`) under node F1, gate G-CLASSBIND, class_ids AF-WCC-VAC-GEN/AF-SCC-C2-VAC-GEN/AF-SCC-C0-VAC-GEN, and emit it as: artifacts + status + worker checkpoint. This satisfies "if none, inspect the immediate queue and propose one artifact-backed task."
+
+Wait — but is there a risk of duplicating? Let me check if another worker (e.g., flash-13, flash-10) already did a lexical-ceiling test for FD-13. Let me grep artifacts for "lexical" around R12. Quick grep in artifacts/flash-*/... for "lexical" filenames and recent events mentioning FD-13.
+
+Let me check recent events (last hour) for "FD-13" or "lexical" to avoid duplication.
+dsh: reasoning:
+There's an injected/spoofed card problem (CF-30), not for me. The classsep adjudication is worker-075's.
+
+Now, no prior worker did the lexical-ceiling test for FD-13 (only my own mentions). So the FD-13 lexical-ceiling test is new work.
+
+But wait — is it "class-bound"? FD-13 is the R12 rule (geodesic-inextendibility exemption) whose leak is a C2-inextendibility assertion (AF-SCC-C2-VAC-GEN content) placed in the WCC schema's non_vacuity.condition. Yes, it's class-bound to AF-SCC-C2-VAC-GEN/AF-WCC-VAC-GEN.
+
+Design of the experiment (bounded, deterministic, cheap):
+
+Goal: Test whether the proposed clause-local R12 fix (patched tool 5eaab3f8) generalizes beyond the exact token-triggered phrasing, i.e., measure the lexical ceiling:
+- Generate a set of leak paraphrases that assert C2-type inextendibility (or otherwise class-crossing content) *without* the tokens the R12 exemption keys on (inextendib, extension, horizon, ...).
+- For each: run canonical base (000e09e4), patched proposal (5eaab3f8), and independent flash11 gate (a89b221c) on a byte-minimal fixture derived from frozen rev29 WCC (d9cebb9404b2) — each fixture = base + one appended sentence in non_vacuity.condition.
+- Controls: legitimate geodesic statements (must remain accepted by patched) + the frozen canonical schema itself.
+- Report per-probe accept/reject + rule ids for each gate, plus a classification: CAUGHT (leak rejected) / ESCAPED (leak accepted).
+- Falsifier: if any non-lexical rephrasing that a human would call a class crossing is accepted by the *patched* gate → lexical ceiling confirmed; the patch is a token patch, not a semantic fix. If all rephrasings are caught by the patched gate → the lexical-ceiling hypothesis is falsified (at this probe set), which strengthens the patch proposal.
+- Also measure base gate: expect it accepts all (exemption fires) → shows the leak class is systematic.
+
+This is a good artifact-backed bounded task: ~15-25 probe fixtures × 3 gates; fast.
+
+Important: reproducibility requires I cite the exact hashes and keep fixtures under my own artifacts path. I must verify byte-exact pins before running (FROZEN rev29 might have moved — pass 07 measured rev29 pins; but FROZEN.json may have moved to rev30 by now!). Let me check current FROZEN.json hash and manifest revision before binding. If it moved, I bind to the *current* FROZEN revision as long as schemas match or re-derive. Simplest: at runtime, read FROZEN.json, verify revision and the specific hashes; if the WCC schema moved, snapshot and use the current pinned one, and state that.
+
+Also note CF-26: detector writes frozen (class_separation.py) — irrelevant to my gate work.
+
+Let me look at my existing fd13_rev26 tooling: `fd13_rev26/build_and_run.py`, `verify_r22.py`, and the `fd13/` dir with fd13_results.json. Reuse them rather than rewriting. Let me inspect the fd13_rev26 build_and_run.py and fd13/fd13_results.json to understand the harness, and the r12_proposal.diff + leak/control fixtures.
+
+Let me also read my fd13_rev26/README.md for the current FD-13 statement, and the patched tool's R12 section (lines 300-330) to understand exactly what the exemption does. Then I'll write a new bounded script `artifacts/flash-11/f1_aux_class_binding/fd13_lexceiling/lexceiling_probe.py` that:
+1. Verifies pins (sha256 of base tool, patched tool, independent gate, rule_spec, KEY_MANIFEST, frozen WCC schema).
+2. Builds N paraphrases from a spec list (each: probe_id, sentence, intended class crossing, tokens used).
+3. Writes fixtures to disk.
+4. Runs each gate × fixture via subprocess, parses structured JSON output/exit codes.
+5. Emits `lexceiling_results.json` with per-probe results, counts, verdict, falsifier status.
+6. Writes README.md and emits events + checkpoint.
+
+Let me first read the relevant existing files.
+dsh: reasoning:
+Good. The harness exists. Now let me see the rest of build_and_run.py (how it runs gates and what it writes), and the fd13/run_fd13.py. Then I'll write a new script for the lexical-ceiling probes reusing the same invocation protocol.
+
+Let me read the rest of build_and_run.py (lines 120-end).
+dsh: reasoning:
+Good, I understand the harness. Now let me design the lexical-ceiling probe.
+
+Plan (`FORM-DIFF-03` / FD-13-LEXCEIL, class-bound F1, G-CLASSBIND):
+
+Fixtures: base = current frozen WCC schema (verify against FROZEN current revision; snapshot it). Apply one appended sentence inside `non_vacuity.condition` at the ANCHOR.
+
+Probe sentences (leak candidates; each intended to be a class crossing / non-geodesic SCC-type inextendibility claim, phrased with different lexical choices):
+1. `lex01_refute_form` — literal-ish but avoiding "inextendib": "No future-directed causal curve can be continued beyond this boundary." (asserts non-geodesic inextendibility of the development)
+2. `lex02_c2_form` — "The maximal development admits no C^2 extension across the Cauchy horizon." (uses "extension" → exemption token? GEODESIC regex is what matters: if "extension" is INEXTENDIB pattern, and no geodesic token, the clause-local patch catches it; base may not if a geodesic token exists elsewhere in the field. Note the field is the anchor's field; base's field-global check would only exempt if GEODESIC matches the whole field. For these single-sentence fixtures appended to a field whose existing text presumably mentions geodesics... wait, the anchor: `(worker-16 F1-16-03 accepted)."` — the field likely contains legitimate geodesic text. Base accepts because the field-global exemption finds GEODESIC token anywhere in the field. So probes appended after the anchor piggyback on the pre-existing geodesic mention. That's exactly the FD-13 mechanism.)
+3. `lex03_curve_form` — "Every causal curve reaching the boundary has finite generalized affine length."
+4. `lex04_cauchy_form` — "The spacetime is maximal as a C^0-regular Lorentzian manifold with boundary" — hmm, maybe "maximal" isn't in INEXTENDIB regex. Need to check the regexes in the tool.
+5. `lex05_no_extension` — "There is no isometric embedding of the development into a larger C^{1,1} spacetime." (no "extension"/"inextendib" token; semantically exactly inextendibility!)
+6. `lex06_maximal_development` — "Every extension of the maximal development contains a point not in the image of the development" — hmm.
+
+To design well, I must read the actual R12 regexes: INEXTENDIB, GEODESIC, FOREIGN patterns in the canonical tool. Let me read around lines 240-330 of check_class_schema.py and the rule_spec R12 definition.
+
+Also controls (legit geodesic statements, must stay accepted by patched):
+- control already exists (control_rev29.yaml). Add a few paraphrase controls mentioning "future-inextendible causal geodesic" in various forms.
+
+Key measurement question: does the patched (clause-local) gate catch non-lexical rephrasings? The patch only splits clauses and applies INEXTENDIB regex per clause; so any phrasing that uses INEXTENDIB tokens (whatever the regex is) gets caught clause-locally; any phrasing that avoids the INEXTENDIB tokens entirely escapes both base and patched (since detection is lexical). The interesting boundary: phrasings that use INEXTENDIB tokens but *elsewhere in the same field*... Wait, the patch splits by [.;] and checks per clause. So a leak sentence in its own clause gets caught if it contains INEXTENDIB token and no GEODESIC token in that clause. A leak phrased without INEXTENDIB tokens escapes the patch → confirms the lexical ceiling.
+
+So the deliverable: probe set of (a) INEXTENDIB-token leaks (caught by patch, escaped by base), (b) semantics-only leaks with no INEXTENDIB token (escape both → lexical ceiling), (c) clause-tricks: leak sentence joined to a geodesic clause with a semicolon or comma, or embedded such that the split doesn't separate them (e.g., comma-joined: "…, and the maximal development is C^2-inextendible." — split only on [.;], so a comma-joined sentence won't split → patch misses!). That's a concrete defect in the patch worth reporting: `re.split(r"(?<=[.;])\s+")` is punctuation-based, so a leak appended with ", and" (no period/semicolon) stays in the same clause as the geodesic mention → escape even with the patch.
+
+That's a strong, specific finding: the patch is punctuation-sensitive. Probes:
+- P1: separate sentence (period) with INEXTENDIB token, no geodesic token in that clause → base ACCEPT (exempt), patched REJECT. (control of the patch's efficacy)
+- P2: comma/`and`-joined variant, same INEXTENDIB token, in a field whose earlier clause has a geodesic mention → base ACCEPT, patched ACCEPT (escape!) → patch incomplete due to punctuation granularity.
+- P3: no INEXTENDIB token at all (pure paraphrase) → base ACCEPT, patched ACCEPT → lexical ceiling.
+- P4: INEXTENDIB token present but geodesic word also present in the same sentence with an unrelated role, e.g., "no future-inextendible causal geodesic exists in the maximal development" — hmm that's a legit assertion? Careful: the exemption is intended for statements that only speak of geodesic inextendibility; the check catches "SCC-style inextendibility" i.e. non-geodesic. A sentence "the spacetime is geodesically complete and the maximal development is C^2-inextendible" — clause split: clause2 has INEXTENDIB and no GEODESIC → caught. But comma-joined: "the spacetime is geodesically complete, and the maximal development is C^2-inextendible" — one clause (split only on ;/.), GEODESIC present → exempt → escape.
+
+And controls:
+- C1: genuine geodesic statement (existing control).
+- C2: geodesic statement with comma-joined clauses → must ACCEPT in all gates (no false positive).
+- C3: canonical schemas unchanged → accept.
+
+Also need to determine what the independent flash11 gate does with these (it caught literal leaks earlier; expect it catches INEXTENDIB-token leaks and misses no-token semantics; measure it).
+
+Let me read the R12 code and regexes to design probes precisely. Let me look at check_class_schema.py around the FOREIGN definitions.
+dsh: reasoning:
+The R12 detection is literally token-based: `inextendib` anywhere in the field, and `geodesic` anywhere in the field exempts. So:
+
+- Any leak phrasing avoiding the substring "inextendib" escapes both base and patched → lexical ceiling (expected, but important to measure and quantify).
+- Punctuation-joined leaks containing "inextendib" but sharing a clause with a geodesic mention escape the patched version (comma/and-join).
+- Clause-local patch catches period/semicolon-separated INEXTENDIB leaks.
+
+Let me read lines 75-100 and 300-325 for context. Then design ~8 probes:
+
+Family A (INEXTENDIB token, separate sentence): 
+- A1: " The maximal development is C^2-inextendible." — already known caught by patched (positive control of patch).
+- A2: " No C^0 extension of the maximal development exists." (uses "extension" - other FOREIGN pattern is `\bC0\b.{0,20}extension` → catches via different pattern, not R12). Hmm, that would be caught by the C0/C2-extension patterns maybe. Better to use pure inextendib token: " The maximal development admits no further inextendibility beyond this boundary." Weird wording.
+- A2: " The maximal development is future-inextendible as a Lorentzian manifold." (asserts spacetime non-geodesic inextendibility, INEXTENDIB present, no geodesic in clause)
+- A3: " It is inextendible in the class of C^{1,1} Lorentzian manifolds." 
+
+Family B (INEXTENDIB token, comma/and-joined to a geodesic mention in the same field):
+- B1: " The spacetime is geodesically complete, and the maximal development is C^2-inextendible."
+- B2: " Singularities are witnessed by future-inextendible causal geodesics, but the maximal development is also C^2-inextendible as a manifold."
+  Careful: in B2, the clause after the period-split: "Singularities are witnessed by future-inextendible causal geodesics, but the maximal development is also C^2-inextendible as a manifold." — one clause containing both geodesic and inextendib → patch accepts. Base accepts. Escape.
+  Hmm wait: "future-inextendible causal geodesics" contains both token types. The clause-level rule: if INEXTENDIB and not GEODESIC → fail. Here GEODESIC present → no fail. So escape. But is this a *genuine* leak? It asserts a non-geodesic C^2-inextendibility of the maximal development in a clause with geodesic content. Yes, the intended semantics of R12 should flag SCC-style non-geodesic inextendibility; the presence of an unrelated geodesic word in the same clause shouldn't exempt it. This is a genuine class-boundary leak (WCC schema carrying C2 content).
+
+Family C (no INEXTENDIB token at all — pure paraphrase):
+- C1: " The maximal development admits no extension as a C^{1,1} Lorentzian manifold." — "extension" with C^{1,1}? The FOREIGN patterns: `\bC0\b.{0,20}extension`, `\bC2\b.{0,20}extension`. C^{1,1} doesn't match C0/C2 patterns. So pure R12 territory but no "inextendib" token → escapes all. Semantically this is exactly inextendibility (non-geodesic) → lexical ceiling.
+- C2: " There is no isometric embedding of the maximal development into a larger Lorentzian manifold of the same regularity." — no inextendib token → escapes all.
+- C3: " The maximal development cannot be continued past this boundary by any causal curve." — no inextendib token; may not even be in FOREIGN patterns → escapes.
+
+Wait, C3 is really "non-geodesic inextendibility" in plain words. Good probe.
+
+Controls (must be accepted by all three gates):
+- K1: existing control sentence: " Any singular point is witnessed by a future-inextendible causal geodesic of finite affine length."
+- K2: comma-joined geodesic statement: " Every singular point is witnessed by a future-inextendible causal geodesic, and the boundary is reached at finite affine length."  (no false positive expected: GEODESIC present)
+- K3: the canonical WCC schema unmodified (accept all).
+
+Also, probes could inadvertently trigger OTHER rules (R09/R15/R16/R22...), which would confound. I must report all failed rule ids and treat "caught by a rule other than R12" as a separate category (not evidence for the R12 patch). The harness reports rule_ids per gate; I'll classify.
+
+I should also run base and patched and flash11. For each probe, capture:
+- canonical_base verdict + rule_ids
+- canonical_patched verdict + rule_ids
+- flash11 verdict + rule_ids
+- classification:
+  - r12_caught_by_patch (patched reject with R12)
+  - escaped_patch (patched accept)
+  - non_r12_confound (patched reject without R12)
+
+Falsifier for the new task:
+"FD-13-LEXCEIL falsifier: FIRED IF (a) any probe in family C (no INEXTENDIB token, semantics = non-geodesic inextendibility) is rejected by the patched gate at R12 (i.e. the patch is not merely lexical — then the ceiling claim is false at these probes), or (b) any family-B punctuation-joined probe is rejected by the patched gate (patch is not punctuation-sensitive — then my mechanism claim is false), or (c) any control is rejected (false positive), or (d) asserted pin hashes move."
+
+Expected results: (a) not fired (family C accepted), (b) not fired (family B accepted → patch punctuation-sensitive), (c) not fired. So the falsifier is NOT fired and the result: patched R12 catches only period/semicolon-separated INEXTENDIB leaks; escapes comma-joined token leaks and all token-free paraphrases. Conclusion: the patch is an improvement over base but remains lexical; the class-crossing channel is NOT closed. That's a solid, falsifiable, bounded measurement.
+
+Now, binding: FROZEN may have moved to rev30 (pass 07 measured rev29 pins). Let me check the current FROZEN.json hash/revision and the WCC schema hash. I read FROZEN.json above at ~01:10, rev29 (815e08079aefbc is FROZEN's own hash? In my status I cited `artifacts/formulation/FROZEN.json#815e08079aef`. Note FROZEN.json's internal revision 29 and its content hash from my checkpoint is 815e08079aefbc...). But the CF-27 says FROZEN moved within same revision. Let me measure the current hash and schemas before running.
+
+Also important: my earlier fd13 measurement wrote fixtures based on ANCHOR in WCC. Let me verify the anchor is still unique in the current WCC, and check which field it's in. Let me read the WCC around the anchor and confirm non_vacuity.condition.
+
+Plan of execution:
+1. Write `artifacts/flash-11/f1_aux_class_binding/fd13_lexceiling/lexceiling_probe.py` (new, own path).
+2. It verifies pins (canonical tool 000e09e4, rule_spec 40f9bb9e, KEY_MANIFEST 014e2d30, patched 5eaab3f8, flash11 a89b221c; schema hashes recorded), snapshots WCC, builds probes + controls, runs 3 gates on each, writes `lexceiling_results.json`.
+3. Run it.
+4. Write README.md summarizing finding, mechanism, minimal repro, proposal implication, caveats.
+5. SHA256 all artifacts.
+6. Emit outbox events (artifact + status with IDs, evidence_refs path#hash, falsifier/next_falsifier) — append to comms/outbox/deepseek-flash-11.jsonl.
+7. Write worker checkpoint `runtime/state/flash-11_checkpoint_fd13_lexceiling.json`.
+8. Verify events ingest? Running `comms.py ingest` is controller-only; I shouldn't. Actually the protocol says accepted stream is written by `research_map/comms.py ingest` only; workers just write outbox. I can optionally run validate? No, leave ingest to controller/cycle.
+
+Wait — "checkpoint" might also mean run the 15-min cycle `run_cycle.py`? No — that's controller. Worker checkpoint file is the convention (flash-11_checkpoint_rev29.json exists, w078 checkpoints). I'll write a worker checkpoint JSON, and additionally emit a `status` event with `checkpoint` reference.
+
+One concern: artifact path convention. Lead said keep code under artifacts/flash-11/, and my assigned artifacts were artifacts/flash-11/f1_aux_class_binding/*. I'll write under `artifacts/flash-11/f1_aux_class_binding/fd13_lexceiling/`.
+
+Another concern: Should I attempt `python3 research_map/comms.py ingest`? No. But I might check that my JSON lines are valid by parsing them.
+
+Budget: This is ~0.5-1.0 agent-hour of work. Fine as one bounded unit.
+
+Let me first check the anchor and the field in the current WCC, plus current pin hashes.
+dsh: reasoning:
+All pins match FROZEN rev29:
+- FROZEN.json 815e08079aefbc
+- WCC d9cebb9404b2 (rev13)
+- C2 e9a27996dfd3
+- C0 b2ab6acb2bbe
+- tool 000e09e4, rule_spec 40f9bb9e, KEY_MANIFEST 014e2d30, patched 5eaab3f8, flash11 a89b221c.
+
+The field is `non_vacuity.condition` and it already contains "future geodesically incomplete" → the GEODESIC token is present in the field. So base accepts any appended "inextendib" sentence in that field. The anchor is at the end of the condition string.
+
+Now design probes precisely. The field text ends with `...(worker-16 F1-16-03 accepted)."`. My build_fixture appends a sentence between the anchor's `."` → modifies to `.(sentence)".` Wait: ANCHOR = `(worker-16 F1-16-03 accepted)."` and the code does `ANCHOR[:-1] + sentence` where `ANCHOR[:-1]` = `(worker-16 F1-16-03 accepted).` and sentence begins with a space. So the result: `(worker-16 F1-16-03 accepted). <sentence>"` — i.e., the sentence is inserted before the closing quote, after the final period. Good.
+
+Probe families and expected behavior:
+
+Family A — token leaks separated by period (patch's intended catch):
+- A1 ` The maximal development is C^2-inextendible.` (literal; known)
+- A2 ` The maximal development is future-inextendible as a Lorentzian manifold of the same regularity.`
+- A3 ` No extension of the development exists beyond this boundary; the development is inextendible.` — contains semicolon; the split regex splits on `(?<=[.;])\s+` so this yields clauses: "...exists beyond this boundary;" and "the development is inextendible." → second clause has inextendib, no geodesic → caught. Good.
+
+Family B — token leaks comma/and-joined to geodesic words (patch's punctuation blind spot):
+- B1 ` The spacetime is geodesically complete, and the maximal development is C^2-inextendible.` (one clause: contains geodesic+inextendib → exempt)
+- B2 ` Singularities are witnessed by future-inextendible causal geodesics, but the maximal development is also inextendible as a C^{1,1} manifold.` (one clause with both tokens; the leak assertion is non-geodesic. Escapes.)
+- B3 ` The data are future geodesically incomplete, while the maximal development is inextendible.` (clause has both → exempt.)
+
+Family C — no `inextendib` token, semantics = non-geodesic inextendibility (lexical ceiling; escapes both):
+- C1 ` The maximal development admits no extension as a C^{1,1} Lorentzian manifold.` — wait, does this trigger the FOREIGN C2-extension pattern? Patterns are `\bC2\b.{0,20}extension` and `\bC0\b.{0,20}extension`. "C^{1,1}" doesn't match. But R12's FOREIGN map also scans other families; let me read the full FOREIGN dict to know. Let me read lines 80-100.
+- C2 ` There is no isometric embedding of the maximal development into a larger Lorentzian manifold of the same regularity.`
+- C3 ` The maximal development cannot be continued beyond this boundary by any causal curve.`
+- C4 ` Every causal curve reaching the boundary has finite generalized affine length.` Hmm — semantically this asserts geodesic incompleteness (WCC-ish), not non-geodesic inextendibility. Maybe not a class crossing. Better: C4 ` The development is maximal; no larger C^{1,1} spacetime contains it as a proper open subset.`
+
+Controls (must be accepted by all three):
+- K1 existing: ` Any singular point is witnessed by a future-inextendible causal geodesic of finite affine length.`
+- K2 comma-joined geodesic: ` Every singular point is witnessed by a future-inextendible causal geodesic, and the boundary is reached at finite affine length.`
+- K3 split geodesic statement across clauses: ` Any singular point is witnessed by a future-inextendible causal geodesic. The boundary is reached at finite affine length.` (two clauses, both geodesic-ish; first has both tokens; second has neither → accepted)
+- K4 canonical WCC unchanged.
+
+Also, importantly, some probes may trigger OTHER rules (R09 etc.). We'll see rule ids.
+
+Classification per probe:
+- `base`: accept/reject + rules
+- `patched`: accept/reject + rules
+- `flash11`: accept/reject + rules
+- `r12_patch_effective`: base accept AND patched reject with R12
+- `escaped`: patched accept
+- `other_rule_catch`: patched reject without R12
+
+Falsifier (new task FD13-LEXCEIL, falsifiable):
+"FIRED IF (a) family C probe is rejected by canonical_patched (with or without R12) — the 'lexical ceiling' claim would be false (some non-token paraphrase is caught); or (b) family B probe is rejected by canonical_patched at R12 — the 'punctuation-sensitivity' mechanism claim would be false; or (c) any control K1-K3 is rejected by any gate, or the canonical WCC copy is rejected by canonical_base/patched (false positives); or (d) any asserted pin hash moves before/during the run (binding abort)."
+
+Expected: (a) not fired, (b) not fired, (c) not fired, (d) no move → falsifier NOT fired, result = LEXICAL_CEILING_CONFIRMED with the specific punctuation blind spot.
+
+Wait — for family C, if a probe accidentally triggers another rule (e.g., R15 overclaim), then patched rejects it → my falsifier (a) would fire spuriously. I define (a) as "rejected by canonical_patched at R12" and treat other-rule rejections as confounds to report, not falsifier firings. Better: state falsifier precisely as "family C rejected at R12 by canonical_patched" and separately report any other-rule noise. But the point of family C is precisely that no R12-catchable token exists; if it gets caught at R12 that means the regex catches it. If it gets caught by another rule, that's a confound (the probe didn't isolate R12) — I should report it and either replace the wording or mark it excluded. I'll write the probes to be minimal and semantically clean, and in the results mark confounds.
+
+Now, the plan for the script. Reuse code structure from build_and_run.py but self-contained, new dir. Include:
+- pin verification (hard assert on the 5 tool hashes + FROZEN schema bindings)
+- fixture build with per-probe sentence
+- gate runs
+- results JSON with everything + hashes
+- also write a `README.md`? Better: script writes `lexceiling_results.json`; I write README separately with the write tool (human-readable).
+
+Time to write the script. I'll be careful with YAML: appending to the condition string must not break YAML (no unescaped quotes/backslashes). Avoid double quotes in probe sentences; avoid `\` characters. Use plain text only. "C^{1,1}" contains `{` `}` `^` — fine inside a double-quoted YAML scalar? `{` at the start of a scalar would be flow mapping, but inside a quoted scalar it's fine. The condition value is double-quoted; inserting `C^{1,1}` is fine. Avoid `"` entirely. Avoid `:` followed by space inside? Inside quotes fine.
+
+One risk: YAML round-trip—we do pure byte replace, no parse by the builder; the gates parse it. If a probe breaks YAML parsing, the gate would return R01 structured rejection. I'll check parse results and treat R01 as a defective probe (rebuild).
+
+Let me now write the script. I'll also include the independent flash11 gate run. Its interface: `check_schema.py <path> --json`? In build_and_run.py, flash11 is invoked as `[sys.executable, spec["path"], fixture, "--json"]` with cwd BIND (f1_aux_class_binding). And parses payload[0] with keys verdict ACCEPT/REJECT, failed_codes, layout. Good.
+
+Note: `check_schema.py` (flash11, a89b221c) — is it self-contained? It might import from the same dir. cwd=BIND. Let me check quickly what it needs (e.g., a rule spec file next to it). Actually it ran fine in prior runs, so just replicate.
+
+Let me also double check whether the fd13 patched tool's environment in run needs `patched/rule_spec.json` etc. In build_and_run, they created HERE/patched/{tools/patched_check_class_schema.py, rule_spec.json, KEY_MANIFEST.json} then IMPLS["canonical_patched"]["path"] = HERE/"patched/tools/patched_check_class_schema.py" with cwd patched/tools. The tool resolves rule_spec from Path(__file__).parents[1] = patched/. Good. I'll reuse the existing patched env at fd13_rev26/patched/ (verify hashes).
+
+Let me read the rest of the FOREIGN dict to predict other-rule triggers.
+dsh: reasoning:
+The patched env is intact. Now let me write the lexical-ceiling probe script.
+
+Key design:
+- Probes in families A (token, clause-separated), B (token, comma-joined to geodesic), C (no token).
+- Controls K1-K4.
+- 3 gates: canonical_base, canonical_patched (use fd13_rev26/patched env), flash11.
+- Verify pins: tool 000e09e4, rule_spec 40f9bb9e, KEY_MANIFEST 014e2d30, flash11 a89b221c, patched 5eaab3f8; FROZEN.json revision+hash; schemas bind to manifest.
+- Snapshot the three canonical schemas into the new dir.
+- Classify results and evaluate falsifier.
+- Write JSON + a deterministic summary; print human summary.
+
+Also guard: check WCC anchor uniqueness, per-probe YAML parse sanity (let the gate's R01 indicate), and check the mutation of the right field (the anchor is inside non_vacuity.condition).
+
+Let me now write the file. Path: artifacts/flash-11/f1_aux_class_binding/fd13_lexceiling/lexceiling_probe.py
+
+I'll write it carefully with plain ASCII sentences (avoid smart quotes). Probe sentences:
+
+A1: " The maximal development is C^2-inextendible."
+A2: " The maximal development is future-inextendible as a Lorentzian manifold of the same regularity."
+A3: " No extension of the development exists beyond this boundary; the development is inextendible."
+B1: " The spacetime is geodesically complete, and the maximal development is C^2-inextendible."
+B2: " Singularities are witnessed by future-inextendible causal geodesics, but the maximal development is also inextendible as a manifold."
+B3: " The data are future geodesically incomplete, while the maximal development is inextendible."
+C1: " The maximal development admits no extension as a C^{1,1} Lorentzian manifold."
+C2: " There is no isometric embedding of the maximal development into a larger Lorentzian manifold of the same regularity."
+C3: " The maximal development cannot be continued beyond this boundary by any causal curve."
+C4: " No larger Lorentzian manifold of the same regularity contains the maximal development as a proper open subset."
+K1: " Any singular point is witnessed by a future-inextendible causal geodesic of finite affine length."
+K2: " Every singular point is witnessed by a future-inextendible causal geodesic, and the boundary is reached at finite affine length."
+K3: " Any singular point is witnessed by a future-inextendible causal geodesic. The boundary is reached at finite affine length."
+
+Careful with C1: does it hit other patterns? The FOREIGN["WCC"] patterns: "extension[_ ]regularity" no; `\bC0\b.{0,20}extension`? The clause contains "C^{1,1}" — no C0. `\bC2\b.{0,20}extension`? No "C2". Good. But the SCC foreign patterns are for SCC schemas; we're scanning the WCC schema for WCC-foreign tokens = SCC content? Wait: FOREIGN["WCC"] list is the list of tokens foreign to WCC (i.e., if found in a WCC schema, it's SCC content → fail R12). "INEXTENDIB_NON_GEODESIC" is in that list. So C1 ("no extension as a C^{1,1} Lorentzian manifold") has no listed token → escapes R12. Right.
+
+Wait, but R12 scans WCC schema for FOREIGN["WCC"] patterns — yes.
+
+Hmm, C4 might be caught by R09 (something else) or R15. We'll see; classify confounds.
+
+Also, the condition field already contains "geodesically incomplete". Note family A clauses: the field is one long string starting "G must contain data whose MGHD is future geodesically incomplete; ..." — the split by `(?<=[.;])\s+` creates clauses. A1's appended sentence becomes its own clause only if the preceding char is `."`? Let's see: the raw YAML contains `...(worker-16 F1-16-03 accepted). <sentence>"`. The split regex `(?<=[.;])\s+` splits after "." followed by whitespace. So "...(worker-16 F1-16-03 accepted)." ends a clause, and the appended sentence is a new clause. Good. The first clause contains "geodesically incomplete" but that's a different clause — the patch catches A1's clause.
+
+For B1: "...accepted). The spacetime is geodesically complete, and the maximal development is C^2-inextendible." — split: clause1 "...(accepted).", clause2 "The spacetime is geodesically complete, and the maximal development is C^2-inextendible." — clause2 has GEODESIC ("geodesically") → exempt. Escape. 
+
+For B3: "The data are future geodesically incomplete, while the maximal development is inextendible." — GEODESIC present → exempt. Escape.
+
+Base behavior: field-global GEODESIC present (the field starts with "future geodesically incomplete"), so all A/B probes accepted by base. Confirms base remains leaky.
+
+K3: clause1 "Any singular point is witnessed by a future-inextendible causal geodesic." (both tokens → exempt); clause2 "The boundary is reached at finite affine length." (no inextendib → exempt). Accept. Good.
+
+Now flash11 independent gate may behave differently — it might catch some. That's fine; measured.
+
+Also add the existing rev29 leak/control as historical comparators? The new probe set includes A1 which is essentially the same as leak_rev29; I can include the frozen rev29 leak/control fixtures as comparators by copying (their hashes) — but simpler: the A1 probe is the same sentence so it doubles as the comparator. I'll note it.
+
+Also include the unmodified canonical WCC as control K4.
+
+Now write the script. I'll produce results JSON with:
+- artifact, task_id "FD13-LEXCEIL-01", node F1, gate G-CLASSBIND, class_ids, assignment source
+- binding {pins, frozen, schemas}
+- probes: [{probe_id, family, sentence, fixture, fixture_sha256, intent, verdicts{gate:{verdict,rule_ids,detail/failures}}, classification, expectation}]
+- stats: {A_total, A_caught_patch, A_escaped_patch, B_total, B_escaped_patch, C_total, C_escaped_patch, C_r12_caught, controls_fp, confounds}
+- falsifier {statement, fired, fired_reasons}
+- conclusion
+
+Then print summary.
+
+Let me write it now. Use only stdlib. Timeout 90s per run.
+
+I also want the script to be re-runnable and self-contained (builds fixture files in its own dir).
+
+Let me create the directory and write the script with the write tool.
+dsh: reasoning:
+Wait, there's an issue: I use `fx.write_bytes(...)` for probes but then `sha256_file(fx)`; fine. But canonical targets: I write `canonical_<name>` copies from SCHEMAS in the loop `for name in SCHEMA_NAMES: (HERE / f"canonical_{name}").write_bytes(...)`. Then in CANON_TARGETS I use `orig = n` and `fname = f"canonical_{n}"`. Good.
+
+One issue: `run_gate` for canonical gates passes the fixture path; the tool resolves relative paths? We pass absolute HERE paths — fine.
+
+Another issue: for canonical patched cwd = CANON_PATCHED_ENV/"tools"; path = CANON_PATCHED = fd13_rev26/patched/tools/patched_check_class_schema.py. The tool resolves rule_spec/KEY_MANIFEST from Path(__file__).parents[1] = fd13_rev26/patched. Good.
+
+Potential issue: my fixture build uses `ANCHOR[:-1] + sentence` then appends `"`, so the closing quote follows the sentence. Good.
+
+Also `created_at` is None in JSON — I should set it from datetime. Let me fix that: use datetime.now with CST. Also I should validate all probe fixtures parse as YAML before running gates (the gates will report R01 if not, and I classify as confound). Better to explicitly check with yaml.safe_load if PyYAML available. The tool probably uses yaml. Let me add a quick pre-parse check in the script using yaml (available since the tools use it). If a probe fixture doesn't parse, mark it a build error. Let me add that.
+
+Also, in the summary I want `flash11` results for families too.
+
+Let me patch the script: add datetime import, created_at, yaml parse check per probe.
+
+Also note: `out["stability"]` is added after writing the file once, then rewritten — the final write includes stability. Fine but sloppy; ok.
+
+One more concern: the flash11 independent gate (check_schema.py) may require additional files or may behave differently with --json. Prior harness used the same invocation, so fine.
+
+Let me make the edits.
+dsh: reasoning:
+That edit was a no-op-ish (removed a blank line). Let me now add parse_errors into stats and set created_at, and include flash11 stats. Let me view the relevant portion of the file to edit precisely.
+dsh: reasoning:
+Now run the script. Note `import yaml` was moved above CST; also ensure `re` is no longer used in the script (I removed `import re` — check if `re` is used elsewhere). Let me grep. Also run a syntax check.
+dsh: reasoning:
+The probes broke YAML: the anchor `(worker-16 F1-16-03 accepted)."` — the `"` is the closing quote of the `condition` value. My replacement `ANCHOR[:-1] + sentence` = `(worker-16 F1-16-03 accepted).` + sentence, then the file continues with `"` — wait the anchor includes the closing quote, and replacing with `ANCHOR[:-1]+sentence` removes the quote and does NOT re-add it! So the condition string is unterminated. In build_and_run.py, they did the same... and it worked? Let me re-check: `out = base.replace(ANCHOR.encode(), (ANCHOR[:-1] + sentence).encode())`. ANCHOR = `(worker-16 F1-16-03 accepted)."` — 32 chars. ANCHOR[:-1] = `(worker-16 F1-16-03 accepted).` — drops the closing `"`. So the replacement removes the quote... unless LEAK_SENTENCE ends with `."`? LEAK_SENTENCE = `" The maximal development is C^2-inextendible.\""` = ` The maximal development is C^2-inextendible."` — yes! It ends with a quote. And CONTROL_SENTENCE ends with `\""` too. My sentences don't include the trailing quote.
+
+So I need to append `"` at the end of each sentence in the fixture build: `(ANCHOR[:-1] + sentence + '"')`. Or define sentences with trailing `"`. I'll fix the build to add the closing quote explicitly.
+
+Also note that `mutated_field_value` for the canonical copies... fine.
+
+Also the probe rows show A_base_escape=0 etc. because everything failed R01 (malformed). Let me fix the builder: replace with `(ANCHOR[:-1] + sentence + '"').encode()`.
+
+Also update the top docstring to mention sentences are inserted before the closing quote — already says that.
+
+Let me edit.
+dsh: reasoning:
+Also update `build_fixture` function (unused now? I have build_fixture defined but not called — probes use inline write). Let me check: `build_fixture` is defined but the main loop writes directly. It's dead code; either use it or remove. I'll leave it but make it consistent (add quote) to avoid confusion, or better, call it in the loop. Simpler: fix it too and remove the inline duplicate. Let me just fix it and use it in the loop for clarity.
+
+Actually simplest: fix build_fixture to append quote, and in the loop use `fx.write_bytes(...)`. The dead function is misleading. Let me remove build_fixture and keep inline. Or refactor loop to call build_fixture. I'll refactor: in loop, `meta = build_fixture(f"probe_{pid}.yaml", sentence)` then use meta. But row needs fixture path etc. Minimal edit: fix build_fixture and leave it; but dead code in a measurement script is bad. Let me just delete build_fixture and keep inline write (which is now correct).
+dsh: reasoning:
+Also add an anchor-uniqueness assertion in main before building probes. Let me add it after binding check. Then rerun.
+dsh: reasoning:
+Excellent, clean result:
+- A: 3/3 token leaks in own clause → base escapes 3/3, patched catches 3/3 at R12.
+- B: 3/3 comma-joined token leaks → base escapes, patched escapes 3/3 (punctuation blind spot).
+- C: 4/4 token-free paraphrases → base escapes, patched escapes 4/4 (lexical ceiling).
+- Controls: 6 controls × 3 gates = 18 checks, 0 false positives.
+- flash11 catches 4 R12 leaks total (A:3 + probably one B or C?). Let me inspect per-probe verdicts to report accurately. flash11_r12_catch_total=4 across A/B/C. Which ones? Let me look at results JSON.
+
+Also I want to double-check falsifier evaluation and stability. Let me inspect the JSON, then write the README, hash everything, emit events, checkpoint.
+
+Let me summarize the per-probe table.
+dsh: reasoning:
+Interesting extra data point: the independent flash11 gate catches B3 (it rejects it at R12) but not B1/B2. That's a differential disagreement (interesting but not the core). The summary's `flash11_r12_catch_total` = 4 (A1,A2,A3,B3). Note that the independent flash11 gate is one of the gates in the differential matrix; here it behaves differently from both canonical gates on B3. Worth noting as a finding: the independent implementation's R12 check is also token-based but with different clause logic; it catches B3 but not B1/B2.
+
+Wait, why would flash11 catch B3 but not B1/B2? Maybe its rule catches "inextendible" near end of string patterns. Not important; report as measured.
+
+Core result: the patched (clause-local) fix closes only clause-separated token leaks (A 3/3), and fails on punctuation-joined token leaks (B 0/3) and token-free paraphrases (C 0/4). Base escapes all 10 non-control probes. Controls 0 FP.
+
+Now note the falsifier: NOT fired. Also the pre-registered prediction was exactly this. Good.
+
+One more thing: I should include the existing rev29 leak fixture as a cross-check comparator? A1 is the identical sentence to leak_rev29 (mine): " The maximal development is C^2-inextendible." — yes, same. So A1 replicates the rev29 finding. Good, note it.
+
+Now:
+1. Write README.md for the fd13_lexceiling dir with finding, mechanism, minimal repro, measured table, falsifier, caveats, and implications.
+2. Compute sha256 of results + README + script.
+3. Append artifact + status events to comms/outbox/deepseek-flash-11.jsonl (valid JSON, event_id, event_type, created_at, actor, node_id, class_ids, task_id, gate, path, sha256, validation_status, evidence_refs, falsifier, next_falsifier).
+4. Write worker checkpoint runtime/state/flash-11_checkpoint_fd13_lexceiling.json.
+5. Optionally run `python3 research_map/validate_map.py`? That's controller; not needed. But I can sanity check that my outbox lines are valid JSON.
+
+Also, should I run the 15-min checkpoint (`python3 research_map/checkpoint.py`)? The worker convention is the worker checkpoint file (flash-11_checkpoint_rev29.json). The controller runs checkpoint.py automatically via run_cycle. I'll write the worker checkpoint file; that matches "checkpoint" in my prior iteration and other workers.
+
+Let me write the README now. Keep it precise and honest: unverified, worker-level, no canonical writes, lexical not semantic, caveats.
+
+Then events. Event IDs follow my convention: `flash11-FD13LEXCEIL-artifact-*` and `flash11-FD13LEXCEIL-status-*`. Let me use event ids with timestamp 20260912T0113.
+
+Evidence refs use `path#sha256-prefix` (12 hex chars).
+
+I need the hashes of:
+- lexceiling_results.json
+- lexceiling_probe.py
+- README.md
+- probe fixtures (a few, or the whole set?) — evidence_refs should include results + a representative fixture. The results JSON contains fixture hashes for all.
+- canonical pins: FROZEN 815e08079aef, WCC d9cebb9404b2, C2 e9a27996dfd3, C0 b2ab6acb2bbe, tool 000e09e46b2f, rule_spec 40f9bb9e657b, KEY_MANIFEST 014e2d301978, patched 5eaab3f8f031, flash11 a89b221c1c68.
+
+Let me write README first.
+dsh: reasoning:
+Now compute hashes and verify result reproducibility (re-run? The results JSON includes created_at, so re-running changes the hash — that's okay; the measurement values are deterministic. I could re-run once to confirm identical verdicts table; good practice. Let me do a second run into a temp label? The script always writes the same file. I could run it twice and compare the probes table ignoring created_at. That's a cheap determinism check. Let me do that: copy results to /tmp, rerun, diff the probes sections.
+
+Then compute sha256 of artifacts, write events, checkpoint.
+
+Let me run the determinism check.
+dsh: reasoning:
+Deterministic rerun: True. Note probe_A1 fixture hash = 90ae1b596294... which matches leak_rev29.yaml hash `90ae1b596294` from my prior status — good cross-check (A1 is byte-identical to the rev29 leak fixture).
+
+Current hashes after rerun:
+- lexceiling_probe.py 4c294d6c091d
+- lexceiling_results.json ceb0403232af
+- README.md 9512fbfc5cd5
+- probe fixtures as above.
+
+Now emit outbox events. Format requirements per PROTOCOL.md:
+- Every event needs `event_id`, `event_type`, `created_at`, `actor`.
+- artifact event: node_id, artifact_type, path, sha256, validation_status.
+- status event: node_id, status (queued|active|blocked|done|rejected|killed), hours, summary, evidence_refs, next_falsifier.
+- claim event: class_id, statement, conclusion_type, assumptions, falsifier, evidence_refs, artifact_refs (required for theorem).
+
+I'll emit:
+1. artifact events for: lexceiling_results.json, lexceiling_probe.py, README.md (3 events), maybe one for the probe fixture set (could reference A1/B1/C1 hashes in the status instead).
+2. One status event (task FD13-LEXCEIL-01, node F1, gate G-CLASSBIND, class_ids, hours ~0.8, status active, summary with the numbers, evidence_refs with hashes, falsifier, next_falsifier).
+3. Possibly a `claim`? The task's deliverable is a measurement, not a theorem. A claim event with conclusion_type "measurement"/"empirical" could be appropriate, but the protocol's claim schema includes class_id; worker claims are recorded as completion_claims? Only `theorem` requires artifact_refs; but the safer route: status + artifact events. My prior events used artifact + status only. Keep that convention.
+
+Let me build the events with python to ensure valid JSON and correct created_at. Timestamp: 2026-09-12T01:14:30+08:00 (approx now). Let me get the actual time.
+
+Important IDs (12-hex prefixes):
+- FROZEN 815e08079aef
+- WCC d9cebb9404b2
+- C2 e9a27996dfd3
+- C0 b2ab6acb2bbe
+- tool 000e09e46b2f
+- rule_spec 40f9bb9e657b
+- KEY_MANIFEST 014e2d301978
+- patched 5eaab3f8f031
+- flash11 gate a89b221c1c68
+- results ceb0403232af
+- probe script 4c294d6c091d
+- README 9512fbfc5cd5
+- A1 90ae1b596294
+- B1 5e554a8e2e3a
+- C1 9aa076864f0d
+
+Also maybe include a fixture-set digest: a sha256 over sorted "name hash" lines. Let me compute a set digest for evidence. I'll compute `sha256` of the sorted `probe_id fixture_sha256` lines and cite it in the status.
+
+Now write the events appended to comms/outbox/deepseek-flash-11.jsonl. Must be one JSON object per line.
+
+Check: does the ingest require specific fields for artifact events? Let me look at comms.py ingest schema quickly to make sure my events are accepted (e.g., required `artifact_type`, `path`, `sha256`, `validation_status`; and status requires `summary`). My previous events followed it and were accepted. Let me check the events.schema.json quickly for required fields.
+dsh: reasoning:
+Note: `status` event type is not in the schema's oneOf! But the map's ingest must handle status specially (my prior status events were accepted — events_applied included them; status events appear in events.jsonl). The schema validation may only apply to some types. Let me check comms.py ingest to see how it validates. My previous status events were applied, so it works. Let me not worry, but verify by checking that events of event_type status exist in events.jsonl (yes, tail showed status). Good.
+
+Now write the event emission script. I'll append 4 artifact events + 1 status event. Keep the artifact events to 3 (results, script, README) + maybe 1 for probe set. I'll include probe set as an artifact event with path pointing to results? No — artifact event needs a real path. I'll cite the fixture-set digest in the status event instead, plus representative fixture hashes.
+
+Actually, 4 artifact events: results, script, README, and one representative fixture (A1 = the byte-identical replicator of rev29 leak). Hmm, each artifact event names one path. Let me do 3 artifacts + status. The status carries all evidence refs.
+
+Let me write with python appending. Then validate all lines parse and print the count. Then write the checkpoint file.
+
+For the status event:
+- event_type: status
+- status: active (not done; worker cannot set done)
+- hours: 0.8 (estimate for this iteration) — be honest: ~0.5-0.8h.
+- node_id: F1, gate G-CLASSBIND, group_id formulation, class_ids [...]
+- task_id: FD13-LEXCEIL-01
+- assignment_event_id: assign-FORM-DIFF-02-20260911T2331
+- claims_completion: false
+- summary: detailed
+- evidence_refs: path#prefix list
+- falsifier: full statement + NOT fired
+- falsifier_status: not fired
+- next_falsifier: "Apply the clause-local fix optionally; more importantly: a semantic (non-token) probe..." Actually next falsifier should be the next test: e.g., "Owner applies any R12 fix to canonical; re-run this probe set plus a punctuation-stripped twin set: the boundary claim re-fires if the patched gate then catches B1/B2/C1-C4, or if a control flips to reject. Also: worker-06 rephrased corpus as an out-of-sample semantic measurement."
+
+Also mention no canonical writes.
+
+Let me write the script.
+dsh: reasoning:
+Events appended and the whole outbox parses. Now the worker checkpoint file: `runtime/state/flash-11_checkpoint_fd13_lexceiling.json`, following the schema seen in w078 and my own flash-11_checkpoint_rev29.json.
+
+Include: checkpoint_id, actor, created_at, task_id, node_id, gate, class_ids, status, binding (pins), verdict (A/B/C counts, falsifier), artifacts (path+sha256), evidence_refs, non_claims, next_falsifier, map_at_write (map sha now), post_run_outcome maybe empty.
+
+Let me get the current map sha and write the checkpoint.
+
+Also, should I run `python3 research_map/validate_map.py` to make sure my map is still valid? Not needed; but running the controller checkpoint (`checkpoint.py`) is explicitly listed in PROTOCOL as a controller command; I'll skip. The worker checkpoint file is my "checkpoint".
+
+Let me also double check the final artifact inventory and hashes in one place, then write checkpoint.
+dsh: reasoning:
+Checkpoint written. Now, final verification steps:
+
+1. Verify the outbox lines are valid and the new event fields are complete (event_id, event_type, created_at, actor, node_id, artifact_type, path, sha256, validation_status for artifacts; status fields).
+2. Verify no canonical bytes were modified: quickly re-check the pinned hashes.
+3. Maybe check `python3 research_map/validate_map.py` still VALID (my writes don't touch map; cheap sanity).
+4. Optionally trigger ingest? No — controller-only. But the run_cycle auto-ingests every 15 min, so it will pick up my outbox.
+
+Let me do a final integrity check: pin hashes + outbox parse + checkpoint parse. Also confirm the results file has `stability` after the second write (yes, run wrote it again after adding stability — wait, in the second run, the script set out["stability"] and rewrote; the hashes I cited (ceb0403232af) were computed after the second run, and I ran determinism check after that. Let me re-verify the file hash matches what I cited in events (ceb0403232af). The events were written after the rerun, so yes, but double-check now.
+
+Also note: my events cite results hash ceb0403232af and I computed sha at event-write time — consistent.
+
+Final check commands.
+dsh: reasoning:
+The assertion failed on the artifact event because I checked for "created_at" — wait, the event has no `created_at`! Looking at the emitted event: I forgot to add `created_at` to the common dict. The protocol requires every event to have `event_id`, `event_type`, `created_at`, `actor`. The schema requires created_at. I must fix the events: append created_at to the new events (rewrite those 4 lines).
+
+Let me rewrite the last 4 lines of the outbox with created_at added. I'll read the file, patch the 4 events in place, and rewrite. Since I must not corrupt the file, do it in python: read all lines, for the 4 new events add created_at = "2026-09-12T01:14:40+08:00" (and maybe `updated_at`), write back.
+
+Also `validate_map.py` printed VALID (before my map? It validates map+events; my events aren't ingested yet so no issue).
+
+Let me fix now.
+dsh: reasoning:
+All good now. Let me do one final overall check:
+- Canonical pins unchanged: verified True earlier (and nothing changed since).
+- Outbox: 37 lines, all valid JSON, 4 new events complete and hash-bound.
+- Checkpoint exists and is valid.
+- results artifact exists with stability field, state LEXICAL_CEILING_CONFIRMED, falsifier not fired.
+- map validator VALID.
+
+One more consideration: the `status` event with `evidence_refs` referencing paths with prefixes verified. Good.
+
+Should I also ensure the `lexceiling_results.json` `stability` field's `tool_stable_during_run` is true? Yes it was.
+
+Now, one last item from the worker prompt: "emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit."
+
+Done:
+1. Valid JSON events (4) with IDs (event_id, node_id, task_id, assignment id, class ids), evidence (path#sha256), falsifier + falsifier_status, next_falsifier.
+2. Artifact hashes.
+3. Worker checkpoint file.
+
+Let me produce a compact final summary for the user. Also list the key files/hashes. And note that the controller will ingest at the next cycle; I did not ingest (controller-only).
+
+Let me get the final state of the outbox new events (created_at) and give the final answer. Maybe also do a final `ls` on the new dir.
+dsh: reasoning:
+Everything is in place. One cleanup: remove `__pycache__` from the artifact dir (created by py_compile). It's harmless but avoid leaving clutter. Let me remove it. Also the `/tmp/lex_r1.json` is outside workspace, fine.
+
+Then final answer summary.

@@ -1,0 +1,733 @@
+dsh: reasoning:
+Let me start by understanding the task. The user says: "You are Astra controller. Read ASTRA_HANDOFF.md and research_map.json. Consume comms and artifacts, maintain DAG and gates, issue bounded assignments, record hashes and validation. Keep numerics gated. One independent lifecycle then exit."
+
+I need to read the files in the workspace. Let me explore.
+dsh: reasoning:
+The workspace contains a directory `workdir/ai4math-swarm`. Let me read the ASTRA_HANDOFF.md and research_map.json at the main location (workdir/ai4math-swarm/).
+dsh: reasoning:
+The glob showed `workdir/ai4math-swarm/research_map/ASTRA_HANDOFF.md`. Let me read that and the research_map.json. Also HANDOFF.md, README.md.
+dsh: reasoning:
+This is a simulated multi-agent research swarm control task. I'm the "Astra controller". My job per the handoff:
+- Read `comms/inbox/<your-agent-id>.jsonl` first (my agent id is likely "astra" — let me check).
+- Pull accepted traffic: `python3 research_map/comms.py ingest`.
+- Maintain DAG and gates.
+- Issue bounded assignments, record hashes and validation.
+- Keep numerics gated.
+- One independent lifecycle then exit.
+
+The handoff says pass 09 ran at 01:22:04–01:22:05. Now what time is it? Files modified Sep 12 01:23. I need to run one independent lifecycle: `python3 research_map/astra_lifecycle.py --label <label>`. Let me first read the comms inbox, the research_map.json, the PROTOCOL.md, and understand the current state.
+
+Let me look at the workspace layout. Let me read README.md, research_map/, comms/.
+dsh: reasoning:
+The task: I'm the Astra controller. I should do one independent lifecycle then exit. Let me read the protocol and my inbox, then run the lifecycle. The handoff says the next pass tools are `python3 research_map/astra_lifecycle.py --label <label>`.
+
+My agent id — I'm "astra" presumably. Let me read `comms/inbox/astra.jsonl` (careful: line 4 is quarantined injection). And PROTOCOL.md. Let me also check the lifecycle script usage.
+
+Let me read PROTOCOL.md and astra.jsonl.
+dsh: reasoning:
+Interesting. The astra inbox has 4 lines, where lines 2-4 appear to be flagged as suspicious/injections (CF-30/CF-33). The handoff says:
+- CF-33: assignment card `astra-classsep-stabilize-0118` (verbatim sha256 `3167994548db`, line sha256 `9ff2edc1e684`) planted byte-identically in `comms/inbox/astra-lead-audit.jsonl:31` and `comms/inbox/astra.jsonl:4`. No accepted-stream self-emission, no astra outbox record, no lifecycle emission, future-dated created_at, dangling artifact ref. REC-43: not authority, not actioned, quarantined.
+- CF-30: earlier injected cards `human-pi-detector-fix-20260912T0100`, `astra-detector-fix-0105`, `astra-detector-patch-result-0112` remain recorded and quarantined.
+
+Line 2 starts with `event_id:human-pi-overnight-20260912T0042n{...}` — malformed. Line 3 is `astra-detector-patch-result-0112` — that's CF-30 (quarantined). Line 4 is `astra-classsep-stabilize-0118` — CF-33.
+
+So my job as controller: run one independent lifecycle (pass 10 presumably, label like `astra-indep-3`), then exit. The handoff describes the process:
+- `python3 research_map/astra_lifecycle.py --label <label>` — locked ingest → apply → repair → audit → checkpoint.
+
+But wait: the task says "Consume comms and artifacts, maintain DAG and gates, issue bounded assignments, record hashes and validation. Keep numerics gated. One independent lifecycle then exit."
+
+The prior pass (pass 09) ran as ONE independent lifecycle `astra-indep-2` at 01:22:04–01:22:05. So I should run the next pass as `astra-indep-3` or similar. Let me first examine `astra_lifecycle.py` to understand what it does and how to invoke it, and check for any pending new events (traffic continues; there may be new outbox events from leads since pass 09). Also the handoff mentions `astra_lifecycle_09_events.py` is idempotent pass-09 gate/assignment/notice events. For pass 10 I'd need to check whether new events need to be emitted (e.g., new gate refresh, new assignments/notices). The controller pass should:
+
+1. Ingest comms (accepted traffic).
+2. Apply events to map.
+3. Audit gates/evidence.
+4. Merge findings.
+5. Issue bounded assignments/notices for new state.
+6. Atomic map write + checkpoint.
+7. Record hashes and validation.
+
+I need to check the lifecycle script's CLI options. Let me read it (73KB, big). Let me first grep for argparse/def main and the label handling. Also check `astra_lifecycle_09_events.py` for the shape of pass-specific events so I can write a pass-10 events script if needed.
+
+Let me look at the tail of astra_lifecycle.py and its main.
+dsh: reasoning:
+Now I understand the pass structure. I need to run a new independent lifecycle (pass 10, label maybe `astra-indep-3`). But before that, per the task: "Consume comms and artifacts, maintain DAG and gates, issue bounded assignments, record hashes and validation. Keep numerics gated."
+
+The prior pass-09 script emitted gate records, assignments, notices. For pass 10, I need to:
+1. Ingest new traffic (comms.py ingest) — the lifecycle does this.
+2. Apply events — lifecycle does this.
+3. Check what's new since pass 09 (outbox events after 01:22, artifacts).
+4. Possibly emit new pass-10 events (gate refresh with new hashes, new bounded assignments for newly opened work, notices).
+5. Run the lifecycle with a unique label.
+6. Record hashes and validation.
+
+Important note in the handoff: "traffic continues and the 15-minute auto-cycle (research_map/run_cycle.py) applies accepted events between controller passes; it moved the map from a2585ffc2152 (pass-08 exit) to 4cd5fc5e before this pass even started". So the map may have moved. Also the auto-cycle may be running every 15 min. Let me check for a running cycle process. And check if there's traffic after 01:22.
+
+First, let me check the state of the map: current sha, gates, publication status, etc. The map is 7.7MB — big. I'll use python to extract key fields.
+
+Also there may be new outbox messages after pass 09 (e.g., worker-093's containment scan result due 01:55, audit lead replies, etc.). Let me check outbox mtimes and the last events.
+
+Let me be careful about numerics: numerics_lock must stay LOCKED, N1 forbidden.
+
+Plan:
+1. Survey current state: map sha, gates, lock, latest lifecycle, checkpoint, events tail, outbox files newer than 01:22.
+2. Ingest new comms (via lifecycle).
+3. Determine newly-arrived accepted events and whether they require controller action (new gate evidence, assignments, notices).
+4. Write pass-10 events script if needed (idempotent) following pass-09 pattern; run it.
+5. Run lifecycle `astra-indep-3`.
+6. Validate map, record hashes, update ASTRA_HANDOFF.md for the next pass (the handoff is the durable state document — pass 09 updated it; I should update with pass-10 state and then exit).
+7. Report.
+
+"One independent lifecycle then exit" — so exactly one lifecycle invocation. Then exit. Updating the handoff is part of the controller's duty (the previous pass did it, as the handoff says "LIVE CONTROLLER STATE ... pass astra-indep-2 / 09").
+
+Let me start by measuring the current map and checking for new traffic. Note the auto-cycle could be running concurrently. Let me check processes.
+dsh: reasoning:
+Lots of new outbox traffic after 01:22:06 (the timestamps are epoch: 1789147336 ≈ 2026-09-12 01:22:16 +0800). So traffic continues at high rate.
+
+The handoff says pass 09 did one independent lifecycle at 01:22:04-05. Also, the auto-cycle runs every 15 min. I need to do pass 10. My label: maybe `astra-indep-3`. The user says "One independent lifecycle then exit". I should follow the established pattern: write a pass-10 events script with idempotent gate/assignment/notice events based on new evidence, then run the lifecycle once with a label like `astra-indep-3`.
+
+But wait — I need to consume comms and artifacts to determine what's genuinely new. Let me:
+1. Run `comms.py ingest` to pull new outbox traffic into events.jsonl (the lifecycle does this too, but for situational awareness I need to know what's in it). Actually running ingest now is fine and idempotent; the lifecycle will then find only remaining. But "one independent lifecycle" means the heavy locked pass should be run once. Running ingest separately is a normal controller command per the protocol ("Pull accepted traffic: python3 research_map/comms.py ingest"). Still, maybe better to first survey without writing, then let the lifecycle do ingest. But I need to know the new events to decide pass-10 events. Ingest is safe/idempotent and part of consuming comms. Hmm, but the lifecycle's report counts accepted events during its own run; if I ingest first, the lifecycle will report 0 accepted. The handoff reported "202 events applied (ingest: 88 accepted...)" from lifecycle. To keep the lifecycle report meaningful, I should do the ingest inside the lifecycle. But then how do I know what new events need controller action before writing the events script?
+
+Option: dry-run ingest to see acceptance, or inspect the raw outbox events directly (last N lines per file since 01:22) without writing. `comms.py ingest --dry-run`? Let me check comms.py for a dry_run option and whether there's a "report" of pending. The lifecycle calls `comms.ingest(dry_run=False, verbose=True)`. I can call `comms.ingest(dry_run=True)` myself to preview.
+
+Let me read comms.py to understand ingest semantics.
+dsh: reasoning:
+I can use `comms.ingest(dry_run=True)` to preview new events without writing. Let me do that and analyze what's new since pass 09. That gives me the material to decide what controller events (gate refresh, assignments, notices) pass 10 needs.
+
+Let me preview the ingest and summarize the new accepted events (types, actors, nodes).
+dsh: reasoning:
+81 new accepted events. Let me look at the meaningful ones: gate events from lead-numerics (1), blockers, claims, reviews, status of leads. Also the 1 rejected event.
+
+Let me print the new accepted events grouped: gate, blocker, claim, review, status (from leads), artifact for astra-lead-numerics.
+dsh: reasoning:
+There's a lot of new traffic. Important items:
+
+1. **Numerics lead life cycle 10**: emits a G-NUM gate event with corrected unmet text; claims stop-rule items 1-3 closed by three independent measurements; says N0 accept verdict is lead-audit-owned and not yet landed. Two blockers: (a) stale G-NUM unmet text in map — dischargeable by applying the lifecycle-10 gate event; (b) registration gap B-N0-R2-1: controller should register the three foreign-owned replication verdict hashes (artifacts/worker-046/..., worker-057/..., worker-081/...) in `runtime/state/artifact_hashes.json`, or extend the registry scan scope. Controller-owned.
+
+2. **worker-004 W004-DIR-01**: F0 canonical taxonomy asserts superseded strength direction at lines 94/200 while F1 rev13 asserts corrected direction. Blocker: controller disposition — either authorize F0 revision (voids G-F0 accepts; re-verification required) or record explicit erratum. This is a serious finding: F0 is frozen and G-F0 passed. CF-21 was about F2b coverage divergence? Let me re-read the handoff: "Residual CF-21 stays recorded". Also the handoff says "G-F0 PASSES and is unchanged... Any write to research_map/formulation_taxonomy.yaml voids G-F0." So worker-004's blocker asks for a disposition. This is new and significant. It might be a finding to record (CF-34?) and an assignment to the audit/formulation lead.
+
+3. **worker-027 hashbind census**: found B7 prefix-forgery vulnerability in `check_class_binding_drift.py` (tool owner's call), plus supplement-drift. New blockers/findings for F2a.
+
+4. **worker-025 L1 mirror dedup**: 3 merge proposals, 1 suspect mirror edge; blocker for L1 owner disposition.
+
+5. **worker-047 REC-37 crosswalk**: built, needs owner to land as VOCAB_CROSSWALK.json and re-emit FROZEN rev30; F-TC-1 naming adjudication.
+
+6. **worker-039 F0 canonical independent verify**: review/claim.
+
+7. **worker-036 review ledger self-evidence**: A1 coverage numbers binding issue — 11 accept-to-non-accept citation drifts, 24 shared-path collisions.
+
+8. Also there may be an important one: `deepseek-flash-02` F2b rev14 landing predicate.
+
+9. There's a "rejected" event (1). Let me see what was rejected.
+
+The task instruction says: "Consume comms and artifacts, maintain DAG and gates, issue bounded assignments, record hashes and validation. Keep numerics gated. One independent lifecycle then exit."
+
+So pass 10 should:
+- Ingest new traffic (in the lifecycle).
+- Apply events.
+- Update gates with refreshed hash-bound evidence (gate events from controller).
+- Issue bounded assignments for newly opened work (e.g., F0 direction erratum disposition, L1 mirror-edge disposition, B7 patch adoption, registration gap).
+- Record hashes (artifact_hashes.json registration for the three verdicts — controller-owned).
+- Keep numerics gated: G-NUM stays pending; numerics_lock LOCKED; N1 forbidden. Apply the corrected G-NUM unmet text? That's a gate event from the lead-numerics that the controller must adjudicate. The controller should not blindly accept lead gate text; but the lead-numerics gate event is advisory evidence for the controller. The controller owns gate text per REC-40. The blocker says the stale unmet text is in the map. Since N0 accept verdict is lead-audit-owned and not landed, the gate stays pending with the corrected unmet text.
+
+Let me look at more details:
+- The full G-NUM gate event from lead-numerics (event_id lnum-gate-756ea541f33f479e1802).
+- The rejected event.
+- The current G-NUM unmet text in map.
+- What's in artifact_hashes.json and whether we can register those three hashes (controller can measure from disk and register).
+- Check the pending assignments/in-flight and due times.
+
+Let me also check the "1 rejected" event.
+
+Also check what new events arrived after my dry-run preview (traffic continues; the 15-min auto-cycle may run at some point). The current time is ~01:24. The auto-cycle maybe runs every 15 min from some start. Let me check run_cycle.py and crontab-ish. Actually the handoff says the auto-cycle applies accepted events between controller passes. Let me check if there's a background process. `ps aux | grep run_cycle` returned nothing (the first command output only showed the "---" line... wait, no, the output began directly with "--- newer outbox..." meaning the ps grep found nothing). So no auto-cycle running as a process right now; maybe it's run by another agent periodically. Fine.
+
+Let me gather the remaining details. First the rejected event and the G-NUM gate event full JSON, plus the relevant map fields (gates text, numerics_lock), and artifact_hashes.json structure.
+dsh: reasoning:
+The rejected print failed because `r["rejected"]` is an int in the dry-run result (the dry-run result has "rejected": count, plus "accepted_events"). The rejected details aren't in the dry-run structure. Let me check `comms/rejected.jsonl` tail instead.
+
+Now let me think about what pass 10 needs to do. Given the amount of new traffic, the controller pass should:
+
+**A. Ingest + apply** (via lifecycle). The lifecycle does this.
+
+**B. Gate refresh**: The `findings_merge` and `gate_audit` in `astra_lifecycle.py` compute the gate audit and findings each pass. But gate *text* (unmet lists) is updated by controller gate events applied by apply_events.py. Pass-09 emitted `astra-indep2-gate-*` events. For pass 10, I likely need to emit `astra-indep3-gate-*` events with refreshed hash-bound unmet lists. The lifecycle's `gate_audit` produces analysis, but gate records in the map are the ones with `verdict`/`unmet`.
+
+**C. New findings**: The new blockers reveal genuinely new issues:
+- CF-34: F0 canonical taxonomy strength-direction contradiction (W004-DIR-01) — F0 frozen asserts superseded direction; F1 rev13 asserts corrected direction; G-F0 accepted on F0. Needs disposition: erratum vs revision (voiding G-F0). This is important and new.
+- CF-35: B7 prefix-forgery + supplement-drift in `check_class_binding_drift.py` (W027-HBC-F1/F2) — tool-hardening gap; a forged evidence record passes the durable HF-B1 binding check.
+- Possibly: L1 mirror graph defects (W025 findings), REC-37 crosswalk landing, registration gap B-N0-R2-1 (though that may be known as B-N0-R2-1 from the audit — was already an audit finding; the handoff mentions CF-32 etc. The numerics lead says "B-N0-R2-1 PROTOCOL-rule-2 registration gap ... controller-owned").
+
+Let me check existing CF list details to see if some of these are already recorded (CF-21 was F2b coverage?, CF-31/32). Let me print the findings titles from the map. Also check `controller_findings` for the live ones. And check `assignments` in-flight + new.
+
+**D. Assignments**: New bounded assignments for newly opened work:
+1. F0 direction contradiction disposition — to lead-formulation or lead-audit? The F0 taxonomy is frozen; any write voids G-F0. The blocker asks owner/controller disposition: authorize F0 revision (voids G-F0 accepts; re-verification required) or record explicit erratum. This is a high-impact scope question — perhaps record CF-34 and assign `astra-life05-verify-f0dir` (lead-audit) to adjudicate independently, and/or decide erratum ourselves? The controller can record findings but F0 byte move voids G-F0. Handoff says "Any write to research_map/formulation_taxonomy.yaml voids G-F0." So the disposition is: do NOT write F0; record an erratum in the map/findings declaring the F0 direction labels a known residual, OR authorize a revision which would void G-F0 and require re-verification. Given "improve epistemic quality before increasing parallelism", the safe controller ruling: F0 stays frozen; record erratum; require the rev14 formulation pass to bind the corrected direction and add an explicit erratum note; G-F0 acceptance stands on the canonical bytes with the erratum recorded. But this is a substantive adjudication; the controller can issue it as a finding + bounded assignment to produce the erratum record and check consistency of all dependent artifacts. Hmm. The controller maintains gates; it can rule.
+
+Actually, wait. There's a subtlety: F0 asserts "SET is strictly stronger" at lines 94/200 but F1 rev13's direction correction says single-q => SET... and the taxonomy's superseded direction is wrong. The canonical taxonomy's class labels are used by numerics for class AF-WCC-SCALAR-SPH. If F0 text is wrong on a direction claim, that's a content defect in a frozen artifact — like CF-21 (residual). Options: (a) void G-F0, require rev6 and re-acceptance; (b) record erratum to be folded in a future sanctioned revision while G-F0 stands "at the frozen bytes with known textual defect". The handoff culture: "Prefer fewer accepted claims with verified scope"; "a completed node requires artifact and validation evidence". Given G-F0 was accepted with 7 distinct independent accepts at 0abb9ed8a961, and the defect is a textual direction label, the controller's likely ruling is to record the erratum (CF-34) and keep G-F0 pass at unchanged bytes, with a mandatory follow-up revision authorized only through the normal gate process... But careful: F1 rev13 binds F0 hash; if the direction contradiction means F1's f0_binding references a taxonomy that contradicts F1, then the binding is semantically inconsistent. Still, an erratum can fix the label.
+
+Actually, I should check what W004-DIR-01 actually says in full and whether the audit lead has an opinion. Also check if there are review files on disk (reviews/F1-rev13-strictness-direction-worker-004.json). Let me read the report/review to decide the disposition.
+
+2. B7 prefix-forgery: assign adoption of the four-hunk patch to the tool owner (worker-005?) or the formulation lead; this is F2a support tool, G-FORM. A bounded assignment e.g. `astra-life10-hf-b1-patch` to the tool owner to adopt/reject with regression evidence.
+
+3. L1 mirror dedup: assign L1 owner (lead-literature) to disposition 3 merge proposals + correct SRC-093 edge. Bounded assignment.
+
+4. REC-37 crosswalk landing: already covered by FROZEN rev30 rev14 assignment? The rev14 pass is authorized to fold REC-37 token crosswalk — handoff says "the ONE authorized rev14 / FROZEN rev30 ... folding the F2b D1/D2 repairs, F2a category pin, REC-37 token crosswalk, SET level label, f1-suite rebind and acceptance-corpus rebind". So worker-047's blocker (landing crosswalk + F-TC-1 naming adjudication) is within that assignment scope. Maybe add a notice to lead-formulation, or a bounded assignment for F-TC-1 naming adjudication. F-TC-1: F0 genericity allowed entry `dense_open` vs registry alias `open_dense` — needs naming adjudication. That's a small bounded decision for lead-formulation (owner of VOCAB_ALIASES) maybe.
+
+5. N0 registration gap (B-N0-R2-1): controller-owned; I can register the three foreign-owned replication verdict hashes in `runtime/state/artifact_hashes.json` by measuring them. That's "record hashes". The lifecycle's `measured_hashes` covers numerics/, artifacts/numerics/, evaluation_rubric.yaml — not artifacts/worker-*/. The registry is at runtime/state/artifact_hashes.json. Let me inspect how it's built (checkpoint.py) to see whether I can add entries or extend scope. The controller can measure + record. The blocker says "Controller registers the three measured hashes (or extends the artifact_hashes.json scan scope to artifacts/worker-*/)". Extending the scan to all artifacts/worker-* might be huge (hundreds of MB / many files) and slow. Better: add the three specific entries to artifact_hashes.json in the controller pass? But checkpoint.py regenerates it each lifecycle — would it wipe manual additions? Let me read checkpoint.py.
+
+6. The G-NUM gate text refresh: emit `astra-indep3-gate-gnum` with the corrected unmet (stop-rule closed) and verdict pending, citing the new evidence. Also the audit-owned N0 accept is not landed.
+
+7. worker-036 review ledger: A1 coverage drift (11 accept-to-non-accept citation drifts, 24 shared-path collisions) — this is an audit-lead-owned disposition; maybe record as evidence for A1 and a notice. It affects G-AUDIT A1 coverage. Could be a finding (CF-36?) or a blocker to record.
+
+8. F2b rev14 predicate (worker-002): advisory instrument for the rev14 landing; already routed to lead-formulation/lead-audit. Not new assignment.
+
+9. worker-039 F0 canon verify: independent evidence about F0 canonical taxonomy — likely relevant to the F0 direction question (worker-039 verifies alias->canonical equivalence). Not blocking.
+
+Before deciding, let me look at:
+- The map's current findings list (titles/status) to avoid duplicating.
+- The current in-flight assignments (assignments array: ids, assignees, due, status).
+- The `review_coverage`, `publication_status` from last lifecycle.
+- The new outbox traffic after my dry-run (traffic continues; need to re-preview right before emitting events).
+
+Also, I must respect "One independent lifecycle then exit": I should run exactly one `astra_lifecycle.py --label astra-indep-3`. The pass-10 events script (like `astra_lifecycle_10_events.py`) emits events *before* the lifecycle, so they get applied by the lifecycle's apply step. Pass 09 did the same: `astra_lifecycle_09_events.py` emitted gate/assignment/notice events, then presumably lifecycle ran. Looking at pass-09 report: gate events `astra-indep2-gate-*` applied during the 01:22:04 lifecycle, so the events script ran just before.
+
+Order:
+1. Read state, decide rulings.
+2. Write `research_map/astra_lifecycle_10_events.py` — idempotent, fail-closed on pins (F0 taxonomy hash, detector hash, numerics solver absence, etc.), emitting:
+   - gate refresh events: G-F0 (pass, unchanged), G-FORM (pending), G-LIT (pending), G-NUM (pending, corrected unmet), G-AUDIT (pending)
+   - new bounded assignments (2-3 max)
+   - notices to leads
+   - possibly findings/repairs events? Findings are merged by `findings_merge()` in astra_lifecycle.py, which I can extend with CF-34 etc. — pass 09 added CF-33 in findings_merge. I need to add new findings there for pass 10 if genuinely new.
+   - controller_repairs: move/copy registration entries? `controller_repairs()` currently returns a list of repair log entries (tool_repair). It doesn't modify artifact_hashes.json. I could handle the registration in the events script: measure the three files and append to `runtime/state/artifact_hashes.json`... but checkpoint.py may rebuild it. Let me check.
+
+Let me inspect checkpoint.py and the artifact_hashes.json structure now. Also check `controller_repairs()` and `controller_gate_audit` to understand how much the lifecycle recomputes automatically.
+
+Also note: `astra_lifecycle.py` calls `comms.ingest` then `apply_events.main`. `apply_events.py` applies accepted-but-unapplied events to the map. So the events script must append to `research_map/events.jsonl` (via comms.append_event) *before* lifecycle runs. But will apply_events pick up events not "seen"? apply_events marks applied. Let me read apply_events.py main to understand: it loads events, applies those not yet applied. The events script writes to events.jsonl directly. Pass-09 script uses `comms.append_event`? Let me check the rest of the pass-09 script to replicate the pattern exactly. Let me read lines 80-317.
+dsh: reasoning:
+Good — now I understand the pattern. For pass 10, I need to write `astra_lifecycle_10_events.py` similarly. Let me now check a few more things:
+
+1. What new events arrived *after* my dry run (traffic continues). I'll re-preview before emitting.
+2. The existing findings (CF-21, CF-31, CF-32, etc.) to avoid duplication; specifically, does a finding exist for the F0 direction contradiction? Let me print the findings summary from the map.
+3. Current in-flight assignments and their due dates/statuses.
+4. The `artifact_hashes.json` structure + checkpoint.py behavior (for the registration gap B-N0-R2-1).
+5. `findings_merge` in astra_lifecycle.py: how CF findings are generated; I need to add CF-34/35 there for this pass if appropriate. Actually findings_merge() computes findings from measured state each pass — it likely has hardcoded CF entries with conditions. Let me read the relevant part around lines 385-900 to see the structure and how CF-33 was added.
+6. `gate_audit()` to see what it checks.
+
+Let me read the findings_merge function. It's ~500 lines; let me read in chunks, focusing on structure and the tail where CF-31/32/33 are.
+dsh: reasoning:
+Now let me look at the tail of findings_merge (CF-29..CF-33) to see how they're structured and where I'd add CF-34/CF-35. Also check `controller_repairs` function (line 904+), and `gate_audit` (line 259+) to understand the gate audit structure/statuses it computes.
+
+I should be careful about scope: the user asked for a bounded controller lifecycle. I shouldn't over-engineer. But the pass should genuinely consume the new evidence, refresh gates, issue bounded assignments, and record hashes.
+
+Let me read the end of findings_merge (~lines 780-905) and controller_repairs.
+dsh: reasoning:
+Now I understand `findings_merge`: it has a `want` list (CF-7 through CF-33) that gets rewritten each pass; order preserved. It doesn't include CF-1..CF-6 in `want` (they're preserved via by_id/order). To add CF-34/CF-35 for pass 10, I'd add entries to the `want` list. That's a code edit to `astra_lifecycle.py`, which is a controller tool — allowed and consistent with pass-09 behavior ("Findings live in research_map/astra_lifecycle.py::findings_merge (CF-33 added this pass)").
+
+Now, how do findings relate to gate audit and assignment issuance? Findings are recorded in the map; assignments are events. For pass 10, I'll:
+
+1. Add CF-34 (F0 direction contradiction) and CF-35 (B7 prefix-forgery/supplement-drift) to findings_merge — these are genuinely new, evidence-backed findings that block G-FORM/G-AUDIT quality.
+2. Write `astra_lifecycle_10_events.py` emitting refreshed gate records (5 gates) with corrected unmet lists, and bounded assignments:
+   - `astra-life10-f0-direction` → worker-004? No — assignment must go to a bounded executor; the disposition is owner/controller. Actually worker-004 already did the independent verification and reported. The controller can rule: record erratum (no F0 write) and require the authorized rev14 to carry the direction correction in F1 and an erratum note; keep G-F0 pass at unchanged bytes. But does the controller have authority to rule? Yes — the controller owns gates. Handoff: "Only the controller and group leads can move [statuses/gates]". "High-impact scope changes are escalated to the Human PI." Voiding G-F0 would be high-impact; instead, record erratum (not voiding) and have the audit lead independently verify the direction claim and erratum text (`astra-life10-verify-f0dir`, lead-audit, bounded). Hmm, but W004-DIR-01's finding says F0 lines 94/200 assert the superseded direction and F1 rev13 asserts corrected direction; independent proof agrees with rev13. The erratum is the low-risk disposition: F0 bytes stay frozen (G-F0 pass unchanged), an erratum item is recorded in the map as a known residual (CF-34, status recorded-erratum-pending), and the formulation rev14 may not write F0 (only the erratum record in map + a companion note under artifacts/formulation/). Also the F0 companion supplement d7419b4e8963 records D1 as "F0 was stronger" (W004-DIR-02 minor).
+   - `astra-life10-hf-b1-patch` → worker-005 (owner of check_class_binding_drift.py) or a fresh worker to adopt/reject W027's four-hunk patch with mutation controls. The blocker says tool owner must adopt/reject. Which agent owns it? `artifacts/worker-05/verify/check_class_binding_drift.py` — worker-05. But assignments usually go to current worker ids; worker-005 exists? The audit leads manage their workers. The controller can assign to a specific worker (like pass-09 assigned worker-093). I'll assign a bounded verification task to a worker (e.g., worker-005 or worker-002 if free). Let me check which workers are active/recently used and their inbox/assignment patterns. Simplest: assign to the formulation lead? No — the controller issues bounded assignments to execution agents, and pass-09 assigned directly to worker-093. I can assign to worker-005 (the tool author) via its inbox. But is worker-005 still alive? Let me check recent outbox from worker-005 or worker-05. There's `artifacts/worker-05/verify/...` which may be older naming. Let me check.
+   - `astra-life10-l1-mirror` → worker-025 (already did the measurement) — no, the blocker needs owner disposition by lead-literature; a bounded assignment to the literature lead could adjudicate the 3 merge proposals + SRC-093 edge. Since leads are agents too, assignment to `astra-lead-literature` is fine (like `astra-life05-verify-l0-final` assigned to lead-audit).
+   - `astra-life10-f-tc1` → lead-formulation for the dense_open/open_dense naming adjudication? That's small, but the rev14 pass is already due 02:15 and includes REC-37 token crosswalk. The F-TC-1 naming adjudication blocks full crosswalk coverage — include a notice to lead-formulation rather than a separate assignment, or fold into rev14 assignment scope (rev14 already in flight; per CF-12 rule, don't duplicate an open assignment naming the same canonical path). A notice is right.
+   - N0 registration gap: controller repair — register the three foreign-owned verdict hashes. Let me see whether I can do that with a durable mechanism: add a `controller_registrations` section? Actually simplest: measure them and append to `runtime/state/artifact_hashes.json` under their paths, if checkpoint.py preserves existing entries. Let me read checkpoint.py.
+3. Notices: 
+   - `astra-life10-notice-f0dir` to lead-formulation + lead-audit (erratum ruling, no F0 write).
+   - `astra-life10-notice-gnum` to lead-numerics (registration gap closed by controller; G-NUM text corrected; N0 accept remains audit-owned).
+   - Maybe `astra-life10-notice-l1` to lead-literature.
+   - `astra-life10-notice-hfb1` to lead-formulation/audit? If assign to worker directly, notify the owner lead.
+
+Also REC-37/F-TC-1 and F2b rev14/predicate items: mention in G-FORM unmet.
+
+Also worker-036's A1 review-ledger finding (11 accept-to-non-accept citation drifts, 24 shared-path collisions) — new evidence for A1; add to G-AUDIT unmet and maybe a finding? The review-coverage audit is already CF-31-family? CF-31 is F2b coverage divergence; this is a broader review-ledger provenance problem: "bind coverage counts to review-file hashes rather than record counts; disposition the 11 accept-to-non-accept citation drifts (5 gate-scoped) and the 24 shared-path collisions before promoting any coverage number." That's a substantive new finding — maybe CF-36, status "adjudication-required", action: A1 coverage claims must be hash-bound; the audit lead's A1 adjudication must disposition drifts/collisions. But careful: findings inflation. The handoff culture encourages recording real findings. I think CF-36 is justified: it's a distinct, measured integrity issue (review ledger vs disk bytes), with hard evidence (worker-036 report) and gate impact (A1/G-AUDIT + G-FORM coverage claims). It could be major.
+
+Let me also check the audit lead's latest outbox events (after 01:22) — maybe it already landed the N0 accept or A0 verdicts. Let me re-preview ingest now (a few minutes have passed) and check for lead-audit events. Also check the newest events from leads.
+
+Actually, my dry-run preview above was at 01:24:06. Let me re-run it now and filter for lead events and reviews/claims since then to catch anything material. Then finalize the pass-10 plan.
+
+Also check: is `astra-lead-audit` N0 accept landed? The numerics lead says no. Let me check `reviews/N0-review-final-verify.json` (revise 3.5) and any new N0 accept event.
+
+Let me check assignments in the map: statuses/due for in-flight ones, and look at the events applied for `astra-life08-formulation-rev14` etc. Also check `deepseek-flash-02` claim (F2b predicate) — fine.
+
+Time check: it's ~01:26. The rev14 due 02:15, r3 02:45, etc. My pass should be quick.
+
+Let me now:
+(a) inspect checkpoint.py
+(b) inspect artifact_hashes.json structure
+(c) check the three N0 verdict files exist and measure hashes
+(d) check worker-005 availability / naming
+(e) list current open assignments from map
+(f) re-preview new traffic for lead-audit/numerics/formulation/literature events since 01:24.
+dsh: reasoning:
+Key facts:
+- `artifact_hashes.json` = `{"hashes": ev["hashes"], "registry": ev.get("registry", {})}` produced by `audit_evidence.audit(map_path)`. So the registry is rebuilt from audit_evidence's scan. To register the three foreign-owned verdicts durably, I need to look at `audit_evidence.py` to see how `hashes` and `registry` are built, and whether there's a declared extra-paths mechanism. If I add them manually to artifact_hashes.json, the next checkpoint will overwrite. Better: extend `audit_evidence.py` to include specific controller-registered paths (e.g., a declared list in the map, or extra roots). The numerics lead suggested "extend the artifact_hashes.json scan scope to artifacts/worker-*/". Scanning all worker artifacts could be enormous (artifacts/ has 126 worker dirs; maybe tens of thousands of files). Let me check audit_evidence.py to see the scan design and registry size.
+
+- The three files exist with measured hashes matching the declared refs: 814452111bc8, b906445878f3, 65ae766d9e4c. Good — controller can register them.
+
+Let me read audit_evidence.py.
+dsh: reasoning:
+I see. The registry scan roots are hardcoded: schemas, ledger, numerics, reviews, evaluation, artifacts/numerics, runtime/state/controller_verification, plus evaluation_rubric.yaml. The three foreign-owned verdicts are under `artifacts/worker-046/`, `artifacts/worker-057/`, `artifacts/worker-081/` — not covered.
+
+Repair options:
+1. Add a targeted registration list to `audit_evidence.audit()` — e.g., read `m.get("registry_extra_paths", [])` from the map, or a fixed list of controller-registered evidence paths. A clean approach: support a map field `evidence_registry_additions` (list of paths) and register those files. Then the controller adds those three paths to the map via an event? Hmm, apply_events handles specific fields. Alternatively hardcode a small list in audit_evidence.py: `EXTRA_REGISTRY = [...]` with a comment. But hardcoding three specific foreign artifacts is less principled; a map-declared list is better and avoids repeated code edits.
+
+Simplest robust repair consistent with the architecture: in `audit_evidence.py`, after the root scan, register every path declared in `m["gates"][*]["evidence_refs"]` and in `m["assignments"][*]["artifact"]`/`evidence_refs` that exists on disk and is a file under `artifacts/`? That could register thousands over time but bounded to declared refs. Actually more principled: the gate evidence refs are exactly what PROTOCOL rule 2 needs registered. The B-N0-R2-1 gap is that G-NUM's criteria cite three paths not in the scan roots. Registering all declared gate evidence refs (files that exist) would close it and future-proof.
+
+But careful: evidence_refs contain strings with `#sha256-prefix` suffixes, `reviews/` dirs, etc. Need to strip `#...`. Also some refs are directories. Register files only (or directories via artifact_digest). This would add maybe a few hundred entries — acceptable.
+
+Minimal and targeted: add a helper that registers any existing file referenced in gate `evidence_refs` (stripping the `#hash` suffix) that isn't already registered. That directly implements "PROTOCOL rule 2 requires a registered sha256 before any N0 completion claim" and is controller-owned. I'll also register the three explicitly via the map's G-NUM evidence_refs, which already contain `artifacts/worker-046/...#814452111bc8` etc. So the repair is elegant: gate-declared evidence gets registered automatically.
+
+Wait — but the registry is rebuilt each checkpoint from audit_evidence; my edit to audit_evidence.py makes it durable. Good.
+
+Also note `hashes` (node artifact digests) is separate. The `hashes` dict maps node artifact paths. G-NUM registration gap concerns `registry`, per the numerics lead ("runtime/state/artifact_hashes.json"). Yes.
+
+Now, what does apply_events.py do with gate events? REC-40 gate text fields. Let me check the gate-handling part of apply_events.py to make sure my events update the gate records properly (verdict/unmet/criteria/evidence_refs/controller_note/owner/eta). Let me grep.
+dsh: reasoning:
+Note: assignments in the map keep all historical entries; the recent ones are the open ones. The lifecycle's `gate_audit` and findings know which are current.
+
+Now let me check the newest traffic since my last preview to catch material lead events. Also let me check whether the auto-cycle (`run_cycle.py`) is periodically applying events — the map updated_at is 01:22:05, so no cycle since. Let me look at the outbox of astra-lead-audit and astra-lead-formulation tails for events after 01:22 to see if any new gate/verdict landed (e.g., N0 accept, A0 verdicts).
+
+Let me re-run dry-run ingest and print only events created after 01:22:06 with event_type in (gate, review, claim, blocker, direction_update, resource_request) or actor == astra-lead-*.
+dsh: reasoning:
+Now accepted count is only 13 (previously 81) — because... wait, the dry_run doesn't write `seen`, so it should still show 81. Unless the auto-cycle ran `comms.ingest(dry_run=False)` in between and consumed the 81 events (writing them to events.jsonl and seen). The dups went from 7758 to 7996 (+238 dup lines), consistent with an ingest having run. So the 15-min auto-cycle (run_cycle.py) likely ran and applied events. Let me check `run_cycle.py` and the map's updated_at.
+
+Actually, my earlier dry-run at 01:24 didn't write seen. Something else did: another process (the auto-cycle) ingested the 81 events between 01:24 and now. Let me check map updated_at + events tail. The 13 new accepted are events that arrived after the auto-cycle's ingest. Let me print those 13.
+dsh: reasoning:
+Interesting: map updated_at still 01:22:05 — so no apply happened, but `seen` grew. Who ingested the 81 events? Wait — maybe an auto-cycle ran `comms.ingest(dry_run=False)` but `apply_events` didn't apply because... hmm, if run_cycle ran, it would also rewrite the map (updated_at would change) and checkpoint. Map updated_at 01:22:05 unchanged. Maybe someone ran `comms.py ingest` alone (a lead or worker?). Or... my earlier dry-run at 01:24:06 — and then the "accepted 81" events got ingested by another agent. Let me check `runtime/state/ingested_ids.json` mtime and events.jsonl tail/mtime.
+
+Actually wait: in the dry-run I ran at 01:24, accepted=81. Then I ran a second dry run just now and accepted=13, dups 7996 vs 7758 (+238). If someone had ingested the 81, they'd also be marked seen. 81 events × multiple JSON objects per event? Each accepted event produces one seen id. So +238 dups means many more lines were scanned and are now seen. The outbox files keep growing; the seen set grew by 238 IDs. This suggests `comms.ingest(dry_run=False)` ran recently (by the auto-cycle?) but apply didn't happen because run_cycle crashed before apply? Let me check for logs of the auto cycle.
+
+Anyway, for my pass, I care about what will be applied when the lifecycle runs. Events accepted but not applied remain in events.jsonl with no `applied_to_map`; apply_events applies them. The pending events include the 81 + more. Fine — my lifecycle will ingest the remaining 13 and apply everything pending.
+
+Let me check events.jsonl for the last lines and the count of unapplied events, plus whether the 81 are now in events.jsonl. `comms.py pending` gives accepted-but-unapplied.
+
+Also: is there an auto-cycle job that will interleave with my controller pass? The lock (map.lock) serializes. The lifecycle takes the lock too. Good.
+
+Now — worker-014 cross-verification (N0 accept cross-check), worker-059 stage-2 unpinned engine blocker (independent confirmation of lead-form-life08-123 instrument governance gap — an important new blocker: stage-2 engine unpinned, editing it flips F1 verdict with 0/50 pins moved). That's another genuinely new finding (CF-37?) about the G-FORM instrument: the stage-2 engine executed by run_acceptance.py is outside FROZEN closure, so a repair to R03 could change gate behavior without a pin move. This is relevant to CF-32 repair.
+
+Limiting scope: I'm the controller; pass 10 should record the important new findings and issue bounded assignments. Candidates for new findings:
+- CF-34: F0 direction contradiction (W004-DIR-01/02) — frozen F0 taxonomy asserts superseded strength direction; F1 rev13 asserts corrected; disposition required; F0 stays frozen (no write) with erratum.
+- CF-35: `check_class_binding_drift.py` B7 prefix-forgery + unbound supplement input (W027-HBC-F1/F2) — durable HF-B1 binding check accepts forged evidence; patch proposed, not adopted.
+- CF-36: review-ledger vs disk provenance drift (worker-036: 21 verdict drifts, 11 accept→non-accept, 5 gate-scoped, 24 shared-path collisions; 197 short-digest-only) — coverage claims must be hash-bound; affects G-FORM/G-AUDIT coverage evidence.
+- CF-37: stage-2 engine/unpinned dependency closure (worker-059 + lead-form-life08-123): gate-relevant stage-2 engine is not in FROZEN; a one-line edit flips canonical F1 reject→accept with 0/50 pins moved; R03 repair must pin the engine + rule/fixture data in the same revision. This is a strong, independently confirmed finding. It relates to CF-32 but is distinct (instrument governance). Could fold into CF-32's action instead... but it has independent confirmation with a mutation control. I think record as CF-37 major, status "repair-authorized-extension" — actually keep it focused: "adjudication-required" or "repair-authorized". It directly affects how rev14/stage-B repair lands: any R03 repair must pin the stage-2 engine in FROZEN rev30.
+
+That's 4 new findings in one pass. Is that too many? The pass must maintain epistemic quality. Each is measured and evidence-backed. I'll include CF-34 (F0), CF-35 (B7), CF-36 (review ledger), CF-37 (stage-2 unpinned). Actually, let me reconsider CF-36: is it distinct from existing coverage findings? CF-31 is F2b coverage divergence at one hash (accept vs revise counts). worker-036's is a broader review-ledger provenance census (735 records, drifts, collisions). It's the same family but the census is new and affects A1 and all coverage claims. Rather than a new CF, I could fold its action into CF-31's action. Hmm. But the finding "197 short-digest-only / 24 shared-path collisions / 21 verdict drifts" is a new integrity issue about how review evidence is recorded and cited. I'll record it as CF-36 with severity major, status "adjudication-required", action: coverage must be bound to review-file hashes; the audit lead's r3/REC-39 binding table must disposition the 11 accept→non-accept drifts and 24 collisions; no coverage promotion until then.
+
+That's reasonable. Five findings would be too many; four is defensible. Actually — maybe I should keep it to 3 new findings (CF-34, CF-35, CF-36) and fold the stage-2 engine into CF-32's evidence/action (append the independent confirmation). Hmm. But CF-32's status is "repair-authorized" and its action already says "the stage-B R03 binder is repaired by its owner with a mutation control" — worker-059 IS that mutation control, and it says the fix must also pin the engine. Extending CF-32's finding text for pass 10 is cleaner than a new CF. But findings_merge rewrites `want` each pass, so I can update CF-32's text to add the independent confirmation and pin requirement. That preserves the "fewer findings, verified scope" principle. I'll do that.
+
+So new findings: CF-34 (F0 direction), CF-35 (B7 prefix forgery + unbound supplement), CF-36 (review-ledger provenance drift). And CF-32 text extended with worker-059 confirmation. Also G-FORM unmet gets new items; G-LIT unmet gets L1 mirror findings + locator; G-AUDIT gets review-ledger/binding-table item; G-NUM gets corrected text; G-F0 gets erratum note.
+
+Assignments (bounded, new):
+1. `astra-life10-f0-direction` → `astra-lead-formulation`? Hmm. The F0 direction contradiction's disposition: The controller can rule the erratum itself (record CF-34), and require lead-audit to independently verify the direction claim + erratum text at frozen bytes. But is an assignment needed? Yes — a bounded verification to make the erratum durable: `astra-life10-verify-f0dir` → astra-lead-audit (0.5h, due 02:40): read-only independent verification of W004-DIR-01/02 at pinned bytes; produce erratum text + verdict on whether it's a textual defect vs semantic; explicitly NOT authorizing any F0 write; check that F1 rev14's f0_binding remains consistent with the erratum. Hmm, but the audit lead already has many assignments. Alternatively assign to a worker (worker-004 already did the verification and is the author; independent review is needed). There were existing F0 review assignments (audit-r2-F0-a/b at rev27 hash). The W004 report itself says "workers cannot set done/passed or a gate verdict; this is advisory evidence for the audit lead and controller". The blocker asks for controller/owner disposition. The controller can rule: erratum recorded; G-F0 stays pass; require lead-formulation to fold the correction into F1/registry (already done in rev13) and NOT write F0; require the rev14 FROZEN manifest to declare the F0 direction erratum as a residual. I'll issue a bounded assignment `astra-life10-f0dir-erratum` to astra-lead-formulation (0.5h, due 02:15, alongside rev14) to record the erratum in the formulation evidence tree (not in F0) and include it in the rev14 FROZEN notes. That's a real bounded artifact: `artifacts/formulation/evidence/f0_direction_erratum.json`. And a notice to lead-audit for awareness? Perhaps include in G-F0 gate unmet/note.
+
+Wait — but should G-F0 remain "pass" if the frozen taxonomy contains a wrong direction statement? The handoff says G-F0 pass with 7 independent accepts at those bytes, and the taxonomy is used for class identity. The wrong statement is about the relative strength of SET vs single-q visibility — a semantic direction claim inside the taxonomy? Let me actually look at the F0 lines 94 and 200 to understand what's asserted, and whether it's about class definitions or about a proof-status claim. This matters for the ruling. Let me read those lines and the W004 report findings.
+
+Let me also check `formulation_taxonomy.yaml` around lines 90-100 and 195-205.
+dsh: reasoning:
+Now I understand the F0 direction issue. F0 (frozen) says the SET variant is "Strictly stronger than the parent class"; F1 rev13 and the registry say SET is strictly weaker (the parent single-q tail predicate entails the union reading; converse fails on the omega-chain witness). The direction was corrected in F1 rev13 but F0 was frozen with the old, wrong direction. This is a genuine content defect in F0.
+
+Disposition options:
+- Writing F0 voids G-F0 → requires re-verification of everything binding 0abb9ed8a961 (7 accepts, F1 f0_binding, numerics class usage, worker-061/…) — expensive.
+- Erratum: record the defect + corrected direction in a hash-pinned erratum artifact, keep F0 bytes frozen, G-F0 stays pass "at bytes with recorded erratum", and require the erratum to travel with every F0 citation. This is the epistemically honest, low-churn disposition. The controller should rule this and have it independently verified (lead-audit) so it isn't just a controller assertion.
+
+Note that F0's own `status: "registered_variant_not_written"` and the variants block — the direction claim is about the SET variant, not about the four class identities. G-F0's acceptance was about the canonical taxonomy/class separation. So an erratum is proportionate.
+
+I'll issue a bounded assignment to astra-lead-formulation: produce `artifacts/formulation/evidence/f0_direction_erratum.json` (hash-pinned, cites W004 report + F0 lines 94/200 + corrected direction + statement that F0 bytes are unchanged and any future F0 revision must fold it), and include a line in FROZEN rev30 notes? Careful: rev14/FROZEN rev30 is already authorized and in flight with a defined scope. Adding a requirement is a scope change. The handoff says rev14 folds listed items. I can add the erratum requirement as a bounded item with a 0.5h budget, due 02:15 (same deadline as rev14) — the lead can emit the erratum as a separate artifact without touching F0. And a notice to lead-audit to include the erratum in the G-F0/G-FORM verification (independent verdict). Hmm, but I shouldn't spawn unbounded work. One assignment + one notice is bounded.
+
+Also: the G-F0 gate has verdict pass. Should the erratum change the gate text? Add a `controller_note`/unmet? G-F0 with an erratum: verdict stays pass, add note: "F0 bytes unchanged; CF-34 records the SET direction erratum (W004-DIR-01/02); erratum artifact pending astra-life10-f0dir-erratum; any write to F0 voids this pass." That's honest.
+
+Now the registration repair: I'll patch `audit_evidence.py` to register gate-declared evidence refs (files) that aren't in scan roots. This is a controller repair (CF-10 C4 registration family). It writes `runtime/state/artifact_hashes.json` via checkpoint. It also makes the three N0 verdicts registered → B-N0-R2-1 closed. I must be careful not to slow the pass too much: gate evidence_refs across ~5 gates ≈ 150 refs; measuring files is fast. Some refs are directories ("reviews/", "artifacts/worker-002/review-ess/") → skip dirs or digest them? Register files only; skip dirs. Also strip `#hash` suffix. Also skip missing.
+
+But wait: registering gate evidence refs from *all* gates includes refs to mutable review files. That's fine — registry records measured hashes at checkpoint time.
+
+Hmm, actually there's a subtlety: `_register` overwrites the entry each audit, that's fine. Some refs point to paths already registered. Also `research_map/research_map.json#...` doesn't exist as a path (research_map/research_map.json does exist) — should we register the map? It would include research_map/research_map.json in the registry, which then changes every pass — noisy but harmless. Better to restrict to `artifacts/` and `numerics/` and `reviews/` paths? The N0 verdicts are under artifacts/worker-*. The cleanest: register existing files referenced in gate evidence_refs whose path starts with artifacts/ (covers worker verdicts). Plus the existing scan roots cover numerics/reviews/schemas/ledger/evaluation. I'll restrict to `artifacts/` to avoid registering the map itself. Actually include any existing file under artifacts/ referenced by gate evidence — that closes the gap precisely.
+
+Let me write that repair carefully:
+
+```python
+    # pass-10 repair (B-N0-R2-1, controller-owned): PROTOCOL rule 2 requires a registered
+    # sha256 for every path a gate cites. Gate evidence refs may point outside the scan
+    # roots (e.g. the three foreign-owned N0 replication verdicts under artifacts/worker-*/).
+    # Register every existing artifacts/ file cited by a gate (strip the #sha256 suffix).
+    for g in m.get("gates", []):
+        for ref in g.get("evidence_refs", []):
+            rel = str(ref).split("#", 1)[0]
+            if not rel.startswith("artifacts/"):
+                continue
+            fp = ROOT / rel
+            if fp.is_file() and str(fp.relative_to(ROOT)) not in registry:
+                _register(fp)
+```
+
+This is minimal and durable.
+
+Wait — order matters: `registry` is defined at line 172 with `_register` at 174; gates are computed at line 81. I'll insert this block after the root scan and before `return`.
+
+Now the G-NUM text: I'll emit a pass-10 G-NUM gate event that:
+- verdict pending
+- scope N0
+- unmet refreshed:
+  1. N0 verdict on disk is hash-bound revise 3.5 at da7c36071995 (reviews/N0-review-final-verify.json#18a0c0d0e77f, re-asserted); the accept is lead-audit-owned and not landed. Stop-rule items CLOSED (closure 88ec0bf298cb; lifecycle-10 recomputation eb3c85681767; audit operative verdict marks closed).
+  2. B-N0-R2-1 registration gap: CLOSED by controller repair at pass 10 — gate-cited artifacts/ evidence is now registered (three foreign verdicts 814452111bc8 / b906445878f3 / 65ae766d9e4c). Remaining: B-N0-R2-2 review-state supersession semantics at 1e6cdf04d7a2 (controller/audit disposition), B-N0-R2-3 advisory (protocol preamble cites superseded pins).
+  3. numerics_lock LOCKED; N1 forbidden; G-NUM certifies N0 only.
+
+Also include worker-014 cross-verification accept as evidence.
+
+Careful about claims: worker-014's review accept is worker-level; the N0 "accept verdict" is lead-audit-owned. Keep "pending".
+
+G-FORM pass-10 unmet refresh:
+1. rev14/FROZEN rev30 in flight due 02:15 (F2b D1/D2, F2a category pin, REC-37 crosswalk, SET level label, f1-suite rebind 56bcb4b3234b, acceptance-corpus rebind).
+2. CF-31 gform-r3 per-file binding table due 02:45.
+3. CF-32 stage-B R03 re-run due 02:30; CF-32 extension: worker-059 pin-closure census — stage-2 engine unpinned, one-line edit flips F1 reject→accept with 0/50 pins moved; the R03 repair must pin the engine + rule/fixture data in FROZEN rev30.
+4. CF-36 review-ledger provenance: coverage claims must bind review-file hashes (worker-036 census: 21 verdict drifts, 11 accept→non-accept (5 gate-scoped), 24 shared-path collisions, 197 short-digest-only) — disposition required before coverage is cited as gate evidence.
+5. CF-35: HF-B1 drift checker B7 prefix-forgery/supplement-drift; patch adoption pending owner decision (astra-life10-hf-b1-patch).
+6. Bytes move at rev14: current verdicts void; r3 re-runs.
+7. CF-34 F0 erratum: F1 rev13 direction correct; frozen F0 asserts superseded direction; erratum assignment astra-life10-f0dir-erratum; F1/F2 gate acceptance must cite the erratum.
+8. REC-37 crosswalk landing + F-TC-1 naming adjudication (worker-047 blocker).
+
+That's long but informative. Keep each item concise.
+
+G-LIT pass-10 unmet:
+1. L0 a1674f094979: 2 accepts vs 5 revise + 1 inconclusive; astra-life05-verify-l0-final (02:30) adjudicates.
+2. L1 315c19145065: 24 binding re-fetch spot checks ≥3; locator finding undispositioned; NEW worker-025 mirror/dedup reconciliation: 3 merge proposals, SRC-093→SRC-033 suspect mirror edge, union rule (must union used_by_theorems/class_mapping); lead-literature disposition required (astra-life10-l1-mirror).
+3. Fixed figure "201 citations" not a measured universe.
+
+G-AUDIT pass-10 unmet:
+1. A0 d748a9e3574e: 6 revise, no accept; worker-089 r4 review landed (accept?) — wait, worker-089 filed a review at 01:21:56; what verdict? The event printed `w089-a0-r4-20260912T0121-review`. Let me check its verdict. It might be an accept with findings. I should check before writing gate text.
+2. A1: no full accept; CF-31 blocks coverage; CF-36 review-ledger provenance drift; CF-33 injection; CF-29 detector freeze; worker-036 A1 review-ledger census.
+3. Detector freeze.
+
+Let me check worker-089's review verdict and the newest A0 reviews. Also check if the `reviews/A0-review-worker-089.json` exists and its verdict. And check `evaluation/A0_detector_scope_adjudication.json` (the scope artifact) — "unverified" per handoff; has anything changed?
+
+Also, need to check the A0 verdict count at d748a9e3574e (the handoff says 6 revise verdicts). worker-089 r4 could be accept 4.x? Let me measure.
+
+Let me query review coverage quickly for A0 and L0.
+
+Actually, the lifecycle's `review_coverage()` computes this from disk each pass; I can inspect its output. Let me run it standalone to see the latest coverage numbers (it's read-only). Let me check `review_coverage` implementation quickly, then run it, plus `publication_status()`. These functions are in astra_lifecycle.py and importable. Let me run them read-only (they don't write).
+dsh: reasoning:
+Good. Current state summary:
+- A0: verdicts include worker-089 (verdict truncated; looks like it's part of list after lead-audit-r2 revise). Let me get worker-089's verdict exactly. The list shows 4 revise then worker-089... In the earlier event, worker-089's r4 review had findings about instrument scope. Let me check the file's verdict.
+- A1/F2a/F2b/N0: empty full-accept scans (CF-31 divergence: the scan shows none; earlier handoff said scan reports F2b 3-4 accepts via a different method). Whatever — the gate text says gform-r3 adjudicates.
+- L0: worker-075 rev3 accept (1 full accept) + others revise → matches "2 accepts" perhaps counting a scoped one.
+- L1: one full accept (worker-032).
+- F0: several accepts.
+- F1: several accepts.
+
+Clock discipline: 55 future-dated events, max skew 2055s (34 min!) — CF-14 remains; new future-dated events (worker-036 01:55, deepseek-flash-06 02:00).
+
+Now let me check worker-089 review verdict quickly and then write the pass-10 script. Also I want to check the `astra-lead-*` inbox for whether my notices would matter. And I should check the auto-cycle: the 81 events were ingested but not applied? Let me verify pending events count and whether events.jsonl contains them. If another process ingested but apply didn't run, my lifecycle will apply them. Fine.
+
+Actually — wait. There's a risk: `comms.ingest` in my lifecycle will see the 13 new events; `apply_events.main` will apply the 81+13 pending. Good. The lifecycle report will show 13 accepted (I ingested the 81 in dry-run only... but someone else ingested them). Fine.
+
+One more important check: `apply_events.py` — does applying a gate event with `verdict` "pending" for a gate currently "pass" (G-F0) demote it? The gate handling sets `gate["verdict"] = ev["verdict"]`. My G-F0 event will say pass, so no change. For pending gates, fine.
+
+Also: my `astra-life10-*` assignment events will be applied to `m["assignments"]` by apply_events (line ~378). Notices (status events) will be applied as status events. Good.
+
+Now, one concern: the controller must not edit another agent's artifact (CF-4). My changes: (1) `research_map/astra_lifecycle.py` findings_merge (controller tool — allowed; prior passes did it), (2) `research_map/audit_evidence.py` registry repair (controller tooling repair — prior repair REC-40 edited apply_events.py), (3) new `research_map/astra_lifecycle_10_events.py` (new file), (4) update `research_map/ASTRA_HANDOFF.md` (controller handoff doc), (5) create `runtime/state/controller_verification/astra-lifecycle-10-decisions.json` (pass-10 decisions record). Not editing any agent artifact. Good.
+
+Also the `comms/inbox/astra.jsonl` has the injected line 4; I should NOT hand-edit it (CF-33 ruling). Good.
+
+Findings_merge edits: add CF-34/35/36 to `want`, update CF-32 text, maybe update CF-31 action to include CF-36, and CF-21/CF-33 stay as-is. Let me look at the CF-21 entry and the top of the want list to place new entries at the end (order = first-seen order preserved; new ids appended).
+
+Let me view the CF-21 and CF-28 entries quickly to know where things stand and avoid contradictions. Also check the G-F0 relevant finding (CF-21 residual).
+dsh: reasoning:
+Good. So A0 still has no accept; worker-089 revise 2.5.
+
+Now let me plan the concrete pass-10 artifacts:
+
+### 1. Repair `audit_evidence.py` (controller-owned registry coverage, B-N0-R2-1)
+Add gate-cited artifacts/ registration. Also update the docstring comment to note pass-10 repair.
+
+### 2. Update `astra_lifecycle.py::findings_merge`
+- Extend CF-32 text with worker-059 stage-2 pin-closure confirmation + pin requirement.
+- Add CF-34 (F0 direction erratum), CF-35 (check_class_binding_drift B7), CF-36 (review-ledger provenance).
+- Maybe update CF-31 action to cross-reference CF-36.
+Positioning: add new entries at the end of `want` (after CF-33).
+
+### 3. Write `research_map/astra_lifecycle_10_events.py`
+Fail-closed pins:
+- F0 = 0abb9ed8a961 (must equal F0_PASS)
+- detector = a8c04fc31e4a (restored)
+- numerics solver absent: `numerics/spherical_solver` must not exist (glob check `numerics/spherical_solver*`)
+- n1 hash absent? check `numerics/tests/selfgravity_lock_guard.py` exists (guard present)
+- F1/F2a/F2b/FROZEN/suite/L0/L1/A0/proto/N0rev3 measured.
+- void detector evidence + quarantines still present (keep CF-29/CF-33 fail-closed).
+Gate records (5) — updated text as above.
+Assignments (new, bounded):
+  a. `astra-life10-f0dir-erratum` → astra-lead-formulation, 0.5h, due 02:15, artifact `artifacts/formulation/evidence/f0_direction_erratum.json`; acceptance: hash-pin F0 0abb9ed8a961 lines 94/200, cite W004 report + F1 rev13, state corrected direction (SET strictly weaker than parent single-q tail predicate), declare F0 bytes unchanged and any future F0 revision must fold it, no F0/FROZEN write in this task, no gate verdict.
+  b. `astra-life10-hf-b1-patch` → worker-005? Let me verify which agent owns `artifacts/worker-05/verify/check_class_binding_drift.py`. The path is `artifacts/worker-05/verify/...` (not `worker-005`). That might be an old-style worker id "worker-05". Assigning to "worker-05" may not be a live worker. Safer: assign to the formulation lead (owner of the HF-B1 check flow) or to a fresh worker id. Pass-09 assigned to worker-093 (a live worker). Which workers are currently live/recent? From the new traffic: worker-004, 025, 027, 036, 039, 047, 059, 002, 014... Many are LLM swarm workers run by the platform. The handoff pattern "one NEW at pass 09 → worker-093". I can pick a currently-active worker. worker-027 did the census (author). Independent adoption verification should be a different worker. Ownership adoption decision belongs to the tool owner: the lead-formulation or lead-audit? The tool `check_class_binding_drift.py` is a formulation-side HF-B1 check (F2a/F2b hash-binding). The lead-formulation owns formulation tooling. But per CF-4, the controller doesn't edit artifacts; the lead decides adoption. So assign `astra-life10-hf-b1-adopt` → astra-lead-formulation (0.5h, due 02:30): adopt or reject the four-hunk patch, land adopted bytes at a pinned path, re-run the regression with the prefix-forged/supplement-drift/stale-declared controls, record before/after hashes. This is bounded and owner-driven. Notify lead-audit (G-FORM evidence). 
+  c. `astra-life10-l1-mirror` → astra-lead-literature (0.5h, due 02:30): disposition the three L1 merge proposals + union rule and correct/withdraw the SRC-093→SRC-033 mirror edge; read-only on frozen ledger; record dispositions in a pinned artifact (`reviews/L1-mirror-disposition.json`).
+  d. Maybe `astra-life10-reviewledger` → astra-lead-audit (0.5h, due 02:45): bind A1 coverage to review-file hashes per worker-036, disposition the 11 accept→non-accept drifts (5 gate-scoped) and 24 shared-path collisions. This is real and bounded. But lead-audit has r3 (02:45), l0-final (02:30), a0 items (02:00), etc. Adding a 0.5h task at 02:45 may be too much. But it's directly required for A1/G-AUDIT. Hmm. I could fold it into the G-AUDIT unmet as a requirement of the existing A1 review round instead of a new assignment. The handoff style does add assignments. However, the instruction says "issue bounded assignments" — issue only genuinely new bounded work. I think (a), (b), (c) are the new bounded work; the review-ledger binding can be required within the existing A1/r3 work and recorded as CF-36. I'll add it to unmet and CF-36 action, and a notice to lead-audit. That keeps assignment count at 3 new (plus the existing 10 in flight).
+
+Notices:
+  - `astra-life10-notice-f0dir` → astra-lead-formulation + astra-lead-audit: F0 stays frozen; erratum ruling; no F0 write; G-F0 unchanged at bytes; erratum must be cited by F1/F2 verdicts.
+  - `astra-life10-notice-gnum` → astra-lead-numerics: B-N0-R2-1 closed by controller registration repair; G-NUM unmet refreshed (stop-rule closed); N0 accept still audit-owned; lock enforced.
+  - `astra-life10-notice-reviewledger` → astra-lead-audit: CF-36 + binding requirement.
+  - `astra-life10-notice-b7` → astra-lead-formulation? covered by the assignment notification. Maybe also lead-audit because HF-B1 binding check is audit-relevant. I'll notify both leads on the assignment.
+
+Decisions record: write `runtime/state/controller_verification/astra-lifecycle-10-decisions.json` with REC-44 (F0 erratum disposition), REC-45 (B-N0-R2-1 controller registration repair), REC-46 (B7 adoption required), REC-47 (L1 mirror disposition), REC-48 (review-ledger binding). Should this be written by the events script (before lifecycle) or after? Pass-08/09 decisions file `astra-lifecycle-08-decisions.json` exists; pass-09 didn't have one? The 09 events script references DEC08. The decisions file seems to be an input for evidence refs. I can write it as part of the events script (before emitting, so events can reference it) — but then the file exists before the lifecycle, which is fine; it's controller evidence. I'll write `astra-lifecycle-10-decisions.json` in the events script with the rulings, then reference it in gate/notice evidence.
+
+Hmm wait, `astra-lifecycle-09-decisions.json` doesn't exist — pass 09 used DEC08 in evidence refs. Let me check which decisions files exist and their structure. `runtime/state/controller_verification/astra-lifecycle-0{5,6,7,8}-decisions.json`. I'll create the pass-10 one mirroring the pass-08 structure. Let me look at the pass-08 decisions file structure quickly.
+
+### 4. Run lifecycle `astra-indep-3` (one independent lifecycle).
+
+### 5. Update ASTRA_HANDOFF.md with pass-10 live state.
+
+### 6. Record hashes + validation: lifecycle does checkpoint + measured hashes. Verify map VALID at exit and report.
+
+Also "Keep numerics gated": no N1; ensure the events script fail-closes if `numerics/spherical_solver` appears or detector/taxonomy moved.
+
+Let me look at the decisions file structure and the assignment event schema (validate_event) to make sure my events are valid. Let me check schemas.py validate_event requirements for assignment/status/gate.
+dsh: reasoning:
+Now I have everything I need. Let me plan the code edits precisely.
+
+**Edit 1: `research_map/audit_evidence.py`** — add gate-cited artifacts registration after the scan roots (before `return`).
+
+**Edit 2: `research_map/astra_lifecycle.py`::findings_merge** — update CF-32 and add CF-34/35/36.
+
+Let me look at the exact CF-32 block to modify (lines 834-855 shown above).
+
+**Edit 3: new file `research_map/astra_lifecycle_10_events.py`**.
+
+**Edit 4: `research_map/ASTRA_HANDOFF.md`** — rewrite the LIVE CONTROLLER STATE section for pass 10 after the lifecycle report is available.
+
+**Edit 5: `runtime/state/controller_verification/astra-lifecycle-10-decisions.json`** — created by the events script.
+
+Now, before writing events, I need to decide gate texts. Let me draft carefully but concisely.
+
+Also: what label for the lifecycle? Pass 09 was `astra-indep-2`. I'll use `astra-indep-3` (pass 10). The events script name: `astra_lifecycle_10_events.py`, gate event ids `astra-indep3-gate-*`, assignments `astra-life10-*`, notices `astra-indep3-notice-*`.
+
+Time now ~01:30. Deadlines: assignments due 02:15/02:30 fine.
+
+For the events script, measured pins:
+- F0 0abb9ed8a961 (research_map/formulation_taxonomy.yaml)
+- F0_SUP d7419b4e8963 (artifacts/formulation/formulation_taxonomy.yaml)
+- F1 d9cebb9404b2 (schemas/af_wcc_vacuum.yaml)
+- F2A e9a27996dfd3 (schemas/af_scc_c2_vacuum.yaml)
+- F2B b2ab6acb2bbe (schemas/af_scc_c0_vacuum.yaml)
+- FROZEN 815e08079aef (artifacts/formulation/FROZEN.json)
+- SUITE 56bcb4b3234b (schemas/f1_falsifier_tests.jsonl)
+- L0 a1674f094979 (ledger/theorems.jsonl)
+- L1 315c19145065 (ledger/citation_audit.csv)
+- A0 d748a9e3574e (evaluation_rubric.yaml)
+- PROTO 1e6cdf04d7a2 (numerics/CONVERGENCE_PROTOCOL.md)
+- N0REV3 da7c36071995 (numerics/results/flat_wave_convergence_rev3.json; the lead cites #da7c36071995 — earlier handoff said N0 review hash da7c36071995; let me measure)
+- DET a8c04fc31e4a (research_map/class_separation.py)
+- DET_PIN c266dbecaa87 — pin; not a file necessarily (FROZEN pin). The 09 script only measured DET, F0 etc. It had DET_PIN constant.
+- W004 report c70cdbb306aa (artifacts/worker-004/f1_strictness_direction/report.json)
+- W027 report 8b0da506dcca (artifacts/worker-027/hashbind_census/report.json)
+- W036 report fe17912b49ca (artifacts/worker-036/reviewledger_selfevidence/report.json)
+- W025 report c3aa74c47044 (artifacts/worker-025/l1_mirror_dedup/report.json)
+- W047 crosswalk 1f38fad26814 (artifacts/worker-047/rec37_token_crosswalk/crosswalk.json)
+- W059 report? The artifact event didn't include a path; let me check the worker-059 report path and hash. Its outbox lines had paths in evidence/artifact events maybe. Let me check quickly.
+- N0 foreign verdicts: 814452111bc8, b906445878f3, 65ae766d9e4c.
+- Reviews: review_coverage etc.
+
+Rather than hardcode all, measure at emission and fail-closed on the critical pins (F0, detector, solver absent, FROZEN, N0rev3 maybe). For the erratum assignment evidence, cite W004 report path — I should measure it to confirm it exists; if the file has moved since my measurement at ~01:30, that's fine as long as it exists (fail-closed only on the pins the ruling depends on: F0 bytes and the report existing).
+
+Wait: careful about FAIL-CLOSED on F0: if F0 were rewritten (voiding G-F0), the events script should abort. Yes.
+
+Let me check worker-059 artifact paths and hashes from its outbox lines, so I can cite it in CF-32's evidence. Let me grep the last lines of comms/outbox/worker-059.jsonl.
+dsh: reasoning:
+I have worker-059's report path/hash: `artifacts/worker-059/stage2_pin_closure/report.json` sha 3f54ea725bde.
+
+Now let me plan out the findings text. Let me now make the edits. First `audit_evidence.py`.
+
+Wait — one consideration about the registry repair: my events script's fail-closed and the lifecycle both call audit_evidence. The repair will register gate-cited artifacts. The G-NUM gate in the map currently has evidence_refs including `artifacts/worker-046/n0_fixed_dt_independent/verification.json#814452111bc8` etc. After my pass-10 gate event replaces/extends evidence_refs (apply_events unions evidence_refs), the three will remain. Then audit_evidence registers them → checkpoint writes artifact_hashes.json with them → B-N0-R2-1 closed.
+
+However: `audit_evidence.audit()` is called with `map_path` before the map is written? In the lifecycle: `soft = audit_evidence.audit(MAP)["soft"]` — this runs read-only (doesn't write). checkpoint.main() runs audit again and writes artifact_hashes.json. checkpoint is called after the map is written. Good: the gate event will be applied to the map before checkpoint, so the refs are there.
+
+Note `audit_evidence.main()` (if run standalone, e.g. by PROTOCOL's `python3 research_map/audit_evidence.py`) writes artifact_hashes.json too.
+
+Now write the edits. Let me be careful with exact strings for edit.
+
+Edit 1: audit_evidence.py — insert after the rubric registration (lines 185-187) and before `return`:
+
+```python
+    rubric = ROOT / "evaluation_rubric.yaml"
+    if rubric.is_file():
+        _register(rubric)
+
+    # pass-10 repair (B-N0-R2-1, controller-owned; PROTOCOL rule 2): a gate may cite evidence
+    # outside the scan roots -- notably the three foreign-owned N0 replication verdicts under
+    # artifacts/worker-*/ that G-NUM names. Register every existing artifacts/ file a gate
+    # cites (strip the #sha256 suffix) so a gate-cited path cannot be unregistered.
+    for g in m.get("gates", []):
+        for ref in g.get("evidence_refs", []) or []:
+            rel = str(ref).split("#", 1)[0]
+            if not rel.startswith("artifacts/"):
+                continue
+            fp = ROOT / rel
+            if fp.is_file() and str(fp.relative_to(ROOT)) not in registry:
+                _register(fp)
+
+    return {...}
+```
+
+Edit 2: astra_lifecycle.py findings_merge. I'll modify CF-32's finding/action and add three new entries before the closing `]` of `want` (after CF-33 dict). Let me write the new entries:
+
+```python
+        {"id": "CF-34", "severity": "major", "status": "erratum-recorded-no-f0-write",
+         "finding": ("F0 direction contradiction at frozen bytes: the canonical taxonomy "
+                     "research_map/formulation_taxonomy.yaml#0abb9ed8a961 asserts the superseded "
+                     "strength direction ('SET strictly stronger than the parent') at lines 94 and 200 "
+                     "and in the AF-WCC-VAC-GEN conclusion text, while F1 rev13 " + h('F1') + ", "
+                     "VARIANT_REGISTRY 6bac9adea19e and the SET delta 64b8d6394a04 assert the "
+                     "corrected direction (SET strictly weaker: the parent single-q tail predicate "
+                     "entails the union reading, the converse fails on the omega-chain witness). "
+                     "W004-F1-STRICTNESS-DIRECTION-INDEP-01 (report " + hw004 + ") independently "
+                     "verified the corrected direction: 13/13 expectations, 6/6 controls, 0/355 "
+                     "whole-tail separations, single-q=>SET 0 violations, omega-chain strict "
+                     "separation; W004-DIR-01/02 recorded. The frozen F0 bytes cannot be repaired "
+                     "without voiding G-F0 and every accept bound to 0abb9ed8a961."),
+         "action": ("Ruled (REC-44): F0 stays byte-frozen and G-F0 stays pass at 0abb9ed8a961 with "
+                    "the defect recorded as an erratum, not a revision. astra-life10-f0dir-erratum "
+                    "(lead-formulation, due 02:15) must land a hash-pinned erratum artifact that "
+                    "carries the corrected direction, cites the F0 lines, and states that any future "
+                    "F0 revision must fold it; no F0 write is authorized by this pass. The F1/F2 "
+                    "gate verdicts must cite the erratum wherever they cite the F0 direction."),
+         "evidence": [...]
+        },
+```
+
+Careful with h('F1') — h uses `hashes` measured for node artifacts; F1 → schemas/af_wcc_vacuum.yaml d9cebb9404b2. What is `hashes` keyed by? `measured_hashes(m)` returns node_id → digest of node artifact. Let me check lines 82-104 of astra_lifecycle for measured_hashes keys. The CF-11 text used h('F0'), h('F1'), etc., so node ids work: F0→research_map/formulation_taxonomy.yaml, F1→schemas/af_wcc_vacuum.yaml, L0 etc. Good.
+
+But careful: hardcoding report hashes like 6bac9adea19e as strings is okay but they may move. Better to use literals consistent with the finding text; they're static references. I'll keep short prefixes as text (as existing findings do).
+
+CF-35:
+```python
+        {"id": "CF-35", "severity": "major", "status": "repair-required-owner-decision",
+         "finding": ("The durable HF-B1 binding check artifacts/worker-05/verify/check_class_binding_drift.py "
+                     "has two confirmed hard-check gaps at the live pins (W027-HBC-F1/F2, census report "
+                     "8b0da506dcca): B7 accepts any evidence record containing the declared revision's "
+                     "first 16 hex chars, so a prefix-preserving forged record with 48 flipped nibbles "
+                     "passes every hard check (probe T_prefix_forged, unpatched exit 0), and no hard "
+                     "check binds the class-contract supplement input, so supplement drift after evidence "
+                     "generation still yields verdict=pass (probe T_supp_drift). A four-hunk patch "
+                     "(8ffa189d8de9) exists unapplied. This concerns adopting the checker as the durable "
+                     "binding check, not the HF-B1 candidate 4c4803c5, which embeds both full input hashes "
+                     "and passes the patched checker."),
+         "action": ("Ruled (REC-45): the checker is not adopted as a durable HF-B1 binding check at its "
+                    "current bytes. astra-life10-hf-b1-adopt (lead-formulation, due 02:30) must adopt or "
+                    "reject the patch with before/after hashes and re-run the author selftest plus the "
+                    "prefix-forged / supplement-drift / stale-declared controls; adoption moves a pinned "
+                    "path and requires the FROZEN revision bump to name the new hash. No gate verdict."),
+         "evidence": [...]}
+```
+
+CF-36:
+```python
+        {"id": "CF-36", "severity": "major", "status": "adjudication-required",
+         "finding": ("Review-ledger provenance drift (worker-036 W036-A1-REVIEWLEDGER-SELFEVIDENCE-01, "
+                     "report fe17912b49ca): of 735 map review records / 246 accepts / 164 gate accepts, "
+                     "only 177 are SE_VERIFIED (46 gate accepts) with 458 SE_NONE (94 gate accepts); 21 "
+                     "verdicts drift from the on-disk review bytes including 11 accept->non-accept (5 "
+                     "gate-scoped), 24 review paths are shared by more than one record, and 197 carry "
+                     "only a short digest. Coverage counts must bind review-file hashes, not record "
+                     "counts; the w072 F2b flip is the known instance of this class (CF-31)."),
+         "action": ("Ruled (REC-48): no coverage number is gate evidence until it is bound to "
+                    "review-file hashes. astra-life05-verify-gform-r3's per-file binding table (CF-31) "
+                    "and the A1 adjudication must disposition the 11 accept->non-accept drifts (5 "
+                    "gate-scoped) and the 24 shared-path collisions; shared paths must be resolved to "
+                    "one reviewer/verdict per (path, reviewed_sha256)."),
+         "evidence": [...]}
+```
+
+Also update CF-31 action to cross-ref CF-36? Optional. I'll append a sentence to CF-31's action: "CF-36 extends this to the whole review ledger (735 records: 21 drifts / 11 accept→non-accept / 24 shared paths); coverage must bind review-file hashes." Good.
+
+Also extend CF-32 with worker-059:
+Add to finding: "... (iii) worker-059's pin-closure census at FROZEN rev29 815e08079aef independently confirms the stage-2 engine executed by run_acceptance.py is unpinned (0 occurrences in FROZEN.json; 48-file closure = 11 PINNED_OK / 37 UNPINNED_UNTRACKED) and a one-line edit of that unpinned engine flips the canonical F1 verdict reject/R03 -> accept with 0/50 pins moved."
+And action: "... the R03 repair must pin the stage-2 engine and the rule/fixture data its verdicts depend on in the same FROZEN revision, or the repaired verdict is not reproducible from pins (REC-47)."
+
+Hmm, REC numbering: I'll use REC-44 (F0 erratum), REC-45 (HF-B1), REC-46 (L1 mirror disposition), REC-47 (stage-2 pinning, fold into CF-32), REC-48 (review ledger binding). Let me keep consistent.
+
+Now the events script. Gate records detail:
+
+**G-F0** (verdict pass):
+- criteria: unchanged.
+- unmet: [] (pass)
+- controller_note: "Pass-10 refresh. Unchanged bytes at 0abb9ed8a961 + companion d7419b4e8963; seven distinct independent accepts bind the canonical bytes (declared-vs-measured drift 0). CF-34 erratum recorded (W004-DIR-01/02): the frozen taxonomy asserts the superseded SET direction at lines 94/200; F0 is NOT written and G-F0 stays pass at these bytes — any write voids this pass and requires fresh accepts (CF-21 residual also stands)."
+- evidence_refs: F0, F0_SUP, reviews/F0-review-rev27-b.json#152cae0efbe4 (keep), W004 report#c70cdbb306aa, decisions file.
+
+**G-FORM** (pending):
+- unmet: list:
+  1. rev14/FROZEN rev30 in flight due 02:15 — folds F2b D1/D2, F2a category pin, REC-37 crosswalk (worker-047 candidate 1f38fad26814 needs owner landing + F-TC-1 naming adjudication), SET level label, f1-suite rebind 56bcb4b3234b, acceptance-corpus rebind.
+  2. CF-31 F2b coverage divergence: r3 per-file binding table due 02:45.
+  3. CF-32 acceptance pipeline non-reproducible + stage-B R03 rejects untouched F1; extended by CF-31-family CF-36 and by the stage-2 unpinned-engine confirmation (worker-059 report 3f54ea725bde): R03 repair must pin the engine + rule/fixture data in FROZEN rev30.
+  4. CF-36 review-ledger provenance: 21 verdict drifts (11 accept→non-accept, 5 gate-scoped), 24 shared paths, 197 short-digest-only; coverage must bind review-file hashes before any gate citation.
+  5. CF-35 HF-B1 checker B7 prefix-forgery + unbound supplement; adoption decision astra-life10-hf-b1-adopt due 02:30; adoption moves a pinned path → FROZEN bump.
+  6. CF-34 F0 direction erratum must accompany any F1/F2 acceptance citing F0 direction (astra-life10-f0dir-erratum due 02:15).
+  7. Bytes move at rev14: every current verdict is void and r3 re-runs at the new pins.
+- controller_note: pass-10 refresh.
+
+**G-LIT** (pending):
+  1. L0 a1674f094979: 2 accepts vs 5 revise + 1 inconclusive; astra-life05-verify-l0-final (02:30) adjudicates.
+  2. L1 315c19145065: 24 binding spot checks ≥3 done; locator finding undispositioned.
+  3. NEW worker-025 mirror/dedup (report c3aa74c47044): 3 merge proposals / 4 rows, 1 contradicted mirror edge SRC-093→SRC-033, merge-union rule (must union used_by_theorems/class_mapping or drop D-002/T-101); lead-literature disposition required → astra-life10-l1-mirror due 02:30.
+  4. "201 citations" not a measured universe.
+
+**G-NUM** (pending): as above.
+
+**G-AUDIT** (pending):
+  1. A0 d748a9e3574e: no accept (6+ revise incl. worker-089 r4 revise 2.5); scope artifact unverified; astra-life04-verify-a0 + astra-life05-a0-detector-scope due 02:00.
+  2. A1: no full accept at measured hashes; CF-31 blocks coverage; CF-36 requires hash-bound review coverage and disposition of 11 drifts/24 collisions.
+  3. CF-33 injection not authority; REC-43 stands; CF-29 detector freeze continues (a8c04fc31e4a live, pin c266dbecaa87).
+  4. worker-036 census evidence fe17912b49ca.
+
+Now assignments:
+
+a. `astra-life10-f0dir-erratum`:
+- node_id F0, assignee astra-lead-formulation, gate G-F0, class_id AF-WCC-VAC-GEN
+- artifact: artifacts/formulation/evidence/f0_direction_erratum.json
+- deadline 02:15, budget 0.5
+- acceptance: "Read-only on research_map/formulation_taxonomy.yaml (0abb9ed8a961 must not move). Land artifacts/formulation/evidence/f0_direction_erratum.json that: (1) pins F0 0abb9ed8a961 and names lines 94/200 + the AF-WCC-VAC-GEN conclusion text; (2) states the corrected direction — the SET variant is strictly weaker than the parent single-q tail predicate (single-q=>SET, converse fails on the omega-chain witness) — citing W004 report c70cdbb306aa and F1 rev13 d9cebb9404b2; (3) records W004-DIR-02 (companion supplement d7419b4e8963 'F0 was stronger' wording) as a residual; (4) states F0 bytes are unchanged, G-F0 stays pass at these bytes, and any future F0 revision must fold the erratum and re-run the F0 review round. No F0/FROZEN write, no gate verdict."
+- falsifier: "F0 hash moves; the erratum asserts an equivalence instead of the corrected strict direction; the erratum is cited without the pinned F0 hash; or a later F0 citation omits it."
+- evidence refs: F0 path#hash, W004 report#c70cdbb306aa, F1#d9cebb9404b2, VARIANT_REGISTRY#6bac9adea19e, decisions file.
+
+b. `astra-life10-hf-b1-adopt`:
+- node_id F2a (and F2b?), assignee astra-lead-formulation, gate G-FORM
+- artifact: artifacts/formulation/tools/check_class_binding_drift.py (adopted path?) Hmm the existing tool is `artifacts/worker-05/verify/check_class_binding_drift.py`. Adopting means landing at a formulation-owned pinned path. Acceptance should allow either adopt (land patched bytes at a declared path + hash + FROZEN rev30 mention) or reject (record rationale with counter-controls). Artifact path: since the outcome is binary, declare artifact as `artifacts/formulation/evidence/hf_b1_checker_decision.json`. Yes — decision artifact, not the tool.
+- deadline 02:30, budget 0.5.
+- acceptance: "Decide adoption of proposed_patch_B7B8.diff (8ffa189d8de9) against artifacts/worker-05/verify/check_class_binding_drift.py: if adopted, land patched bytes at a declared formulation path, record before/after sha256, run the author selftest plus the three controls (prefix-forged must fail, supplement-drift must fail, stale-declared must fail) and the HF-B1 candidate tree must pass; if rejected, record the counter-evidence and the residual risk. Record the decision at artifacts/formulation/evidence/hf_b1_checker_decision.json. Adoption moves a pinned/durable path and must be named in FROZEN rev30; no gate verdict."
+- falsifier: "The patched checker still accepts the prefix-forged or supplement-drift tree, or rejects the HF-B1 candidate 4c4803c5; or the adopted hash is not named in the FROZEN revision."
+- evidence: W027 report#8b0da506dcca, patch#8ffa189d8de9, tool path#bde270d3886a, decisions.
+
+c. `astra-life10-l1-mirror`:
+- node L1, assignee astra-lead-literature, gate G-LIT
+- artifact: reviews/L1-mirror-disposition.json
+- deadline 02:30, budget 0.5
+- acceptance: "Disposition the W025-L1-MIRROR-DEDUP-01 findings at pinned ledger/citation_audit.csv#315c19145065 (report c3aa74c47044): accept/reject each of the 3 merge proposals and the merge-union rule (used_by_theorems + class_mapping must be unioned or D-002/T-101 are dropped); correct or withdraw the SRC-093→SRC-033 mirror_of edge contradicted by title/year/DOI/arXiv; record why SRC-020/SRC-044 (no identifier) are handled. Land the disposition at reviews/L1-mirror-disposition.json. Read-only on the frozen ledger; no gate verdict."
+- falsifier: "A disposition that merges a pair whose declared mirror edge is contradicted, drops the union rule, or is not derivable from the report's R1-R5 rules at the pinned bytes."
+- evidence: ledger#315c19145065, W025 report#c3aa74c47044, prereg#7366c27843d8, decisions.
+
+Notices:
+- `astra-indep3-notice-f0dir` → lead-formulation, lead-audit: REC-44 (erratum, no F0 write), assignment.
+- `astra-indep3-notice-gnum` → lead-numerics: B-N0-R2-1 closed by controller registry repair (three verdicts registered); G-NUM unmet corrected (stop-rule closed); N0 accept remains lead-audit-owned; lock enforced; N1 forbidden.
+- `astra-indep3-notice-bind` → lead-audit: CF-36 + CF-35 + binding requirements; gform-r3 binding table must disposition drifts/collisions.
+
+Do I need a notice to lead-literature for L1? The assignment itself is sent to them. Notices are status events; the assignment card is delivered to the assignee inbox. The NOTIFY mapping sends the assignment event to the assignee. For the erratum I'll send both the assignment (to formulation) and the notice (to formulation+audit). For HF-B1 I'll send the assignment to formulation and notify audit as part of notice-bind. Let me structure NOTIFY:
+```python
+NOTIFY = {
+  "astra-life10-f0dir-erratum": ["astra-lead-formulation"],
+  "astra-life10-hf-b1-adopt": ["astra-lead-formulation"],
+  "astra-life10-l1-mirror": ["astra-lead-literature"],
+  "astra-indep3-notice-f0dir": ["astra-lead-formulation","astra-lead-audit"],
+  "astra-indep3-notice-gnum": ["astra-lead-numerics"],
+  "astra-indep3-notice-bind": ["astra-lead-audit"],
+}
+```
+
+Also should I notify worker-093 (CF-33 containment due 01:55) — no new action.
+
+Decisions file: `runtime/state/controller_verification/astra-lifecycle-10-decisions.json` with schema, lifecycle label (astra-indep-3), map hash at decision, REC-44..REC-48, gates, lock state, tool hashes. I'll write it in the events script before gate events (so refs resolve). It should include controller_tools_sha256 for astra_lifecycle.py, audit_evidence.py, the 10 events script, apply_events.py, ASTRA_HANDOFF.md — but ASTRA_HANDOFF.md is updated after; I can hash at write time and note it. Actually simpler: store the tool hashes I can measure at script time (astra_lifecycle.py, audit_evidence.py, apply_events.py, the events script itself), and leave handoff to be recorded in the lifecycle report? The pass-08 decision file includes ASTRA_HANDOFF.md hash. I can include it measured at script time (stale after update) — or omit handoff. I'll include the four tool hashes and omit the handoff, or add a note. Keep it honest: record measured-at-emission hashes.
+
+Wait — one ordering subtlety: the events script measures `research_map/astra_lifecycle.py` and `audit_evidence.py`; I'll edit those first, then run the events script, then lifecycle. The decisions file's tool hashes will then reflect the edited tools. Good.
+
+Also: the events script writes the decisions JSON via plain file write — fine.
+
+Another consideration: `apply_events.py` applies assignment events; does it filter fields? Line 378 shows it picks specific fields. Let me check the assignment branch to ensure my `acceptance`, `expected_information_gain`, `stop_rule`, `deadline`, `budget_agent_hours` are preserved. Let me read apply_events.py around lines 340-400.
+dsh: reasoning:
+Assignment application preserves the fields I need. `status` event handling: my notices will be applied as status events for nodes F0/N0/A1 — careful! A status event with `node_id: F0` and `status: active` could change node F0's status (promote/demote logic). The pass-09 notices used node_id A1 (status active) and N1 (status blocked). For my notices:
+- notice-f0dir: node_id F0, status active — F0 node status is likely done with validation passed. A non-authority status event won't demote because of CF-25 fix ("a node already done is no longer demoted by a non-authority status event" — but actor is "astra" and my events are authority... hmm, the actor is astra; does the status branch guard promotion/demotion? Let me check the status handling. Since apply_events marks `status_events_ignored` for non-authority... My event actor is astra (AUTHORITY), so it could change the node status. Dangerous: F0 node is done; a status event with status "active" from astra could demote it!
+
+Let me check the status branch in apply_events.py and the CF-25 repair. Let me look at lines ~180-260.
+dsh: RATE_LIMIT: Too many requests. Your current concurrency is 23, which exceeds your concurrency limit of 20 based on your remaining balance. Please top up your balance to restore your concurrency.

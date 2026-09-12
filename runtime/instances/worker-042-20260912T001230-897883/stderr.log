@@ -1,0 +1,290 @@
+dsh: reasoning:
+Let me start by understanding the environment. I need to read handoff/map and comms. Let me look around the workspace.
+dsh: reasoning:
+The workspace is big. The task mentions "handoff/map and comms". Likely under workdir. Let me look.
+dsh: reasoning:
+Let's read HANDOFF.md, README.md, comms/PROTOCOL.md, and look at research_map, ledger, etc.
+dsh: reasoning:
+Now let me read the research map, inbox for worker/agent ids. Worker=042. Agent ids are `deepseek-flash-01` … `deepseek-flash-20`. Hmm, worker=042 might map to something else. Let me inspect the research_map and comms/inbox.
+dsh: reasoning:
+There's worker=042. Maybe there's a worker registration system. Let me look at runtime/instances for a worker-042, and runtime/control. Also the launch_swarm.sh / supervise scripts. Let me search for "042".
+dsh: reasoning:
+There's a worker-042 instance directory. Let me inspect it.
+dsh: reasoning:
+I am worker-042. I need to:
+1. Read handoff/map and comms.
+2. Take one class-bound task.
+3. Emit valid JSON with IDs, evidence, hash, falsifier.
+4. Checkpoint.
+5. Exit.
+
+Let me read the ASTRA_HANDOFF.md, README.md, and research_map structure. Also check comms/inbox for worker-042 assignments (there's no worker-042.jsonl in inbox - the inbox has deepseek-flash and worker-01, 06, 16). Let me look at the swarm launcher to see how workers get assignments.
+dsh: reasoning:
+I'm worker-042 in a new run (20260912T001230-897883). The supervise_loop.sh probably launched workers 001-0xx. Let me check supervise_loop.sh and independent_supervisor scripts for worker-042's prompt. Also check whether there's an inbox assignment for worker-042. There isn't in comms/inbox (only worker-01, worker-06, worker-16 older). Let me check supervise_loop.sh.
+dsh: reasoning:
+So there's a bigger worker pool (100 workers) launched by independent_supervisor scripts. Worker slots 001-100. I'm slot 042, with the prompt given. My prompt says: "Read handoff/map and comms. Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit."
+
+Let me read independent_supervisor_100.sh to see the worker prompts for the 100-worker run. Then find my assignment. There may be worker prompt files.
+dsh: reasoning:
+I'm worker 042 in the 100-worker pool. I need to take one class-bound task from the map's queue. My agent-id for comms purposes should be worker-042 (though the map uses deepseek-flash ids for the older pool). Let me look at the research_map.json to understand structure: classes, assignments, nodes, gates. It's a 737KB JSON. Let me inspect keys and summarize.
+
+I should also check comms/inbox for worker-042 — doesn't exist. The leads may not have assigned anything specific to worker-042. Then per prompt, "if none, inspect immediate queue and propose one artifact-backed task" — but here the instruction is "take one class-bound task". So I should find an available class-bound task in map.assignments and execute the artifact work myself, producing a real artifact with sha256, evidence, falsifier.
+
+Let me look at the map structure. Use python to summarize.
+dsh: reasoning:
+Let me get the groups/nodes, assignments (open ones), classes and statuses. Also claims list to see what classes exist.
+dsh: reasoning:
+I am worker-042 — not assigned in map (workers 001-100 were just launched generically). The instruction says: take one class-bound task. If no assignment exists, inspect immediate queue and propose one artifact-backed task. But my prompt says "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit."
+
+Best approach: find a genuinely useful bounded task not already done, produce a real artifact with measurable hash, write events to comms/outbox/worker-042.jsonl (valid JSON schema per PROTOCOL.md and events.schema.json), checkpoint, exit.
+
+First, let me understand the events schema and existing outbox patterns, and check what artifacts already exist (to avoid duplication). Also check the "immediate queue" in the map (groups' nodes? assignments?). Let me read events.schema.json, ARCHITECTURE.md, README.md quickly, and look at a good example outbox event (e.g., worker-06 or flash-*).
+
+Also check runtime/state/processes / counts to see if worker-042's tmux session is watched. Actually more important: the deliverable — a valid JSON artifact + hash + events + checkpoint.
+
+Let me be careful about avoiding duplication with 100 concurrent workers. Check what's in artifacts/ already.
+dsh: reasoning:
+There is a lot done already. I need one class-bound task that's genuinely valuable and not duplicated. Let me look at the map's immediate queue / controller findings / escalations to find open gaps. Especially `controller_findings` (11), `escalations` (3), gates' unmet criteria. Let me read those.
+dsh: reasoning:
+There are lots of open tasks. As worker-042 (a bounded worker, not a lead), I should take ONE class-bound task, produce an artifact, hash, evidence, falsifier, checkpoint, exit. The most valuable, bounded, class-bound tasks I can do:
+
+The gate unmet criteria list several concrete, bounded verification tasks. Notably:
+
+- G-AUDIT: "four of five class-binding gates are uncalibrated on audited-positive fixtures" — a bounded task: calibrate class-binding checkers on positive fixtures.
+- G-FORM: "no single frozen data class (s,delta,norm) is shared by F1/F2a/F2b, which dis..." — a bounded cross-schema consistency check.
+- G-LIT: "ledger rows use class tokens outside the frozen four" — worker already fixed; "201 citations have no source_meta" — could be a bounded task but requires web access.
+- G-NUM: "the replication harness invariant functional is leapfrog-specific; a scheme-agnostic check or relabelling is required" — bounded numerics check but numerics work is gated (N0 allowed).
+
+But careful: assignment in map says worker-06 had class-binding rules. I should avoid duplicating. Let me check what's already present in artifacts and what the highest-value unclaimed bounded task is.
+
+Given I'm worker-042 in the new pool with no specific assignment, my best move: pick a bounded, machine-checkable verification task on the canonical formulation artifacts (class-bound), produce a JSON artifact with a sha256, emit an `artifact` event + `status` (or claim) to comms/outbox/worker-042.jsonl, checkpoint in runtime/state, then exit.
+
+Important: worker events cannot set status=done, validation_status=passed, or gate verdicts. So I should emit artifact with validation_status like "self_checked"/"proposed" (need to check allowed values — check schemas.py / apply_events.py for validation statuses).
+
+Let me check apply_events.py and schemas.py to understand accepted validation_status values and event shapes, and what the ingest expects. Also look at an example worker outbox event to copy the format (e.g., worker-16.jsonl or deepseek-flash-17 final).
+
+A good class-bound task: **canonical schema hash and quantifier consistency check across F1/F2a/F2b** — verifying whether the three canonical schemas (schemas/af_wcc_vacuum.yaml, af_scc_c2_vacuum.yaml, af_scc_c0_vacuum.yaml) share a frozen data class (s, delta, norm) and whether extension predicates are defined (HF-A1 dangling extension_predicate) — a deterministic cross-file checker producing a JSON report. That addresses concrete G-FORM unmet criteria and is bounded, machine-checkable, and class-bound (F1/F2a/F2b).
+
+But wait — the lead-formulation has an assignment astra-life01-publish-frozen due 01:30. The canonical schemas may be republished. My check should be robust: compute hashes at check time and record them. Also there's a risk of duplication with other workers doing the same. Let me check artifacts for any existing cross-schema/dangling-predicate checks: search for "dangling" or "extension_predicate" in artifacts.
+dsh: reasoning:
+Good. So an artifact event needs validation_status in {unverified, passed, failed, retracted}. As a worker, I cannot set validation_status=passed per authority rules (worker events cannot set validation_status=passed). So I should set "unverified" and let a reviewer/controller promote. That complies.
+
+Now, which task? Let me look at what gate unmet criteria are most actionable and machine-checkable, and not already assigned to a lead for 01:30.
+
+Candidate: G-AUDIT unmet: "four of five class-binding gates are uncalibrated on audited-positive fixtures". Worker-06 did class binding rules + fixtures; worker-16 did audit_calibration. Let me check worker-16/audit_calibration and worker-17/class_binding_gate to see coverage. If uncalibrated positives remain, a bounded task: calibrate the class-binding checker on audited-positive fixtures (i.e., take known-good canonical schemas, verified as class-correct by independent audit, and run checker to confirm no false positives). But running worker-06's checker is a defined artifact.
+
+Candidate: G-FORM unmet "F1 ... F2a ... F2b ... no single frozen data class (s,delta,norm) is shared by F1/F2a/F2b". A bounded cross-schema entity check: extract the data class definitions from the three canonical schemas and check identifier-by-identifier. That's deterministic, machine-checkable, class-bound (F1/F2a/F2b). It would produce an evidence artifact for the gate. This seems high value and unlikely done: let me grep for existing "data class" cross checks.
+
+Candidate: G-NUM "the replication harness invariant functional is leapfrog-specific; a scheme-agnostic check or relabelling is required" — bounded: inspect numerics harness and propose/implement scheme-agnostic invariant check. But numerics is locked for self-gravitating; N0 flat-space allowed. Still, the numerics lead has open assignment astra-life01-n0-proposal.
+
+Candidate: G-LIT "201 citations have no source_meta" — heavy web work, tool broken per ESC-3.
+
+Let me check the canonical schemas themselves to see size and structure. Let me look at the three canonical schemas and the FROZEN.json and reviews to see exact unmet details. First check whether the schemas currently in schemas/ are the frozen canonical ones (astra-life01-publish-frozen may not be complete yet).
+
+Let me look at schemas dir listing with hashes and FROZEN.json location.
+dsh: reasoning:
+The canonical schemas match the hashes recorded in CF-11: b65fcc0f0118 (F1 WCC), 8dae50da1ab5 (F2a C2), a8d899d2941f (F2b C0). Good — canonical is authoritative and stable at these hashes as of 00:12.
+
+Now the concrete G-FORM unmet: "no single frozen data class (s,delta,norm) is shared by F1/F2a/F2b, which dis..." — truncated. Let me see the full unmet text. Also recall F2 split into F2a/F2b. Let me get full gate details.
+dsh: reasoning:
+Key concrete, bounded, class-bound task: "no single frozen data class (s,delta,norm) is shared by F1/F2a/F2b, which disables the licensed C0⇒C2 transfer."
+
+As a worker, a strong deliverable would be a deterministic cross-schema consistency checker on the three canonical schemas, producing:
+1. Per-schema extracted data-class definitions (fields, types, topology, regularity, genericity, I+, visibility, conclusion_type).
+2. A shared-vs-divergent table across F1/F2a/F2b for (s, delta, norm) — exact line/hash evidence.
+3. Verdict: whether a single frozen data class is shared; if not, enumerate the minimal divergences with file:line citations.
+4. A falsifier: "If any of the three canonical schemas defines (s, delta, norm) with identical name/type/quantifier/topology on the same frozen hash, this artifact's 'not shared' conclusion is false — re-run check.py to refute."
+
+This is genuinely useful gate evidence for G-FORM and is machine-checkable. It doesn't claim completion/theorem, and it's bounded.
+
+But first, I must check whether another worker already did exactly this. Search artifacts for "data class" / "s,delta,norm" / "shared". Also check the latest reviews for G-FORM. Let me grep.
+dsh: reasoning:
+There's an existing artifact `artifacts/audit/emit_events.py` that mentions the blocker "lead-formulation freezes one (s, delta, norm) triple and rebinds all three schemas". Let me read that audit artifact to see status: maybe it's a blocker already recorded. Let me check artifacts/audit/ contents.
+
+Also let me look at the data_class sections of the three schemas to see whether they're actually divergent. If they are already identical, the gate unmet might be stale. If divergent, a precise divergence report is valuable evidence.
+
+Let me read the data_class blocks of each schema (lines ~95-140).
+dsh: reasoning:
+Now I can see the details. The data_class blocks are *almost* identical but with subtle divergences:
+
+F1 WCC (b65fcc0f):
+- regularity_class.sobolev_variant: s, delta as separate keys with status "standard_choice; the numeric thresholds are UNVERIFIED citations, L1 owns verification"
+- asymptotic_decay.parity_conditions: "not imposed; imposing a parity condition would shrink the class and must be declared as a different class"
+- adm_mass: exists/sign/rigidity/citation_status (no locator)
+- symmetry, gauge, diffeo_quotient, excluded_data extra fields
+- No `is_part_of_class`/class_change_warning/transfer fields? (genericity may have them further down)
+
+F2a C2 (8dae50da):
+- sobolev_variant flow map, status "standard_choice; UNVERIFIED citation"
+- parity_conditions: "not imposed"
+- adm_mass has locator
+
+F2b C0 (a8d899d2):
+- same as F2a mostly; adm_mass has hypotheses_reconciliation extra.
+
+So the three schemas share the same *numeric* (s > 5/2, delta in (1/2,1)) but differ in *field structure/annotation*. The gate's unmet says "no single frozen data class (s,delta,norm) is shared by F1/F2a/F2b, which disables the licensed C0⇒C2 transfer". Note "(s,delta,norm)" — norm isn't even a field anywhere. So the artifact should establish precisely: what the three data_class blocks declare, whether a single frozen triple exists, and enumerate divergences with file:line. And it must itself be falsifiable.
+
+This is an excellent bounded worker task: a **cross-schema data-class diff** that is deterministic and produces JSON + a machine-checkable verifier. It's class-bound (F1, F2a, F2b), cited to exact sha256 hashes of the canonical schemas, with a falsifier.
+
+The artifact should:
+1. Anchor hashes of the three canonical schema files (measured at run time; must match map's recorded canonical hashes).
+2. Parse the `data_class` section of each schema (YAML subset — safe_load should work).
+3. Compare fields recursively: for each key path, values across the three; classify: IDENTICAL / EQUIVALENT_TEXT_DIFF / DIVERGENT / MISSING.
+4. Specifically check for (s, delta, norm): s and delta exist and are numerically equal across all three; `norm` does not exist as a declared field in any of the three.
+5. Compute a verdict: shared_triple = false with reason; i.e., no single frozen data class exists because annotation-level divergence (parity, adm_mass locator/hypotheses, status strings) — though these may not change the mathematical class. Better to be careful: distinguish "same mathematical content under declared fields" from "byte-identical frozen class". The gate says "no single frozen data class (s,delta,norm) is shared ... which disables the licensed C0=>C2 transfer". So the report should produce a normalized comparison and say whether the *class-defining* fields agree (they seem to agree mathematically) and what the residual divergences are; plus the `norm` gap.
+
+Actually, the most decision-relevant output: a **frozen data class triple table** with exact (s, delta, norm) status per schema and the minimal patch list to make all three share one frozen class. That's actionable for the formulation lead: it converts the gate unmet into a concrete 3-line diff. And it's falsifiable: if any two schemas differ in (s, delta, norm) values, the "shared" conclusion flips.
+
+I must be careful not to over-claim. I'll present:
+- verdict: `single_frozen_data_class_shared = false` at given hashes (evidence: norm absent, annotation divergence).
+- `class_defining_fields_agree = true` for matter/cc/equations/constraints/regularity numeric thresholds/decay rates/parity/symmetry/gauge.
+- residual divergences list (field paths where the three disagree).
+
+Then propose a minimal freeze patch: add explicit `norm:` field? Hmm, better not to invent; instead list the exact fields that must be frozen to satisfy the gate: `s`, `delta`, `norm` (currently absent; the Sobolev `spaces` string implies the weighted norm), `parity_conditions`, `adm_mass.locator/hypotheses_reconciliation`, `regularity_class.sobolev_variant.status`.
+
+I should also verify the map's current recorded measured hashes for these nodes, and cite them. Let me get node records (artifact_sha256_measured). groups' nodes printed None for node_id... let me inspect a node dict fully. Actually the node keys had 'node_id' but printed None, so keys differ. Let me print raw node dict keys.
+
+Also I need to check the checkpoint tool, `research_map/checkpoint.py`, to produce a checkpoint (as instructed). And what the checkpoint looks like for a worker — check runtime/state/w06_checkpoint_1.json to copy the pattern (worker-06 wrote checkpoints). Let me read one.
+
+Also the outbox event format: let me read a good example from a recent worker, e.g. artifacts/audit/emit_events.py or comms/outbox/deepseek-flash-19.jsonl tail. Let me look at the tail of an outbox file and one checkpoint file.
+dsh: reasoning:
+I now have a clear picture of the format expected. Let me check whether the FROZEN.json has been republished (astra-life01-publish-frozen, deadline 01:30). Also check the artifact hash registry to see the canonical measured hashes and whether my chosen hashes match.
+
+Let me read artifacts/formulation/FROZEN.json, runtime/state/artifact_hashes.json (relevant entries), and the map's node records for F1/F2a/F2b.
+
+Also check if there's an existing cross-schema checker in artifacts/formulation (lead might have built one). Let me search for scripts that load all three schemas.
+dsh: reasoning:
+The FROZEN.json is revision 23 and includes `artifacts/formulation/schemas/*` at the same sha256 as canonical schemas/ (a8d899d..., 8dae50da..., b65fcc0f... presumably). That means the publish-frozen task has been completed (at 00:26) and the canonical and authoring trees are now byte-identical for these three schemas. Good — my check at canonical paths remains valid and hash-anchored.
+
+Let me see the artifact_hashes.json structure (2 keys). And check the map's node records for measured hashes.
+
+Now let me plan the concrete task:
+
+**Task ID**: `worker-042-FORM-DATACLASS-01` (class-bound: F1=AF-WCC-VAC-GEN, F2a=AF-SCC-C2-VAC-GEN, F2b=AF-SCC-C0-VAC-GEN; node F1/F2a/F2b; gate G-FORM).
+**Deliverable**: `artifacts/worker-042/data_class_freeze/data_class_crosswalk.json` + `check_data_class_crosswalk.py` + `README.md`.
+**Content**:
+- Anchored input hashes: canonical schemas (measured at run).
+- Extracted `data_class` subtree per schema.
+- Field-by-field crosswalk: path → per-class value → status (identical / wording_only / divergent / absent).
+- Explicit (s, delta, norm) table: s and delta values in each; `norm` absent in all three → `single_frozen_data_class: false`, with exact JSON pointers.
+- Minimal freeze patch: what to add/align so all three share one frozen data class. (Proposal only, not applied.)
+- Falsifier: any of: (a) re-hash mismatch → stale; (b) if the report claims a divergence that is actually identical under the normalization defined in the script → refuted; (c) if a fourth canonical class token exists with a different (s,delta,norm) → check incomplete. Specifically: "This report is false if two schemas have different values at any path classified identical or if any path classified divergent is in fact byte-identical modulo whitespace after normalization" — the script re-runnable with `--selftest`.
+- Self-test: inject synthetic schema variants (mutate delta) and confirm the checker flags them (positive control) and that identical copies yield `shared=true` (null control). This is the "run the null first" discipline.
+
+Deliverable must be machine-checkable: a `verify.py`/`--check` mode that re-runs from the artifact's own emitted JSON and validates its claims against the schema files, plus a self-test proving the checker can detect a divergence (control).
+
+Also emit to `comms/outbox/worker-042.jsonl`:
+- `artifact` event (path, sha256, validation_status: unverified, node_id F1/F2a/F2b... node_id must be a single string; use "F1+F2a+F2b" or "F1"). Better: one artifact event with node_id "F1" and class_id listing all three? The schema requires node_id. Use node_id "F1" (the cross-class node is F1/F2 family...). Hmm. Maybe emit three artifact events, one per node, each with its own path? That over-complicates. I'll use node_id "F1+F2a+F2b" — validate_event only requires presence. But apply_events.py may map node ids; let me check how apply_events handles artifact node_id, to avoid rejection. Let me check if node ids are validated.
+
+Also a `status` event with node_id, status=active (workers can't set done), summary, evidence_refs, next_falsifier, hours.
+
+Also maybe a `claim` event? A claim requires class_id, statement, conclusion_type, assumptions, falsifier, evidence_refs. conclusion_type could be "formal_model" or "numerical_evidence" — my result is a structural/consistency finding, not a theorem. It could be a claim of conclusion_type "formal_model"? Hmm. Safer: emit `artifact` + `status` + maybe `blocker` if the finding blocks the gate (it's evidence the gate is blocked, not a new blocker). The instruction says "emit valid JSON with IDs evidence hash falsifier" — artifact + status covers IDs/evidence/hash/falsifier. I might also emit a `claim` with conclusion_type "open_problem"? No — that's wrong. I'd rather emit one artifact event and one status event; both carry falsifier. That satisfies the requirement without risking auto-reject (theorem claims without artifact_refs auto-rejected; mine wouldn't be a theorem anyway).
+
+Let me check apply_events.py to see which upward types it accepts and requires (especially whether artifact events need extra fields like class_id, and whether node_id must be known).
+dsh: reasoning:
+Good. Now let me verify canonical hashes are unchanged right now and match map/FROZEN. Earlier sha256sum gave:
+- F1 WCC b65fcc0f0118980fe50b4a5eaf5fb637f4f744d0db095105fd8031db1dabcd94
+- F2a C2 8dae50da1ab595577c38587c2eb9841d1b4b5d75d22adb117f917a88d6af825f
+- F2b C0 a8d899d2941fa5b61a536b05dd513378150121805e3684409d505b508fecec1f
+These match FROZEN rev 23 and CF-11 measured values. 
+
+Now check whether another worker has already produced a data-class crosswalk. Search the artifacts tree for "data_class" JSON keys and "crosswalk".
+dsh: reasoning:
+There's `artifacts/worker-05/data_class_freeze_decision_packet.md` — relevant prior work! Also new workers 008, 076, 077, 086, 088 have created artifacts (concurrent workers from the 100-pool). Let me check worker-05's packet (older worker-05 from the 20-pool) and new worker dirs to check duplication. Especially worker-076/077/086/088 are from the 100-pool and could be doing something similar.
+
+Let me look at worker-05's packet and list contents of the new worker dirs.
+dsh: reasoning:
+Worker-05 already did a data-class freeze decision packet at 23:40, based on OLD revisions (F1 #7a3e1f93, F2a #23fec0e9, F2b #cb897b29). Since then all three canonical schemas were republished (FROZEN rev 23 at 00:26) with new content — the new revisions appear to have converged the layout: all three now have `regularity_class.default = smooth-with-decay` and the same `sobolev_variant {s, delta}` values. So the C7 probe's inputs are stale, and the gate unmet ("no single frozen data class is shared") may now be **partially resolved** at the current hashes.
+
+This is a perfect task: **re-measure the C7-shared-data-class probe against the current frozen revisions and report whether the mismatch is closed, with a field-by-field crosswalk**. That's exactly "one class-bound task" on F1/F2a/F2b under G-FORM, and it's decision-relevant: it tells the lead whether the gate criterion is now met or what remains.
+
+I should not duplicate worker-05's packet but *supersede* it with a current-hash measurement. Let me check worker-05's check_f2_integration.py and its report to reuse its C7 probe semantics (or better, write my own independent parser, which is stronger evidence — an independent reimplementation is worth more than re-running theirs, and avoids inheriting their bugs). Actually best: do both — my own extraction, plus run their probe if it accepts explicit paths. Let me look at their script briefly.
+
+Also there may be a canonical gate script artifacts/formulation/tools/run_gate_tests.py with the C7 rule. Let me check tools and the rule_spec T1.
+
+Let me first do a quick extraction of the three data_class blocks and compute equality. Let me write the checker now. Plan:
+
+Deliverables under `artifacts/worker-042/data_class_crosswalk/`:
+1. `check_data_class_crosswalk.py` — deterministic checker:
+   - inputs: `--f1 --f2a --f2b` paths (default canonical), `--out`
+   - anchors sha256 of each input
+   - YAML-safe-load (PyYAML availability? Check. The repo uses yaml in scripts, e.g. astra_lifecycle imports yaml presumably. Let me verify python3 -c "import yaml".)
+   - extracts `data_class` subtree and, additionally, the class-defining "regularity" / "genericity" relevant keys listed in rule_spec/acceptance.
+   - flattens to JSON-pointer → scalar value, canonicalizes whitespace (collapse spaces), and compares.
+   - crosswalk classification: `identical` (after whitespace canonicalization), `divergent`, `missing_in_*`.
+   - `(s, delta, norm)` focus block: locate `s`, `delta`, `norm` at the required paths; determine numeric equality.
+   - `--selftest`: null control (3 identical copies → shared=true) + mutation control (change delta in a copy → flagged), + missing-field control.
+   - exit codes: 0 = verdict computed and self-test passed; 2 = selftest failed.
+2. `data_class_crosswalk.json` — the report (artifact).
+3. `README.md` — summary, falsifier, how to refute.
+4. `hash.txt` or the report itself includes its own generator hash? Better: emit `MANIFEST.json` with sha256 of all files after writing. Circular hash problem: a file can't contain its own hash. Standard approach: emit `MANIFEST.json` containing hashes of the other files (script, json, readme) — plus the artifact event cites the manifest's own hash? The artifact event needs a single path+sha256. Use `data_class_crosswalk.json` as primary artifact; and include `manifest` inside... can't include its own hash. I'll emit `MANIFEST.sha256` listing the hashes of the three files (script, json, readme), and cite the JSON's hash in the event. That's clean: report JSON's sha256 is cited; manifest lists the rest.
+
+Wait — but the report JSON must be written before hashing it. Fine.
+
+Now, what exactly is the right verdict semantics? The gate criterion: "no single frozen data class (s,delta,norm) is shared by F1/F2a/F2b, which disables the licensed C0⇒C2 transfer". My report should say:
+- `shared_class_block_present`: whether the three `data_class` blocks are equal after canonicalization (excluding known annotation-only fields? No—report both raw and normalized).
+- `s_delta_norm`: s equal? delta equal? norm declared? → `true/false`.
+- `transfer_license_prerequisites`: given rule T1 (exact class + genericity match), is it now licensed? Only if all three blocks equal and genericity blocks equal.
+
+Careful: I must not overstate. The gate also requires reviews etc. I'll report only the data-class equality fact, with an explicit "not a gate verdict" disclaimer.
+
+Let me first check the actual equality now. Quick ad-hoc comparison before writing the final script. Let me check PyYAML and do recursive diff of data_class and genericity blocks.
+dsh: reasoning:
+Very informative. The key numeric class-defining axes now agree:
+
+- `data_class.regularity_class.default`: identical string "smooth-with-decay: h and K of class C^infinity with the numeric rates below" in all three.
+- `data_class.regularity_class.sobolev_variant.s`: s > 5/2 in all three.
+- `data_class.regularity_class.sobolev_variant.delta`: delta in (1/2, 1) in all three.
+- `data_class.asymptotic_decay`: numeric rates identical.
+- `data_class.matter/cc/equations/constraints`: identical.
+- parity_conditions semantically identical ("not imposed").
+- `norm`: absent in all three as an explicit field; only implied by `spaces` string. F1's spaces has trailing "(weighted Sobolev)" annotation difference.
+
+And diffs are annotation-level (status strings, locators, rigidity/excluded_data fields, genericity prose and extra keys).
+
+So the precise finding: 
+1. At the current frozen hashes, the *numerical* data-class parameters that worker-05's C7 probe compared are now aligned: default=smooth-with-decay in all three, s="s > 5/2", delta="delta in (1/2,1)". So C7's mismatch (s=4 vs s>5/2, delta=1/2+eps vs (1/2,1), Sobolev vs smooth) is **closed** at these revisions.
+2. However, the shared class is still not *frozen byte-identically*: 9 divergent leaf paths in data_class, 10 in genericity; and `norm` is not an explicit declared field anywhere, so a strict "(s,delta,norm) triple shared" criterion is not literally met.
+3. Distinguish: `class_defining_axes_aligned=true` vs `byte_identical_frozen_block=false`.
+
+Also interesting: `data_class.regularity_class.sobolev_variant.status` says "smooth-with-decay: default" and sobolev_variant declared but is it the selected class? Hmm — there's no `selected` field in these new revisions, unlike worker-05's old revisions. The default field says "smooth-with-decay". So the shared class = smooth-with-decay; Sobolev is a variant. But wait: is the Sobolev variant part of the class or a different class? F1's field says "the numeric thresholds are UNVERIFIED citations, L1 owns verification". Not important.
+
+Also to check: the T1 transfer rule in rule_spec.json requires exact data-class AND genericity match. Genericity blocks are NOT byte-identical either (10 divergent leaf paths), though semantically aligned on kind=residual_comeager, ambient_space, generic_set meaning, etc. The C0⇒C2 transfer is between SCC classes F2a (C2) and F2b (C0), not involving F1 — so the relevant pair for the transfer is F2a vs F2b. Let me check: F2a==F2b on data_class? From the diff output, F2a and F2b diverge on /adm_mass/hypotheses_reconciliation and /adm_mass/locator (F2b has extra annotation), plus presumably nothing else? Let me compute F2a vs F2b specifically.
+
+So the report should have a pairwise matrix: F1-F2a, F1-F2b, F2a-F2b, for data_class and genericity, at both canonicalization levels:
+- level A (byte-identical after whitespace canonicalization) — strict
+- level B (semantic class axes: kind, default, s, delta, spaces, decay rates, matter, cc, equations, constraints, parity, symmetry, gauge) — normalized
+
+The C0⇒C2 transfer depends on F2a/F2b pair matching on class + genericity. Let me compute that pair precisely.
+
+Then the falsifier: "Re-run check_data_class_crosswalk.py --check against the same three sha256s. This report is FALSIFIED if (a) any pairwise classification printed here is contradicted by re-extraction (e.g., F2a/F2b data_class differ on matter/cc/equations/constraints/regularity numeric values), (b) the `norm` field is found declared in any of the three at the cited hash, or (c) a path marked divergent is byte-identical after whitespace normalization." And the selftest mutations prove the checker detects real divergences.
+
+Now, "norm": the gate phrase "(s,delta,norm)" likely refers to a weighted Sobolev norm. In these schemas, `spaces` has the norm structure (H^s_delta etc.) but no explicit `norm:` key. So report: `norm_declared=false` in all three; `norm_implied_by` = data_class.regularity_class.sobolev_variant.spaces. That's a concrete gap: to satisfy the literal criterion, one could add an explicit `norm` field, or record in the map that `spaces` IS the norm declaration. This is a finding the lead can act on.
+
+I must also double check the current map's gate unmet text may have been superseded by controller events... The map is the authority, last updated 00:12:11. The gate G-FORM unmet still says "no single frozen data class (s,delta,norm) is shared". Fine.
+
+Now, one more concern: 100 workers are running; several may be editing/writing. My artifact dir `artifacts/worker-042/` is unique to me. Good. Also, the leads may republish schemas concurrently, invalidating my hashes — my report is hash-anchored, so staleness is handled by the falsifier/reopen rule.
+
+Let me now check the task/authority constraints: "Authority: worker events cannot set status=done, validation_status=passed, or a gate verdict." I'll set validation_status="unverified" and status="active".
+
+Let me also check nodewise: which node_id should the artifact event use? Options: "F1" (single), or "F1,F2a,F2b". apply_events.py uses `idx.get(ev["node_id"])` → None if unknown, and for artifact events when g,n is None... let me check what happens: line 274-304. If node not found, n is None and the code may error. Let me read that region.
+dsh: reasoning:
+For artifact events, if node_id is unknown (idx returns None), nothing happens (no crash). For status events likewise. To make my events land on the map, I should use a known node_id. Known nodes: F0, F1, F2a, F2b, L0, L1, N0, N1, A0, A1, A2, GLOBAL? Let me confirm node ids from map groups. Earlier printing gave node_id None because I printed n.get('node_id') but the key might be 'id'. Let me check the map node keys.
+
+For an artifact event, using node_id "F2a" would let the apply record it against F2a's artifact submissions (path != assigned artifact, so it goes to artifact_submissions — safe, doesn't overwrite canonical). Since my artifact spans F1/F2a/F2b, I could emit three artifact events — one per node pointing at the same path+sha — but that would triple-record. Better: emit one artifact event on the node whose gate criterion it most directly serves (G-FORM, F2a/F2b pair for C0⇒C2 transfer), plus include `class_id` listing all three and `related_nodes`. Hmm, but the event schema allows additional properties (additionalProperties: true), so I can add `related_node_ids: ["F1","F2a","F2b"]`.
+
+Which node? The C0⇒C2 transfer is between F2a and F2b. I'll use node_id "F2a" for the artifact event... Actually the crosswalk is about all three. I'll emit three separate `artifact` events? No — same path on three nodes would record 3 submissions. That's arguably fine (each node gets the evidence recorded). But cleaner and safer: one artifact event with node_id "F2a" and `related_node_ids`; plus one status event with node_id "F1+F2a+F2b"? Status node_id unknown → dropped. Hmm.
+
+Better: emit three status events (node F1, F2a, F2b), each with the same evidence refs and summary; and one artifact event per node as well? That's heavy. The instruction says "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit." One artifact event suffices. I'll do:
+
+1. `artifact` event, node_id "F2a" (the transfer's left side), class_id all three, artifact_type "cross_schema_check_report", path report JSON, sha256, validation_status "unverified", plus extra fields: related_node_ids, gate "G-FORM", input_hashes, falsifier.
+2. `status` event, node_id "F2a", status "active", hours 0.75, summary, evidence_refs, next_falsifier.
+3. Optionally a `claim` event with conclusion_type "formal_model"? Hmm. The claim event is for research claims; my finding is a structural/consistency measurement. I could emit a claim of conclusion_type "formal_model" — but that might pollute claims. Let me check what conclusion types existing claims use. Maybe better to skip claim; artifact + status is what PROTOCOL lists for a worker result. Actually the instruction explicitly says "emit valid JSON with IDs evidence hash falsifier" — artifact + status both have IDs; artifact has hash; status has falsifier. Good.
+
+Also I should write a checkpoint file in the style of worker checkpoints: `runtime/state/w042_checkpoint_1.json` (following w06/w08 naming). And maybe append to a personal checkpoints jsonl. The instruction says "checkpoint". The map's checkpoint tool (`research_map/checkpoint.py`) is controller-run; a worker checkpoint file + status event referencing it is enough. Let me check what worker-16/worker-01 did for checkpoints and whether there's a convention like artifacts/worker-042/CHECKPOINTS.md. worker-16 has CHECKPOINTS.md and worker-01 has checkpoints/ckpt-7.json. I'll write `artifacts/worker-042/CHECKPOINTS.md` + `runtime/state/w042_checkpoint_1.json`, and reference both in the status event.
+
+Before writing, let me double-check F2a vs F2b specifically (the transfer pair) and also look at the `rule_spec.json` T1 requirement to align my report to the actual rule. Let me read rule_spec.json relevant part and check T1 text.
+dsh: reasoning:
+Note: reviews/F2a-review-lead-audit.json refers to a superseded revision (F2a rev3 with weighted Sobolev H^4). The new F2a (8dae50da) has smooth-with-decay default. So my current-hash measurement supersedes the audit's statement about which class is frozen.
+
+Let me find the T1 rule in rule_spec.json exactly. Let me search the full rule spec for "transfer".

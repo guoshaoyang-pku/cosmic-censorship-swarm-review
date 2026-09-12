@@ -1,0 +1,123 @@
+dsh: reasoning:
+Let me start by reading the handoff files and understanding the task.
+
+The user says: "You are Astra controller. Read ASTRA_HANDOFF.md and research_map.json. Consume comms and artifacts, maintain DAG and gates, issue bounded assignments, record hashes and validation. Keep numerics gated. One independent lifecycle then exit. probe=quota"
+
+Let me look at the workspace first.
+dsh: reasoning:
+Let me find ASTRA_HANDOFF.md and research_map.json. They may be in a subdirectory. Let me search.
+dsh: reasoning:
+Found the handoff. Let me read both files.
+dsh: reasoning:
+This is a complex multi-agent swarm control task. Let me understand the state.
+
+Key context:
+- I am the Astra controller (a new pass — pass 10 presumably, labeled `astra-indep-3`? Or the handoff says pass 09 ran as `astra-indep-2`).
+- The user says "One independent lifecycle then exit. probe=quota"
+- I need to: read ASTRA_HANDOFF.md (done) and research_map.json, consume comms and artifacts, maintain DAG and gates, issue bounded assignments, record hashes and validation, keep numerics gated, run ONE independent lifecycle, then exit.
+
+So the task: run `python3 research_map/astra_lifecycle.py --label <label>` once (one independent lifecycle), which does locked ingest → apply → repair → audit → checkpoint. Then report and exit.
+
+"probe=quota" — hmm, maybe that's a directive meaning probe the quota? Perhaps it means the reason for triggering is a quota probe. Or maybe there's a specific thing to check with quota. Let me look for "quota" references in the repo.
+
+First let me check the current state and understand the tools. Let me:
+1. Read the map (it's 8MB — read selectively via python/jq).
+2. Check current map sha, gate states, assignments, inbox for me (astra).
+3. Check numerics_lock.
+4. Run one lifecycle.
+
+Let me check the handoff mentions: "Your assignment is in `comms/inbox/<your-agent-id>.jsonl`."
+
+My agent id is presumably `astra`. Let me check comms/inbox/astra.jsonl.
+
+Also "probe=quota" might refer to a specific directive in an inbox message. Let me look.
+
+Let me be careful about the big files. Use python to inspect JSON.
+
+Let me start.
+dsh: reasoning:
+"probe=quota" — no direct hits in the repo. This likely is a directive from the user meaning "probe quota" perhaps referring to checking the DeepSeek API quota? Or maybe it's a token/instruction field for the run metadata. Let me look at the inbox for astra, especially the most recent messages (mtimes show astra.jsonl modified 06:08, astra-lead-formulation.jsonl at 06:16 — much later than pass 09 at 01:22). So there's new traffic since pass 09. The map is at 06:26 mtime, events.jsonl at 06:26. So the auto-cycle has been running and new events came in.
+
+Let me look at:
+1. comms/inbox/astra.jsonl (my inbox).
+2. The current map summary: sha, gates, numerics_lock, assignments, etc.
+3. Check for "probe" or "quota" in inbox messages.
+
+Let me be efficient. First, check the tail of astra.jsonl and search for probe/quota.
+dsh: reasoning:
+Now I see. The situation: quota outage occurred ~01:50 through at least 06:26. Various "controller-01" agents (previous controller passes presumably) have been managing the quota circuit. New assignments were issued at 06:40-06:41 (astra-lead-formulation inbox lines 35-36) with actor "astra" — probably from a prior controller invocation ("astra" controller) at 06:40.
+
+Wait — those events in astra-lead-formulation.jsonl at 06:40 are future relative to now? What is the current time? Let me check. The astra.jsonl line 26 is at 06:26. Line 35-36 of astra-lead-formulation at 06:40. Let me get the current date/time.
+
+"probe=quota" likely means: the supervisor quota probe — check whether quota is restored. The last artifact says "Supervisor quota probe now uses per-instance exit_code, trajectory, and stderr; failed probe kills only cosmic-controller-01."
+
+The user instruction: "Keep numerics gated. One independent lifecycle then exit. probe=quota" — I think this means: run one independent lifecycle (astra_lifecycle.py --label ...) and the probe key/value is "quota", i.e., maybe check quota status. Actually it could be a parameter for the lifecycle: probe=quota. Hmm.
+
+Let me look at astra_lifecycle.py's CLI and the supervisor scripts to understand. Also look at runtime/state/quota_circuit_until and the watcher.
+
+Let me check current time first, and the state of runtime.
+dsh: reasoning:
+Current time: 2026-09-12T11:14+08:00. The map was last updated at 06:26. So there's been ~4.8 hours of no controller lifecycle. The auto-cycle presumably keeps applying accepted events (events.jsonl mtime 06:26 too... actually research_map.json mtime is 06:26 and events.jsonl 06:26). Hmm — so nothing since 06:26? But research_map dir mtime 06:26. Let me check runtime/state/checkpoint_log.jsonl mtime 06:24, counts.tsv at 03:24.
+
+Wait — the ls showed `research_map/` dir modified Sep 12 06:26 and events.jsonl 06:26. And `/data3/guoshaoyang/workdir/ai4math-swarm` modified 01:23. So the map froze at 06:26.
+
+Also, note `runtime/state/map.lock` is from 05:10 — 0 bytes. Hmm, a lock file. Need to check lock handling in the lifecycle; maybe stale lock. Let me look at the astra_lifecycle.py CLI/behavior, run_cycle.py, and supervisor. And check whether the quota circuit file exists (quota_circuit_until printed empty — the file doesn't exist? `cat` returned nothing but no error shown... Actually with 2>/dev/null, if it doesn't exist we'd see nothing. Let me check).
+
+Key question: what does "probe=quota" mean? Possibly the user wants me to run the lifecycle with a probe of quota — i.e., check whether the DeepSeek quota is restored before launching anything. The last event says "Supervisor quota probe now uses per-instance exit_code, trajectory, and stderr; failed probe kills only cosmic-controller-01."
+
+Let me inspect the supervisor script and quota state to see how a probe is done, then run one independent lifecycle.
+
+Let me read the key files:
+- research_map/astra_lifecycle.py (73KB — read the argparse/main section)
+- scripts: /data3/guoshaoyang/independent_supervisor_100.sh (mentioned)
+- runtime/state/quota_circuit_until
+
+Let me grep the lifecycle for main and probe.
+dsh: reasoning:
+Now let me read the lifecycle main and understand what it does. Also check the supervisor script that does quota probe. Let me read lines ~1000-1095 of astra_lifecycle.py, and look at the /data3/guoshaoyang/independent_supervisor_100.sh.
+dsh: reasoning:
+Now it's clear. The supervisor launches a controller with `probe=quota` appended to the prompt when a quota circuit is open. The user prompt "probe=quota" indicates I am that quota probe instance: I'm the controller launched specifically to probe whether quota recovered. My instruction: "One independent lifecycle then exit."
+
+So my task: run ONE independent lifecycle (`python3 research_map/astra_lifecycle.py --label astra-indep-3` or similar), then exit with a report. Since I'm a quota probe, I should also record whether quota is available (the probe is via the lifecycle's own exit_code/stderr). Actually — the probe mechanism: the supervisor launches controller-01 with prompt ending "probe=quota"; then waits 35s and checks stderr for "QUOTA: Insufficient Balance". If quota is seen, sets circuit; else proceeds to launch the full fleet (leads + 100 workers).
+
+Hmm, but "One independent lifecycle then exit" — my exit could be after one lifecycle. The launch of leads/workers is done by the supervisor, not me.
+
+Wait, but importantly: as a controller instance under dsh_fixed.sh --profile headless, my output goes to runtime/instances/controller-01-*/... Let me check the current instance directory to confirm which instance I am. Let me look for the most recent controller-01 instance. Actually, the current tmux session is presumably controller-01.
+
+Let me check `tmux ls` and my own instance dir. Also check whether quota is actually available now (that's a key part of "probe=quota"). A way to probe: check recent stderr logs from lifecycles for the QUOTA message, or try a tiny dsh call? But a probe should ideally not consume much. The supervisor's own probe is: launch controller (me) and check if my stderr contains QUOTA. So the "probe" is essentially "did the controller session start successfully". If I'm running and doing work, quota is presumably okay.
+
+Actually more precisely: the dsh lifecycle process (me) exits immediately with "QUOTA: Insufficient Balance" if quota is out. I'm running, so quota appears to be OK. But wait — the launch command was at ~11:13-11:14. Let me check my instance dir.
+
+Plan:
+1. Determine my instance id and check stderr for quota.
+2. Read the map gates/assignments, comms since pass 09 (events applied by auto-cycle between 01:22 and 06:26).
+3. Run ONE independent lifecycle: `python3 research_map/astra_lifecycle.py --label astra-indep-3`. But before that, the handoff says pass 09 ran `astra_lifecycle_09_events.py` (idempotent pass-09 gate/assignment/notice events). For pass 10, I may need to create the pass-10 events script or just run the lifecycle. The instruction says "One independent lifecycle then exit." So minimally: run the lifecycle once with a label.
+
+But the controller's job also includes: consume comms and artifacts, maintain DAG and gates, issue bounded assignments, record hashes and validation, keep numerics gated. The lifecycle tool does ingest → apply → gate audit → findings merge → atomic map write → checkpoint. Since I have a limited budget/quota, I should do exactly one lifecycle and record the outcome.
+
+However, there's context: the previous controller passes also produced "pass-NN events" scripts that emit gate events, assignments, notices. The handoff says pass 09 ran one lifecycle at 01:22:04–01:22:05. New traffic between then and 06:26 has been applied by the auto-cycle but the controller hasn't run a lifecycle since. There are new artifacts from controller-01 at 03:03–06:26 (the quota-outage period work) and new assignments at 06:40-06:41 in lead-formulation inbox. Wait, the assignment events at 06:40/06:41 in the lead-formulation inbox were created at 06:40 — by "astra" actor. Hmm, but map updated at 06:26, events.jsonl at 06:26. Those assignment cards in the inbox have created_at 06:40/06:41 — possibly injected/forged (CF-33 pattern!) or emitted by a later controller instance whose outbox events weren't ingested (acquired after 06:26). Let me check the astra outbox for those event ids.
+
+Let me be systematic and quick given the one-lifecycle mandate:
+
+A. Pre-flight verification (read-only):
+- map sha (recompute), validate.
+- gates + numerics_lock current.
+- iterate inbox/outbox to find new traffic since pass 09.
+- check the two 06:40 assignments' provenance (are they in astra outbox? Ingested? Are they accepted?).
+- Check detector pin (class_separation.py sha) — frozen.
+- Check F0 taxonomy sha — must not change.
+- Check numerics/results for N1 artifacts — must be none.
+
+B. Run one lifecycle with label `astra-indep-3` (pass 10).
+
+C. Post: verify report, map sha, gates; write a short handoff/record? The instruction says "One independent lifecycle then exit" — so after the lifecycle, I report and exit.
+
+Should I create a pass-10 events script that emits assignments/notices? The instruction says "issue bounded assignments" as part of the controller role. But the mandate is one lifecycle then exit and we're quota-probing. Given limited quota, the safest approach matching precedent: run the lifecycle, and then optionally append a small events script for pass-10 notices/assignments — but that would be a second map write (not part of "one independent lifecycle"). Hmm. Pass 09 did: lifecycle + astra_lifecycle_09_events.py. The handoff says "Pass 09 ran as ONE independent lifecycle, astra-indep-2, at 01:22:04–01:22:05 (single locked invocation: ingest → apply → gate audit → findings merge → atomic map write → checkpoint)" — but the pass-09 events script presumably ran earlier (it says controller tools for the next pass include both). Actually the pass-09 event script was written at 01:22 (mtime), and lifecycle report at 01:22:05. Hmm, order unclear: probably events script first (01:22:00), then lifecycle at 01:22:04.
+
+Given "probe=quota" and the risk of burning quota, I'll do the minimum viable controller pass:
+1. Read-only pre-flight.
+2. Run one lifecycle as `astra-indep-3`.
+3. Verify the report; record the probe result (quota OK) with evidence.
+4. Report and exit.
+
+Do I need to issue assignments? The map already has assignments in flight; new ones may be
