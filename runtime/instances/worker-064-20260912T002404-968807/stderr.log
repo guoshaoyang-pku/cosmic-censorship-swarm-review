@@ -1,0 +1,793 @@
+dsh: reasoning:
+Let me start by understanding the environment. I'm worker=064, need to read handoff/map and comms, take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit.
+
+Let me look at the workspace.
+dsh: reasoning:
+No handoff directory at top level. Let me look for "handoff" directories and "comms". Also "${I}" directory is odd. Let me search.
+dsh: reasoning:
+The relevant workspace is /data3/guoshaoyang/workdir/ai4math-swarm. It has HANDOFF.md, README.md, research_map, comms, runtime, ledger, reviews, proposals, etc. Let me read HANDOFF.md, README.md, and explore research_map and comms.
+dsh: reasoning:
+This is an AI4Math swarm workspace. I am worker=064. The task says: "Read handoff/map and comms. Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit. worker=064"
+
+So there's a research_map directory, comms directory, runtime, ledger, proposals, proposed, schemas. Let me explore those to understand the current protocol. Probably there's a research map with tasks assigned to workers/classes. Let me list directories.
+dsh: reasoning:
+I need to read the comms PROTOCOL.md, research_map/ASTRA_HANDOFF.md, ARCHITECTURE.md, and the checkpoint.py, schemas.py to understand the required JSON shape. Also look for the task assignment mechanism — "class-bound task". Let me read the protocol and handoff first.
+dsh: reasoning:
+Now, I'm worker=064. Note earlier handoff mentions "Erdős #64" problem and recommendation "Concrete next step: pick 3 problems ... #64 is already done". Hmm, "worker=064" may be an agent id. But there's no `worker-064` files listed in outbox. Let me check the inbox for my assignment. The comms/inbox directory. Also check runtime/instances for worker-064.
+
+Let me check the inbox and my assignment. The task instruction mentions "Take one class-bound task". The ASTRA handoff says assignments are in comms/inbox/<agent-id>.jsonl.
+
+Let me check comms/inbox and see if worker-064 has an inbox file. Also check runtime/instances and runtime/state.
+dsh: reasoning:
+There's no `comms/inbox/worker-064.jsonl`. But there are instances `worker-064-*` in runtime/instances. Let me look at those directories. The naming pattern suggests other workers have instances with assignments. Let me inspect worker-064 instances and compare with another worker's instance that has completed a task (e.g., worker-080 or similar) to understand the expected output shape.
+
+Let me look at runtime/instances/worker-064-*.
+dsh: reasoning:
+Interesting. The most recent instance worker-064-20260912T002404-968807 is probably THIS run (started at 00:24). Let me read its prompt.txt, meta.json, and stderr.log. Also the older worker-064 instance from 00:16 with exit_code 2 — let's read its output to learn what happened.
+
+Actually wait — worker-064-20260912T002404-968807 has stderr.log 2525 bytes at 00:24, and this might be the current session. Let me check.
+dsh: reasoning:
+I am the third invocation of worker-064 (started 00:24:04). The previous worker-064 at 00:16:57 already did the churn audit task W064-CHURN-01 and emitted events to `comms/outbox/worker-064.jsonl` and checkpoint `runtime/state/w064_checkpoint.json`.
+
+My instructions: "Read handoff/map and comms. Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit. worker=064"
+
+Since W064-CHURN-01 is done by the immediate predecessor, I should take a different class-bound task (avoid duplicating; the ASTRA handoff explicitly says one canonical path has exactly one owner). I need to read the current state of comms and map to find an open, class-bound task suitable for a cheap breadth worker, ideally something with a verifiable artifact.
+
+Let me first check the current state:
+1. `comms/outbox/worker-064.jsonl` — what the predecessor emitted.
+2. `runtime/state/w064_checkpoint.json`.
+3. The research_map assignments in map.
+4. `comms/inbox/astra-lead-formulation.jsonl` (latest downward traffic), any new assignment for worker slots.
+5. `runtime/state/supervisor.log` tail to see current swarm state.
+6. `comms/outbox/e08_artifact_map_gate.event.json` etc.
+
+Also the current map may have moved since. Let me check current time, map hash, recent events.
+
+Let me be efficient. I'll read worker-064 outbox + checkpoint, then grep the research map for assignments with statuses, and check recent outbox traffic (last minutes).
+
+An important consideration: the deliverable is a JSON artifact with:
+- IDs (event ids, node/class ids)
+- evidence (paths + sha256)
+- falsifier
+- checkpoint
+
+And I must not claim things worker cannot claim: worker events cannot set status=done, validation_status=passed, or a gate verdict. So my event types should be `artifact`, `status`, `claim` (with evidence), `blocker` maybe.
+
+The previous worker's task was a churn audit. A natural next class-bound task: validate the schemas' checkers? There are schemas: `af_scc_c0_vacuum.yaml`, `af_scc_c2_vacuum.yaml`, `af_wcc_vacuum.yaml`, `af_scc_regularities.yaml`, plus `f1_falsifier_tests.jsonl`, `semantic_contract_tests`, `taxonomy_cases.jsonl`. The gate G-FORM is pending on "full-schema accepts at rev21 hashes plus F1 soft flag". Audit tasks: A1 rebind coverage, class separation. There's `proposed/class_separation.py`, `audit_evidence.py`.
+
+Let me look at what open tasks exist and which are class-bound and unclaimed. The most useful thing a bounded worker can do: run a falsifier test suite against a specific class artifact and emit evidence, without duplicating another owner's path.
+
+Let me check the map's assignments and the newest inbox messages to leads/workers. Also check `runtime/state/supervisor.log` tail — it may show what workers are being assigned currently (e.g., workers launched with prompts). Let me look.
+dsh: reasoning:
+The swarm is running with many workers being launched every ~20 seconds. Each worker gets the same prompt. The predecessor worker-064 did a churn audit, producing events but those might be ingested or rejected. Note the events in the outbox have future created_at times (e.g. resource request at 00:34:00). Hmm.
+
+Now I need to "take one class-bound task". I need to pick a task that:
+1. Is class-bound (named class id like AF-WCC-VAC-GEN, AF-SCC-C2-VAC-GEN, AF-SCC-C0-VAC-GEN, AF-WCC-SCALAR-SPH).
+2. Produces valid JSON events with IDs, evidence, hash, falsifier.
+3. Checkpoint in runtime/state.
+4. Doesn't duplicate work already done/claimed by others.
+
+Let me check what other workers have done in the last few minutes to avoid duplication. Let me look at the most recent outbox files and the assignments in the map. Let me grep for assignment entries in research_map.json and current statuses.
+
+First, let me understand the map structure: use python to load and inspect assignments, gates, claims, nodes.
+
+Also check what's in `runtime/state/checkpoints/` and `current_checkpoint.json` — maybe there's a list of worker tasks.
+
+Let me also check recent outbox content of workers launched around the same time (worker-050, worker-043, worker-084 etc.) to see what tasks they took. This will help avoid duplication and maybe find a gap.
+
+Let me use python to summarize map.json: keys, counts, assignments with status/assignee.
+dsh: reasoning:
+Let me look at the assignments in the map, particularly the open ones, and see if there are assignments not yet done. Also check what recent workers did (e.g., worker-050, worker-084, worker-043, worker-022, worker-069). Let me summarize recent outbox events: actor, event_type, node_id, class_id, summary.
+
+I'll write a python script to parse the last ~30 outbox files and print concise info.
+dsh: reasoning:
+There is a huge amount of parallel activity — dozens of workers picking tasks. Many workers did reviews of F0/F1/F2a/F2b. Others did L1 spot checks. I need to pick a bounded class-bound task that is not already covered, and do it well with an artifact + evidence + falsifier + checkpoint.
+
+Let me look at the map's assignments to see if there is an open assignment that is unclaimed — the ASTRA handoff lists open assignments owned by leads. But workers without cards take tasks from "the open queue".
+
+What are high-value gaps not yet covered? Observations from recent outbox:
+- Many independent reviews of F2a/F2b/F0/F1 at various hashes.
+- L1 spot checks (many).
+- N0 flat-space test replication (worker-051, deepseek-flash-12).
+- G-NUM protocol review (worker-067).
+- A1 class separation heldout mutants (worker-068).
+- Checker tokenizer window defect (worker-085).
+- F0 rebind audit (worker-087).
+- A0 self-test (worker-038).
+
+What's missing? Perhaps a falsifier-targeted test of the *class separation* checker or the "G-FORM" checker on the *actual* published artifacts — but worker-069 did a 27-criteria G-FORM checker for F2a; others did full-schema reviews for F2b and F1.
+
+Alternatively, pick something concrete and bounded with high information gain: e.g., verify the claimed equivalence between `artifacts/formulation/**` mirrors and `schemas/*.yaml` (byte-identity), or audit the "definitional" units/constants in the F1 schema (e.g., weighted data class, genericity, I+, visibility) against primary sources. Hmm.
+
+Let me look at the assignments list in the map to find "open" assignments and see which ones lack artifacts. Perhaps there's a specific assignment assigned to a worker id that doesn't exist (e.g. "assignee": "worker-064"?). Let me check.
+
+Also, I should read the current checkpoint to see what the controller expects next, and the controller_verification latest report.
+
+Let me query the map for assignments with status open/queued and their acceptance tests.
+dsh: reasoning:
+Assignments don't have status fields; the map likely tracks completion via events/applied events. Let me look at the "immediate queue" — nodes and their status. Let me inspect the map nodes (maybe under 'groups' or 'cross_group_edges'?). The top-level doesn't show a 'nodes' key. Hmm, maybe nodes are inside groups. Let me summarize groups.
+
+Also I want to find specific unaddressed verification tasks with clear class binding. Let me check the latest controller lifecycle report to see which gates are failing and what evidence is missing, then pick a task that produces evidence toward a gate that no other worker has done.
+
+Let me read the latest controller verification report.
+dsh: reasoning:
+Now I see the current gate picture at 00:24:40:
+- G-F0: pending — 0 distinct accept reviewers at F0 hash 276009f4f63d (worker-082:revise, worker-16:revise, flash-21/22:inconclusive, lead-audit:revise). Needs 2 distinct independent accepts.
+- G-FORM: F1 needs 1 more distinct accept reviewer (has lead-audit only); F2a has 2 (lead-audit, worker-047) — but worker-047's review might bind b6123750; F2b has 4.
+- G-LIT: L0 has 3 accepts (need >=2), L1 has 19 spot checks (need >=3). Pending probably on some other criterion.
+- G-NUM: C8 unmet.
+- G-AUDIT: A0 rubric exists; A1 coverage: F0 0, F1 1, F2a 2, F2b 4, L0 3 distinct accepts (need >=2 each).
+
+The most valuable non-duplicative task: an independent full-schema review of F1 (`AF-WCC-VAC-GEN`, sha256 9a8bd4c96800) producing an accept would move G-FORM to 2 distinct accepts. But many workers are already reviewing. Wait — is anyone reviewing F1 right now? Let's check the latest events: worker-094 did F1 review (revise, score 4, HF-094-2 duplicate?), worker-088 did F2a, etc. Worker-069 did F2a accept, worker-089 F2b accept...
+
+Hmm, but there's risk of duplicating F1 review. Let me grep the outbox for recent F1 review events in the last few minutes.
+
+Alternatively, maybe I should pick a different angle with clearly higher uniqueness: the map shows `evidence_soft_findings` dual-tree divergence: `research_map/formulation_taxonomy.yaml` (276009f4f63d) != `artifacts/formulation/formulation_taxonomy.yaml` (c8e979a1eb48). The ASTRA handoff says: "Canonical-path policy stands: schemas/*.yaml and research_map/formulation_taxonomy.yaml are authoritative; artifacts/formulation/** must be published byte-identically before verdicts bind."
+
+A high-value bounded task: measure the exact byte-level delta between the canonical taxonomy and the authoring copy, and classify whether the divergence is semantic (class definitions differ) or cosmetic (whitespace/metadata). That would be class-bound (F0 and the four classes) and would help adjudicate CF-13 publication drift. But worker-087 already did "F0-REBIND-AUDIT-01" on taxonomy rebinding, and predecessor worker-064 did churn audit including F0 dual-tree divergence. Hmm, duplicating again.
+
+Other options:
+- G-NUM C8: "the recorded protocol verdict reviews/G-NUM-protocol-review.json binds unbound (stale)". worker-067 did an independent G-NUM C8 review (verdict revise on F1, no hard failures). The requirement: criterion C8 against protocol 1e6cdf04d7a2 — recorded verdict binds stale 01b2072434cd. A worker could produce an independent verdict binding the current protocol hash 1e6cdf04d7a2. That's exactly what worker-067 did at 00:22:56 (review G-NUM). Hmm. Did it bind? Their review was "verdict revise on F1, no hard failures; C1-C3 closed and reproduced; C4 remains controller-side". Not sure.
+
+- A2 four-arm ablation: never run? The `evaluation/ablation_harness.py` and `ablation_dryrun_report.json` exist (dry run). A bounded worker could run a small real ablation? That's likely too heavy for a bounded worker.
+
+- The formulation taxonomy has class definitions. A valuable task: verify the "class separation" claims between C0 and C2 at the *semantic* level against the primary sources (literature ledger), e.g., confirm that the C0/C2 schemas' quoted theorems actually imply the claimed implications. This is class-bound (AF-SCC-C0-VAC-GEN / AF-SCC-C2-VAC-GEN) and could catch a real error. But many workers have done checker-based reviews, not source-level semantic checks. Hmm, but the L1 ledger rows are spot-checked.
+
+Let me think about what the task prompt expects concretely: "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit." The predecessor did exactly that with an artifact + events + checkpoint. I should do the same but with a distinct task (not the churn audit), class-bound, artifact-backed, with a real (not fabricated) measurement.
+
+Given the swarm is churning on reviews of the schemas, a genuinely useful and unclaimed task might be: **independent full-schema review of F1 (AF-WCC-VAC-GEN) at sha 9a8bd4c96800** to give G-FORM its second distinct accept... but only if it passes on the merits. An honest review must not be pre-committed to accept. And duplicate risk: worker-094 reviewed F1 with verdict revise at 9a8bd4c96800. If I review F1 and find it needs revision, that's not helpful for the gate but is honest.
+
+Wait — actually the review criterion counts *accept* reviewers only; lead-audit has one accept at F1 9a8bd4c96800. A second independent accept would close G-FORM's F1 portion. But if legitimately there are defects (worker-094 found HF-094-2 duplication issue), an accept would be wrong. Let me look at worker-094's F1 review to see the defect. If the defect is real and material, F1 needs revision (lead-formulation), and I shouldn't duplicate that.
+
+Alternatively, an unclaimed and verifiable task: **audit the `claim`-level class-binding of the *review corpus* itself** — i.e., verify that each review event recorded at the current hashes actually measured the file it claims (hash binding). The map's gate audit counts "distinct accept reviewers" at measured hashes. A worker could machine-check that reviews' recorded sha256 match the measured artifact bytes at the time. But reviews are in map (untrusted) — if binding is wrong, gates are being computed on stale verdicts. That's a meta-audit, class-bound via the F0/F1/F2a/F2b targets.
+
+Hmm, but many recent events claim that exact problem (verdicts bound to superseded hashes). The controller already scans review hashes.
+
+Let me look at what's likely *not* done: The `schemas/f1_falsifier_tests.jsonl` (136KB) and `schemas/semantic_contract_tests/` — the F1 falsifier tests. Perhaps no one has *executed* the declared falsifier tests for F1. That is a concrete class-bound task: run the F1 falsifier test suite against the frozen F1 schema and report which declared falsifier tests pass/fail. That produces machine evidence, directly relevant to G-FORM (F1's verification), and is not a duplicate opinion review.
+
+Let me check what's in `schemas/f1_falsifier_tests.jsonl`, whether there's a test runner, and whether any worker has run it. Also `schemas/semantic_contract_tests/`.
+
+Let me grep outbox for "falsifier_tests" / "f1_falsifier".
+dsh: reasoning:
+The `f1_falsifier_tests.jsonl` was recently rebound — the first row shows `binding_sha256: 9a8bd4c96800...` which matches the current F1 hash. So someone (probably lead-formulation) rebuilt it at 00:20. 25 rows in 136KB.
+
+A very concrete, class-bound task: **execute the 25 declared F1 falsifier probes against the frozen F1 schema `schemas/af_wcc_vacuum.yaml@9a8bd4c96800`** — i.e., take each row's `counterexample_candidate`/mutation spec and decide whether the declared falsifier actually falsifies the schema (does the schema's `deciding_field` still read as claimed, and would the mutation be caught by the schema's contract?). Hmm, but the rows are descriptions, not machine-executable mutations. Let me examine the structure more to see if there's an executable check.
+
+Alternatively: `schemas/semantic_contract_tests/` has `run_contract_tests.py`, `manifest.json`, `observed_verdicts.json`, fixtures. A worker could *re-run* the semantic contract tests independently and verify the observed verdicts — that's a class-bound task (F1/af_wcc_vacuum). Who ran it? Let me check outbox mentions of `run_contract_tests` / `observed_verdicts`.
+
+Let me check what worker-059 and worker-090 did with f1_falsifier_tests, and check if the semantic contract tests have been independently re-run. Also check whether the tests were run against the *current* revision (00:14 files, F1 republished 00:19 — maybe stale!).
+
+The file timestamps: `semantic_contract_tests/*` at 00:14, while schemas republished at 00:19. That suggests the contract tests may bind an older F1 revision (9a8bd4c96800 was published at 00:19?). Actually F1 9a8bd4c96800 mtime 00:19. The semantic contract test manifest at 00:14 may be bound to a previous F1 hash. That's a rebinding gap exactly like the one the f1_falsifier_tests had (which was re-bound at 00:20). Hmm! But wait — maybe the F1 schema content at 00:14 was already 9a8bd4c96800 and republished identically at 00:19 (touch). Let me measure: check manifest.json binding hashes vs current.
+
+That would be a great bounded task: **rebind audit of `schemas/semantic_contract_tests/` against the current frozen F1/F2a/F2b revision, and independently re-run the contract tests to verify `observed_verdicts.json`** — class-bound to AF-WCC-VAC-GEN (+C2/C0). Evidence: hashes, run logs, per-test comparison, falsifier. This is concrete, machine-checkable, and useful for G-FORM.
+
+Let me first check whether any other worker already did this (grep outbox for semantic_contract / run_contract_tests).
+dsh: reasoning:
+Excellent. This is a very rich, concrete artifact. The README says:
+- Run at 00:14:40, stages structural `000e09e46b2f`, semantic `c79d8ab8440a`.
+- Exit code 3 because controls are stale → `validity.valid_for_calibration = false`.
+- Open blocker `ADJ-CONTROL-STALENESS` owned by lead-formulation.
+
+Also, importantly: the README's "Falsifier for the measurements: any stage hash change invalidates the numbers above until re-run." Stage hashes: structural gate = `artifacts/formulation/tools/check_class_schema.py` (hash 000e09e46b2f?) and semantic auditor = `artifacts/worker-06/spec_conformance_audit.py` (c79d8ab8440a?). Since the canonical schemas were republished at 00:19 (after the 00:14:40 run), the contract suite's numbers may be stale too. Also F1 got republished. This is a real gap: **the semantic contract test suite was last run at 00:14:40 against schema revisions that have since been republished (00:19:14), and its own falsifier says any stage hash change invalidates the numbers — but also the fixtures' copied schemas may have changed.**
+
+Actually more precisely: the suite checks fixtures (mutants + controls) against the gate rules; the canonical schemas are used as "current canonical accepted by all stages" controls. The runner verifies fixture copies by hash at every run. The stale-control issue is separate.
+
+A bounded, high-information task: **independently re-run `schemas/semantic_contract_tests/run_contract_tests.py` against the current frozen rev25 tree, record stage/tool hashes and per-fixture verdicts, check reproducibility of `observed_verdicts.json` (32/32 structural catch, 11/32 baseline, 32/32 hardened), and test whether the stale-control blocker ADJ-CONTROL-STALENESS is real (i.e., controls rejected by structural stage R28) at current hashes.** Plus check whether the canonical schemas at the current frozen hashes (C0 1bb78ce9b357, C2 b6123750b37d, F1 9a8bd4c96800) are accepted.
+
+That is class-bound (three classes + F1), machine-verifiable, cheap (stdlib + PyYAML), and directly addresses a G-AUDIT calibration artifact and an open adjudication item. Prior work: deepseek-flash-06 authored it and worker-059 ran it? Let me check worker-059 and worker-090's events to see what they did and whether a re-run is already claimed.
+
+Let me look at worker-059 and worker-090 outbox contents, and deepseek-flash-06's most recent events about this suite. Also check current hashes of the tools referenced (check_class_schema.py, spec_conformance_audit.py) to see if they changed since 00:14:40 (which would invalidate the numbers).
+dsh: reasoning:
+Key facts:
+- The contract-test tool hashes match the README's stage hashes (structural `000e09e46b2f`, semantic `c79d8ab8440a`) — unchanged since 00:14:40. Good, so stage hashes didn't change.
+- Schemas were republished at 00:19:14, after the 00:14:40 run. So the suite's "3 current canonical schemas accepted by all three stages" measurement is against pre-00:19 bytes. Since then C0/C2/F1 were republished. The contract suite validity conclusion may be stale in that specific respect. Re-running is a legitimate, bounded, high-value task: it re-measures canonical acceptance at the current frozen rev25 hashes and re-tests the stale-control blocker at current bytes.
+- worker-059 reported "run_contract_tests.py exits 2 INTEGRITY_FAILURE" at 00:22 — that's a serious finding! If the runner exits 2 (integrity failure), the suite is currently broken (fixture hash mismatch?), possibly because fixtures were relocated while provenance references original paths, or because schema republishing changed something. Wait, exit 2 = integrity failure. worker-059's claim needs verification... but careful: worker-059 might have run it with a different cwd or args. The README says: exit codes: 0 valid; 2 integrity failure; 3 integrity ok but a control is rejected.
+
+That's a strong candidate for a bounded falsification task: **re-run the semantic contract suite at the current frozen rev25 tree; determine whether it exits 2 (integrity failure) or 3 (stale control); capture the exact integrity failure; and check the canonical-schema acceptance claim at current hashes.** This directly tests worker-059's blocker and the README's validity claim, is class-bound (AF-WCC/C2/C0), emits machine evidence + falsifier, and is bounded (~1-2 min runtime).
+
+But wait: is that "class-bound"? Yes — the suite is class-leakage calibration for the same three class ids. And the artifact is `schemas/semantic_contract_tests/*`, node A1/G-AUDIT.
+
+Risk: another worker may be doing exactly this right now. Let me grep recent (after 00:22) outbox events for "contract" mentions. worker-059 is the only one so far that flagged exit 2. Let me check the whole outbox for `INTEGRITY_FAILURE` and `semantic` in the last few minutes (00:22-00:25).
+
+Also, I must be careful about integrity: the suite may require running from a specific cwd and the fixtures may be checked against `artifacts/worker-06/semantic_fixtures/manifest.json`. Let me inspect run_contract_tests.py to understand its behavior and the exit-2 case.
+
+Let me look at the script and observed_verdicts.json validity field.
+dsh: reasoning:
+Note `run_structural` has a bug-ish behavior: it indexes `proc.stdout.index("{")` — if stdout has no "{", ValueError is caught. OK.
+
+Exit 2 happens only on integrity errors: missing fixture or sha mismatch, or "stage produced no verdict" (which includes timeout? subprocess.TimeoutExpired would raise uncaught, actually).
+
+The manifest's `conforming_canonical_controls` entries reference the canonical schemas with their sha256 — those were 00:14:40 values. After 00:19:14 republish, if hashes changed, the runner should report sha mismatch → exit 2. That's likely exactly what worker-059 saw! Let me check the manifest's conforming_canonical_controls hashes vs current.
+
+This is the crux: if the manifest pins canonical schema hashes from the 00:14 run and the schemas were republished at 00:19 with different bytes, then run_contract_tests.py exits 2 (integrity failure). The README says "Current measurement Run 2026-09-12T00:14:40" and its own falsifier: "any stage hash change invalidates the numbers above until re-run". The schemas changed — but the stage tools didn't. The `conforming_canonical_controls` fixtures (canonical schemas) changed → integrity failure.
+
+Let me measure precisely: compare manifest's pinned sha256 for each conforming canonical control with current file hashes. Also check the manifest structure and `observed_verdicts.json` validity.
+
+This is clearly a valuable, bounded, class-bound task:
+
+**W064-SEMCT-REBIND-01**: Rebind/falsification audit of `schemas/semantic_contract_tests/` against FROZEN rev25 canonical hashes:
+1. Verify integrity of all 32 mutants + 3 frozen controls (fixture sha256 matches) — the mutant corpus itself must be frozen.
+2. Determine that the 3 `conforming_canonical_controls` are pinned to superseded hashes (or not) and reproduce worker-059's exit-2 INTEGRITY_FAILURE, with exact stderr/stdout.
+3. Independently re-run the suite with *current* canonical schemas substituted (without modifying the canonical manifest — do this in a worker-local copy) to measure whether (a) current canonical C0/C2/F1 are accepted by all three stages, (b) the stale frozen control is still rejected on R28, (c) mutant catch rates reproduce 32/32 structural, 11/32 baseline, 32/32 hardened.
+4. Emit a rebind proposal (a JSON patch of the conforming_canonical_controls hashes) + per-fixture results + falsifier.
+
+This yields: (i) reproduces a blocker, (ii) tells the lead exactly what to change, (iii) provides current-revision calibration numbers at rev25, (iv) class-bound.
+
+However, care: I must not modify canonical files (`schemas/...` are authoritative, owned by lead-formulation). I'll make a worker-local copy under `artifacts/worker-064/semct_rebind/` and run there, referencing the repo tools. The runner uses `HERE` (its own dir) to resolve fixtures; if I copy the whole suite dir, fixtures come along; `REPO = HERE.parent.parent` would then be wrong. So better: copy the script and manifest into worker dir but patch REPO path, or simpler: run the original script unchanged (read-only) to capture the integrity failure, then run a *worker-local* modified copy (with an env/`--repo` override or sed-patched REPO) to get current-revision numbers. I must be careful not to write into `schemas/semantic_contract_tests/` (it writes `observed_verdicts.json` on success — the original script writes OBSERVED unconditionally at the end!). If run directly, it would overwrite `schemas/semantic_contract_tests/observed_verdicts.json` — that's a canonical-ish artifact owned by the suite. That's a write to a shared artifact; risky.
+
+Wait: if integrity fails, it returns 2 before writing OBSERVED (line 150-154 before line 219). So running the original as-is to reproduce the integrity failure is read-only *if* integrity fails. But if it doesn't fail (exit 3), it would overwrite observed_verdicts.json at line 219. That's a mutation of a shared artifact with a different manifest_sha... Actually it rewrites observed_verdicts.json which is the suite's own output — arguably OK since the script is designed to do that, but with concurrent readers it could confuse. Better: never run the original directly; instead run a worker-local copy.
+
+Plan: create `artifacts/worker-064/semct_rebind/` with:
+- `run_rebind_audit.py`: a self-contained audit script that:
+  a. loads the canonical manifest (read-only) and hashes all fixtures/controls/canonical pins;
+  b. identifies which pinned hashes are stale vs current;
+  c. makes a temp copy of the suite manifest at worker dir, updates only `conforming_canonical_controls` pins to the *current measured* canonical hashes (and records the exact JSON patch), then runs the repo's runner logic against it — simplest: import the original runner module with monkeypatched MANIFEST/OBSERVED paths and REPO? The script has module-level constants; I can load it via importlib, override `MANIFEST` and `OBSERVED` to worker-local paths, and `HERE`? `process()` uses `HERE / f` for fixtures starting with "fixtures/", and `REPO / f` otherwise. If I only override MANIFEST and OBSERVED, fixtures still resolve to the original suite dir (read-only, good), and canonical fixtures are entries like "schemas/af_scc_c0_vacuum.yaml" (kind conforming_canonical) resolved via REPO (original repo, good). So: copy manifest.json → worker dir, update conforming pins + maybe add a `rebind` record, then run a driver that imports runner, sets runner.MANIFEST = worker copy, runner.OBSERVED = worker out, and calls main() with argv []. That works and won't touch canonical files.
+
+  d. Runs the three stages on each of the 38 targets: 32 mutants + 3 frozen controls + 3 canonical. Each fixture runs 3 subprocesses (structural, semantic baseline, semantic hardened) = 38*3 ≈ 114 subprocess calls; each maybe 0.1-0.5s → fine (README run took presumably a minute or two). Bounded. Let me estimate by timing one fixture.
+
+  e. Also independently verify worker-059's exit-2 claim by running the **unmodified** manifest through the runner with OBSERVED redirected to worker dir (MANIFEST untouched → integrity check uses pinned hashes → should exit 2 with sha mismatch lines). This is read-only and reproduces/refutes the claim.
+
+  f. Produce `report.json` + `manifest_rebind_patch.json` + `run_original.json` + `samples` etc., `manifest.sha256`, README, and emit events + checkpoint.
+
+That's a solid bounded task. Let me first check the manifest's conforming canonical pins and frozen controls, and confirm the integrity failure quickly with a dry run of the unmodified runner (redirecting OBSERVED). Actually I can simply compute hashes to confirm mismatch without running. Let me do a quick measurement first.
+
+Let me inspect manifest keys and the conforming pins.
+dsh: reasoning:
+Confirmed: all 3 conforming_canonical pins are stale (manifest pins vs current canonical), and all fixtures/controls match. So running the unmodified runner should exit 2 INTEGRITY FAILURE with 3 sha mismatch lines. This reproduces worker-059's claim mechanically and gives the exact cause.
+
+This is an excellent bounded task. Let me now define it precisely:
+
+**Task W064-SEMCT-REBIND-01** (class-bound: AF-WCC-VAC-GEN;AF-SCC-C2-VAC-GEN;AF-SCC-C0-VAC-GEN; node A1/G-AUDIT):
+Independent re-measurement and rebind audit of `schemas/semantic_contract_tests/` at FROZEN rev25:
+1. Reproduce the unmodified suite run: expect exit 2 with exactly 3 integrity errors (SCT-K01/K02/K03 sha mismatch), no fixture/control integrity errors. (This confirms the suite is currently unusable as calibration evidence and that the cause is canonical republishing, not corpus tampering.)
+2. Produce a minimal rebind patch (conforming_canonical_controls sha256 → current measured hashes; optionally update run_record) in a worker-local copy, without touching the canonical manifest.
+3. Run the rebound suite (worker-local manifest, worker-local observed output) end-to-end: measure per-stage catch on 32 mutants, 3 frozen controls, 3 current canonical controls; verify whether README's numbers reproduce (structural 32/32, baseline 11/32, hardened 32/32) and whether the stale-control blocker persists (frozen controls rejected by structural R28) and whether current canonical schemas are accepted by all three stages.
+4. Also verify fixture integrity (35/35) and stage hashes unchanged.
+5. Emit report + patch + raw run JSON + hashes + falsifier + checkpoint + events.
+
+Careful about the exit code semantics: with rebound canonical controls, `controls_ok` refers to the 3 frozen controls only, so if they're still rejected → exit 3 (validity false, ADJ-CONTROL-STALENESS). The conforming canonical are checked by `conforming_ok`. So the validity blocker likely persists → exit 3, which is a meaningful measurement: at rev25 the suite remains invalid for calibration and the lead must resolve ADJ-CONTROL-STALENESS.
+
+Additional useful check: are the frozen controls still rejected *only* by R28 (structural)? The README says "rejected by the structural stage, on R28 only". Verify.
+
+Also falsifier for each finding, per the task instructions.
+
+Note about "one class-bound task" — this is class-bound via the three class controls and the manifest's class coverage. Good.
+
+Before doing it, check the time budget and CPU. The suite run: 38 targets × 3 stages. Let me time a single structural run first. The check_class_schema.py may be fast. Let me test on one fixture. Also check spec_conformance_audit.py runtime.
+
+Also I should check whether another worker is already running this exact task right now (worker-059 flagged exit 2 minutes ago). Let me grep the latest outbox files (00:24+) for "contract" or "SCT-". Earlier grep showed only flash-06, worker-059, worker-090 mention it. worker-090's artifact evidence might include a re-run? Its finding said "falsifier suite and F0 consistency evidence need re-binding". Not the same.
+
+Potential collision: another worker (e.g., worker-050, worker-084 launched same time) might pick the same task minutes from now. That's inherent to the swarm; I'll emit my events promptly with a distinctive task id.
+
+Let me set up the working directory and write the audit script. Design:
+
+`artifacts/worker-064/semct_rebind/`
+- `semct_audit.py` — main driver:
+  - Constants: REPO root, SUITE dir.
+  - Step 0: measure current hashes of the 4 canonical paths + 3 tools + manifest/observed.
+  - Step 1: fixture integrity check (read manifest, hash all 38 targets, compare pins; classify).
+  - Step 2: run ORIGINAL suite unmodified but with OBSERVED redirected (import runner; set MANIFEST=original, OBSERVED=worker/out/original_observed.json; call main() catching SystemExit) → capture exit code and stdout. Since integrity fails, no write. This reproduces exit 2.
+  - Step 3: build rebound manifest (copy of original; conforming_canonical_controls sha256 ← measured current hashes; add a `worker_rebind` record documenting original pins; do NOT change expected verdicts) written to worker dir. Save the exact patch as JSON (`rebind_patch.json` with old/new hashes).
+  - Step 4: run runner with MANIFEST=rebound copy, OBSERVED=worker/out/rebound_observed.json → capture exit code, stdout; parse observed JSON.
+  - Step 5: derive findings: per-stage catch counts, escapes, hardened-only catches, controls accepted/rejected with failed rules, canonical accepted by all stages, stage hashes; compare to README's run_record numbers.
+  - Step 6: verify a couple of null controls: e.g., ensure the output JSON is well-formed; maybe a control that the audit itself fails if the mutant corpus were tampered.
+  - Write `report.json` with all findings and falsifiers; `manifest.sha256`; `README.md`.
+  - Determinism note: subprocess runs are deterministic; the audit can be re-run.
+
+Importing the runner: `importlib.util.spec_from_file_location`; then set module attributes. But `main()` builds argparse from sys.argv; I'll set sys.argv=['run_contract_tests.py'] before calling. Also `main()` writes OBSERVED. Fine.
+
+Careful: runner's `HERE` used to resolve `fixtures/...`; keep original HERE. REPO original. So only MANIFEST/OBSERVED overridden. Good.
+
+One more consideration: the runner's semantic stage writes temp files `.tmp_audit_*.json` inside the *original* suite dir (HERE). That writes into `schemas/semantic_contract_tests/` temporarily then deletes them. Tiny risk but acceptable? It creates and removes temp files there. Hmm, "worker may not write canonical paths". These are ephemeral. Alternatively, I can override HERE... but then fixtures resolution breaks (HERE/fixture). I could instead copy the entire suite dir (fixtures included, ~ maybe 200KB) to the worker dir and override REPO to point at the real repo. Then HERE=worker copy, REPO=real repo → fixtures resolve in the copy, canonical schemas resolve in the real repo. That's clean and fully avoids writes to the shared suite dir. Copy fixtures + manifest + controls.
+
+Let me check size of fixtures dir.
+
+Then in the driver: copy suite → worker dir (`suite_copy/`), load runner from the *real* script path but override HERE to the copy? The runner's `HERE` is module-level used by `run_semantic` for tmp out and by `process` for fixtures. If I set `runner.HERE = copy_dir` and `runner.REPO = real_repo`, then:
+- MANIFEST should be copy_dir/'manifest.json' (or worker out dir);
+- OBSERVED = worker out dir;
+- STRUCT/SEM point to real repo paths (module constants computed from original HERE — they're already absolute paths of the real repo, fine).
+- fixtures resolve to copy_dir/fixtures/... ✓
+- canonical entries "schemas/..." resolve to REPO/schemas ✓ (set REPO = real repo root).
+- tmp audit files go to copy_dir. ✓
+
+Great: zero writes to shared dirs.
+
+But note: the fixture copies in my worker dir are byte-identical copies; the manifest pins their sha256, and integrity check will pass. For the original (unmodified) run I use the original manifest (pins stale canonical) with HERE=copy → mismatch on 3 canonical entries → exit 2. That reproduces the failure faithfully (same pins, same tools).
+
+Wait: for step 2, original manifest pins frozen controls and fixtures; copy passes; canonical pins stale → 3 integrity errors, exit 2 before writing. ✓
+
+For step 4 rebound manifest: update the 3 canonical pins to current hashes; everything else identical. ✓
+
+Then the numbers should reproduce: structural 32/32 etc.
+
+Time estimate: let me time the stages on one fixture to ensure bounded runtime.
+
+Let me start. First, quick timing probe + copy suite.
+
+Also, I should record the exact start time and use real timestamps (clock discipline! CF-14: future-dated events are a problem — so use wall-clock now for created_at).
+
+Let me do the timing probe.
+dsh: reasoning:
+Very fast: ~0.1s per stage. 38 targets × 3 stages ≈ 11s. 
+
+Note: the `du` for fixtures printed only one line? Actually output shows "1.2M schemas/semantic_contract_tests" then nothing for fixtures? It seems the fixtures line may have been cut. Whatever, 1.2M total is small.
+
+Confirmed: the frozen control `control_conforming_base.yaml` is rejected by structural R28 — stale-control blocker persists.
+
+Now let me build the task. Directory: `artifacts/worker-064/semct_rebind/`.
+
+Plan files:
+- `semct_rebind_audit.py` — main driver (self-contained; copies suite to `suite_copy/`, runs original + rebound, writes report).
+- Outputs: `original_run.json` (stdout/exit/integrity errors), `rebound_run.json` (observed verdicts), `rebind_patch.json`, `report.json`, `README.md`, `manifest.sha256`.
+- Events: `comms/outbox/worker-064.jsonl` — append artifact/claim/status/review/blocker events with new IDs `w064-semct-01-*`.
+- Checkpoint: `runtime/state/w064_semct_checkpoint.json` + append to `runtime/state/w064_checkpoints.jsonl`.
+
+Let me check the schemas.py validate_event to make sure my events validate. Let me read `research_map/schemas.py`.
+
+Also check whether emitting to `comms/outbox/worker-064.jsonl` conflicts with the predecessor's events — no, append.
+
+Let me read schemas.py.
+dsh: reasoning:
+Good. Now, let me set up the todo list and write the audit script.
+
+Let me also quickly look at the manifest schema for the `controls` entries (kind, leak_family, rules_tested, expected). And check `observed_verdicts.json` summary to compare. I have enough.
+
+Implementation details for `semct_rebind_audit.py`:
+
+```python
+#!/usr/bin/env python3
+"""W064-SEMCT-REBIND-01 ..."""
+import argparse, hashlib, importlib.util, json, shutil, subprocess, sys, time
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+REPO = Path('/data3/guoshaoyang/workdir/ai4math-swarm')  # resolve from __file__: parents[2]
+WORK = Path(__file__).resolve().parent
+SUITE = REPO/'schemas'/'semantic_contract_tests'
+CST = timezone(timedelta(hours=8))
+def now(): return datetime.now(CST).isoformat(timespec='seconds')
+def sha(p): return hashlib.sha256(Path(p).read_bytes()).hexdigest()
+
+def load_runner():
+    spec = importlib.util.spec_from_file_location('semct_runner', SUITE/'run_contract_tests.py')
+    mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+    return mod
+
+def run_suite(manifest_path, observed_path, here_dir, label):
+    mod = load_runner()
+    mod.HERE = here_dir      # fixture resolution + tmp audit outputs
+    mod.REPO = REPO          # canonical entries + tools resolve to real repo
+    mod.MANIFEST = manifest_path
+    mod.OBSERVED = observed_path
+    saved = sys.argv; sys.argv = ['run_contract_tests.py']
+    import io, contextlib
+    buf = io.StringIO()
+    rc = None
+    try:
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+            rc = mod.main()
+    except SystemExit as e:
+        rc = e.code
+    finally:
+        sys.argv = saved
+    return {'label': label, 'exit': rc, 'stdout': buf.getvalue(), 'observed_path': str(observed_path), 'observed_written': Path(observed_path).exists()}
+```
+
+Wait: `run_semantic` uses `HERE / f".tmp_audit_..."`; setting mod.HERE to the copy dir is fine. But `stage_triplet`/`process` resolve fixtures `(HERE / f)`. Good. STRUCT/SEM were computed at import from the original module path — real repo absolute paths. Good.
+
+`mod.main()` prints and returns 0/2/3. If it returns 2 before writing OBSERVED, observed_written False. Good.
+
+For the original run, manifest_path = original SUITE/manifest.json, here_dir = copy dir (so fixtures exist), observed = WORK/'original_observed.json' (won't be written). This reproduces exit 2.
+
+For the rebound run: manifest_path = WORK/'manifest_rebound.json' (copy with updated pins), observed = WORK/'rebound_observed.json'.
+
+Note: when rebound manifest is in WORK, entries with `fixture: fixtures/...` resolve via mod.HERE=copy dir. ✓.
+
+Then analysis of rebound observed JSON:
+- summary counts; compare with manifest run_record summary.
+- controls: list per control: structural/semantic verdicts, failed rules.
+- conforming canonical: same at current hashes.
+- escapes: mutants with escapes_adopted_stages; hardened_only.
+- stage hashes.
+- integrity: check all 38 pins against files (fixtures/controls match; canonical old vs current).
+- manifest sha before/after; note that rebound manifest differs from canonical only in the 3 sha256 fields (+ optional worker_rebind record).
+
+Report findings with falsifiers:
+- F1: integrity failure reproduces on unmodified manifest: exit 2, exactly 3 errors (SCT-K01/02/03), 0 fixture/control errors.
+- F2: rebind patch: 3 pins updated to current hashes; suite then runs (exit 3 expected).
+- F3: rebounded run reproduces mutant catch numbers (structural 32/32, baseline 11/32, hardened 32/32) — or reports deviations.
+- F4: ADJ-CONTROL-STALENESS persists at rev25: 3 frozen controls rejected by structural on R28; canonical C0/C2/F1 accepted by all three stages.
+- F5: stage hashes unchanged since 00:14:40 run → README numbers still attributable to same tools, but validity invalid due to stale controls.
+
+Falsifiers: e.g., re-run `semct_rebind_audit.py`; any fixture integrity mismatch; if unmodified run returns !=2; if rebound run counts differ; if frozen controls accepted by structural; if canonical rejected.
+
+Also emit a "review" event? The protocol says `review` requires target_id/reviewer/verdict/score/hard_failures/findings. I could emit a review of the semantic_contract_tests suite artifact. As a worker, a review event is allowed (workers have emitted reviews). It should be honest: target_id = the suite (e.g. `schemas/semantic_contract_tests/manifest.json` or "A1"), verdict probably "revise" (data invalid for calibration until rebind) with score 3, hard_failures = list, findings = list.
+
+Hmm, but careful: the worker prompt says "emit valid JSON with IDs evidence hash falsifier". Events: artifact (xN), claim, review, blocker, status. Good.
+
+I need `validation_status` for artifacts: "unverified" (worker cannot set passed). node_id: A1 (the suite is calibration evidence routed to G-AUDIT, per README). class_ids as applicable. Event schema for artifact requires node_id, artifact_type, path, sha256, validation_status. Fine.
+
+For status: node_id, status (active), hours, summary, evidence_refs, next_falsifier. status=active is allowed (done not allowed for workers).
+
+For claim: class_id, statement, conclusion_type (numerical_evidence or formal_model), assumptions, falsifier, evidence_refs. Artifact_refs only required for theorem. Use conclusion_type "numerical_evidence" or "formal_model" — this is a measurement, so numerical_evidence fits (precedent: predecessor used numerical_evidence). 
+
+For blocker: node_id, description, needed_to_unblock, evidence_refs.
+
+Now the checkpoint: follow predecessor format but with new task id; write `runtime/state/w064_semct_checkpoint.json` and append to `runtime/state/w064_checkpoints.jsonl`.
+
+Note: two workers with the same id (063? 064?) writing to the same file — only I write w064 now; predecessor finished. Appending to w064_checkpoints.jsonl is fine.
+
+Let me also check how the supervisor/controller treats events — they're ingested from outbox; `comms.py ingest` may reject duplicate event ids. I must use unique event ids with a fresh timestamp. The predecessor used `w064-churn-01-*`. I'll use `w064-semct-01-*`.
+
+Now, timing/clock discipline: use real wall clock for created_at (no future-dating).
+
+Let me create the todo list first, then write the script.
+
+Actually before that, let me double check the fixtures copy: I need the `fixtures/` dir including `controls/`. And there's possibly a `fixtures/controls` plus other files. Let me list.
+
+Also: the manifest has 32 fixtures with paths `fixtures/...`. Copying the whole `fixtures` tree is easiest.
+
+One more design decision: should I copy the suite dir or just reference the original fixtures read-only? The runner needs a `HERE` for fixtures. If I copy just `fixtures` into WORK/suite_copy, and set HERE=WORK/'suite_copy', then manifest entries `fixtures/...` resolve there. I don't need the manifest/README in the copy. But for provenance, copy manifest.json too into the copy? I'll write `suite_copy/manifest.json` = original bytes for completeness (not strictly needed), plus `suite_copy/fixtures/...`.
+
+Let me check what else is in the suite dir (only fixtures + manifest + observed + README + runner). We saw that.
+
+Let me now write the script. I'll write it with the `write` tool, then run it. Also include a `--quick` maybe not needed.
+
+I'll structure report.json:
+
+```json
+{
+ "task_id": "W064-SEMCT-REBIND-01",
+ "worker": "worker-064",
+ "instance_id": ... (read env? instance id not in env; leave null or derive from supervisor? I'll set from argv --instance default ""),
+ "created_at": ...,
+ "repo": ...,
+ "inputs": {"suite_dir":..., "manifest_sha256":..., "tools": {...}, "canonical_current": {...}},
+ "fixture_integrity": {"total":38, "fixtures":32, "frozen_controls":3, "conforming_canonical":3, "errors":[...], "canonical_pins_stale":[...]},
+ "original_run": {...exit, stdout, integrity errors...},
+ "rebind_patch": {"file":"manifest.json", "op":"replace", "path":"conforming_canonical_controls[*].sha256", "changes":[...]},
+ "rebound_run": {"exit":..., "stage_hashes":..., "summary":..., "validity":..., "controls":[...], "canonical_controls":[...], "escapes":[...], "hardened_only":[...]},
+ "reproduction_vs_readme": {...},
+ "findings": [ {id, statement, evidence, falsifier} ...],
+ "not_claimed": [...]
+}
+```
+
+Let me write the script carefully.
+
+Also, after running, compute sha256 of all outputs and write `manifest.sha256`. Then `sha256sum -c` verify. Then emit events with those hashes (must compute after files are final).
+
+Potential subtlety: `run_contract_tests.py` `run_semantic` uses `cmd.insert(-2, "--hardened")` → `[python, SEM, target, "--hardened", "--json", out]`, fine.
+
+Another subtlety: the copied fixture paths contain a directory `fixtures/controls`. Manifest `controls` entries have `fixture: fixtures/controls/...`. The copy must preserve those relative paths.
+
+Let me write it now.
+
+Also, for the claim, statement must be precise and include numbers. I'll generate the event JSON programmatically from report.json to avoid transcription errors — write `emit_events.py` that reads report.json and appends events, validating each with research_map.schemas.validate_event. Good (predecessor did the same).
+
+Let me also check ingest behavior with respect to duplicate `event_id`s; my ids are unique.
+
+Let me create files.
+dsh: reasoning:
+Interesting: the frozen control SCT-C01 `control_comment_only_composite.yaml` was *rejected by structural* at the 00:14 run — the README says "3 frozen corpus controls: rejected by the structural stage, on R28 only". Wait, it says rejected on R28 only, but SCT-C01 is a comment-only composite control; its rejection on R28 seems odd. Anyway, the README claims all 3 rejected by structural on R28. We'll measure.
+
+Now let me write the audit script.
+
+One more check: `run_contract_tests.py` at line 56 does `proc.stdout[proc.stdout.index("{"):]` — fine.
+
+Let me write `artifacts/worker-064/semct_rebind/semct_rebind_audit.py`.
+
+I'll write it carefully with:
+
+- copy suite fixtures to WORK/suite_copy/fixtures (if not exists or refresh).
+- original run with original manifest.
+- rebind: build manifest_rebound.json by loading original manifest, for each conforming_canonical_controls entry set sha256 = current measured; add top-level `worker_rebind` record: {"rebound_by":"worker-064","rebound_at":now,"task_id":...,"original_pins":[{test_id, path, old_sha256, new_sha256}], "note": "..."}.
+- rebound run.
+- analyze.
+- write report.json, rebind_patch.json, README.md.
+- print summary.
+
+Edge: run 2 will exit 2 (integrity) and not write observed. Fine.
+
+Edge: `main()` may raise SystemExit? It returns instead. We catch anyway.
+
+Let me now write the file.
+dsh: reasoning:
+Now run the audit script. It will take ~15-30s (38 targets × 3 stages × 2 runs ≈ 228 subprocess calls at ~0.1s ≈ 23s plus overhead). Let me run it with a timeout.
+
+Note: run A exits 2 (no observed written), run B exits 3. The script returns 0.
+
+Potential issue: `shutil.copytree(..., dirs_exist_ok=True)` requires Python 3.8+. Fine.
+
+Another potential issue: `mod.HERE = COPY` — `run_semantic` writes tmp files to COPY (exists). Good.
+
+Let me run it.
+dsh: reasoning:
+Excellent. Results:
+- Run A: exit 2 with 3 integrity errors (canonical pins stale).
+- Run B: exit 3, mutants: structural 32/32, baseline 11/32, hardened 32/32, 0 escapes, 0 hardened-only; frozen controls not accepted both stages (stale); conforming canonical accepted both stages = true.
+- All README numbers reproduced.
+
+Let me look at the full report to verify details: frozen controls' failed rules (R28?), canonical rows, run A error count. Then finalize README + manifest.sha256 + emit events + checkpoint.
+
+Let me check report.json key sections.
+dsh: reasoning:
+All confirmed. Interesting: `semantic_baseline` accepts 27 (11 rejected); `structural` rejects 35 (32 mutants + 3 controls). `semantic_hardened` rejects 32 (mutants) + accepts 6 (3 controls + 3 canonical). Good.
+
+An important nuance in F-SEMCT-4: the frozen controls' observed verdict is "accept" (because semantic_baseline and semantic_hardened accept them) while `rejected_by` includes structural, so `controls_accepted_both_stages=false`. The README said structural rejects them on R28 only. Confirmed.
+
+Now let me also double check the frozen control SCT-C01's structural failure — it says R28 for all three, matching README.
+
+Now write README.md for the artifact dir and manifest.sha256. Then emit events.
+
+One additional independent check I should add for strength: verify that the rebound run is deterministic by re-running once and comparing the summary? That would strengthen the evidence but adds ~19s. Good value: a mutation/control on my own measurement. Let me add a quick determinism check: re-run only the rebound suite and compare the observed JSON minus run_at (the observed file includes `run_at` so bytes differ; compare summary + per-fixture observed fields). I can do that inline as a separate small step and record it in the report... but report.json is already written by the script. Modifying the script to include determinism would require rerunning everything (~19s), which is fine.
+
+Hmm, bounded effort. Actually the cleanest: after writing README/manifest, run a small verification command that (a) re-runs the rebound suite once more into `rebound_observed_2.json`, (b) compares the `results[].observed` structures, and (c) writes `determinism_check.json`. Then include that file in the manifest. The report.json won't reference it, but README can. Alternatively rerun the whole audit script with an added determinism step... but then hashes change, and I'd need to re-verify. Simpler: do the second run via a tiny inline python snippet using the same loader, write `determinism_check.json` with the comparison, and reference in README. That keeps report.json stable (already hashed later anyway).
+
+Wait — ordering: I should compute hashes at the very end. So adding determinism_check.json before manifest.sha256 is fine.
+
+Let me do the determinism re-run with a small script `determinism_check.py` (so it's reproducible) that loads the rebound manifest, runs the suite once more to `rebound_observed_2.json`, compares to `rebound_observed.json` ignoring `run_at` and stage execution timestamps (observed JSON has no per-stage timestamps except `audited_at` inside semantic stage? Let me check: semantic stage dict has "audited_at" inside the raw rep? In run_semantic, rep is read and only selected keys are returned — tool, exit, verdict, failed_rules, undecided_rules, accepted, rejected, stderr. No timestamps. The observed JSON top-level has run_at, manifest_sha256_at_run (same manifest), stage_hashes. So comparison ignoring run_at should be exact.
+
+Let me write determinism_check.py and run it. Then write README.md, then manifest.sha256 (over all files except manifest.sha256 itself), verify with sha256sum -c.
+
+Then emit events. Let me plan the event set (with real timestamps):
+
+1. `w064-semct-01-artifact-report` — artifact: report.json, node A1, class_ids 3, gate G-AUDIT, validation_status unverified.
+2. `w064-semct-01-artifact-original-run` — artifact original_run.json (the reproduced integrity failure).
+3. `w064-semct-01-artifact-rebound-run` — artifact rebound_observed.json (full 38-target run at rev25) + rebound_run.json? Keep to distinct artifacts: original_run.json, rebound_observed.json, rebind_patch.json, determinism_check.json. Maybe 4-5 artifact events.
+4. `w064-semct-01-claim` — the measured claim with numbers.
+5. `w064-semct-01-review` — review of the suite (target_id: `schemas/semantic_contract_tests/manifest.json`, reviewer worker-064, verdict revise, score 3, hard_failures: [stale canonical pins → integrity failure; stale frozen controls → validity false], findings: [...], evidence_refs).
+6. `w064-semct-01-blocker` — ADJ-CONTROL-STALENESS + manifest rebind needed; needed_to_unblock.
+7. `w064-semct-01-status` — status active, next_falsifier.
+
+Event schema for review: target_id, reviewer, verdict, score, hard_failures, findings — plus base fields. Fine.
+
+Note: `created_at` real wall clock at emission. Instance id: worker-064-20260912T002404-968807 (I know from the runtime instance dir; meta.json for this run is the one started 00:24:04 — that's me). I can read it from the newest instance dir matching my start. Let me include "instance_id" in the checkpoint/report? The report has worker id only. Checkpoint will include instance id.
+
+Wait — I should double-check which instance is mine. The supervisor launched worker-064 at 00:24:04 and the instance dir `worker-064-20260912T002404-968807` had empty stdout/trajectory, 2525-byte stderr at 00:24. That is me. Fine.
+
+Let me write determinism_check.py.
+
+Actually, simpler and equally rigorous: re-run the *rebound* suite via the same run_suite function. I'll import the audit module and call its `run_suite` after ensuring `suite_copy` exists (it does). Compare `results[].observed` deep-equal and summary deep-equal.
+
+Let me write it.
+dsh: reasoning:
+Deterministic: 38/38 test ids, no differences, exit 3 reproduced.
+
+Now write README.md for the artifact directory and the manifest.sha256. Then emit events and checkpoint.
+
+README content: task, what was measured, results table, findings with falsifiers, files, limits, not claimed.
+
+Then manifest.sha256 over all files in the dir (including suite_copy? Probably exclude suite_copy to keep manifest focused on deliverables; but including copied fixtures is fine too. The predecessor included all files in the dir. I'll include top-level deliverables and not suite_copy/fixtures (which are copies, already pinned by the manifest). Actually to be safe and complete, include everything except manifest.sha256 itself. The suite_copy has 35 files; including them makes the manifest long but proves the copy is byte-intact. Hmm, the fixture pins in the manifest already do that. Keep it focused: top-level files + suite_copy/manifest.json (if copied — I didn't copy manifest into suite_copy, only fixtures). Let me just list top-level files, excluding manifest.sha256.
+
+Wait, the script wrote suite_copy/fixtures only. Fine.
+
+Now write README.md.
+dsh: reasoning:
+Now generate manifest.sha256 and verify. Include all top-level files except manifest.sha256 itself. Then proceed to events.
+
+Note: the README references F0 taxonomy hash 276009f4f63d as "rev25" — that's from the predecessor's churn audit; let me confirm the current taxonomy hash quickly (it may have changed again). Let me measure now before finalizing. If changed, I should adjust the README (F0 isn't in scope of my suite though; I mention it as context). Better: check and adjust if needed.
+
+Also, my report.json's measured section includes canonical C0/C2/F1 only (three classes) — fine.
+
+Let me measure and write manifest.
+dsh: reasoning:
+There's a `__pycache__` directory created because `semct_rebind_audit.py` was imported by determinism_check.py. I should exclude it and remove it (or keep it out of the manifest). Let me delete `__pycache__` (worker-local, safe) and regenerate manifest using explicit file list.
+
+Also, note the `manifest.sha256` was created (partially?) — the shell redirection created an empty/partial file before xargs failed. Let me rewrite properly.
+dsh: reasoning:
+All hashes verified. Now, before emitting events, let me re-measure the canonical hashes one more time to ensure they haven't changed since my run (churn check on my own evidence): if they changed, my run is stale and I should note it / re-run. Let me check quickly.
+
+Then write `emit_events.py` that:
+- reads report.json + manifest.sha256,
+- constructs the events with real `created_at`,
+- validates each with research_map.schemas.validate_event,
+- appends to comms/outbox/worker-064.jsonl (unique ids),
+- prints them.
+
+Event list (ids prefixed `w064-semct-01-`):
+
+1. artifact report.json — node A1, gate G-AUDIT, class_ids 3, artifact_type "semantic_contract_rebind_audit", validation_status "unverified", evidence_refs [original_run.json#sha, rebound_observed.json#sha, determinism_check.json#sha], falsifier.
+2. artifact original_run.json — artifact_type "suite_integrity_failure_record".
+3. artifact rebound_observed.json — artifact_type "semantic_contract_suite_run".
+4. artifact rebind_patch.json — artifact_type "manifest_rebind_patch".
+5. artifact determinism_check.json — artifact_type "determinism_control".
+6. review — target_id "schemas/semantic_contract_tests/manifest.json", reviewer "worker-064", verdict "revise", score 3, hard_failures [3 items], findings [list], evidence_refs. (Review schema requires target_id, reviewer, verdict, score, hard_failures, findings.)
+7. claim — class_id "AF-WCC-VAC-GEN;AF-SCC-C2-VAC-GEN;AF-SCC-C0-VAC-GEN", statement with measured numbers, conclusion_type "numerical_evidence", assumptions, falsifier, evidence_refs, artifact_refs (optional but useful).
+8. blocker — node A1, description, needed_to_unblock, evidence_refs.
+9. status — node A1, status "active", hours ~0.4, summary, evidence_refs, next_falsifier.
+
+For gate: claim/artifact include "gate": "G-AUDIT" as extra field (allowed; extra keys are fine since validator only checks required keys).
+
+Evidence refs format: `path#sha256-prefix` (protocol §4). I'll use first 12 hex chars.
+
+Let me verify current hashes first, then write emit_events.py.
+dsh: reasoning:
+No drift. Evidence is current.
+
+Now write `emit_events.py` and run it. It must:
+- Load `research_map/schemas.py` via importlib or sys.path insert REPO.
+- Build events with sha256 of artifacts read fresh.
+- Validate and append to comms/outbox/worker-064.jsonl.
+- Also write a copy of the events to `artifacts/worker-064/semct_rebind/events.jsonl`? That would change the manifest... I could include it, but manifest is already frozen and verified; adding a file after would make manifest incomplete. Better: don't create extra files after manifest, OR regenerate the manifest at the very end including events.jsonl. Simpler: emit_events.py lives in the artifact dir? That would also add a file post-manifest.
+
+Cleaner approach: keep the artifact bundle frozen as-is (11 files, manifest verified) and put `emit_events.py` in the parent worker dir (`artifacts/worker-064/emit_semct_events.py`), which is outside the frozen bundle. The predecessor had `artifacts/worker-064/churn_audit/emit_events.py` inside. For me, placing the emitter outside the frozen bundle avoids invalidating manifest.sha256. The event `path` values point into the bundle; hashes are recorded.
+
+Actually, a source-of-truth emitter script near the events is nice for reproducibility. I'll put it at `artifacts/worker-064/emit_semct_events.py` and mention nothing in README (README says files list of the bundle). Fine. Alternatively, regenerate manifest at end including the emitter if placed inside. Simpler: outside.
+
+Wait, actually it would be nicer for reproducibility if the emitter were inside the bundle and the manifest covered it. I can place the emitter inside the bundle, regenerate manifest.sha256 (which then includes it), verify, then run the emitter (which does not modify bundle files). That works and keeps everything hash-pinned. The only risk: if the emitter is buggy and needs a fix after manifest regeneration, hashes change. I'll write it carefully, run it, and if a fix is needed, re-freeze. Let me do that.
+
+Event content details:
+
+Artifacts (5):
+- report.json (12,562 bytes) sha 04f860ff...
+- original_run.json sha c455cf2d...
+- rebound_observed.json sha 12a4de8b...
+- rebind_patch.json sha 77904d5a...
+- determinism_check.json sha 9da7053d...
+
+Review:
+```
+{
+ "event_id": "w064-semct-01-review-suite",
+ "event_type": "review",
+ "created_at": now,
+ "actor": "worker-064",
+ "target_id": "schemas/semantic_contract_tests/manifest.json#b2e8bd17892b",
+ "reviewer": "worker-064",
+ "verdict": "revise",
+ "score": 3,
+ "hard_failures": [
+   "HF-SEMCT-1: run_contract_tests.py exits 2 INTEGRITY_FAILURE on the canonical manifest; the 3 conforming_canonical_controls sha256 pins (a8d899d2941f, 8dae50da1ab5, b65fcc0f0118) predate the 00:19:14 canonical republish; no calibration output is produced.",
+   "HF-SEMCT-2: the 00:14:40 run_record numbers are bound to schema bytes that no longer exist at canonical paths; the suite must be rebound and re-run before the numbers can be cited for rev25.",
+   "HF-SEMCT-3: validity.valid_for_calibration is false at rev25 (all 3 frozen controls rejected by structural R28); ADJ-CONTROL-STALENESS is unresolved, so the suite is not current-revision calibration evidence."
+ ],
+ "findings": [ ...positive + numeric... ],
+ "evidence_refs": [...],
+ "gate": "G-AUDIT", "node_id": "A1", "class_id": "AF-WCC-VAC-GEN;AF-SCC-C2-VAC-GEN;AF-SCC-C0-VAC-GEN"
+}
+```
+Note validator for review doesn't require class_id, but extra fields fine.
+
+Claim:
+```
+statement: "Independent rebind audit at rev25 (C0 1bb78ce9b357, C2 b6123750b37d, F1 9a8bd4c96800; stage tools unchanged): the canonical semantic-contract manifest is unexecutable (exit 2, exactly 3 stale canonical-control pins; 32/32 mutants + 3/3 frozen controls byte-intact); after rebinding only those 3 pins the suite runs (exit 3) and reproduces the 00:14:40 numbers exactly (structural 32/32, semantic baseline 11/32, hardened 32/32; 0 adopted-stage escapes; 0 hardened-only catches; 38/38 test ids identical on a second run); validity.valid_for_calibration remains false because all 3 frozen controls are rejected by structural R28 only while all 3 current canonical schemas pass all three stages."
+conclusion_type: "numerical_evidence"
+assumptions: [...]
+falsifier: "Re-run semct_rebind_audit.py + determinism_check.py: run A exit != 2 or error count != 3; any mutant/control pin mismatch; run B counts differing; any frozen control passing both adopted stages; any canonical schema rejected; or any 38-test-id difference on re-run falsifies the corresponding clause."
+```
+
+Blockers: description above; needed_to_unblock: apply patch + resolve ADJ-CONTROL-STALENESS + re-run.
+
+Status: hours 0.4, status active, next_falsifier same as above.
+
+Let me write the emitter.
+
+One important detail: outbox file `comms/outbox/worker-064.jsonl` already has 6 lines from predecessor. Append mode. Unique event ids.
+
+Then checkpoint: `runtime/state/w064_semct_checkpoint.json` and append to `runtime/state/w064_checkpoints.jsonl`. Include instance_id, class ids, node A1, gate G-AUDIT, evidence refs with hashes, falsifier, not_claimed, outbox_event_ids. Also record measured canonical hashes at checkpoint time (re-measure inside checkpoint script to be honest).
+
+Let me write both scripts, regenerate manifest (including them if placed inside the bundle).
+
+Decision: place `emit_events.py` inside bundle and `checkpoint.py` also inside bundle? The checkpoint writes runtime/state files. The bundle is "artifacts/worker-064/semct_rebind". I'll put both in the bundle for provenance: `emit_events.py`, `checkpoint_w064.py`. Then regenerate manifest.sha256 to include them, verify, and run them. Running them doesn't modify bundle files. 
+
+Order:
+1. write emit_events.py + checkpoint_w064.py
+2. regenerate manifest.sha256 (all files except manifest.sha256, excluding __pycache__)
+3. run emit_events.py (appends events; reads hashes from manifest)
+4. run checkpoint_w064.py (writes runtime/state)
+5. verify manifest again + `sha256sum -c`
+6. verify events validate and outbox parses as JSONL.
+
+The emitter should read the hashes fresh from files rather than from manifest to avoid mismatch; and assert they match manifest.sha256 entries. Good self-check: read manifest.sha256, verify each file hash matches, then emit with those hashes; abort if mismatch.
+
+Let me write emit_events.py.
+dsh: reasoning:
+Now the checkpoint script. It should:
+- Re-measure canonical hashes at checkpoint time (honesty).
+- Read report.json summary numbers.
+- Write `runtime/state/w064_semct_checkpoint.json` and append to `runtime/state/w064_checkpoints.jsonl`.
+- Include instance_id.
+
+Let me write it.
+dsh: reasoning:
+Now:
+1. Regenerate manifest.sha256 including the two new scripts.
+2. Dry-run emit_events.py to validate.
+3. Run emit_events.py for real.
+4. Run checkpoint_w064.py.
+5. Re-verify manifest and JSONL.
+
+Note: after running emit_events.py and checkpoint_w064.py, `__pycache__` may be created inside the bundle by importing research_map.schemas? No — that's in research_map/. Importing bundle scripts as __main__ doesn't create __pycache__ for the main script itself. determinism_check.py imported semct_rebind_audit.py → created bundle/__pycache__ earlier, which I removed. If I re-run determinism_check.py it would recreate it. I won't re-run it. `checkpoint_w064.py` is run as main → no pycache. `emit_events.py` imports research_map.schemas → pycache under research_map/ (not my bundle). Good.
+
+But the manifest generation step uses `ls` excluding dirs; if `__pycache__` reappears, it's a dir and excluded by grep -v '/$'. Fine.
+
+Let me regenerate manifest with explicit sorted list including all top-level files except manifest.sha256, then verify.
+dsh: reasoning:
+All 9 events validate. Now emit for real and checkpoint. Then verify outbox JSONL parses and all event ids unique, and verify the manifest once more (emission doesn't alter bundle files).
+
+One consideration: the event `created_at` will be ~00:29-00:30 (real time). Good, no future-dating.
+
+Also, I want to double-check the outbox append: it appends 9 lines to worker-064.jsonl which already has 6 predecessor lines.
+
+Let me run both.
+dsh: reasoning:
+Everything is done:
+- 9 validated events appended to `comms/outbox/worker-064.jsonl` (15 total lines, unique ids, all validate).
+- Checkpoint written to `runtime/state/w064_semct_checkpoint.json` + appended to `runtime/state/w064_checkpoints.jsonl`.
+- Evidence hashes verify; bundle manifest verifies.
+
+Let me update the todo list and do a final sanity check on the checkpoint log append and a final summary. Also I should confirm the events' created_at are not future-dated relative to now.
+
+One more consideration: the instruction said "checkpoint, then exit". Done. Should I also try to run `python3 research_map/comms.py ingest`? The protocol says ingest is a controller command ("research_map/comms.py ingest only" writes accepted stream). Worker should not run it (it's controller's job). The ASTRA handoff lists it as a controller tool. I'll leave it.
+
+Let me do the final verification of timestamps and checkpoint log line, then finish with a summary.
+
+Let me also double check that I didn't inadvertently write to canonical paths:
+- `git status` could show modified files. The repo is a git repo. Let me check `git status --short` to confirm only my new files + runtime state + outbox changed. But note many other workers are writing concurrently, so git status will be noisy. Still, let me check specifically that schemas/*.yaml and schemas/semantic_contract_tests/* are untouched by me. I can verify via mtimes: they remain 00:19:14 and 00:14:40, and observed_verdicts.json unchanged (c6b81c9c...). Let me confirm.
+
+Also verify no `.tmp_audit_*` files were left in the canonical suite dir.
+dsh: reasoning:
+Hmm — a `__pycache__` directory appeared in `schemas/semantic_contract_tests/` at 00:27. That's a side effect I did not intend. Where did it come from? My audit loaded `run_contract_tests.py` via importlib — importing a module from that directory creates `__pycache__` there (Python writes bytecode cache next to the source when imported). Yes: `spec_from_file_location` + `exec_module` causes `__pycache__/run_contract_tests.cpython-*.pyc` to be written in the source directory.
+
+So I did create a file (a directory) inside the canonical suite dir. It's a Python bytecode cache, not a canonical artifact, but I claimed "the shared suite directory was never written to" in the README/report. That claim is now false as stated. I should fix this. Options:
+
+1. Delete `schemas/semantic_contract_tests/__pycache__` (it's a generated cache; removing it restores the directory to its prior state as far as tracked artifacts go). But my statement "never written to" would still be technically inaccurate; better to also update the README/report wording to "no canonical artifact was modified; the only write was a Python bytecode cache directory, removed after the run"... That requires re-freezing hashes and re-emitting events, which is a chunk of work but doable (~few min). Alternatively, I can keep the bundle as-is and emit a small correction event (erratum) documenting the bytecode cache side effect and its removal — corrections are common in this swarm (worker-031 issued one, worker-088 clock correction). That's more in the spirit: append-only event stream, don't rewrite evidence.
+
+Wait, but the README inside the frozen bundle says: "No canonical artifact was modified; the shared suite directory was never written to." The nuance: no canonical *artifact* was modified — true (manifest.json, observed_verdicts.json, fixtures hashes unchanged). "The shared suite directory was never written to" — false (a `__pycache__/` was created by the importlib load at 00:27, and also earlier runs at 00:14 by flash-06 presumably... Actually the `__pycache__` mtime is 00:27 — created by my run). Let me verify what's in it and remove it.
+
+Best course:
+1. Inspect `__pycache__` contents (confirm only run_contract_tests pyc).
+2. Remove it (restores prior state).
+3. Verify canonical suite artifacts' hashes unchanged (already verified: manifest b2e8bd..., observed c6b81c...).
+4. Emit an erratum event: `w064-semct-01-erratum-bytecode-cache` — status or artifact event documenting: the importlib load created `schemas/semantic_contract_tests/__pycache__/run_contract_tests.cpython-*.pyc` at 00:27; removed at <time>; canonical manifest/observed/fixtures hashes unchanged before and after; the README sentence should read "no canonical artifact was modified (a transient Python bytecode cache was created by importing the runner and removed)". This is honest and machine-checkable.
+
+Actually — should I instead regenerate the bundle with corrected wording? The task says emit valid JSON with IDs evidence hash falsifier, checkpoint, exit. An erratum event keeps the audit trail clean and is cheaper. But leaving a README with a slightly overbroad claim is not great. The erratum explicitly corrects it, which is the protocol-compatible way (controller applies corrections via events). I'll do the erratum event and also write a small `ERRATUM.md` in the bundle... but that would change the bundle after manifest freeze. I could add ERRATUM.md and re-freeze the manifest (regenerating manifest.sha256), then emit erratum event referencing the new manifest hash. But then the earlier events' `report.json` hash still verifies (unchanged), and manifest.sha256 changes — the earlier events don't reference manifest.sha256, so no conflict. Adding a file to the bundle after emission is fine as long as I re-freeze and emit the erratum with the new file's hash.
+
+Plan:
+1. Remove `schemas/semantic_contract_tests/__pycache__`.
+2. Add `ERRATUM.md` to the bundle documenting the side effect + removal + unchanged canonical hashes.
+3. Regenerate `manifest.sha256` (now 14 files) and verify.
+4. Emit one erratum status/artifact event with the ERRATUM.md hash and manifest hash, validation-checked.
+5. Update checkpoint? The checkpoint references bundle artifacts by manifest pins; it doesn't include manifest.sha256 hash. The checkpoint's evidence_refs still verify. I could append a second checkpoint or leave it. Since the checkpoint says `status: worker_task_complete_no_node_transition` and its evidence refs remain valid, I'll append a small correction line to `w064_checkpoints.jsonl`? Better: rewrite `w064_semct_checkpoint.json`? No — append-only is cleaner. The erratum event is the correction of record; no need to touch the checkpoint. Actually, to keep the checkpoint consistent with the bundle (it lists `artifacts` = the pinned files from the 13-file manifest), adding ERRATUM.md makes the checkpoint's artifact list incomplete but not wrong (it lists the files at checkpoint time, all still valid). I'll note in the erratum that checkpoint_w064.json's artifact map predates ERRATUM.md and remains valid for the files it lists.
+
+Hmm, wait. Is this overkill? The instruction is bounded: emit JSON, checkpoint, exit. I found a real inconsistency between my written claim and an actual (minor, generated-file) write. Handling it honestly and cheaply with an erratum is right, and it's exactly the project's ethos (label claims, correct measured discrepancies). Do it.
+
+Let me check the pycache contents first, then remove.
+dsh: reasoning:
+Confirmed: only a `.pyc` was created; all canonical artifacts unchanged; all 35 fixture files unmodified (mtime check). Cache removed.
+
+Now write ERRATUM.md, re-freeze the manifest (14 files), emit one erratum event (event_type `status` or `artifact`? It's a correction record → `artifact` for the ERRATUM.md file, which is the natural fit; plus a `status`-type erratum would be optional. I'll emit one `artifact` event for ERRATUM.md with a clear summary, and it doubles as the correction of record).
+
+The emitter script `emit_events.py` is inside the bundle; if I want to add the erratum emission programmatically I'd need another script or extend emit_events.py — but modifying emit_events.py changes its hash and the frozen manifest again. Cleanest: write a separate small script `emit_erratum.py` (inside the bundle), re-freeze manifest including it and ERRATUM.md, then run it. That keeps everything reproducible and hash-pinned. But note: `emit_erratum.py` must reference ERRATUM.md hash from the manifest (self-consistent: manifest includes both).
+
+Order:
+1. Write ERRATUM.md.
+2. Write emit_erratum.py.
+3. Re-freeze manifest.sha256 (14 files) and verify.
+4. Run emit_erratum.py (appends 1 event).
+5. Verify outbox (16 lines, all validate).
+6. Optionally append a correction note to checkpoints? I'll skip; instead emit_erratum.py will also append a one-line correction to `runtime/state/w064_checkpoints.jsonl`? Hmm, appending a checkpoint line that references the erratum would keep the checkpoint stream honest. But the checkpoint log lines are full checkpoint objects; a second small object might confuse the controller's checkpoint parsing. Let me check `research_map/checkpoint.py` quickly to see if `w064_checkpoints.jsonl` is even read... It's a per-worker file I invented (predecessor's convention), not a controller file. The controller reads `runtime/state/current_checkpoint.json` and `checkpoint_log.jsonl`. So my per-worker files are auxiliary. A second line there is harmless. I'll append a compact correction record to `w064_checkpoints.jsonl` via a small append in emit_erratum.py — actually, simpler: not needed. The erratum event in the outbox is the authoritative correction and will be ingested by the controller. But the checkpoint file `w064_semct_checkpoint.json` says "Never wrote to canonical" indirectly? Let me re-read: checkpoint says `"not_claimed": [...]` which doesn't claim no-writes; the report.json scope string says "no canonical file modified" (true) and README says the stronger false sentence. The erratum will point at README.
+
+Actually let me reconsider: the README's exact sentence is "No canonical artifact was modified; the shared suite directory was never written to." The first clause is true. The second is false in a narrow sense. The erratum will state precisely: a transient `__pycache__/run_contract_tests.cpython-310.pyc` was created in the suite dir by the importlib load at 00:27 and removed at 00:29; no canonical artifact hash changed (manifest b2e8bd17892b, observed c6b81c9c957b, runner 3be197c3729c); the correct wording is "no canonical artifact was modified; the only write to the suite directory was a transient Python bytecode cache, removed".
+
+Let me write ERRATUM.md now.
+dsh: reasoning:
+Now re-freeze the manifest (adding ERRATUM.md and emit_erratum.py → 15 files), verify, dry-run erratum, run it, and verify outbox. Note that `report.json` etc. are unchanged, so the previously emitted events' hashes remain valid. The manifest.sha256 file itself changed but no event references it.
+
+Wait: `ERRATUM.md` and `emit_erratum.py` are new; the previous 13 files unchanged → their hashes unchanged. Good.
+
+Let me do it.
+dsh: reasoning:
+Everything is verified:
+- Bundle: 15 files, manifest OK.
+- Outbox: 16 lines total (6 predecessor + 10 mine), unique ids, all validate, 32 evidence_ref hashes independently verified.
+- Canonical suite dir has no `__pycache__` and only its original entries.
+
+Let me update the todo list to complete, and provide the final summary. Since the task said "checkpoint, then exit", I'm done. Let me mark todos complete.
+
+Actually, one question: should the checkpoint be updated to include the erratum event id? The checkpoint lists outbox_event_ids (9). The 10th (erratum) came after checkpoint. This is a minor inconsistency; the erratum is self-describing. I could append a one-line correction to `runtime/state/w064_checkpoints.jsonl` recording the erratum event id and the final 15-file bundle state. That would keep the checkpoint stream accurate. It's cheap. But modifying `checkpoint_w064.py` would change its hash → re-freeze → invalidate... no, the manifest would be re-frozen again (hashes of other files unchanged, checkpoint script hash changes), but then the erratum evidence_refs don't reference checkpoint_w064.py, so nothing breaks. However, each re-freeze after emission creates a moving manifest; the events don't reference manifest.sha256, so we're fine.
+
+Is it worth it? The erratum event explicitly says it corrects the README; the checkpoint's `outbox_event_ids` list is auxiliary. I'll leave the checkpoint as-is — the events are the authoritative stream, and the checkpoint was accurate at its timestamp. Over-engineering further risks more churn (this swarm has already documented clock/churn problems). Done.
+
+Let me finalize todos and write the summary.

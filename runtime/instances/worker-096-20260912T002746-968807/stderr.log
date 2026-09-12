@@ -1,0 +1,771 @@
+dsh: reasoning:
+Let me start by understanding the task. I'm worker=096, a bounded execution worker. I need to read handoff/map and comms, take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit.
+
+Let me explore the workspace.
+dsh: reasoning:
+No handoff directory in the workspace root. Let me search for "handoff" directories and "map" and "comms" - probably related to a swarm setup. There's `launch_swarm.sh`, `supervise_swarm.sh`, `ai4math-swarm.tar.gz`, `workdir`. Let me look.
+dsh: reasoning:
+Found the swarm workspace at /data3/guoshaoyang/workdir/ai4math-swarm. Let me read HANDOFF.md, README.md, research_map, comms, schemas, runtime.
+dsh: reasoning:
+This is an agent swarm with a control plane. I need to read the comms PROTOCOL.md, the research_map (ARCHITECTURE.md, ASTRA_HANDOFF.md), and figure out what task is bound to worker=096. Let me check the runtime state, inbox for worker 096, and the schemas for output.
+
+Let me look at comms/PROTOCOL.md, inbox, and runtime/state.
+dsh: reasoning:
+There's a worker-096.jsonl in outbox. Let me read it. Also there's an inbox for astra-lead-*. Let me look at the outbox/worker-096.jsonl and the runtime state to understand worker 096's assignments.
+dsh: reasoning:
+So worker-096 has already done two tasks: F2b independent review and F1 binding receipt. But the instructions say: "Read handoff/map and comms. Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit. worker=096"
+
+Hmm — but the outbox already has entries for worker-096. Wait — this may mean the task is: I am worker 096 in a new instance, and I should take ONE class-bound task. The previous outbox entries are from prior runs of worker-096. The runtime instances show worker-096 instances at 00:12, 00:16, 00:22, 00:27. Now it's presumably later.
+
+Let me check the current time and the latest state (runtime/state/current_checkpoint.json, events.jsonl tail, research_map.json for assignments to worker-096). Also check whether there's a pending assignment/queue for worker-096. The task says "take one class-bound task" — likely from the research map's queue of open nodes/classes.
+
+Let me look at:
+- runtime/instances/worker-096-*/ for the current instance
+- research_map/ASTRA_HANDOFF.md
+- research_map/ARCHITECTURE.md
+- current_checkpoint.json
+- The latest events.jsonl tail
+- inbox files for leads to see assignments
+
+Let me also figure out what "checkpoint" means: runtime/state/w096_checkpoint_N.json; checkpoint.py exists.
+
+Let me read.
+dsh: reasoning:
+Interesting. So worker-096 instances have been spawned repeatedly — 00:12, 00:16, 00:22, 00:27 — and each seems to be me. The instance at 00:27 is likely the current one. Let me check the instance meta/prompt/stderr to understand what's going on.
+
+Wait — but the outbox has entries with created_at 00:21:43 and 00:26:53, which correspond to earlier instances (00:22 and 00:27 spawns... hmm, timestamps ~00:26:53 matches the 00:27 spawn? No — 00:27 spawn would be this current one, and the second batch was written at 00:26:53. The instance worker-096-20260912T002746 was created at 00:27:46, after 00:26:53. So this current instance might be the one at 00:27:46 and the outbox entries at 00:26:53 came from the 00:22 instance? Actually, 00:22:02 instance wrote the 00:21:43 batch (weird future timestamps, CF-14 mentions future-dated events). The 00:26:53 batch came from 00:27:46 instance? That's future-dated too.
+
+Anyway. The point: multiple worker-096 instances have been launched and each has been taking tasks without an assignment card. Now I am a new worker-096 instance. The instruction says "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit."
+
+So the expected behavior: claim one class-bound task, produce artifacts, emit events to outbox, checkpoint, exit. Given previous instances did F2b review and F1 binding receipt, I should pick a distinct class-bound task. Let me check the current state to see what's open and what would be useful.
+
+Let me check:
+1. runtime/instances/worker-096-*/prompt.txt and meta.json for the current instance (to see the spawn prompt).
+2. The inbox for worker-096 (empty, presumably).
+3. The latest map state: gates, assignments, classes.
+4. What classes exist: AF-SCC-C0-VAC-GEN, AF-SCC-C2-VAC-GEN, AF-WCC-VAC-GEN, AF-WCC-SCALAR-SPH; nodes F0, F1, F2a, F2b, L0, L1, A0, A1, A2, N0, N1.
+
+Previous tasks:
+- W096-F2B-INDEP-REVIEW-01: review of schemas/af_scc_c0_vacuum.yaml (F2b) at 1bb78ce9b357.
+- W096-F1-BINDING-RECEIPT-01: binding receipt for AF-WCC-VAC-GEN (F1) at 9a8bd4c96800, verdict revise.
+
+Distinct options for a third class-bound task:
+- W096-F2A-... : AF-SCC-C2-VAC-GEN schema at schemas/af_scc_c2_vacuum.yaml (b6123750b37d). F2a has 2 accepts + 2 revises.
+- Or the FROZEN revision 25 at af24e9c39606.
+- Or L0 review (theorems.jsonl ce42d205e761), A0 (evaluation rubric d748a9e3574e).
+
+The instruction says "class-bound task" — so something tied to a specific class_id. F2a (AF-SCC-C2-VAC-GEN) binding receipt / independent review at its current hash would be a natural third, symmetric with the F1 receipt. That seems most useful: F2a has 2 accepts + 2 revises; the F2b review done by w096 covered C0; F1 covered WCC. Remaining: F2a C2 schema, plus F0.
+
+Let me look at the current hashes and the F2a schema. First, let me check the current runtime instance prompt, current map assignments, and the relevant reviews.
+
+Let me also read the schemas.py and checkpoint.py to understand the expected JSON event format and checkpoint format.
+
+Plan:
+1. Read the current instance's prompt.txt/meta.json.
+2. Read research_map/schemas.py (event schema) and checkpoint.py.
+3. Inspect the map for F2a node state, class ids, assignments.
+4. Measure current hashes.
+5. Decide one class-bound task: likely independent binding/publication receipt for AF-SCC-C2-VAC-GEN (F2a) at measured sha.
+6. Write harness + report + README into artifacts/worker-096/f2a_binding_receipt/.
+7. Emit JSON events to comms/outbox/worker-096.jsonl (append).
+8. Write checkpoint runtime/state/w096_checkpoint_3.json + append w096_checkpoints.jsonl.
+9. Exit.
+
+Let me gather the state efficiently. Note: I should not disturb other agents (the swarm is live). Read-only investigation, then write only in my own paths and the outbox (protocol says outbox is written by any agent — but concurrency? Other instances of worker-096 may be running concurrently! Let me check running processes. There were instances at 00:27:46 — is one still running? If multiple worker-096 instances run concurrently, appending to the same outbox could conflict. But appends with a single write are likely atomic-ish for small writes. The last instance wrote at 00:26:53, and its trajectory.log has 72 bytes. Let me check process list.
+
+Let me check the spawned instance dirs and running processes.
+dsh: reasoning:
+OK so I'm the 4th instance (00:27:46) of worker-096 and I'm running now. Prior instances: checkpoint 1 (F2b review), checkpoint 2 (F1 binding receipt). I should take one new class-bound task, emit events, checkpoint 3, and exit.
+
+The obvious remaining class-bound task: F2a schema for AF-SCC-C2-VAC-GEN at schemas/af_scc_c2_vacuum.yaml, hash b6123750b37d per handoff (re-measure). This is a natural third receipt. But wait — was F2a already independently reviewed heavily? It has 2 accepts + 2 revises. F2b had 4 accepts and w096 added a 5th independent review. F1 had a lead-audit accept + 3 revises and w096 did a binding receipt.
+
+Also possible: F0 (formulation_taxonomy.yaml 276009f4) with known divergence — CF-13 partially resolved: F0 canonical vs authoring divergence remains. There's an open assignment astra-life03-close-findings for lead-formulation. A worker taking a class-bound task on F0 could be very useful but F0 is taxonomy, not a class per se. Hmm, "class-bound task" means a task bound to a class_id: AF-WCC-VAC-GEN, AF-SCC-C2-VAC-GEN, AF-SCC-C0-VAC-GEN, AF-WCC-SCALAR-SPH.
+
+Let me look at the map to see what's assigned/open for F2a and whether some other worker is already on it. Let me check the map's assignments and node states, plus recent outbox entries from other workers to avoid duplicating.
+
+Let me also read the F2b review artifacts from the earlier instance to reuse the harness approach (they are on disk). I can model the F2a binding receipt on the F1 receipt harness (run_receipt.py) which was designed generically. Actually maybe I can run the F1 receipt harness against the F2a schema? The F1 harness has symbol/quantifier checks specific to F1. Better to write a fresh, independent harness for F2a (AF-SCC-C2-VAC-GEN) — a "binding + structural receipt" analogous to F1 but for the C2 class.
+
+But first, let me understand the F2a schema content and the existing review findings for F2a, so my receipt is genuinely useful and not duplicative. Let me look at:
+- schemas/af_scc_c2_vacuum.yaml (structure, top-level keys)
+- reviews F2a-review-*.json (findings)
+- map: nodes.F2a, assignments, gates
+- runtime/state/artifact_hashes.json entries
+
+Let me use a script to summarize the map. Since research_map.json is 1.4MB, use python/jq to extract.
+
+Let me do a quick summary.
+dsh: reasoning:
+Now I understand the landscape. F2a (AF-SCC-C2-VAC-GEN) at b6123750b37d has 2 accepts + 2 revises (plus inconclusives). The outstanding blocking findings:
+- Dup YAML keys (revised_at x8, revised_at_unused x2)
+- Future-dated revised_at / checked_at
+- class_contract_pointer resolves only on authoring tree
+- D0 disjunctive/ill-typed; quantifier domain issue
+- F2a/F2b data_class key-identical, C2 signature absent
+
+F1 receipt by w096 (worker-096 instance #3) already reported 5 binding defects at 9a8bd4c9, all of which look essentially the same family. For F2a, most substantive issues have already been documented by workers 086, 088, 090, 047, lead-audit.
+
+To add value without duplicating, options:
+
+1. **F2a independent binding/publication receipt at b6123750** — machine-reproduce the binding hygiene defects (dup keys, future timestamps, pointer resolution, undefined symbol extension_predicate, quantifier mismatch D0 vs conclusion), and additionally check the *counterexample/falsifier path* or cross-artifact consistency. This is "class-bound" (AF-SCC-C2-VAC-GEN) and symmetric with my F1 receipt. But partly duplicative of worker-088/090.
+
+2. **Cross-class consistency receipt**: the G-FORM criterion "no single frozen data class shared by F1/F2a/F2b" — a machine check across the three schemas (data_class key/value diff; class_contract_pointer resolution; shared_contract claims). Both F1 receipt and F2a revises touch it. A dedicated "shared-frozen-data-class evidence" artifact would be directly useful to G-FORM, since the gate's unmet list names it and the open assignment `astra-life03-close-findings` is charged to fix it. That's class-bound: bound to the frozen four classes (F1/F2a/F2b = WCC/C2/C0). Hmm, but "class-bound task" implies a single class id.
+
+3. **New check nobody did: the F2a acceptance tests / falsifier executability** — the schema declares acceptance_tests; run them to see whether the tier-1 falsifier is actually machine-checkable and whether any declared check is undecidable. Worker-088's harness did structural probes. Hmm.
+
+Let me check what artifacts already exist for F2a reviews from other workers, so I can differentiate. Let me list artifacts/ dirs for worker-088, worker-18, worker-047, worker-090, worker-043, worker-086, worker-094 etc. And the class_separation.py tool.
+
+Also I should keep scope bounded — the prompt says bounded execution worker, take ONE class-bound task, emit JSON, checkpoint, exit. Previous instances spent ~5 minutes and produced a harness + report + README. I should do similarly: a focused, reproducible receipt.
+
+A genuinely distinct, high-value class-bound task: **W096-F2A-BINDING-RECEIPT-01** — independent binding/publication receipt for AF-SCC-C2-VAC-GEN at the measured hash b6123750, verifying:
+- R1 duplicate top-level keys (strict loader)
+- R2 timestamp sanity (declared vs mtime vs wall clock)
+- R3 class_contract_pointer resolution on canonical vs authoring taxonomy
+- R4 undefined-symbol analysis (extension_predicate, D0/D_gen used but undefined)
+- R5 quantifier consistency (quantifiers.formal vs conclusion.statement_formal)
+- R6 data_class cross-schema comparison vs F1/F2b (one frozen data class criterion)
+- R7 classsep regression
+- Canonical checker as corroboration.
+
+That's essentially the F1 receipt adapted to F2a + the cross-artifact data-class check. It provides G-FORM a machine-reproducible ledger at a pinned hash, which the gate currently lacks for F2a. The reviews are prose; my receipt adds reproducible measurements. That's consistent with the swarm's "artifact + gate evidence referenced by hash" protocol.
+
+But careful: don't claim novelty of findings — the receipt should credit prior reviewers as named-by corpus (like the F1 receipt did: "named-by corpus refs"). That's the value-add: bind each existing finding to a machine check, add any new ones, and record verdict counts at the pinned hash.
+
+Let me first look at the F2a schema to design checks, look at the F1 receipt harness (can I reuse?), and check hashes of the taxonomy and tools. Let me read artifacts/worker-096/f1_binding_receipt/run_receipt.py — it may be generic enough to adapt quickly. It's ~? lines. Let me read it.
+
+Also check the class_separation.py tool and check_class_schema.py.
+
+Let me read the F1 harness and list the F2a schema top-level keys/lines.
+dsh: reasoning:
+Interesting: The F2a schema DOES have `extension_predicate` at line 91 (top-level key) and `class_contract_pointer` at 36, `data_class` 129, `f0_binding` 297. Some earlier reviews said extension_predicate is undefined (at revision 10 hash 4b3dfd?). At revision 11 (b6123750), extension_predicate exists at line 91. Let me check whether the current review (F2a-review-086/088 at b6123750) still claims it's missing. Review 086/088 focus on D0 disjunction. Review 19 was against an earlier hash. So the current hash's blocking issues are:
+- duplicate keys
+- future timestamps
+- pointer to authoring tree
+- ill-typed disjunctive D0
+
+Let me read the schema sections around key lines to design checks: lines 1-60 (header/quantifiers), 78-113 (class_boundary/extension_predicate), 129-160 (data_class/regularity), 161-212 (genericity, i_plus, visibility), 213-253 (conclusion, implication_ledger), 254-320 (falsifier, provenance, review_status, f0_binding).
+
+Let me read the relevant parts.
+dsh: reasoning:
+The revision 11 F2a schema has extension_predicate defined. Good — those prior findings (HF-A1) were at earlier hashes. Current blocking: dup keys, future timestamps, D0 disjunction + quantifier mismatch, pointer to authoring tree, data class mismatch.
+
+Let me read the rest: lines 129-320.
+dsh: reasoning:
+Now I have full understanding of the F2a schema at b6123750.
+
+Distinct checks I can machine-verify that add value beyond what prior reviewers did:
+
+1. **Duplicate keys** (already found): revised_at x8 at lines 8,10,12,14,16,18,21,23; revised_at_unused x2? Let's verify: top-level list shows revised_at_unused at line 26 only once in my scan, but the reviewer said twice (lines 26, 28)? My scan shows line 26 revised_at_unused, line 27 timestamp_provenance, line 28 revision. Hmm reviewer 086/088 said "plus revised_at_unused twice (lines 26, 28)". My scan says line 28 is `revision: 11`. Let me check via strict parser. My scan only counted non-indented lines; line 28 is "revision: 11". So revised_at_unused appears once at 26. Reviewers 086/088 may have misread (or duplicate detection at the raw regex level counts the comment line 25 "# rev8 delta: explicit F0 hash binding"? no). Actually maybe they counted line 25 comment? No. Let me just measure precisely with my own strict duplicate-key scanner. This is exactly the kind of independent verification value-add: worker-096 can correct or confirm.
+
+2. **Future timestamps**: revised_at 00:30:00, f0_binding.checked_at 00:30:00 vs mtime and wall clock.
+
+3. **class_contract_pointer resolution on canonical taxonomy** = research_map/formulation_taxonomy.yaml top-level key `classes` not `class_contracts`. Check.
+
+4. **D0 disjunction**: quantifiers.formal binds (s,delta) in D0, D0 definition is a disjunction "Sobolev variant s > 5/2 and delta in (1/2,1), or the smooth-with-decay default". Check whether the smooth branch supplies (s,delta). This is the critical semantic finding of 086/088.
+
+5. **conclusion.statement_formal** at line 218 says "forall (s,delta) in D0 exists G_{s,delta} comeager forall D in G_{s,delta}..." — does it refer to proper_future_extension_in_class(MGHD(D)) — defined. It matches quantifiers.formal structurally? quantifiers.formal (line 48) says "forall (s,delta) in D0: exists G_{s,delta} subset X^{s,delta}_vac(AF) with G_{s,delta} comeager: forall (Sigma,h,K) in G_{s,delta} ... not exists a proper future C2 vacuum extension (M',g',iota)". So the earlier HF-A2 (line 209 in old revision) is now fixed at rev11? Line 218 uses G_{s,delta} and proper_future_extension_in_class(MGHD(D)), not D_gen. So rev11 fixed the dangling D_gen. Good — I can independently verify HF-A2's falsifier: "if (a) or (b) lands at a new hash, this verdict is superseded". Rev 11 is a new hash — b6123750. So the D_gen mismatch may be superseded at rev11. But the D0 disjunction remains (086/088 at b6123750 still fire).
+
+Actually wait — 086 and 088 both reviewed at b6123750 and fired on D0 disjunction. Let me confirm independently: D0's definition has "or", and in the `.formal` sentence binder (s,delta) ranges over D0. The second disjunct (smooth-with-decay default) doesn't supply an (s,delta). But `X^{s,delta}_vac(AF)` is only defined for Sobolev pairs, and genericity.ambient_space says "Frechet topology for the smooth-with-decay class" without an ambient set. So the statement can't be instantiated for the smooth branch. Also, is the definition of D0 in terms of "admissible regularity pairs" ill-typed for the smooth branch? Yes.
+
+6. **Cross-schema data-class identity**: F1 vs F2a vs F2b data_class blocks. 088/lead-audit say F2a and F2b data_class blocks are key-identical; C2 signature (H^4_{1/2+eps}) appears nowhere. Wait — but the current F2a has `sobolev_variant: {s: "s > 5/2", delta: "delta in (1/2,1)"}` at line 138 and review 21 says "C2 class no longer carries its distinctive weighted Sobolev H^4_{1/2+eps} data class". So the C2 signature was lost. I can verify: does the string "H^4" or "1/2+eps" appear in F2a? Let me check. And compare `data_class.regularity_class` key sets across F1/F2a/F2b and their values.
+
+7. **review_status.independent_reviewers=[]** while reviews exist — binding hygiene; the map's review coverage records accepts/revises. That's a real defect: the artifact's own review_status is stale/empty. F2a-review-047 F-01 and lead-audit noted it.
+
+8. **Canonical checker** check_class_schema.py resolution: F2a-review-18 HF-A4 says canonical checker FAILs with R19/R22 at the earlier hash; lead-audit-r2 says "check_class_schema PASS" at b6123750. Which is right? This is a directly checkable contradiction between two reviews at the same hash — high-value independent check! Let me run the canonical checker on the current bytes and record the exact output. If it passes, HF-A4 (rev10) is superseded; if it fails, lead-audit-r2's positive claim is wrong. That's a genuine falsification opportunity, and cheap.
+
+9. **classsep regression**: run research_map/class_separation.py on the parsed docs + runtime/bin/classsep_regression.py (leaks 17/17, controls 10/10). Independent check.
+
+So my task: **W096-F2A-BINDING-RECEIPT-01** — independent, hash-bound binding/consistency receipt for AF-SCC-C2-VAC-GEN at measured sha256 b6123750..., machine-reproducing the binding defects and adjudicating two reviewer contradictions (canonical checker pass/fail; D_gen mismatch superseded at rev11), adding the data-class cross-schema comparison, and recording the verdict ledger at this hash.
+
+Artifacts:
+- artifacts/worker-096/f2a_binding_receipt/run_receipt.py (deterministic harness, strict loader, self-tests)
+- artifacts/worker-096/f2a_binding_receipt/report.json
+- artifacts/worker-096/f2a_binding_receipt/README.md
+
+Events in comms/outbox/worker-096.jsonl (append, valid JSON lines): status active, artifact x3, review, claim, status complete.
+
+Checkpoint: runtime/state/w096_checkpoint_3.json and append to w096_checkpoints.jsonl.
+
+Important: be careful about concurrency — the outbox file is appended by other instances of worker-096? Prior instances are done (exit_code present for 00:16 and 00:22; the 00:27 instance is me). Actually, wait: the 00:27:46 instance has no exit code and its stderr.log is growing — that's me. Good. Appends should be safe.
+
+Also there's a residual risk: the previous instance wrote events at 00:26:53 with future timestamps? The outbox line 8 says created_at 00:26:53 which is in the past now (00:28+). Fine.
+
+Time discipline: don't future-date. Use current wall clock. Note that my events will be ingested by the controller later. The protocol says evidence refs as path#sha-prefix.
+
+Let me now:
+1. Record current time, file mtime, hash of F2a (re-measure to ensure stability over the run).
+2. Write the harness. I'll write a self-contained Python script with:
+   - strict duplicate-key YAML loader (custom, to avoid PyYAML last-wins) — I can implement a lightweight top-level key scanner over raw lines and also a full duplicate detector using a custom loader. Simpler: use yaml.compose (which preserves nodes) to detect duplicate mapping keys at any level. `yaml.compose` returns node tree; MappingNode.value is a list of (key_node, value_node) pairs including duplicates. That's a clean strict duplicate detector and uses PyYAML only. 
+   - timestamp checks: parse declared revised_at (effective = last), f0_binding.checked_at, compare to file mtime and wall clock.
+   - pointer resolution: load canonical research_map/formulation_taxonomy.yaml and authoring artifacts/formulation/formulation_taxonomy.yaml with yaml.safe_load, resolve fragment path `class_contracts.AF-SCC-C2-VAC-GEN` → check presence of top-level `class_contracts` key.
+   - symbol analysis: find identifiers used in quantifiers/conclusion (D0, D1, D2, D3, G_{s,delta}, X^{s,delta}_vac, extension_predicate, proper_future_extension_in_class, D_gen) and check defined.
+   - D0 disjunction probe: check whether definition contains " or ", and whether smooth branch supplies (s,delta); check ambient space covers it.
+   - data-class cross-schema: load F1, F2a, F2b, compare `data_class.regularity_class` leaf key paths and values; check C2 distinctive tokens (H^4, 1/2+eps) presence in F2a.
+   - canonical checker run: subprocess python3 artifacts/formulation/tools/check_class_schema.py schemas/af_scc_c2_vacuum.yaml, record exit code + stdout tail + tool sha256.
+   - classsep: subprocess python3 research_map/class_separation.py? Need to check its CLI; and runtime/bin/classsep_regression.py.
+   - drift fail-closed: hash target before/after; exit 2 on drift.
+   - self-tests: controls (N1 clean file specificity; duplicate detection positive control; pointer positive control; data-class positive control).
+   - verdict ledger: scan reviews/F2a-review-*.json + reviews/*.json for target_id F2a / class AF-SCC-C2-VAC-GEN, record reviewer, verdict, score, reviewed_sha256, file sha256.
+3. Run it, write report.json.
+4. Write README.md.
+5. Emit events + checkpoint.
+
+Let me first check the tools' CLIs and hashes, plus exact mtimes. Also check if PyYAML is available (it is, used by the swarm).
+
+Let me look at check_class_schema.py CLI and class_separation.py CLI.
+dsh: reasoning:
+Good. Now let me record the key measurements quickly and check the canonical checker on current F2a bytes, the taxonomy key structure, data_class comparison, and mtimes. Then write the harness.
+
+Let me run some quick probes first (these will be replicated inside the harness).
+dsh: reasoning:
+Confirmed:
+- Canonical checker PASSES at b6123750 (so HF-A4 from worker18 at rev10 is superseded; lead-audit-r2's "check_class_schema PASS" corroborated).
+- Pointer resolves only in authoring tree (class_contracts), canonical has `classes`.
+
+Let me now check the data_class comparison across F1/F2a/F2b and the C2 signature tokens, plus duplicate keys count. Then write the harness.
+dsh: reasoning:
+The data_class comparison is informative: F2a/F2b data_class blocks differ in only a couple of leaf values (they are not key-identical — worker-088's claim "key-identical" is too strong; they differ in adm_mass extra keys). And F1's differs more. The shared values: sobolev_variant s="s > 5/2", delta="delta in (1/2, 1)". So there IS a shared data class across all three in the sense of the Sobolev variant values, but F2b (C0) freezes smooth-with-decay? Let me check F2b's `regularity_class.default` and `data_class` further. Both F2a and F2b have the same default "smooth-with-decay". Hmm.
+
+Actually the gate unmet says "no single frozen data class (s,delta,norm) is shared by F1/F2a/F2b, which disables the licensed C0=>C2 transfer". But measured: all three have identical s and delta strings, though F1 adds "(weighted Sobolev)". The "norm" part differs slightly. The real issue per reviews: F2b declares the Sobolev class a separate class / freezes smooth-with-decay. Let me check F2b's data_class text for "separate class" claim. But careful about scope creep: my receipt should measure the leaf diff and report it factually, noting that the semantic adjudication (whether this satisfies "one frozen data class") belongs to the lead/auditor. Good.
+
+Fix the dup_keys bug (key is ScalarNode; use k.value). Let me redo.
+
+Also note: the canonical checker PASSes F2a at b6123750. That contradicts review-18's HF-A4 but review-18 reviewed an earlier hash (rev10, 4b3dfd?) — actually review-18's target hash isn't shown; it had lines 75/76/209 vs current 67/68/218. Different revision. So at rev11 the checker passes. I can record that as a supersession.
+
+Now, the important design decision: what exactly is my one class-bound task?
+
+**Task W096-F2A-BINDING-RECEIPT-01**: independent hash-bound binding receipt for AF-SCC-C2-VAC-GEN (F2a) at sha256 b6123750..., machine-reproducing: duplicate keys, timestamp sanity, canonical pointer resolution, D0 typing/disjunction, cross-schema data_class leaf diff, review_status staleness, verbatim quantifier/conclusion consistency, canonical checker result, classsep regression. Plus verdict ledger at the pinned hash. Verdict: revise (binding defects present), 0 claims of novelty where prior reviewers found it first (named-by refs preserved).
+
+This is bounded, class-bound, evidence-produced, and useful for G-FORM's unmet item ("F2a at ... has revise verdicts with hard failures"). It gives the auditor a reproducible machine ledger.
+
+Let me now check the classsep tools run and the F2b data class claim, then write the harness.
+
+Actually, to keep the harness robust and deterministic, I'll implement checks with explicit "check id, status pass/fail/info, evidence, falsifier" records. The report will include:
+- target: path, sha256 (before/after), bytes, mtime
+- pins: canonical taxonomy, authoring taxonomy, F1, F2b, checker, class_separation, classsep_regression
+- checks list
+- findings list
+- cross_refs (prior reviews named by file + sha)
+- verdict_ledger
+- self_tests
+- drift_closed
+- wall clock at start/end
+- verdict + score
+
+Let me first quickly verify a few more facts so the harness checks are correct:
+1. review_status.independent_reviewers=[] — yes (line 317).
+2. F2b data_class: check `regularity_class` and any statement about separate class. Let me grep F2b for "separate class" / "smooth-with-decay".
+3. classsep on F2a: run research_map/class_separation.py? It's a module with findings(obj, where) — need to see if it has a CLI. Let me check its __main__.
+4. The strict duplicate detection: I'll use yaml.compose and recursive key check.
+
+Let me also check reviews/F2a-review-090.json (mentioned) — files: F2a-review-047, 086, 088, 15, 17, 18, 19, 21, 22, lead-audit, lead-audit-r2. There's no 090? Earlier text said "pointer finding in F2a-review-090" — let me list all F2a reviews again: 047, 086, 088, 15, 17, 18, 19, 21, 22, lead-audit, lead-audit-r2. The ls output was filtered? Let me list all files matching F2a and F2b and F1 for the verdict ledger. Also reviews/INDEX.md.
+
+Let me check quickly.
+dsh: reasoning:
+Facts:
+- F2a dup keys: revised_at x8 (lines 8..23). NO revised_at_unused duplicate in F2a (only F1 has that). So reviewers 086/088's claim of "revised_at_unused twice" for F2a is WRONG. Good independent correction — my receipt can report this precisely: F-086-3/F-088-1's parenthetical "(plus revised_at_unused twice, lines 26, 28)" is not reproducible on b6123750; only revised_at x8. Great, that's a genuine independent verification contribution.
+- All three schemas effective revised_at = 00:30:00, mtime 00:19:14, current wall clock 00:29:10 → future-dated.
+- F2b data_class identical regularity_class to F2a, but F2b says "separate class" at lines 280/298 — need to see context. Its data_class text has smooth-with-decay. Hmm, but both F2a and F2b have identical regularity_class leaf values. Let me note that as measured: F2a and F2b regularity_class leaf-value-identical; F1 differs only in the `spaces` string "(weighted Sobolev)" and `status` string. So the "one frozen data class" criterion is arguably met on the regularity axis at the value level, EXCEPT the gate's intent (s,delta,norm) requires identical norm/topology; F1 says weighted Sobolev, F2a/F2b say H^s_delta (which IS weighted Sobolev) — string differs. The semantic adjudication is out of scope; I record the measured diff.
+
+Wait, but the gate unmet says "no single frozen data class (s,delta,norm) is shared by F1/F2a/F2b". My measurement shows all three share "s > 5/2", "delta in (1/2,1)", "h - delta_ij in H^s_delta, K in H^{s-1}_{delta+1}". So the gate's unmet string may be overstated at rev11, or the intent is about the *operative* frozen class (F2b may declare a separate class elsewhere, e.g., line 280/298 "separate class" — likely about C0 vs C2 extension classes, not data). This is worth reporting as an info/advisory: on the regularity_class axis, the three leaves agree on s, delta, and spaces modulo the "(weighted Sobolev)" annotation; the G-FORM unmet criterion should be re-measured. That's valuable for `astra-life03-close-findings`.
+
+Let me check F2b lines 275-300 to see what "separate class" refers to. Also check what data class F2b freezes per review 18 ("F2b revision 4 freezes smooth-with-decay instead"). Let me read F2b data_class area lines 130-160 and 275-300.
+dsh: reasoning:
+Key correction to prior reviews: F2b's "separate class" lines refer to H2_loc/equation variants, not to the data class. F2a and F2b data_class regularity_class leaves are value-identical; F1 differs only in two annotation strings. So the G-FORM unmet "no single frozen data class (s,delta,norm) is shared" is not supported by the leaf comparison at current hashes on the regularity axis — F1/F2a/F2b share s="s > 5/2", delta="delta in (1/2, 1)", spaces identical modulo a parenthetical. That's an important, machine-reproducible info finding for the lead-audit / close-findings assignment. But I must be careful: maybe G-FORM's criterion requires the *frozen operative* data class per class; F2a's `data_class.regularity_class.default` is smooth-with-decay too. So all three have the same union default + same sobolev variant. The genuinely different thing is the extension class (C0 vs C2) and conclusion.
+
+Hmm, wait: F1's data_class has extra keys (excluded_data, adm_mass.rigidity, parity text) — but the load-bearing values for s/delta/spaces agree. So the gate's unmet statement could be challenged. I will report this as an advisory/info finding with the measured diff table, explicitly deferring the adjudication to lead-audit (it's a scope question: does the criterion require byte-identical blocks, key-identical blocks, or load-bearing value identity?). That is a valuable falsifier for the gate's stated reason.
+
+Now I have a solid task. Let me define the check list for the harness (deterministic, self-tested):
+
+Checks (each with id, description, status, measured evidence, falsifier):
+- B01 target_hash_stable: sha256 before == after (fail-closed exit 2 on drift).
+- B02 duplicate_mapping_keys: strict PyYAML compose-based scan of F2a → revised_at x8 at lines 8,10,12,14,16,18,21,23; effective=(last). Status fail (binding hygiene). Note: prior reviews 086/088 additionally claimed revised_at_unused x2 in F2a — not reproducible; that specific sub-claim is falsified.
+- B03 timestamp_sanity: effective revised_at 2026-09-12T00:30:00 vs mtime 00:19:14 and wall clock; f0_binding.checked_at same. Status fail (future-dated).
+- B04 class_contract_pointer_resolution: resolve `artifacts/formulation/formulation_taxonomy.yaml#class_contracts.AF-SCC-C2-VAC-GEN`: canonical path research_map/... has no `class_contracts` key → fail; authoring resolves → pass. Status fail (canonical binding).
+- B05 pointer_declared_vs_measured: f0_binding.declared_f0_sha256 == measured canonical taxonomy hash? Measure: 276009f4... vs declared "276009f4f63dbf83..." → pass.
+- B06 d0_typing: D0 definition contains alternation; smooth branch supplies no (s,delta); ambient X^{s,delta} defined only for Sobolev pair; genericity.ambient_space names Frechet topology without ambient set. Status fail (critical semantic binding) — corroborates HF-086-1/HF-088-1.
+- B07 quantifier_conclusion_consistency: parse quantifiers.formal and conclusion.statement_formal, check binder sequence and symbols; rev11 uses proper_future_extension_in_class and D0 in both; earlier D_gen mismatch absent at rev11 (supersession check). Status pass with note.
+- B08 undefined_symbols: scan identifiers used in quantifiers/domains/conclusion: D0..D3 defined; extension_predicate defined; proper_future_extension_in_class defined in extension_predicate.name; X^{s,delta}_vac used in D1/genericity; D_gen absent. Status pass (no dangling at rev11; supersedes HF-A2).
+- B09 cross_schema_data_class: leaf diff F1/F2a/F2b; report identical load-bearing values for s/delta/spaces; extra keys in F1. Status info/advisory: gate unmet reason not reproducible on the regularity axis at these hashes; adjudication deferred.
+- B10 c2_signature_presence: scan F2a for the distinctive C2 data signature tokens (H^4, 1/2+eps, etc.) → absent. Status info/major (corroborates review-21 advisory / lead-audit major).
+- B11 review_status_staleness: review_status.independent_reviewers=[] and verdict=pending while ≥11 F2a review files exist with verdicts at this hash... careful: many reviews are at other hashes. At b6123750: 086 (revise), 088 (revise), 22 (inconclusive, reviewed hash b6123750), lead-audit-r2 (revise at b6123750). 047/090 maybe at b6123750 too. I'll compute per-file reviewed_sha256 when present. Status fail (hygiene).
+- B12 canonical_checker: run check_class_schema.py → PASS exit 0, failed_rules=[]; record tool sha. Status pass (corroboration; supersedes review-18 HF-A4 at rev10).
+- B13 classsep: import class_separation, run findings_for_text on F2a raw text → 0 findings; run regression → leaks/controls. Status pass (corroboration). Need to check findings_for_text signature and regression output. I'll use subprocess for regression and import for the raw scan.
+- B14 verdict_ledger: enumerate reviews/*.json whose target_id is F2a or class_id AF-SCC-C2-VAC-GEN, record reviewer/verdict/score/reviewed_sha256/file sha256/file mtime. At pinned hash: count accepts/revises/inconclusive.
+
+Self-tests (controls):
+- N1 clean-file specificity: a synthetic clean schema without duplicates → B02 finds none.
+- P1 duplicate positive control: synthetic text with two `revised_at:` keys → detected count 2.
+- P2 pointer resolution positive control: authoring tree resolves.
+- P3 pointer fail-closed control: a nonexistent fragment returns False.
+- P4 data-class positive control: same-doc comparison is identical.
+- P5 timestamp control: a document with revised_at <= mtime passes.
+
+Report structure:
+{
+  "report_id": "W096-F2A-BINDING-RECEIPT-01",
+  "task_id": ..., "worker": "worker-096", "node_id": "F2a", "class_id": "AF-SCC-C2-VAC-GEN",
+  "gate": "G-FORM",
+  "created_at": wall clock,
+  "target": {path, sha256, bytes, mtime},
+  "pins": {...},
+  "checks": [...],
+  "findings": [...],
+  "prior_review_ledger": [...],
+  "corrections_to_prior_reviews": [...],
+  "self_tests": [...],
+  "drift": {...},
+  "verdict": {"binding": "revise", "semantic_checklist": "pass", "score": ...},
+  "falsifier": "...",
+  "limitations": [...]
+}
+
+Then README.md summarizing; events; checkpoint.
+
+Now, about time budget: I should be efficient. Let me write the harness now. It must be self-contained and deterministic. I'll write it with the write tool.
+
+One important caution: other agents/instances may be running; my harness must not write outside its own dir except reading. The checkpoint and outbox writes happen separately.
+
+Let me check `class_separation.findings_for_text` signature (from the tail: `findings_for_text((root/art).read_text(...), f"artifact {art}")`). And regression output includes tp/fn/tn/fp. Fine.
+
+Also need KEY_MANIFEST / rule_spec paths for checker — the checker resolves them relative to itself; it ran fine.
+
+Let me now write run_receipt.py. I'll aim for ~450 lines, robust.
+
+Key implementation details:
+
+1. Deterministic: no randomness; wall clock only recorded, not used for pass/fail except timestamp sanity (which is inherently clock-dependent). For the recorded check, compare declared vs mtime and vs run wall clock; the run wall clock is recorded.
+
+2. Strict duplicate scan via yaml.compose. Need to guard against compose errors.
+
+3. `resolve_fragment(doc, "class_contracts.AF-SCC-C2-VAC-GEN")` — path split by '.', block. Also handle `#` in pointer: split on '#'; file part + fragment.
+
+4. Prior review ledger: parse every reviews/*.json with json; filter target_id == 'F2a' or class_id == 'AF-SCC-C2-VAC-GEN' or reviewed_artifact mentions af_scc_c2. Record fields. Also record file sha256.
+
+5. C2 signature scan: patterns ['H^4','1/2+eps','1/2+epsilon','H^4_{1/2'].
+
+6. canonical checker subprocess: [sys.executable, 'artifacts/formulation/tools/check_class_schema.py', '--json', target] capture stdout/stderr/exit. Parse JSON if possible.
+
+7. classsep: subprocess [sys.executable,'runtime/bin/classsep_regression.py'] capture output; plus import class_separation.findings_for_text(text, where).
+
+8. Self-tests as described.
+
+9. Drift: hash before, after; if changed → status fail-closed, exit 2.
+
+10. Write report.json to artifacts/worker-096/f2a_binding_receipt/report.json (the script itself writes it; deterministic except wall clock and pins).
+
+The script must take a --out and --target default.
+
+Let me also compute pins hashes: canonical taxonomy, authoring taxonomy, F1, F2b, checker, class_separation.py, classsep_regression.py, review files.
+
+Let me write it.
+
+Also: what verdict score? Binding: revise; structural checklist pass; the class-bound receipt verdict should be "revise" (blocking binding defects + critical D0 typing), score 3.5-ish. The F1 receipt gave revise/3.5. For F2a: 2 blocking (dup keys/timestamps; D0 typing), 1 hard (canonical pointer), plus info. Score 3.0. It's reviewer input only.
+
+Let me write the script now.
+dsh: reasoning:
+Now write the harness. Let me be careful and complete.
+dsh: reasoning:
+Now run it. But first, check the classsep_regression output format: does it print JSON to stdout? Let me run quickly. Also note my regex extraction `reg.stdout[reg.stdout.index("{"):reg.stdout.rindex("}")+1]` might work if it prints JSON. Let's test the harness.
+dsh: reasoning:
+In B06 I access `probe["ambient_space_defines_smooth_branch_set"]` — that exists. The error is 'extension_predicate_defined' — that's in quantifier_consistency's `tokens` dict which I build but the returned dict doesn't include `extension_predicate_defined`; I return a different dict. In B07 I use qc["extension_predicate_defined"] but the returned dict has "conclusion_uses_defined_predicate" instead. Fix: include `extension_predicate_defined` in the returned dict.
+dsh: reasoning:
+It ran. Note B03 timestamp sanity didn't fail? Because it checks `later_than_wall_clock` for future entries. Let me check: declared revised_at = 00:30:00; wall clock now ~00:32 => not later than wall clock. So B03 passed! Hmm. The check compares to wall clock *at the time of the run*, and now it's past 00:30, so the "future-dated" claim no longer holds relative to wall clock; but relative to mtime (00:19:14) it's still later. The prior reviewers measured at 00:24 and it was future-dated then. At my run time (00:32) it's not future-dated anymore.
+
+That's an important nuance for time discipline: a receipt that just repeats "future-dated" is wall-clock dependent. I should make B03 fail if declared > mtime (revision timestamps must not postdate the file content write), and separately report wall-clock relation at run time. The binding defect "declared revision time later than file mtime by ~11 min" is stable and machine-checkable. The "ahead of wall clock" part is time-dependent — I should record both but the check status should be based on declared > mtime (stable). Actually careful: mtime is the file write time; a declared revised_at later than mtime is a real inconsistency — the declared revision time cannot be after the file was written. That's stable evidence.
+
+Let me update B03: fail if any declared field > mtime. And report `later_than_wall_clock` at run time separately with a note that this component is clock-dependent (was true at 00:24 per prior reviews, now false at run time).
+
+Also check the report contents to see B05, B09, B12, B13 results. Let me inspect the report summary + checks briefly.
+dsh: reasoning:
+Issues to fix:
+
+1. **B13 class-separation**: `reg_json` regex parse failed (stdout is not JSON: "leaks detected 17/17 controls clean 10/10 (FP 0, FN 0) VERDICT: PASS"), so `reg_json.get("verdict")` is None → status fail even though regression passed. Fix: parse the text "VERDICT: PASS" or exit code 0. Let me check the regression runner's output format properly. From the raw: exit 0, "VERDICT: PASS". I'll parse: pass if exit_code==0 and "VERDICT: PASS" in stdout.
+
+2. **B09 load_bearing_identical**: false because F1's `spaces` has " (weighted Sobolev)" appended and `status` string differs. Hmm — my earlier probe printed spaces DIFF. That's an annotation-level difference: F1 spaces = "...H^{s-1}_{delta+1} (weighted Sobolev)", F2a/F2b = "...H^{s-1}_{delta+1}". Semantically identical (H^s_delta IS weighted Sobolev). But my check says "load_bearing_identical: false" which conflicts with the finding that they share s/delta/spaces modulo annotation. I should compute two tiers: exact string identity per path, and normalized identity (strip parentheticals/whitespace). Then report: exact: spaces differs in F1 only by parenthetical; s and delta exactly identical; default exactly identical. Better: report `load_bearing_exact_identical` false and `load_bearing_normalized_identical` true, with the diff table. The advisory note explains the adjudication is for the audit lead. Let me refine.
+
+3. **B03**: make fail on declared > mtime (stable), report wall-clock relation separately.
+
+4. **B14 ledger**: `reviewed_sha256: null` for 086/088 even though those reviews were at b6123750? Let me check: review-086 might store the hash under a different key (e.g. "target_sha256" or "reviewed_artifact_sha256"). Let me inspect keys of F2a-review-086.json. Also, "binds_to_this_hash" only counts 22 and one more. The ledger should be more accurate: look for sha256 anywhere in the review (top-level keys and nested). Let me inspect the key names.
+
+5. B12 note says command with `af_scc_c2_vacuum.yaml` (relative name); fine.
+
+6. B04: canonical resolution check: `declared_target_resolves` true (on authoring); my fail condition uses pointer path hash != canonical hash. Good, but clearer to include `resolves_on_canonical: false`. Add explicit fields.
+
+Let me inspect review-086/088 keys to fix the ledger.
+dsh: reasoning:
+Fix the ledger: hash field names vary: `artifact_sha256` and `reviewed_sha256`. Use whichever exists. Then binding hash: 047, 086, 088, lead-audit-r2, 22 all bind b6123750. Verdicts at this hash: 047 accept, 086 revise, 088 revise, lead-audit-r2 revise, 22 inconclusive → accepts 1, revises 3, inconclusive 1. That matches the handoff's F2a coverage ("2 accepts + 2 revises" at some earlier hash; here at current hash 1 accept 3 revise 1 inconclusive).
+
+Let me make the fixes:
+1. B03: fail on declared > mtime; report wall-clock relation.
+2. B09: exact vs normalized identity.
+3. B13: parse regression text output.
+4. B14: hash field fallback.
+
+Let me apply edits.
+dsh: reasoning:
+Wait, in B09 `load_bearing_identical: false` was advisory but didn't produce a fail status (status is "info" always, so not a failure). OK.
+
+Now fix B13 and B14.
+dsh: reasoning:
+Oops — the edit replaced the block but I left the old block? No: my old_string was the full if-block ending with the old ledger.append; new_string is the revised if-block. But I wrote the old block as the "new" text at the end — that means the file now has BOTH the new block and then the old block? Let me re-read: my new_string contained the new if-block AND then the old if-block appended (I mistakenly included it). Yes, the new_string ends with the old block because I pasted it. So now there are two consecutive if-blocks with the same condition — duplicate ledger rows. Let me read the file section and fix.
+dsh: reasoning:
+Good — the duplicate block didn't actually get inserted (the edit tool replaced the old text; my new_string contained the new block followed by the old block, but apparently the old block text in new_string... wait, looking at lines 503-511 there's only one block and it's the new version. Good — because my new_string's trailing old-block text was identical to the old_string's replacement? No... Actually what happened: old_string was the old if-block; new_string was new if-block + old if-block. That would produce both. But line 512 comes right after one block. Hmm, maybe the edit didn't include the trailing old block because... let me check: my new_string ended with:
+
+```
+                "hard_failures": len(d.get("hard_failures", []) or []),
+            })
+```
+and before that the new block. So there should be two. But grep shows only one `binds_to_this_hash` at 509. Maybe the tool's replacement... Let me grep for `bind_hash` to be sure. Actually line 504 has `bind_hash = d.get(...)`; if there were two blocks, there would be two occurrences. Let me just verify with a grep count. Actually grep -n "binds_to_this_hash" returned only line 509 and 512 (512 is the usage). So only one block. Perhaps my new_string's tail was not actually the old block — I may have misremembered what I typed. Fine, the file is correct.
+
+Wait, looking back at my edit call: new_string ended with the new block, and then I *did* include the old block... Actually no: reading my own new_string again:
+
+```
+        if tid in (...):
+            bind_hash = d.get("reviewed_sha256") or d.get("artifact_sha256")
+            ledger.append({
+                ...
+                "binds_to_this_hash": bind_hash == t_sha_before,
+                "hard_failures": len(d.get("hard_failures", []) or []),
+            })
+```
+
+Hmm, that's it — I didn't append the old block; the old_string had the old block, and new_string had the new block only. Great. (I confused myself.)
+
+Now re-run the harness.
+dsh: reasoning:
+Now B03 fails (declared > mtime) as intended. B13 should now pass. Let me verify the full check statuses and the ledger binding counts. Also verify B09 normalized identical = true.
+dsh: reasoning:
+Excellent. Ledger at b6123750: 4 revise, 1 accept (worker-047), 1 inconclusive. The handoff said F2a "2 accepts + 2 revises" but at the current hash my machine count is 1 accept / 4 revise / 1 inconclusive. Wait, there's also F2a-review-034 (revise) which I hadn't listed earlier (ls | grep F2a showed it? earlier listing had 047,086,088,15,17,18,19,21,22,lead-audit,lead-audit-r2 — no 034. But now F2a-review-034.json appears — it was created after my earlier ls (at 00:26-ish by another worker). Fresh traffic! It binds b6123750 with revise 3.0. So as of now: 4 revise + 1 accept + 1 inconclusive.
+
+Note: traffic continues (new review file appeared during my run). My receipt is time-stamped and snapshot-based; fine. Good to note in README: observations are snapshot at report time; fresh reviews may appear (034).
+
+Now, one more valuable check I should consider: the F2a-review-034 was just written — maybe it duplicates. Not my concern.
+
+Let me quickly double check that B06 evidence is coherent, and that the "corrections_to_prior_reviews" content is in the report: B02 note (revised_at_unused not reproducible) and B08 (rev10 superseded), B09 (gate unmet reason), B12 (checker pass). Good.
+
+Now hash the artifacts and write README.md. The README should be a one-page reviewer summary pinned to report/script/target hashes, with falsifiers per finding.
+
+Then emit JSON events. Use current wall clock (00:3x). Events:
+1. status active (task claim)
+2. artifact report.json
+3. artifact README.md
+4. artifact run_receipt.py
+5. review event (target F2a, verdict revise, score 3.0, hard_failures list, findings, gate G-FORM, reviewed hash)
+6. claim event (conclusion_type formal_model; artifact_refs)
+7. status complete (status active per protocol — workers cannot set done; previous instances used status "active" in the complete message)
+
+The event IDs should be unique: w096-f2a-2026-09-12T00:3X-...
+
+I need to make sure JSON lines are valid, one object per line, with required fields event_id, event_type, created_at, actor. evidence_refs with path#sha-prefix.
+
+Checkpoint: runtime/state/w096_checkpoint_3.json with artifacts hashes (report, README, script, outbox), task_id, target_sha256, class_ids, verdict, hard_failures, at. Also append to w096_checkpoints.jsonl.
+
+Order: write README first, compute hashes, then outbox events pinned to those hashes, then checkpoint including the outbox hash after appending.
+
+Wait — careful: the outbox hash in checkpoint 1/2 was computed after appending their events. I'll do the same: append events, then compute outbox sha, then write checkpoint. But the checkpoint file itself isn't referenced in outbox events (previous instances referenced runtime/state/w096_checkpoint_1.json in the summary text but not as an artifact with hash). Checkpoint 1 event says "Checkpoint follows at runtime/state/w096_checkpoint_1.json." So no hash needed. Fine.
+
+Let me write the README now. It should contain: task, target, pins, verdict, findings table with falsifiers, self-tests, corroboration, prior-work naming, what is not claimed, reproduction command.
+
+Compute current hashes first for exact pinning: report.json sha, run_receipt.py sha, target sha, and pins from report. Let me get them.
+dsh: reasoning:
+Now write the README.md. Keep it one page, pinned, with per-finding falsifiers.
+
+Note: the report.json hash will be pinned in the outbox events. The README will pin the report hash. Order: README written → hash README → outbox events pin report + README + script. Good.
+
+Let me write README.
+dsh: reasoning:
+Now compute README hash, verify target hash still b6123750 (and report still valid — report's target hash must match current bytes; if the schema drifted since the report, I need to re-run). Then append outbox events.
+
+Let me check hashes and current time.
+dsh: reasoning:
+**Drift detected!** The target `schemas/af_scc_c2_vacuum.yaml` is now `a7ccae4d5deccd0ccf662bdb75f32eace7358cc588d8037b0d7434683d0dcc27`, not `b6123750...`. The file changed between my report (00:31:28) and now (00:31:45). The swarm is actively repairing it — likely lead-formulation is closing findings.
+
+What to do? My protocol: "a later revision voids the binding, not the measurement". The receipt was bound to b6123750, which was stable during the run. The new revision is a new hash. Options:
+
+1. Keep the report as a snapshot at b6123750 (valid measurement at that moment), and note in the events that the target has since moved to a7ccae4d, so the receipt is advisory and must be re-run. That's honest and protocol-consistent. The checkpoint should record both hashes.
+
+2. Re-run the harness against the new bytes to give a fresh receipt. But this could thrash — the file may be mid-edit by another agent (mtime just now). Also, my task was "one bounded class-bound task"; re-running on a moving target could produce a receipt on a file that changes again immediately.
+
+The best approach: 
+- Verify the report is intact for b6123750 (it is; measured stable across run).
+- Record the drift explicitly: re-measure now, capture the new hash, note it. But also check whether the file is stable now — wait a moment and re-measure. If the new revision fixes the defects, a fresh receipt at the new hash could be genuinely valuable. But "bounded execution worker" + the risk of racing other agents' writes suggests: keep the frozen-bytes receipt and add a drift note.
+
+Actually, maybe re-run the harness on the new bytes — if the new file is stable for a minute, the receipt would document whether the repairs landed (falsifier of my findings!). That's exactly the falsification discipline the project wants: B02/B03/B04/B06/B11 would flip if fixed. A fresh measurement would be highly valuable to the close-findings assignment. But then my README/events would need to be about the new hash, and if the file moves again mid-run, my harness exits 2 (fail-closed) and I keep the old receipt.
+
+Let me check: measure the new file, see its revision and whether it's stable (re-measure after ~20s), and run the harness against it in a scratch output path. If it passes self-tests and no drift, I can decide whether to bind the receipt to the new revision. But careful: the harness writes report.json to the same out path by default; I can use --out /tmp or a rev-specific name. However the artifacts should stay self-consistent: one receipt -> one target hash.
+
+Given the bounded nature, a clean approach:
+- Keep the primary receipt at b6123750 (README/report/events pinned to it).
+- Add a **drift addendum** (report_drift_a7ccae4d.json or an addendum section) that records: target moved to a7ccae4d at 00:31:4x; re-run of the same harness on the new bytes; the resulting check statuses. If it shows the defects fixed, my findings' falsifiers fire and that's a great signal for the lead.
+
+Let me first inspect the new revision quickly: revision number, top-level keys, whether duplicate keys persist. Then decide.
+
+Actually, time check: it's 00:31:45. Let me measure and diff.
+dsh: reasoning:
+The repair revision 12 landed at 00:31:41 (exactly during my run):
+- duplicate revised_at fixed (1 occurrence)
+- pointer re-pointed to canonical research_map/formulation_taxonomy.yaml#classes.AF-SCC-C2-VAC-GEN
+- D0 re-typed as a tagged disjoint union with per-branch ambient space
+- timestamps now match mtime (00:31:41)
+- review_status still empty/pending (B11 likely still fails)
+
+My rev11 receipt is still valid as a snapshot of rev11, but the new rev12 is the operative artifact and my findings' falsifiers have fired. The most useful thing: run the same harness on rev12 and produce a **new receipt bound to a7ccae4d** (documenting whether the repairs hold under independent machine checks) — that directly serves `astra-life03-close-findings`. And keep the rev11 snapshot as the "before" measurement.
+
+But watch out: other agents may keep editing rev12. My harness fails closed on drift (exit 2) so I'll detect that.
+
+Design: Make the artifacts directory contain:
+- run_receipt.py (unchanged, generic)
+- report.json — which one? If I re-run with default --out, it overwrites the rev11 report. I want both. Better: 
+  - report_rev11_b6123750.json (the frozen-byte snapshot; rename current report.json)
+  - report.json → the current revision receipt (rev12 a7ccae4d). Hmm, "report.json" referenced by outbox events; I can emit both artifacts.
+
+Simpler and clearer:
+- Rename the rev11 report to `report_rev11.json` and README to `README_rev11.md`? That churns the already-written README pins.
+- Alternative: keep rev11 files as-is (report.json @ 0b64fc41, README @ 18db7ec0), and add `report_rev12.json` + `README_rev12.md` for the new revision, with the outbox emitting both receipts (two artifacts + two claims). The task is one class-bound task (F2a binding receipt) covering a two-revision window — that's even more valuable: before/after measurement of the repair.
+
+I think that's the best: one receipt task, two frozen snapshots (rev11 before repair, rev12 after repair), same harness, same class. The README can be updated to describe both. But the README is pinned in... nothing yet (outbox events not yet written). Great — no events written yet, so I can restructure freely. The report.json rev11 hash will be pinned in the rev12 report? No, the harness's `pins` include F1/F2b/taxonomy/tools, not the previous report. I'll include a cross-reference in the rev12 README.
+
+Plan:
+1. Copy current report.json → report_rev11_b6123750.json (byte-identical) and README.md → README_rev11_b6123750.md? Hmm, README rev11 already written and positioned as the primary. Let me instead keep `report.json` as the rev11 receipt (pin 0b64fc41) and add:
+   - artifacts/worker-096/f2a_binding_receipt/report_rev12.json (--out)
+   - README.md updated to cover both (hash changes; but no events pin README yet — however the rev11 report.json remains pinned to rev11).
+   Wait, but the final outbox events should pin the artifact hashes; I can pin both report.json (rev11) and report_rev12.json (rev12), plus README (final).
+
+   Also run_receipt.py may need a tweak? No, it's generic. But if I keep report.json as rev11 while the target is now rev12, a reader might re-run the harness and get a rev12 report at the default path, overwriting. To avoid confusion, name outputs explicitly in the README and events.
+
+2. Run harness with --target schemas/af_scc_c2_vacuum.yaml --out artifacts/worker-096/f2a_binding_receipt/report_rev12.json. Check exit 0 and drift false. If it drifted again, re-run or record.
+
+3. Update README.md to be the two-revision receipt summary.
+
+Actually — think about "bounded": is measuring rev12 scope creep? It's the same class-bound task and directly tests my own findings' falsifiers. It's cheap (one command). Yes, do it.
+
+One risk: rev12 may itself be mid-repair and change again. The harness exits 2 on drift; then I'd fall back to the rev11 receipt plus a drift note. Let's try.
+
+Also note: the rev12 harness's B12 will run the canonical checker on rev12; B06 probe: D0 now contains "or" ("tagged disjoint union: r = smooth ... or r = (sobolev,s,delta)") but the binder is now presumably `r` not `(s,delta)`, so `d0_pair_binder_present` should be false → B06 passes. Let me run it.
+dsh: reasoning:
+Small bug: when --out is relative, `Path(args.out).relative_to(ROOT)` fails at print time (after writing the report successfully). The report was written (35428 bytes) but the summary print failed → exit 1. Also the mtime of the schema is now 00:32:02 (changed again after the report's measurement at 00:32:03? The report measured the target at ~00:32:02; the file mtime 00:32:02.095; the harness measured before/after and drift false presumably).
+
+Fix: make `out` absolute in main: `out = Path(args.out); if not out.is_absolute(): out = (ROOT / out)`. Then relative_to works.
+
+Then re-run rev12 report (it may drift again). Let me fix and re-run after checking the target hash stability.
+dsh: reasoning:
+The target moved AGAIN: now `5476a3f2c6bc...` (rev13?). Active repair traffic. The receipt for what I called "rev12" (a7ccae4d) was superseded before I could finish. This is a moving target — the lead-formulation is actively closing findings (probably in response to reviews).
+
+Now I must decide the final shape. My harness is generic and catches drift per run (exit 2 if drift during run). It just produced a report at 5476a3f2 with verdict revise, only B11 failing (review_status still empty/pending). That's a meaningful "after repair" measurement: the repair closed B02/B03/B04/B06.
+
+But the file may keep moving. I should:
+1. Check the current hash/revision and mtime.
+2. Produce final receipts: the frozen rev11 snapshot (report.json @ b6123750) and the latest measured repair snapshot. Name by hash to avoid revision-number confusion: `report_5476a3f2.json`? But wait — the just-written report_rev12.json is bound to 5476a3f2 (the name is now wrong). I should rename it to a hash-based name, or re-run with a clean name once the target settles.
+
+Let me check the current state: revision number, hash stability over ~20-30 seconds. If stable, write `report_after_repair.json` bound to the current hash and update README. If still moving, I may need to freeze at whatever the harness measured (it's a valid snapshot with drift=false within the run).
+
+Also, my evidence flow: the important deliverable is the rev11 receipt + the fact that the repair landed and closed the machine-checkable defects. The exact post-repair hash matters less (it will move again), but must be recorded honestly.
+
+Let me measure now.
+dsh: reasoning:
+The current revision 12 is stable at 5476a3f2 since 00:32:02 (>35 s). Interesting: same revision 12 but hash changed from a7ccae4d (00:31:41) to 5476a3f2 (00:32:02) — the author edited again within rev12. So a7ccae4d was an intermediate fix.
+
+Now: finalize with two receipts:
+1. **Before-repair snapshot**: `report.json` @ b6123750 (rev11) — already written, README explains.
+2. **After-repair snapshot**: report bound to **5476a3f2** (rev12, stable ≥35s). I have report_rev12.json currently bound to 5476a3f2 (from the last run). Let me verify its content (B02/B03/B04/B06 statuses, B11 fail). Then rename to a clear name `report_rev12_after_repair.json`? Renaming changes nothing about content, but the file name/hash mapping must be consistent in events. I'll keep `report_rev12.json` but it currently binds 5476a3f2, while the README might call rev12 = a7ccae4d. To avoid confusion, name by hash: `report_rev12_5476a3f2.json`. Let me copy (not rename, to preserve the one written earlier? The earlier report_rev12.json was overwritten by the second run — it's now the 5476a3f2 report). I'll `mv report_rev12.json report_rev12_5476a3f2.json`.
+
+Then re-verify hash and update README with both snapshots. But careful: README changes → new hash; that's fine (nothing pinned yet).
+
+Actually, wait. Should I include the intermediate a7ccae4d receipt? No — I never saved it (it was overwritten). Not needed.
+
+Also: the rev12 receipt's target hash is 5476a3f2 — the harness measured drift false during its run, but the file mtime 00:32:02 and the run at ~00:32:03-00:32:04. Stable since. Good.
+
+Let me check the rev12 report details to describe the after-repair state accurately:
+- B02 pass (1 revised_at)
+- B03 pass (declared 00:31:41 <= mtime 00:32:02)
+- B04 pass (pointer canonical; canonical taxonomy exposes classes.AF-SCC-C2-VAC-GEN)
+- B06 pass (D0 tagged disjoint union)
+- B07 pass? B07 checks order match + dangling. Need to see.
+- B08: D_gen absent → pass
+- B09: load-bearing diff still (F1 annotation)
+- B10: C2 signature absent
+- B11 fail (review_status empty/pending)
+- B12 checker pass?
+- B13 classsep pass
+- B14 ledger at 5476a3f2: probably 0 binding (no reviews yet for new hash)
+
+Let me inspect.
+dsh: reasoning:
+Important: the repaired rev12 (5476a3f2):
+- B02/B03/B04/B06 pass (repairs landed).
+- **B12 canonical checker FAILS with R22** ("unknown keys") — a NEW finding at rev12! The repair introduced/moved keys and the canonical gate now rejects the file. That's a critical actionable finding for the lead: the repair that closed the binding defects broke the canonical checker (R22 unknown keys). Let me get the exact checker output to report it precisely.
+- B11 still fails (review_status empty/pending).
+- B06 probe: d0_pair_binder_present=false, formal_binder_includes_s_delta=false → pass by my criterion (the repair re-typed the binder as r). Note ambient_space_uses_s_delta=false and frechet_topology_named_without_ambient_set=true still, but the D0 definition itself now names X^r_vac with Fréchet/Sobolev per branch, so my check is satisfied via `d0_pair_binder_present=false`. Semantics adjudication belongs to the auditor, but the specific defect (pair binder over a disjunction) is repaired.
+
+Let me run the canonical checker with --json to capture the exact R22 failures, and also check what keys are unknown (the checker prints messages). This is high-value evidence: at rev12 the canonical checker rejects the artifact, whereas at rev11 it passed. The repair must be reconciled with the KEY_MANIFEST.
+
+Let me capture that. Also, B12's fail severity is "info" in my harness (it's corroboration). But the report flags it under "fail" count with severity info. The hard failure list only includes B11. I should maybe elevate B12 to a real finding in the README (the checker failing is a binding-gate-relevant fact). My harness's B12 severity "info" — I could change it to "hard" when the checker fails, since G-FORM's criteria include checker pass? The canonical checker is corroboration not method, but a FAIL is gate-relevant. Let me set severity dynamically: "hard" if fail else "info". That makes the rev12 verdict include B12 as a hard failure → verdict revise with 2 hard failures (B11, B12). That's more honest for the close-findings assignment.
+
+Let me also capture the checker's exact failure messages in evidence (check_json["failures"]). Currently evidence includes failed_rules but not failures. Add "failures": check_json.get("failures").
+
+Then re-run the rev12 receipt to regenerate with the updated harness (B12 severity dynamic + failures detail). But re-running after editing the harness changes its hash — fine, nothing pinned yet. However the run would also re-measure the file; if it's still 5476a3f2, great.
+
+Also the harness self-test/exit semantics: exit 0 still (self-test pass, no drift).
+
+Let me make these two edits, then re-run both receipts? The rev11 report (report.json) was produced by the older harness version without the "failures" detail and with B12 info severity (at rev11 checker passed anyway, so no change there except an extra field). To keep both reports produced by the same harness hash, I could re-run the rev11 receipt too — but the target file has moved; running the harness with `--target schemas/af_scc_c2_vacuum.yaml` would now measure rev12. There is no way to re-run against rev11 bytes unless I keep a snapshot. I have the rev11 report; that's the snapshot. The harness hash pinned in the rev11 report doesn't exist (the report doesn't pin its own harness hash... actually the report pins checker/classsep etc. but not itself). Fine — I'll note in the README that report.json (rev11) was produced by the harness before the two-line B12-severity change, and the harness hash now is X.
+
+Hmm, this creates a small inconsistency: run_receipt.py's current hash differs from the one that produced report.json. The events should state the harness sha (current) and note that report.json rev11 predates the B12-severity tweak (2-line diff noted). That's transparent.
+
+Alternative: revert the harness after generating the rev11 report? No — keep it simple and transparent.
+
+Actually, better: I can regenerate a rev11 receipt from a frozen copy of the rev11 bytes. Is there a snapshot of rev11 somewhere? Yes: reviews/F2a-review-086.json has a "snapshot" field; the review files may reference snapshot paths (artifacts/worker-043/f2a_rev10_independent_verdict/snapshot/...). Let me check if a rev11 snapshot exists on disk. `artifacts/formulation/schemas/af_scc_c2_vacuum.yaml` was rev11 copy per review-21. But that has certainly been overwritten by rev12 by now (the repair writes canonical+authoring copies). Let me check quickly. If a rev11 copy exists, I could produce a clean rev11 receipt with the final harness. Not critical.
+
+Actually, simplest: the rev11 report.json is already a valid, self-consistent receipt with all the evidence; the harness version that made it differs only in the B12 evidence detail and severity rule (which did not change rev11's outcome). I'll document this in README.
+
+Let me now:
+1. Edit harness B12: dynamic severity + failures detail.
+2. Re-run rev12 receipt (target likely still 5476a3f2).
+3. Compute new hashes; update README to cover both snapshots; events pin report.json (rev11), report_rev12_5476a3f2.json, run_receipt.py, README.md.
+
+Also capture the R22 detail for README.
+dsh: reasoning:
+Excellent. The rev12 repair introduced 6 unknown top-level keys → canonical checker FAIL R22. That's a concrete, high-value finding for the repair cycle: `['at', 'class_contract_supplement_pointer', 'consistency_evidence_sha256', 'index', 'notes', 'revision_history']`.
+
+Now finalize:
+1. Hash current artifacts.
+2. Rewrite README.md as a two-snapshot receipt (rev11 before repair; rev12 5476a3f2 after repair) with findings/falsifiers. Keep it concise but complete.
+3. Emit outbox events (status, artifacts ×2 reports + README + script, review, claim, status complete). Events must be valid JSON with required fields.
+
+Hmm — the outbox "review" event should have target_id F2a, reviewed_sha256, verdict. Since I have two snapshots, the primary review verdict binds to the operative hash 5476a3f2 (after repair): verdict revise, score 3.0, hard failures B11 + B12. And the artifact events cover both reports.
+
+4. Checkpoint 3 with both target hashes, hard failures, artifacts hashes, outbox hash.
+
+Let me check the current hash of everything and then write README.
+
+Also note: the report.json (rev11) was created by an older harness revision. I'll note that in README and in the artifact event summary. Alternatively, I can make the rev11 report's "harness_sha256" explicit... it doesn't contain it. Fine.
+
+One more consideration: should the README be named README.md and updated (hash changes)? Yes. It currently pins report.json @ 0b64fc41 and run_receipt @ 91b1b0e6; both stale now (report.json rev11 unchanged @ 0b64fc41 — yes unchanged; run_receipt.py changed). I'll rewrite fully.
+
+Let me get hashes now.
+
+Also: is the target still 5476a3f2? The last check was 30 seconds ago; let me re-verify right before/after README writing and include the check in the README. If it moves again, the receipt remains a snapshot; I'll add a note. Actually, better to include in the README: "as of 00:33:xx the target is still 5476a3f2" — but the README hash is computed after. Let me verify at the end and add a drift note in the events if it moved. I'll keep the README stating the snapshot hash and rely on the event's summary for current status.
+
+Let me write the README now.
+dsh: reasoning:
+Now compute final hashes of README, reports, harness, confirm target stability, and confirm the rev12 report's verdict/fields. Then write outbox events.
+
+Also: I need to double check the rev11 report.json is untouched (0b64fc41...) — I haven't modified it since. And run_receipt.py hash changed (B12 edit + out path fix). Get hashes.
+dsh: reasoning:
+The README pinned `report_rev12_5476a3f2.json` @ `8c4eaaf36564`, but now the file hash is `f6395c22b76b` — because I regenerated the rev12 report after the harness edit (the README was written after? No: I regenerated rev12 report at 00:32:5x, then wrote README at 00:33:1x, and in the README I wrote `@ 8c4eaaf36564*` which was the hash of the earlier version (before regeneration). Wait, the sequence:
+1. First rev12 report (old harness) → moved to report_rev12_5476a3f2.json → hash 8c4eaaf36564.
+2. Edited harness (B12 severity).
+3. Re-ran → same file overwritten → now hash f6395c22b76b.
+4. Wrote README with the stale 8c4eaaf36564.
+
+I must fix the README to pin f6395c22b76b. Also the README's harness note: "* rev12 report was regenerated after a two-line harness change (B12 severity/detail); measure the file on disk." — with the correct hash, no asterisk needed; simplify.
+
+Also note: the README itself will get a new hash after the fix — and events will pin the final README hash, computed after.
+
+Let me fix the README pin line.
+dsh: reasoning:
+All hashes final. Target still stable at 5476a3f2 since 00:32:02.
+
+Now write the outbox events. Requirements from PROTOCOL.md:
+- one JSON object per line
+- every event needs event_id, event_type, created_at, actor
+- status: node_id, status, hours, summary, evidence_refs, next_falsifier
+- claim: class_id, statement, conclusion_type, assumptions, falsifier, evidence_refs, artifact_refs (required for theorem — mine is formal_model)
+- artifact: node_id, artifact_type, path, sha256, validation_status
+- review: target_id, reviewer, verdict, score 0-5, hard_failures, findings
+- Use IDs unique: w096-f2a-2026-09-12T00:34-...
+
+I'll append 7 events in one write (as a single append to the file) to reduce interleaving risk:
+
+1. status active (claim the task; note no assignment card in inbox)
+2. artifact report.json (rev11 snapshot)
+3. artifact report_rev12_5476a3f2.json (after-repair snapshot)
+4. artifact README.md
+5. artifact run_receipt.py
+6. review (primary verdict binding rev12 5476a3f2; findings incl. R22 regression and the two corrections; note rev11 superseded)
+7. claim (formal_model; artifacts; falsifier)
+8. status complete (status active, since workers cannot set done)
+
+The review event's `reviewed_sha256` = 5476a3f2; `hard_failures` as list of strings; findings list with explicit falsifiers. Keep each line as JSON with ensure_ascii=False, compact.
+
+Timestamps: use current time ~00:34:00+08:00, consistent across events (not future-dated). Let me generate with Python to guarantee valid JSON, then append to comms/outbox/worker-096.jsonl.
+
+Note: `to` field like previous events: ["astra","lead-formulation","lead-audit"].
+
+Also class_ids: ["AF-SCC-C2-VAC-GEN"].
+
+Let me build the events carefully with a Python script, append, then verify line validity and JSON parse of the whole file.
+
+Claim statement should be concise, hash-pinned, with the two snapshots. conclusion_type: "formal_model" (like previous receipts). artifact_refs: the three artifacts with #sha prefixes.
+
+Review findings (each with falsifier):
+- "W096-F2A-AFTER-01 hard (rev12 5476a3f2): canonical checker FAIL exit 1 R22 unknown keys ['at','class_contract_supplement_pointer','consistency_evidence_sha256','index','notes','revision_history']; at rev11 the same checker passed. Falsifier: a checker run at 5476a3f2 returning pass with failed_rules=[]."
+- "W096-F2A-AFTER-02 hard: review_status.independent_reviewers=[] verdict=pending at rev12 while 6 reviews bind rev11 (4 revise, 1 accept, 1 inconclusive). Falsifier: a revision whose review_status matches the ledger."
+- "W096-F2A-BEFORE-01 blocking (rev11 b6123750, superseded by rev12): duplicate revised_at x8; declared stamps 00:30:00 > mtime 00:19:14. Falsifier: strict duplicate-key parse exit 0 / declared ≤ mtime."
+- "W096-F2A-BEFORE-02 hard (rev11, superseded): pointer resolved only on the authoring taxonomy. Falsifier: canonical taxonomy exposing class_contracts.<class>."
+- "W096-F2A-BEFORE-03 critical (rev11, repaired in rev12): (s,delta) binder over disjunctive D0 without smooth-branch ambient set. Falsifier: well-typed single class."
+- "W096-F2A-CORR-01 correction: prior claim 'revised_at_unused twice in F2a' not reproducible (occurs once, line 26). Falsifier: strict duplicate census showing it twice at b6123750."
+- "W096-F2A-CORR-02 advisory: G-FORM unmet reason 'no single frozen data class shared by F1/F2a/F2b' not reproduced on the regularity axis: s/delta/default byte-identical, spaces identical after stripping F1's '(weighted Sobolev)' annotation. Adjudication belongs to lead-audit. Falsifier: load-bearing leaves diverging across the three schemas."
+- "W096-F2A-CORR-03 info: F2a-review-18 HF-A1/HF-A2 (dangling extension_predicate, D_gen) superseded at rev11; checker PASS at rev11 supersedes HF-A4."
+- "Corroboration: classsep detector 0 findings; regression leaks 17/17 controls 10/10 FP0 FN0; self-tests N1/P1-P5 PASS; drift closed false both runs."
+
+Score: 3.0.
+
+Also note snapshot-to-hash binding: review reviewed_sha256 = 5476a3f2; the rev11 snapshot in evidence_refs.
+
+Status complete event hours ~0.4.
+
+Let me write the Python script to append these events.
+dsh: reasoning:
+8 events appended; the whole outbox now has 21 valid JSON lines (13 previous + 8 new).
+
+Wait — the outbox file previously had 13 lines. 13+8=21. Good.
+
+Now the checkpoint: runtime/state/w096_checkpoint_3.json + append to w096_checkpoints.jsonl.
+
+Checkpoint format (from checkpoints 1/2):
+{
+ "artifacts": {path: sha256...},
+ "at": ...,
+ "checkpoint": 3,
+ "task_id": ...,
+ "worker": ...,
+ "class_ids": [...],
+ "target_sha256": ...,
+ "verdict": ...,
+ "hard_failures": [...]
+}
+
+For two snapshots I'll add "snapshots": [{target_sha256, revision, report, verdict, hard_failures}], plus "target_sha256_latest" and artifact hashes.
+
+Let me write it and append a compact line to w096_checkpoints.jsonl.
+
+Timestamps: now ~00:34:2x. Use current time, not future.
+
+Then final verification:
+- validate map? `python3 research_map/validate_map.py` — that validates the map/events, but I shouldn't ingest (controller does). Running validate_map.py is read-only presumably. It's optional; my events are valid JSONL. The protocol says ingest is controller-only. I'll skip ingest. Maybe run a JSON-lines validation (done).
+
+- Also perhaps check that no other worker-096 instance is concurrently writing (we're the only running one).
+
+Then exit. Let me write the checkpoint.
+dsh: reasoning:
+Checkpoint written. Final verification pass:
+1. Confirm all artifact hashes on disk match those recorded in events/checkpoint.
+2. Confirm the outbox lines parse and the new events' hashes match files.
+3. Confirm target hash didn't move (if it did, note; the binding is snapshot-based).
+4. Confirm no other writes needed.
+
+Let me do a verification script. Also update todos.
+dsh: reasoning:
+Everything is done. The harness/reports may have left __pycache__ or other files? The imported class_separation creates research_map/__pycache__ — already existed. My run_receipt.py imports class_separation, which could create `research_map/__pycache__/class_separation.cpython-310.pyc` — that already existed presumably. Not an issue.
+
+One last check: the task says "emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit". Done:
+- IDs: event_id, task_id W096-F2A-BINDING-RECEIPT-01, check IDs, class ID.
+- evidence: artifact + gate evidence referenced by hash, per PROTOCOL rule 4.
+- hash: sha256 pins everywhere; checkpoint artifact hashes.
+- falsifier: every check and finding carries one; claim has a falsifier.
+- checkpoint: w096_checkpoint_3.json + w096_checkpoints.jsonl.
+- exit: stop now.
+
+Should I run `python3 research_map/validate_map.py`? It validates the map, and my events aren't ingested (controller-only). Running it is read-only and might report the map is valid; not necessary. But it could be a nice sanity check that I haven't corrupted the map — I didn't touch it. Skip.
+
+Final answer: concise report of what was done. Include the task, target hashes, artifacts, events, checkpoint, and the notable findings/corrections. No more tool calls needed.

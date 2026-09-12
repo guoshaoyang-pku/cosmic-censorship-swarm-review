@@ -1,0 +1,724 @@
+dsh: reasoning:
+Let me start by exploring the workspace to find the handoff/map and comms.
+dsh: reasoning:
+The task mentions "handoff/map and comms". Let me look for these. There's a `${I}` directory, `workdir`, `.agents`, `transfer`, `tmp`. Let me search for "handoff" directories.
+dsh: reasoning:
+Found the swarm directory: /data3/guoshaoyang/workdir/ai4math-swarm. Let's explore it, especially the map and comms.
+dsh: reasoning:
+Let me read the handoff, README, comms protocol, and look at the inbox for worker=081's task.
+dsh: reasoning:
+Now let me look at comms/inbox for worker 081 assignment. Agent ids are `deepseek-flash-01` … `deepseek-flash-20`, but the task says worker=081. Let me check the inbox directory.
+dsh: reasoning:
+Worker=081. I need to find the assignment for worker 081. The inbox has worker-01, worker-06, worker-16 files. Also deepseek-flash-NN. But "worker=081" — maybe there's a runtime/instances/worker-081-* directory. Let me search.
+dsh: reasoning:
+Interesting — the stderr.log of the earlier worker-081 instance shows my own previous run's reasoning. So I'm a repeat of worker 081 (the second instance at 00:16:57). So I need to do the task: read handoff/map and comms, take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, exit.
+
+I need to figure out what "class-bound task" means and where to find the assignment. Let me read ASTRA_HANDOFF.md, README.md, and look at runtime state, proposals, ledger, and the class separation/taxonomy. Also check what other workers did (outbox deepseek-flash-*.jsonl) to see the pattern of output.
+
+Let me read key docs first.
+dsh: reasoning:
+Now I need to find the class-bound task. Let's read the research map's assignments section and check the ledger/proposals for open tasks. The map is 826KB JSON. Let me use python to parse it and look at structure: gates, assignments, claims, nodes, classes.
+
+Also let me look at schemas for events and the class_separation.py and formulation_taxonomy.yaml. Let me first inspect research_map.json structure.
+dsh: reasoning:
+Let me look at the map's assignments to see open ones available to workers, particularly "class-bound tasks". Also look at how other workers (worker-001 etc.) emitted their output — this gives me the expected format. Let me look at runtime state for assignment/dispatch, and the existing worker artifacts (worker-001, etc.).
+
+Let me parse assignments list.
+dsh: reasoning:
+There are many assignments. I'm worker 081 — a "bounded execution worker". I need to take one class-bound task. The most recent assignments are from astra-life02, with deadline 01:30. I should check the inbox for my agent id. My agent id might be "worker-081". Let me check the inbox files: worker-01, worker-06, worker-16, and other leads. There's no worker-081 inbox file. But maybe the controller sends assignments to "worker-NNN" by writing to inbox files only for those with pending tasks.
+
+Wait — the assignments in the map include assignees like `worker-06`, `worker-16`, `worker-01`. The "worker=081" might just be a slot and I take an unassigned class-bound task. The instruction: "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit."
+
+Let me check recent outbox traffic to understand what worker-081 should do and whether other slots 001-100 have assignments. Let me look at the runtime/state files, control dir, and check whether there is a dispatch script that hands tasks to worker slots. Also check the newer instances' prompt (worker-081 second run). And check whether other workers like worker-002, worker-007 etc. produced artifacts.
+
+Let me look at:
+- runtime/state/* (current_checkpoint.json, artifact_hashes.json, controller_verification)
+- artifacts/worker-001 etc to see what they emitted
+- outbox for worker-01 / worker-06 / worker-16 to see the format
+
+Also check for a "class-bound task" queue — maybe `class_separation.py` or `formulation_taxonomy.yaml` defines class-bound tasks. Perhaps the "class-bound" here means "class-bound task" as in a task tied to a class_id (e.g., AF-WCC-VAC-GEN). Assignments with class_id are "class-bound".
+
+Given the volume, my best move: pick a concrete, bounded, class-bound task that is not yet done and is dispatchable by a worker, produce an artifact + sha256 + event JSON in comms/outbox/worker-081.jsonl, then run checkpoint.py.
+
+Let me inspect the state and see what tasks are open for worker slots. Let me check the dispatch/issue_assignments.py to understand "worker-081" and slot allocation, and check runtime/state.
+dsh: reasoning:
+I need to figure out which task worker-081 should take. Let me check the controller's dispatch logic — perhaps `supervise_swarm.sh` or `supervise_loop.sh` (in home dir) launched 100 workers, each reading an assignment from somewhere. Let me look at supervise_swarm.sh and launch_swarm.sh, and the runtime/instances prompt generation, to see how a worker is supposed to pick a task.
+
+Actually the prompt is identical for all workers: "You are a bounded execution worker. Read handoff/map and comms. Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit. worker=081". So worker 081 must self-select an unclaimed class-bound task. The controller likely just spawns 100 independent workers and expects them to self-select from open assignments, avoiding collisions via runtime/control locks or files.
+
+Let me check what earlier workers did: look at worker-001, worker-002, worker-007, worker-008, etc. artifacts, and outbox events. That shows the pattern. Let me also check counts.tsv and the supervisor logs to see how many remain open.
+
+Also check `.git` history to see the latest commits and diffs from the workers.
+
+Let's look at the worker artifacts dirs to see what they produced.
+dsh: reasoning:
+This is a large running swarm. Worker slots were launched at 00:12:30 (100 workers) and 00:16:57 (another set of 100 workers). Each takes one class-bound task. I'm slot 081 in the second wave (instance 20260912T001657-968807) — though the first wave's worker-081 also ran and presumably produced something. Actually the first wave instance worker-081-20260912T001230-897883 stderr.log showed it reading docs then died (58740 bytes of stderr, truncated). The second wave is at 00:16:57, and the current time is around 00:17+.
+
+Given a wave of 100 workers, they must self-select tasks. Collisions are likely; likely the intended behavior is to pick a bounded, class-bound verification task deriving from the open assignments in the map, e.g. L1 spot checks, class-separation checks, soft-flag dispositions, etc. Many workers have been doing:
+- worker-002: softflag-disposition
+- worker-007: l0_hf01_artifact_refs, l1_spotcheck
+- worker-008: a0_rubric_review, f2_containment_repair
+- worker-009: refetch of arXiv sources
+- worker-047/049: l1_spotcheck
+
+So the pattern is clear: worker-N picks an unclaimed class-bound task from the map, does a small bounded computation, writes artifacts under artifacts/worker-N/, computes sha256, and emits a valid JSON event to comms/outbox (probably comms/outbox/worker-081.jsonl) with event_id, event_type, created_at, actor, node_id, class_id, evidence_refs, artifact path+sha256, falsifier, then runs a checkpoint (research_map/checkpoint.py or their own checkpoint json).
+
+I need to check what the actual event format is expected to be. Let me read comms.py to see ingest validation, schemas.py, and an example outbox JSONL from a worker (e.g. worker-06 inbox? outbox?). Let me look at comms/outbox/deepseek-flash-06.jsonl and the worker inbox/outbox. Wait, comms/outbox has files like deepseek-flash-01.jsonl, not worker-N. But there are inbox files worker-01.jsonl, worker-06.jsonl, worker-16.jsonl. Hmm, and outbox has directory deepseek-flash-07.
+
+Actually per protocol, downward: comms/inbox/<agent>.jsonl, upward: comms/outbox/<agent>.jsonl. But I see worker artifacts and maybe worker events were appended to lead outboxes or to comms/outbox/worker-XX.jsonl? Let me search for events with actor worker-0.. and check where they live. Let me grep the outbox for "worker-0" events.
+
+Also, maybe the workers are expected to write into research_map/events.jsonl directly? No — PROTOCOL says only comms.py ingest writes there.
+
+Let me examine what a typical worker emitted. Check for files in comms/outbox matching worker-*.jsonl. I saw comms/outbox listing included audit-*.jsonl, deepseek-flash-*.jsonl, and directories deepseek-flash-07. Let me list the full outbox.
+dsh: reasoning:
+Now I understand the pattern. Workers produce an artifact directory with a script + JSON report, then emit events to comms/outbox/worker-NNN.jsonl (some do). Let me look at examples of events from worker-002, worker-003, worker-059 to see the exact JSON shape used by this wave.
+
+Let me read comms/outbox/worker-059.jsonl (small, 1164 bytes) and part of worker-03.jsonl.
+dsh: reasoning:
+Now I understand the pattern well. Workers self-assign bounded class-bound tasks (usually verification/review/audit of canonical artifacts), write artifacts under `artifacts/worker-NNN/<task>/`, compute sha256, emit `status`, `artifact`, `claim`/`review` events to `comms/outbox/worker-NNN.jsonl`, then checkpoint (write a checkpoint json; maybe use research_map/checkpoint.py).
+
+I need to pick one class-bound task that:
+1. Is bounded — doable in a short time.
+2. Has a class binding (class_id).
+3. Has evidence, sha256 hash, artifact, falsifier.
+4. Ideally produces a real finding (a falsification or verification) rather than restating.
+
+Let me look for the most valuable open, class-bound task that hasn't been claimed. Recent assignments in the map (astra-life02, deadline 01:30):
+- astra-life02-publish-f0 (lead-formulation) — F0 canonical publish; needs byte-identity and FROZEN single sha256.
+- astra-life02-softflag-f0f1 (lead-audit) — extend soft-flag disposition to F0/F1.
+- astra-life02-n0-c8 (lead-audit) — re-issue G-NUM protocol review.
+- astra-life02-l1-spotcheck (lead-literature) — two further independent re-fetch spot checks binding L1 sha256.
+
+Those are all lead tasks. Workers should take class-bound tasks that support them. Given that 200 workers are running simultaneously, hundreds of overlapping tasks will be attempted. To be useful, choose something concrete and independently verifiable, e.g.:
+- Independent verification of the F0 canonical publish status (byte-identity/FROZEN manifest consistency) — class-bound? F0 is GLOBAL class_id.
+- F1/F2a/F2b class-separation soft-flag disposition — this is class-bound.
+- A semantic leak test on canonical F1/F2a/F2b: does a C0 datum satisfy the C2 schema? etc.
+- A cross-artifact consistency check: class_ids tokens across canonical artifacts vs frozen four.
+
+The task says "Take one class-bound task" — so pick an assignment-like task with a class_id. Class-bound could also mean "bound to a formulation class" in the class separation sense. The most valuable and safely bounded: independent class-binding verification of the frozen canonical schemas — i.e., run `research_map/class_separation.py` over canonical artifacts, reproduce soft flags, and add an independent adversarial check for genuine leakage with control fixtures, emitting a review. But worker-002 already did soft-flag disposition, worker-007 did class separation falsification, worker-059 did F1 independent verdict. Duplication risk. Since many workers are running, I should pick something that's likely unique, or at least additive.
+
+Let me check what tasks recent worker slots have claimed. The outbox has worker-03, worker-059, worker-06, worker-16, worker-01, worker-09. But 100+ workers exist... maybe most don't write to outbox. Let me check runtime/instances for worker-081's first wave result: the first-wave 081 stderr is 58KB — let me see the tail of that stderr to see what it did before dying. Also, my own second-wave instance is the running one.
+
+Actually wait: the second wave at 00:16:57 started 100 new workers. Their instance dirs exist. Let me check if any have produced output already (e.g., worker-082 stderr). But more importantly: I should determine whether there's a shared dispatch that assigns specific tasks per slot. Let me check `supervise_swarm.sh` (home) and the `.codex`/`.agents`, plus `launch_swarm.sh` at home, to see how the prompt is generated. The prompt is generic, so no specific assignment.
+
+So my "one class-bound task" is self-selected. I should look for candidate tasks in the map's assignments that are class-bound and unclaimed, ideally on the critical path or with high information gain. Let me review the most recent assignment list more carefully (astra-life02 ones) and see which ones a worker could support. Also check the ledger/proposals for open questions.
+
+Plan:
+1. Read the remainder of the assignments (astra-life02 and others from the tail of the list).
+2. Check which canonical artifacts currently exist and their hashes (artifact_hashes.json, FROZEN.json).
+3. Pick a bounded class-bound task: e.g., independent verification of the F0 publish byte-identity + soft-flag token census (class-bound: F0 carries 4 classes) — but worker-01/worker-002/worker-059 are near that.
+
+Alternative highly valuable: `astra-life02-l1-spotcheck` asks for two further independent re-fetch spot checks binding L1 sha256 315c19145065. That's class-bound? class_id GLOBAL. Hmm.
+
+Another: `astra-life02-softflag-f0f1` — dispose of the two remaining soft flags (F0/F1). worker-002 did a disposition for all four (F0, F1, F2a, F2b). So that's support already.
+
+What about N0 C8 review? That's class AF-WCC-SCALAR-SPH, class-bound, and it's a review (verdict). It requires reading numerics/CONVERGENCE_PROTOCOL.md and cross-checking the gate proposal criteria. That's bounded and class-bound and on the critical path (N0 gate). But it's assigned to astra-lead-audit; a worker could provide an independent supporting verification? Workers can't set gate verdicts, but can emit a claim/review proposal.
+
+Let me check what the current state of N0 is, since flash-13/14 have been working on it. The map says N0 active/unverified, replication verdict PROVISIONAL. The astra-life02-n0-c8 assignment (lead-audit) needs re-issuing at protocol sha 3345e17d2be3.
+
+Given the swarm is noisy, maybe the best contribution as a bounded worker is a *falsification-oriented* check of something concrete and machine-checkable with a clear pass/fail, e.g.:
+
+Task W081-F0-CANON-IDENTITY-01: Independently check whether the F0 canonical artifact `research_map/formulation_taxonomy.yaml` is byte-identical to `artifacts/formulation/formulation_taxonomy.yaml`, whether FROZEN.json carries a single sha256 for it, and whether every class token in the canonical F0 resolves under the class-separation rules. This is class-bound (F0 carries the four frozen classes), has a falsifier, evidence by hash.
+
+But worker-03 did publish_binding_check for F1/F2. worker-01 did F0 published recheck (F0_published_recheck.json at 00:12ish). Let me check worker-01's F0 recheck result — maybe it found the divergence. The astra-life02-publish-f0 assignment was probably issued in response.
+
+Let me check the latest checkpoint and controller_findings to see what's open and what the biggest holes are. Also check the most recent events from astra lifecycle at 00:15.
+
+Actually, first let me look at the tail of the assignments list to see the latest tasks (astra-life02-*). Let me print assignments sorted by created_at or just the last ~15 entries fully.
+dsh: reasoning:
+Now I have a good picture. The most recent assignments (astra-life02-*) are the live queue. There's a moving-target C8 protocol review on N0 (class AF-WCC-SCALAR-SPH), and the L1 spot checks, F0 publish.
+
+As a bounded worker, the cleanest, most valuable, class-bound, independently-verifiable task with a real falsifier and hash evidence is likely the C8 numerical protocol review (class-bound: AF-WCC-SCALAR-SPH) — but it's a review assigned to the lead-audit; a worker conducting it would be an independent verdict, which is exactly the kind of thing that's needed (G-NUM requires an independent verdict on the protocol). The risk: reading the protocol and producing a review requires domain judgement; but a bounded worker can check concrete machine-checkable things:
+- Does the protocol correctly specify scheme-appropriate invariant functional, resolution-aware drift criterion, order fit with uncertainty, negative controls?
+- Does the protocol pin the revision hash? Measure hash at review time = 1e6cdf04d7a2.
+
+But there's a risk of overlap with the lead. Another strong candidate: verify the F0 canonical/authoring byte identity and FROZEN.json single-hash claim — a concrete machine check with an unambiguous verdict. That directly supports astra-life02-publish-f0 acceptance (audit_evidence.py reports 0 dual-tree divergence). It's class-bound (F0 taxonomy, 4 classes). And it's cheap and fully machine-checkable: read files, compute sha256, run audit_evidence.py, parse FROZEN.json.
+
+Actually worker-01 (first wave) did `F0_published_recheck.json` at 00:12 and worker-03 did publish binding check. Let me check what worker-01 found — maybe F0 is already fine or still divergent. Let me look at FROZEN.json and current hashes quickly. But workers 001-100 first wave probably addressed many of these; the second wave (me) should pick tasks still open after the first wave. I can't see what the first wave concluded except via artifacts.
+
+Let me check the current state:
+1. Does research_map/formulation_taxonomy.yaml == artifacts/formulation/formulation_taxonomy.yaml byte-identically now?
+2. Does audit_evidence.py report 0 dual-tree divergence?
+3. FROZEN.json structure for F0.
+
+Let me run those checks. Also check the state of the L1 spot check requirement (how many exist binding 315c19145065). And the n0 protocol hash now.
+
+This reconnaissance is fast. Let me do it.
+dsh: reasoning:
+Interesting! The canonical F1/F2 files were republished and their hashes changed (68392dd8, 4f97273e, a2aef5ac) vs the values in the assignments (b65fcc0f0118, 8dae50da1ab5, a8d899d2941f). F0 canonical is 0fcc6a1928fd vs authoring 01e7f841643c — still divergent. FROZEN.json frozen_at 00:32, revision 24 — wait, that's *later* than current time? Current time seems to be ~00:18. Hmm, FROZEN.json says frozen_at 2026-09-12T00:32:00+08:00. That's in the future relative to my run... odd. Maybe the system clock of another container is ahead, or someone pre-dated. Let me check current date.
+
+Actually wait — the swarm files were modified at 00:16-00:17. FROZEN.json frozen_at 00:32 is suspicious. Let me check current time and file mtimes. This could be a fabrication/inconsistency finding.
+
+Also interesting: audit_evidence reports 1 hard + 4 soft. The hard one is a CLASSSEP in claims[36].statement (composite C0/C2 asserted as one class). That's class-bound and is a genuine class-separation violation. That could be a great target: verify and quantify the hard CLASSSEP finding and identify the offending claim, with a falsifier and evidence. But it's likely already addressed by leads.
+
+Given I'm one of 100 workers in the second wave, and the highest-value bounded task that is class-bound: the class-separation hard failure in claims[36] (composite C0/C2 asserted as one class) — an independent check that the *canonical* F2a/F2b schemas do not merge C0/C2 (the actual artifact-level risk), plus the claim-level violation. Hmm.
+
+But let me consider the "moving target" C8 review again. The most critical path item per the handoff: G-FORM/G-AUDIT gates + N0 gate. The N0 C8 review is class-bound to AF-WCC-SCALAR-SPH and its falsifier is concrete: "A verdict whose cited sha256 is not 1e6cdf04d7a2, or a review that does not re-measure the protocol hash." A worker can produce an independent, hash-pinned review of numerics/CONVERGENCE_PROTOCOL.md (1e6cdf04d7a2) checking:
+- scheme-appropriate invariant functional
+- resolution-aware drift criterion
+- order fit with uncertainty
+- negative controls
+That's a real review requiring reading the protocol and gate proposal. It's bounded (~1 agent-hour). It is exactly what G-NUM needs (C8 criterion). And it's a "class-bound task" (AF-WCC-SCALAR-SPH).
+
+However, astra-lead-audit owns it; a worker doing it might be duplicative but that's fine — independence is valuable. The task instructions say workers can't set gate verdicts, only emit evidence/review proposals.
+
+Alternatively the L1 spot-check (class GLOBAL) — not class-bound strictly.
+
+Another candidate: Verify the *class-separation* dimension of the current canonical F1 (68392dd8): the audit shows a soft flag 'AF-WCC-VAC-GEN-SET' in F1 canonical. The F1 file was just republished (hash changed from b65fcc0f). The FROZEN.json frozen_at 00:32 suggests... hmm, I should check if FROZEN.json is consistent: does it list canonical schemas/af_wcc_vacuum.yaml with 68392dd8? Also whether F0 canonical publish is still divergent (yes, 0fcc6a vs 01e7f8).
+
+Let me first check the time and file mtimes, then decide. Also check whether FROZEN.json manifest hashes match measured files (a concrete verification). Note the FROZEN.json may have been updated by the first-wave workers concurrently.
+
+Actually, a crucial realization: many agents are concurrently writing to this tree (leads + 200 workers), and frozen_at 00:32 while now is ~00:18 suggests some script set a future timestamp deliberately or the clock in the supervisor is wrong. Let me check `date`.
+
+Let me also look at numerics/CONVERGENCE_PROTOCOL.md and the N0 gate proposal to gauge the C8 review feasibility. And check `numerics/` files.
+
+Priority: choose ONE task and execute. Let me gather decisive info in parallel:
+1. `date`, FROZEN.json measured-manifest consistency check (script).
+2. Read numerics/CONVERGENCE_PROTOCOL.md and n0_gate_proposal.json.
+3. Check reviews/ for existing protocol reviews (avoid duplication) - `ls reviews/ | grep -i num`.
+
+Let me do these.
+dsh: reasoning:
+Now I have a good view. `reviews/G-NUM-protocol-review.json` exists, and N0-review-lead-audit.json. The C8 refresh requires a verdict at protocol hash 1e6cdf04d7a2 (currently measured 1e6cdf04d7a2 — wait, the protocol file was modified at 00:14:24 but its current hash is 1e6cdf04d7a2, matching the assignment's "measured at 00:15:51"). Actually the protocol I just read cites rev 3. The C8 refresh assignment says re-issue verdict against protocol hash measured at review time; as of issue that is 1e6cdf04d7a2. Current hash matches 1e6cdf04d7a2 → stable. 
+
+So a C8 independent review is a great bounded, class-bound task:
+- Class: AF-WCC-SCALAR-SPH.
+- Deliverable: `artifacts/worker-081/n0_c8_protocol_review/review.json` (review event) with hash pin 1e6cdf04d7a2, verdict accept/revise/reject, findings on the four required criteria.
+- Falsifier: verdict citing wrong hash, or one that doesn't re-measure; concrete defects → revise.
+- Evidence: quoted lines from protocol + measured sha256.
+
+But wait: are there already worker attempts at this in the second wave? Many workers. Duplication is acceptable; the assignment explicitly wants an independent verdict distinct from other reviewers. As worker-081, I'm distinct.
+
+However, I should consider whether a review is really "class-bound" enough and whether a stronger contribution is available: an actual *measurement* that tests the protocol's claims, e.g., check that the four claimed schemes' order artifacts satisfy protocol rules, or run the negative control. That's heavier.
+
+Actually, maybe there's a better, high-value and highly bounded verification: verify *the N0 gate proposal* `numerics/tests/n0_gate_proposal.json` against the protocol's criteria C1..C8 — a machine check that each criterion cites an artifact whose hash matches disk and whose declared numbers satisfy the protocol thresholds (>=4 rungs, R5 uncertainty, same norm, etc.). That's concrete, falsifiable, and directly supports the G-NUM adjudication. The lead's proposal exists (24949 bytes, 00:15:22). A worker can produce an independent "gate proposal evidence audit": for each criterion, check the cited artifact exists, hash matches, and the numbers satisfy the protocol rule. That's a strong, bounded, machine-checkable task with clear findings. Class-bound: AF-WCC-SCALAR-SPH.
+
+Let me look at n0_gate_proposal.json to see its structure and see if such an audit is feasible and valuable. If it cites hashes, I can verify them. This is exactly the kind of "evidence layer" work the project values (and rule 2: a node is done only when artifact exists + sha256 in artifact_hashes.json + reviewer verdict).
+
+Let me read it.
+dsh: reasoning:
+The gate proposal has `criteria` list of 5 dicts (probably C1..C8 keys). Let me print the criteria in full and see what each requires; then check which are satisfied/unsatisfied. This could be the audit target: "verify each criterion's cited evidence exists on disk, hash matches, and protocol rules are satisfied". That's a valuable, bounded, machine-checkable verification — an "evidence audit" of the N0 gate proposal. And the class binding is AF-WCC-SCALAR-SPH.
+
+Let me print the criteria fully.
+dsh: reasoning:
+The N0 gate proposal has 5 criteria; two unmet: C8 (protocol-reviewed-by-audit, needs accepting verdict at rev-3 hash 1e6cdf04d7a2) and C5 (registration in artifact_hashes).
+
+So the highest-value bounded class-bound task I can do: **independent C8 protocol review** at the current protocol hash (1e6cdf04d7a2), class AF-WCC-SCALAR-SPH. It's explicitly requested by astra-life02-n0-c8-refresh and is "the single remaining numerics-side condition" for G-NUM. A worker verdict cannot set the gate, but it can be the independent accepting/revise verdict the lead can use; the lead-audit was assigned, but an independent worker verdict at the measured hash is exactly the kind of evidence needed.
+
+Additionally, I could verify the gate proposal's cited evidence hashes (do the cited artifact hashes match on-disk? does artifact_hashes.json register them?) as part of my own review evidence. That's concrete.
+
+But careful: If I produce a review with verdict `accept` while the lead-audit is doing the same, no harm. If I find a real defect, even better.
+
+Let me now form the task:
+
+**W081-N0-C8-01**: Independent class-bound protocol review of `numerics/CONVERGENCE_PROTOCOL.md` (AF-WCC-SCALAR-SPH calibration sub-case) at the hash measured at review time, checking the four required criteria from `astra-life02-n0-c8-refresh`:
+1. scheme-appropriate invariant functional (R1/R2/R4): protocol §4.1 declares per-scheme functional, exactness rule, no cross-scheme gate.
+2. resolution-aware drift criterion (R3): fixed absolute threshold inadmissible; order >= p_decl - 0.5 across >=3 rungs, finest <=1e-6.
+3. order fit with uncertainty (R5/R5a): delta = max(pair spread, LS SE), named norm, agreement rule.
+4. negative controls (§5): four controls must fail.
+Plus check C1-C3 closure claimed by the proposal: C2 (4-rung requirement) is now in §3.2; check consistency and hash pin.
+
+Evidence: measured sha256 of protocol; quoted line numbers; hash checks of cited evidence artifacts (do the `path#hash-prefix` references match the disk?). I'll write a script that:
+- measures sha256 of numerics/CONVERGENCE_PROTOCOL.md at review start and end (guard against moving target)
+- extracts every `path#hex` reference from the protocol and the N0 gate proposal's numeric evidence refs, verifies existence and hash prefix match on disk (this is a strong machine check!)
+- checks protocol claims against linked artifacts where feasible (e.g., n0_order_4rung.json has >=4 rungs, fitted orders within band, R5 delta fields present; gate proposal criteria statuses)
+- checks negative controls are documented and that a control run artifact exists.
+
+Then emit:
+- artifact events for the review JSON + verification script + report
+- a `review` event with target_id, reviewer=worker-081, verdict, score, hard_failures, findings, and cited hash.
+- a `status` event with node/class/evidence/next_falsifier.
+- checkpoint JSON in runtime/state (w081_checkpoint_*.json) — I should check how other workers did the "checkpoint" step. worker-05 has artifacts/worker-05/verify/checkpoint_w05_...json; runtime/state has w04_checkpoint_f1_rev20.json, w06_checkpoint_*.json, etc. Let me look at one checkpoint (w06_checkpoint_7.json / w04_checkpoint) to see the expected format. Also check research_map/checkpoint.py to see if there's a canonical checkpoint format.
+
+Let me read a worker checkpoint example and checkpoint.py quickly. Then execute.
+
+Actually, one important consideration: time budget. The second wave started at 00:16:57; now ~00:18. The first wave's runs each took maybe 3-5 min. I should be efficient. Let me not over-engineer.
+
+Plan:
+1. Read one worker checkpoint example (w06_checkpoint_7.json) and maybe checkpoint.py signature.
+2. Build my task:
+   a. script `artifacts/worker-081/n0_c8_protocol_review/verify_protocol_evidence.py` that does hash-verification of all path#hash references in the protocol and gate proposal + checks the quantitative rules (>=4 rungs etc.), writes `evidence_check.json`.
+   b. `review.json` written from the script's results (verdict + findings + falsifier + hash pin).
+3. Run script, get results.
+4. Compute sha256 of artifacts, write events to comms/outbox/worker-081.jsonl.
+5. Write checkpoint JSON to runtime/state/w081_checkpoint_1.json (and maybe append to runtime/state/w081_checkpoints.jsonl).
+6. Exit.
+
+Let me check reference-format details: `path#sha256-prefix` — prefix is typically 16 hex chars, e.g. `c88146a1375c50f0`. So verification: sha256(path).hexdigest().startswith(prefix). Let me write the script accordingly.
+
+Also check: does the protocol exist at the cited hash? Current 1e6cdf04d7a24313... yes.
+
+Let me read worker checkpoint format and the review event schema requirements (schemas.py) to emit valid JSON. Let me read schemas.py.
+dsh: reasoning:
+Good. Now I'll execute my task. Design:
+
+**Task W081-N0-C8-01** (class-bound: AF-WCC-SCALAR-SPH, gate G-NUM, node N0):
+Independent protocol review at measured hash of `numerics/CONVERGENCE_PROTOCOL.md`. Required checks (from astra-life02-n0-c8-refresh acceptance + astra-n0add-02 falsifier):
+1. Re-measure protocol hash at review time; if it changes mid-review, report moving-target blocker instead of binding stale hash.
+2. Scheme-appropriate invariant functional: protocol §4.1 R1-R4 present and correct; no cross-scheme functional gate.
+3. Resolution-aware drift criterion: R3 (order >= p_decl - 0.5 across >=3 rungs, finest <= 1e-6), not a fixed single-rung absolute threshold.
+4. Order fit with uncertainty: R5/R5a (delta = max(pair-spread half-range, LS SE), named norm, agreement rule).
+5. Negative controls: §5 lists controls that must fail, and there is evidence they were run.
+6. C1–C3 closure claimed by the gate proposal: check that claimed closes are consistent (esp. C2 → §3.2 >= 4 rungs).
+7. Hash-binding audit: every `path#hash` reference cited by the protocol and by the gate proposal's numeric criteria must exist and match its prefix on disk — this is my machine-checkable core.
+
+Deliverables:
+- `artifacts/worker-081/n0_c8_protocol_review/verify_protocol_evidence.py` (script)
+- `artifacts/worker-081/n0_c8_protocol_review/evidence_check.json` (machine results)
+- `artifacts/worker-081/n0_c8_protocol_review/review.json` (review artifact: verdict, score, hard failures, findings, hash pins, falsifier)
+- `artifacts/worker-081/n0_c8_protocol_review/README.md` (short summary)
+- events in `comms/outbox/worker-081.jsonl`: status (claim task), artifact × 4, review, status (complete)
+- checkpoint `runtime/state/w081_checkpoint_1.json` (+ jsonl)
+
+The review verdict should be honest: determined by results. If everything checks out and the four criteria are satisfied at 1e6cdf04d7a2, verdict=accept with score maybe 4.0, hard_failures=[]. If I find defects (e.g., hash mismatches in cited evidence), verdict=revise and name them.
+
+Risks: hash references might not match because files changed after the proposal (moving target). I must distinguish: references in the *protocol* vs the *gate proposal*. The gate proposal cites e.g. `runtime/state/controller_verification/n0_replication_astra_run2_FIXED.json#6542db93eebc5095` — a file that may have been modified since. Mismatch on a superseded supporting artifact is a finding about registration (C5 already flags the FIXED run not registered), not necessarily a blocking defect of the protocol. I'll classify: (a) protocol's own hash bindings — must be exact; (b) gate-proposal evidence refs — record match/mismatch with current measured hash; mismatches inform C5/registration but only block C8 if they claim current binding.
+
+Also the protocol cites `research_map/formulation_taxonomy.yaml#66bf917bd368` (superseded; protocol text itself acknowledges superseded, so ok) and `reviews/G-NUM-protocol-review.json#66a905f5afefda0a`.
+
+Let me write the script generically: scan a list of files for `path#hexprefix` patterns; verify each path exists and hash prefix matches. Collect all.
+
+Additionally, the numeric checks:
+- `numerics/tests/n0_order_4rung.json`: verify it has >=4 rungs for the schemes and all fitted orders within 2.0±0.3; compute my own fit from the rows if rows exist.
+- `numerics/protocol/fixed_replication_verdict.json`: check declared max pairwise |dp| etc.
+- `numerics/tests/selfgravity_lock_guard.py`: run it? It's a test that fails if lock violated. Running it is cheap and gives a real check. The protocol's own claims are numeric; running guard is bounded. Let me include: run `python3 numerics/tests/selfgravity_lock_guard.py` and capture exit code/stdout hash. Careful about side effects: it just checks for existence of numerics/spherical_solver. Safe.
+- Check `numerics/spherical_solver` absence and numerics_lock state in research_map.json.
+
+Let me first inspect n0_order_4rung.json structure and fixed_replication_verdict.json to know what to check. Also check whether artifacts/numerics/n0/lead_4rung_replication.json exists. Quick.
+dsh: reasoning:
+All cited evidence files exist and their current hashes match the cited prefixes (I verified the 16-char prefixes). Wait — actually I computed `sha256sum` and printed first 16 chars; all matched the cited prefixes in the list I checked. That's a strong result. The protocol's hash pins are current, even though the assignment claimed some were stale (01b2072434cd was stale, but that's the old review's pin, not protocol's).
+
+Now let me build the task properly. I'll write the verification script that:
+1. Pins protocol hash at start and end (moving-target guard).
+2. Extracts all `path#hash` refs from the protocol and gate proposal, verifies prefix match; records superseded/protocol-acknowledged exceptions.
+3. Checks the four C8 criteria via textual markers in the protocol (R1/R2, R3, R5/R5a, §5 negative controls) with line numbers.
+4. Machine-checks n0_order_4rung.json: >=4 rungs per scheme, monotone, fit within band, R5 delta = max(pair_half_range, LS SE) to numerical tolerance; recompute fit independently from rows (log-log LS) and compare to reported fit_order and SE.
+5. Runs the lock guard (subprocess) and checks no numerics/spherical_solver.
+6. Checks the gate proposal's criteria statuses and the C5 registration claim: is `6542db93...` in runtime/state/artifact_hashes.json?
+7. Emits review.json with verdict + findings.
+
+Then emit events and checkpoint.
+
+Let me write the script now. I must be careful with time and correctness. Let me check artifact_hashes.json for the FIXED run registration, and how it's structured. Also n0_order_4rung studies list count, and whether `numerics/tests/n0_order_4rung_addendum.py` exists at `fea1b77118bec8ae`.
+
+Let me write the script in one go, then run it. I'll design it to be self-contained.
+
+Important: scripts and artifacts under artifacts/worker-081/n0_c8_protocol_review/.
+
+For hash ref extraction regex: `([A-Za-z0-9_./-]+)#([0-9a-f]{6,64})`. But careful about strings like `runtime/state/artifact_hashes.json#6751621533d21cdf` — prefix of artifact_hashes.json. Also `#c88146a1375c50f0`. Fine.
+
+Should I verify refs from the *protocol* only, or also the gate proposal? The task is the protocol review (C8); but the gate proposal is the thing the verdict feeds. I'll verify both, labeled by source.
+
+Also the protocol cites `research_map/formulation_taxonomy.yaml#66bf917bd368` — the file currently hashes 0fcc6a19, so mismatch; but the protocol text explicitly says it's superseded on disk by 565a6e50 (which is also not the current 0fcc6a19...). Hmm interesting: protocol says "The F0 taxonomy pin cited in the controller run (66bf917b…) is superseded on disk by 565a6e50…". Current canonical F0 = 0fcc6a19 (authoring 01e7f8). So the protocol's own statement about the F0 pin was true at its write time. I should classify: stale-pin-acknowledged (protocol §3 rev 3 says superseded) → non-blocking for class binding, since class binding is explicitly provisional and "not load-bearing". Actually the binding note says the F0 taxonomy artifact exists and is hash-pinned at 66bf917bd368; rev 3 acknowledges supersession. This is a traceable moving target, not a hidden one. I'll record it as a finding of type "stale_pin_acknowledged" (non-blocking) if mismatch and acknowledged.
+
+Also, does the protocol mention "accepting_reviews=[]"? No, that's in the proposal.
+
+Now, the review verdict criteria (from the assignment):
+- (i) scheme-appropriate invariant functional — §4.1 R1/R2/R4: present. Check R4 explicitly forbids cross-scheme pass/fail.
+- (ii) resolution-aware drift criterion — R3 present; check no single absolute threshold gate remains (search for "1e-6" usage: §4 table "Transport thresholds used by the lead reference gates ... drift < 1e-9" and R3 finest <= 1e-6; R4 says harness drift_tol = 1e-6 is diagnostic, not a gate. There's a potential ambiguity: §4 table lists absolute thresholds "used by the lead reference gates" — is that resolution-aware? The R1-R4 rules replace single fixed functional gates. I'll note the tension but R3/R4 resolve it: absolute thresholds are for exact_discrete and diagnostics.
+- (iii) order fit with uncertainty — R5/R5a present, named norm; check n0_order_4rung numbers satisfy delta = max(pair_half_range, LS SE).
+- (iv) negative controls — §5 lists four, "must fail"; check evidence of control runs exists (search results files / replication_triage). I'll scan for control evidence artifacts.
+
+Scoring: if all four present and machine checks pass, accept 4.0 or 4.5. I must not set gate verdicts; review event is a proposal-level verdict for the lead.
+
+Let me now write the script. I'll write it directly with the write tool. Size moderate (~250 lines).
+
+One more check: the `review` event schema requires target_id, reviewer, verdict, score, hard_failures, findings. target_id could be "numerics/CONVERGENCE_PROTOCOL.md#1e6cdf04d7a2". Also set `class_id`/`class_ids`, `node_id`, `gate`, `evidence_refs`, `artifacts` refs, `reviewed_sha256`.
+
+The `artifact` event requires node_id, artifact_type, path, sha256, validation_status.
+
+The `status` event requires node_id, status, hours, summary, evidence_refs, next_falsifier.
+
+Let me also confirm what claim conclusion types are allowed: numerical_evidence is allowed. I'll emit a claim? Maybe not necessary. The instruction says "emit valid JSON with IDs evidence hash falsifier" — a review event plus claim event. I'll emit a claim with conclusion_type "numerical_evidence"? Careful: claims are assertions. My claim: "At protocol hash 1e6cdf04d7a2, the protocol satisfies the four C8 criteria; the sole remaining numerics-side condition for G-NUM criterion C8 is an accept verdict bound to that hash." That's a process claim, could be conclusion_type "formal_model" or "open_problem". Hmm. Better: emit a `review` event (verdict) + `status` + `artifact`s, and one `claim` with conclusion_type `formal_model`? The claim schema requires class_id, statement, conclusion_type, assumptions, falsifier, evidence_refs. I could make the claim about the machine-verifiable evidence: "Every path#hash reference in the N0 gate proposal's numeric criteria resolves to its cited hash on disk at review time." conclusion_type: formal_model (it's a machine-checked statement about files). That seems reasonable, and artifact_refs not needed except for theorem (only theorem requires artifact_refs).
+
+Let me check what a precedent review event looks like: reviews/G-NUM-protocol-review.json (the existing one) — to align field conventions. Let me read it quickly, then write everything.
+dsh: reasoning:
+Excellent. I have everything. Notably: the FIXED run hash `6542db93eebc5095` is NOT in artifact_hashes.json → confirms proposal criterion C5 unmet (registration). The protocol hash `1e6cdf04d7a2` is not registered either (may matter).
+
+Now let me write my verification script. Time to execute. I'll create:
+
+`artifacts/worker-081/n0_c8_protocol_review/verify_protocol_evidence.py`
+
+The script:
+- ROOT = repo root (script is 3 levels down: artifacts/worker-081/n0_c8_protocol_review/) → parents[3].
+- Hash helper.
+- Read protocol, gate proposal, 4-rung, fixed verdict, artifact_hashes.
+- (A) moving-target guard: hash protocol at start and end.
+- (B) extract refs from protocol + proposal using regex; verify each.
+- (C) criteria presence checks with line numbers: search for R1, R2, R3, R4, R5, R5a; negative controls section; "at least four resolutions"; band 0.3/0.35; named norm.
+- (D) independent recomputation of the 4-rung fits: for each study in n0_order_4rung.json, compute log-log LS slope & SE, pair orders, pair half-range, delta = max(pair_half_range, se); compare with reported; verify rows >= 4, monotone errors, within band 2.0±0.3; verify pairwise agreement <= 0.25.
+- (E) lock guard: run `python3 numerics/tests/selfgravity_lock_guard.py` with timeout; capture rc/stdout hash; also check numerics/spherical_solver absent and research_map.json numerics_lock.state.
+- (F) checks on fixed_replication_verdict.json: read key claims (max pairwise |dp| at 4 rungs 0.007765, 3 rungs 0.009446?) to validate proposal's numbers. I haven't seen its full structure; the script should extract numbers generically and compare to the proposal's claim text. Simpler: locate values via JSON search and record; verify the proposal's stated max pairwise |dp| 0.007765 equals max abs_order_diff in 4-rung file (it does: 0.00776498). I'll compute that.
+- (G) C1-C3 closure: check protocol revision log claims C2 fix, and that A0 rubric requires >=4 resolutions (read evaluation_rubric.yaml, grep for "4" resolutions). Let me include a check that evaluation_rubric.yaml mentions >=4 resolutions; and protocol §3.2 states >=4. 
+- Output: `evidence_check.json` with all measurements + `review.json` with verdict.
+
+Verdict logic:
+- hard_failures: any of:
+  - protocol hash changed mid-review (moving target)
+  - R1-R5 markers missing
+  - negative controls section missing
+  - 4-rung checks fail (not >=4 rows, non-monotone, outside band, delta mismatch beyond 1e-9, pairwise > bound)
+  - lock guard fails / spherical_solver exists
+- Non-blocking findings: stale acknowledged pins (F0 66bf917b), C5 registration gap (FIXED run + protocol not in artifact_hashes), stale review pin in proposal (already declared unmet by proposal itself).
+- Verdict: accept if no hard failures and the four C8 criteria satisfied. Score 4.0. If only minor issues: still accept with findings? The prior review had verdict revise with no hard failures because of C1-C3 (now closed). If I verify all closed → accept.
+
+Let me be careful about the protocol's §4 absolute thresholds; the falsifier in the assignment says: "A review that accepts a resolution-dependent threshold without naming the resolution dependence, or that relies on the reference scheme's own functional." So I must explicitly check R3 names resolution dependence and R4 forbids cross-scheme gates. Good.
+
+Now write the script. I'll use Python stdlib only (json, hashlib, re, subprocess, pathlib, math). Note: numpy available too, but stdlib is enough.
+
+Let me write it.
+dsh: reasoning:
+Interesting! There are 3 mismatches:
+1. `research_map/formulation_taxonomy.yaml#66bf917bd368` — expected, protocol acknowledges superseded (non-blocking, but my `ack` logic classified it non-blocking correctly).
+2. `runtime/state/artifact_hashes.json#6751621533d21cdf` — this is cited in the gate proposal (not protocol). `artifact_hashes.json` changes every checkpoint so any pin is stale quickly. Non-blocking.
+3. **`numerics/tests/n0_gate_proposal.json#<prefix>` — BLOCKING by my classification!** This is the self-reference: the gate proposal refers to itself by hash, but the file has since changed (because it was updated after emitting the hash). That's a genuine self-reference drift: the proposal cites its own hash but the on-disk file's hash doesn't match. Let me examine this entry to see the exact prefix and context. Also determine whether this is a real defect or an acknowledged self-reference (FROZEN.json had a `self_reference` field). Let me look at the evidence_check.json entries.
+
+This could be a legitimate finding: the C8-review target's gate proposal is self-referentially stale. But the question for C8 is about the *protocol*, not the proposal. However the assignment's falsifier is about the verdict citing the right hash, and a blocking finding in the proposal matters for G-NUM adjudication.
+
+Wait — careful about my own classification logic: for refs where target is in the protocol text and the protocol says "superseded"/"provisional", ack=True → non-blocking. The self-reference `numerics/tests/n0_gate_proposal.json#...` appears in the proposal itself (source=gate_proposal), so ack is False → blocking. Let me examine what it is. If the proposal refers to itself by an earlier revision hash, the honest disposition: it's a self-reference pin that must be read as "the revision at write time", i.e. the proposal is mutable and its self-pin is stale after any revision. It doesn't invalidate the protocol (C8) but it does affect the proposal's hash-binding (rule 2). The right severity for the *C8 protocol review* is non-blocking, but it's a genuine finding for the proposal. I should reclassify more carefully: the C8 verdict is about the protocol; blocking findings should be limited to defects in the protocol or in the evidence it relies on for the four criteria. A stale self-pin in the proposal is a finding about the proposal, not the protocol.
+
+But hold on — is it *really* stale? Let me check. The proposal may cite `numerics/tests/n0_gate_proposal.json#a1109b32...` as `supersedes_sha256` (yes! `supersedes_sha256 = 'a1109b32cf16ff57...'`). That's the *previous* revision of itself — an intentional supersedes pointer, not a self-pin. My regex extracted it and flagged MISMATCH, but that's by design: "supersedes" means the old hash, which should NOT match current. Similarly FROZEN.json has a `self_reference` field. So the "blocking" classification is a false positive of my checker. I need to distinguish `supersedes` references (expected mismatch) from binding references.
+
+Let me inspect the three mismatches in evidence_check.json and see their context (which field). Then refine the script: classify refs by whether they're `supersedes`/historical (`supersedes_sha256`, `*_at_write`, etc.) vs binding. Since my regex only captures target+prefix from string values, I need context. Let me add context extraction: for each ref, find the JSON key path or the surrounding text snippet, and classify:
+- if the value appears as `supersedes_sha256` or is referenced in a "superseded" statement → EXPECTED_STALE
+- else binding → MATCH required.
+
+Let me look at the entries.
+dsh: reasoning:
+Confirmed:
+1. `research_map/formulation_taxonomy.yaml#66bf917bd368` — protocol acknowledges superseded (line 159). Non-blocking, correctly classified.
+2. `runtime/state/artifact_hashes.json#6751621533d21cdf` — a snapshot pin in the proposal's `reviewed_artifacts` map (line 338). artifact_hashes.json is regenerated by every checkpoint (it's a live registry), so a snapshot pin is by design; the proposal even documents at line 220 that the registry lacks the FIXED entry. This is a stale snapshot reference, expected for a mutable registry, non-blocking for the protocol.
+3. `numerics/tests/n0_gate_proposal.json#a1109b32cf16ff57` — explicitly `supersedes_sha256` (line 18) and `supersedes` (line 347): an intentional pointer to the previous revision, NOT a binding self-pin. Non-blocking/false positive of the raw regex.
+
+So my checker's "blocking" classification for #3 is wrong. I should refine the script to categorize semantic refs: `supersedes` refs are expected-stale; mutable registries (artifact_hashes.json) are snapshot pins. Then re-run, verdict should be `accept` with non-blocking findings. This is an honest, defensible review.
+
+Also note the measured taxonomy hash changed again: 276009f4 now (was 0fcc6a19 minutes ago). The tree is being actively modified by other agents. Fine — the protocol's pin is acknowledged superseded, and I record the measured value.
+
+Let me also double check the criterion checks: the "R5"/"R5a" markers are found. Fine.
+
+Let me refine the script:
+- Extract refs with context: search the JSON structure by walking it, noting key path; and for protocol, note the line.
+- Classification rules:
+  - key contains "supersede" → EXPECTED_STALE (non-blocking)
+  - target endswith "artifact_hashes.json" or "current_checkpoint.json" or "events.jsonl" etc. (mutable registries) → SNAPSHOT_PIN (non-blocking) if mismatch
+  - protocol text acknowledges "superseded"/"provisional" near the ref → ACKNOWLEDGED
+  - else MISSING/MISMATCH → blocking.
+- Findings: distinguish.
+
+Simplest implementation: after collecting a ref entry, add fields:
+  - context: for gate proposal refs, walk the JSON to find key path containing the prefix; if any key on path contains "supersede" → expected_stale.
+  - For protocol refs, check the enclosing line text for "superseded"/"provisional".
+Then blocking = status != MATCH and not (expected_stale or snapshot_pin or acknowledged).
+
+Let me patch the script accordingly, re-run, and update the review.
+
+I'll edit the script: replace the B section with a context-aware version. Also need to make sure `evidence_check.json` gets overwritten, and the review is regenerated with correct verdict.
+
+Let me write the patch using edit tool.
+dsh: reasoning:
+Now update the findings section to use binding_mismatch rather than raw mismatch, and fix the W081-F-REF logic. The old block:
+
+```python
+if result["checks"]["B_hash_refs"]["mismatch"] or result["checks"]["B_hash_refs"]["missing"]:
+    for e in ref_checks:
+        if e["status"] != "MATCH":
+            ack = e["target"] in proto_text and (
+                "superseded" in proto_text or "provisional" in proto_text)
+            findings.append({...})
+```
+
+Replace with binding-aware version, and also update `verdict_inputs.evidence_hash_refs_match` to use binding_mismatch == 0. Let me edit.
+dsh: reasoning:
+Also, the review.json's hard_failures uses `hard` variable defined before the moving-target update; fine. But the W081-F-F0PIN finding duplicates the REF finding for the taxonomy (I add both a REF finding and the F0PIN finding). That's OK but slightly redundant; keep it as explanatory.
+
+Also, the REF finding for artifact_hashes.json snapshot pin is non-blocking now; correct.
+
+Now re-run.
+dsh: reasoning:
+The function signature is `classify_ref(source_name, target, prefix, protocol_text)`. I passed `proto_text=`. Fix: pass positionally.
+dsh: reasoning:
+Verdict `accept`, reviewed hash 1e6cdf04d7a24313 (stable during review), all four criteria present, 18/21 refs match with 3 non-binding mismatches (superseded taxonomy pin, mutable registry snapshot, supersedes pointer), 4-rung refit OK, lock OK.
+
+Now I need to:
+1. Verify the review.json and evidence_check.json contents look right.
+2. Compute sha256 of the artifacts, and the review artifact should include its own evidence_check.json hash (I set it to None in reviewed_artifacts — I should fill it after computing, but that creates a circular hash. Better: keep the field pointing at evidence_check.json's hash computed after writing; review.json's own hash is what gets emitted. Since review.json is written after evidence_check.json, I can compute evidence_check hash and insert before writing review.json. Currently it's None. Let me fix: in the script, compute evidence hash after writing evidence_check.json, set review["reviewed_artifacts"][...] = that hash before writing review.json.
+
+Let me patch the script to do that, re-run once more. Then compute all hashes, write a README, emit events, and checkpoint.
+
+Patch: after `(OUT / "evidence_check.json").write_text(...)`, add:
+```python
+evidence_sha = sha256(OUT / "evidence_check.json")  # or hashlib of bytes
+review["reviewed_artifacts"]["artifacts/worker-081/n0_c8_protocol_review/evidence_check.json"] = evidence_sha
+```
+But review dict is defined after that line. I'll just replace the None value after dict creation:
+```python
+review["reviewed_artifacts"]["artifacts/worker-081/n0_c8_protocol_review/evidence_check.json"] = sha256(OUT / "evidence_check.json")
+```
+placed right before writing review.json.
+
+Also, note the script's own hash should be recorded in the checkpoint/events (artifact events), not necessarily inside review.json (self-hash issue). Fine.
+
+Let me patch and re-run.
+dsh: reasoning:
+The review is solid. Note: W081-F-F0PIN statement says canonical 0fcc6a1928fd but evidence shows measured 276009f4 (both changed). I should align it to say "measured at review start 276009f4" instead of hardcoding. Minor; let me update the finding text to be accurate/measured. Since review.json is auto-generated from the script, I'll patch the script's F0PIN statement to reference the measured value from ref_checks dynamically... simpler: change the text to "no longer matches the canonical file (measured at review time; see W081-F-REF-formulation_taxonomy.yaml-66bf917b)". Let me patch and re-run, then finalize.
+
+Also verify the lock guard output and evidence_check summary numbers. Let me inspect evidence_check.json highlights quickly.
+
+Then:
+1. Write README.md summarizing (with hashes).
+2. Compute sha256 of all 4 artifacts.
+3. Write events JSONL to comms/outbox/worker-081.jsonl:
+   - status (active, task claim)
+   - artifact ×4 (script, evidence_check.json, review.json, README.md)
+   - review event (from review.json, adapted to canonical schema: event_id, event_type, created_at, actor, target_id, reviewer, verdict, score, hard_failures, findings — plus extra fields fine)
+   - claim event about the binding-ref verification (conclusion_type formal_model) with assumptions/falsifier/evidence_refs
+   - status (active, complete, hours, next_falsifier)
+4. Validate each event with research_map/schemas.validate_event to ensure ingest won't reject (important! "emit valid JSON").
+5. Checkpoint: write runtime/state/w081_checkpoint_1.json with artifact hashes + summary + falsifier (mirroring w06 format), and append to runtime/state/w081_checkpoints.jsonl.
+6. Optionally run `python3 research_map/comms.py ingest` — but PROTOCOL says ingest is a controller command; workers just write to outbox. I should not run ingest (would mutate accepted stream). Just write outbox. Actually the checkpoint command `research_map/checkpoint.py` runs ingest; I should not run the full checkpoint (controller-owned). Instead I write my own worker checkpoint. The prompt says "checkpoint, then exit" — worker-level checkpoint is appropriate (like w06/w13/w14). I could also run checkpoint.py but that's the controller's job and may conflict. I'll do worker checkpoint only.
+
+Note file permissions: outbox files created by workers are owned by user; fine.
+
+Also important: avoid corrupting concurrent writers. `comms/outbox/worker-081.jsonl` doesn't exist yet; I'll create with write tool / python append. Use python to append to be safe.
+
+One more thing: events need valid `created_at` ISO. Fine.
+
+Also: the read tool policy — I created these files, so writing is fine.
+
+Let me patch the F0PIN text, re-run, then build README + events + checkpoint in one python script (emit_w081.py) under artifacts/worker-081/ so it's reproducible. I'll include the emit script as an artifact too.
+
+Design of events (keep them schema-valid):
+1. status active:
+{"event_id":"w081-20260912T0020-claim","event_type":"status","created_at":...,"actor":"worker-081","node_id":"N0","status":"active","hours":0.3,"summary":"...","evidence_refs":[...],"next_falsifier":"...","class_id":"AF-WCC-SCALAR-SPH","gate":"G-NUM","task_id":"W081-N0-C8-01"}
+2. artifact events (4): require node_id, artifact_type, path, sha256, validation_status ("unverified").
+3. review event: requires target_id, reviewer, verdict, score, hard_failures, findings.
+4. claim event: requires class_id, statement, conclusion_type, assumptions, falsifier, evidence_refs. conclusion_type "formal_model".
+5. status complete (active, since worker can't set done): hours, summary, evidence_refs, next_falsifier.
+
+Then validate all with schemas.validate_event.
+
+Checkpoint file: follow w06 style:
+{"checkpoint":1,"at":...,"worker":"worker-081","hours_spent_estimate":...,"assignment":"astra-life02-n0-c8-refresh ...", "node_id":"N0","gate_routing":{"gate":"G-NUM","class_id":"AF-WCC-SCALAR-SPH","worker_can_set_gate_verdict":false},"class_ids":["AF-WCC-SCALAR-SPH"],"status":{...},"artifacts":{path:{sha256}}, "falsifier":"...","next_falsifier":"..."}
+
+Let me proceed.
+dsh: reasoning:
+One check is False: `protocol_requires_4_rungs` — my marker string was "at least four resolutions for an order-certification claim". Looking at the protocol text: "**At least four resolutions for an order-certification claim**, refinement ratio 2..." — the phrase in the file is "At least four resolutions for an order-certification claim" with capital A and bold markers. My check was case-sensitive lowercase 'at least'. So it's a checker artifact, not a protocol defect. Let me fix the marker to case-insensitive, re-run. If it still fails, examine.
+
+The actual text from the read: "2. **At least four resolutions for an order-certification claim**, refinement ratio 2, errors in..." So `lower()` contains "at least four resolutions for an order-certification claim". My check used exact lowercase "at least four..." on proto_text without lowering → False. Fix: `"at least four resolutions for an order-certification claim" in proto_text.lower()`.
+
+This is exactly the kind of thing I should fix to avoid a false finding. Let me patch and re-run. Then finalize.
+dsh: reasoning:
+New blocking finding appeared: `reviews/G-NUM-protocol-review.json#66a905f5afefda0a` is now MISMATCH — because the lead-audit (or someone) just rewrote `reviews/G-NUM-protocol-review.json` (it was 66a905f5 when I started, now changed). This is a moving target in the *review evidence*, not the protocol.
+
+Let me check: the protocol cites `reviews/G-NUM-protocol-review.json` (in rev 3 log: "audit review `reviews/G-NUM-protocol-review.json` (verdict revise...)"). The proposal cites it as `reviews/G-NUM-protocol-review.json#66a905f5afefda0a` in audit_review_integration.review. The file changed just now (probably the lead-audit re-issued C8 at the new hash — exactly what C8 needs!). Let me check the current file.
+
+If the review file changed to an accept verdict at rev-3 hash, then the protocol's citation (a "reason" for rev 3) is historical — the protocol cites the review that motivated rev 3; that review file being updated later doesn't invalidate the protocol. But the proposal's binding reference to the review hash becomes stale. This is a genuine moving-target finding but non-blocking for the protocol content.
+
+However, I need to be careful about what my review's verdict should be. The C8 criterion is about the protocol of record. Let me check the new G-NUM-protocol-review.json: if it's an accept at protocol hash 1e6cdf04d7a2, then C8 is satisfied at the same hash I reviewed; I should note that. Let me inspect.
+dsh: reasoning:
+The lead-audit just issued an `accept` verdict at 00:20:00 for protocol rev 3. Let me check `reviewed_sha256` and `pin_discrepancy` — the fields are `reviewed_sha256` (not `reviewed_protocol_hash`), and `artifact_sha256=None`. Let me read those.
+
+This changes the landscape: C8 may now be satisfied by the lead-audit's accept. My review is an *additional independent* verdict. I should:
+1. Re-measure and note that the proposal's cited review hash 66a905f5 is superseded by the lead-audit's accept (so the proposal's audit_review_integration is stale in a benign direction).
+2. My verdict: accept (the protocol content passes), with the review-file drift as a non-blocking finding (the file is a living review record that the lead just updated; its new hash is 8137f18f).
+
+I need to make my finding classification understand that `reviews/G-NUM-protocol-review.json` is a mutable review record whose cited hash is historical ("review at that time"), not a binding pin on immutable evidence. Rule: a mismatch on a file under reviews/ cited as "the review that motivated rev N" is non-blocking (historical citation), unless the citation claims "current".
+
+But careful — is it a *binding* reference for my C8 verdict? No. The C8 criteria are about the protocol text. The review file changing doesn't affect the protocol's content. So classify reviews/*.json mismatches as "historical-citation" non-blocking, with a note.
+
+Let me read the new review's reviewed_sha256 to confirm it binds 1e6cdf04d7a2, and check pin_discrepancy. Then patch the classifier (add `reviews/` to mutable/historical handling, like supersede), re-run, finalize.
+
+Actually — a more principled classification: a ref is binding iff it appears in a *binding-pin field* (e.g., JSON keys: artifact_sha256, reviewed_sha256, frozen_sha256, *, _sha256 on a file, or `#hash` in an "evidence" list that claims current), or the protocol text says "at the hash". For protocol citations of a review that motivated a revision, it's historical. Rather than over-engineer, I'll treat mismatches on files under `reviews/` and files that themselves contain `supersedes_sha256` as historical/non-binding — documented explicitly.
+
+Let me check the new review first.
+dsh: reasoning:
+The lead-audit's review supersedes 66a905f5 and binds 1e6cdf04d7a2. The prior review is preserved at `reviews/G-NUM-protocol-review-rev1-advisory.json`. Let me verify that file exists with hash 66a905f5 — if so, the protocol/proposal citation `reviews/G-NUM-protocol-review.json#66a905f5` points to a file that was renamed; the bytes are preserved byte-identically at the new path (as the lead claims). Then the "mismatch" is explained: the citation names a path whose content moved to an advisory copy. That's a non-blocking, but reportable, provenance drift: the cited path no longer holds the cited revision.
+
+Let me check that file. If it exists with hash 66a905f5, my classifier should mark it "historical revision moved/preserved". I'll add a rule: mismatch on `reviews/*.json` → check for a sibling `*-rev1-advisory.json` or `supersedes` note; disposition "review-record-superseded; predecessor preserved". Keep severity non-blocking, since it does not affect the protocol text and the successor explicitly binds the same protocol hash I reviewed.
+
+Let me verify.
+dsh: reasoning:
+Confirmed: the cited revision 66a905f5 is preserved byte-identically at `reviews/G-NUM-protocol-review-rev1-advisory.json`. So the mismatch is a path-level supersession, not a lost artifact. This is a clean, non-blocking provenance note.
+
+Let me patch the classifier to handle this case generically: for a mismatch under `reviews/`, search for another file under `reviews/` with the cited hash; if found, mark `binding=False, disposition="superseded-review-record-predecessor-preserved-at:<path>"`. That's a rigorous check rather than a hand-wave.
+
+Also add a finding noting the successor review (lead-audit, accept, binds same protocol hash 1e6cdf04d7a2) — this strengthens my accept verdict, and I should include it in review.json's context.
+
+Let me patch the script:
+
+In classify_ref, when status MISMATCH and target starts with "reviews/": scan ROOT/"reviews" for a file whose sha256 == prefix extended... The prefix is 16 chars; find a file whose sha256 starts with prefix. If found → non-binding with disposition. This scan is cheap (35 files).
+
+Also, since the lead review landed at 00:20, I'll add to the review.json a field `concurrent_independent_verdict` that records: reviews/G-NUM-protocol-review.json current sha 8137f18f, verdict accept, reviewed_sha256 1e6cdf04d7a2, supersedes 66a905f5 preserved at ... This is useful context. I can add it in the script statically after checks (read the file if exists). Let me add a small section H that reads it.
+
+Let me implement both edits.
+dsh: reasoning:
+Now verdict should be accept with 0 blocking findings. Four mismatches all non-binding with dispositions. Let me confirm the top of the output (verdict) and the H section. Then finalize:
+1. Write README.md
+2. Compute hashes
+3. Emit events + checkpoint via an emit script
+4. Validate events with schemas.validate_event
+
+Let me view the final review.json quickly and the H block.
+dsh: reasoning:
+The review is complete and internally consistent:
+- verdict accept, score 4.0, no hard failures
+- reviewed protocol hash 1e6cdf04d7a24313... (stable during review)
+- all four C8 criteria verified with line numbers
+- 21 refs: 17 match, 4 non-binding mismatches each with a documented disposition
+- independent 4-rung refit reproduces reported orders/uncertainties to <1e-9; max pairwise 0.007765 ≤ 0.25
+- lock guard passes; lock locked; no spherical_solver
+- concurrent lead-audit accept binds the same protocol hash (recorded, not relied on)
+
+Now finalize:
+1. README.md in the artifact dir.
+2. Emit script that computes hashes, writes events to comms/outbox/worker-081.jsonl, validates each event, and writes checkpoint runtime/state/w081_checkpoint_1.json + w081_checkpoints.jsonl.
+
+Let me write README.md first (concise), then the emit script, then run it.
+
+For the events, use the review.json content. Let me structure:
+
+```python
+events = [
+  status active (task claim),
+  artifact x4,
+  review (from review.json, canonical keys),
+  claim (formal_model about binding refs + criteria),
+  status complete
+]
+```
+
+Careful: `review` event from review.json has `findings` as list of dicts — schema doesn't care. Include `target_id`, `reviewer`, `verdict`, `score`, `hard_failures`, `findings`. Good.
+
+Claim event: class_id "AF-WCC-SCALAR-SPH", conclusion_type "formal_model", statement, assumptions (list), falsifier, evidence_refs (path#hash-prefix). Include artifact_refs too (not required but good).
+
+Also maybe a `review` event referencing the concurrent lead review? No.
+
+For hashes in evidence_refs, use `path#<16hex>`.
+
+Checkpoint: mirror w06 format with artifacts map and hashes, plus "reviewed_sha256" and "class_ids".
+
+One thing: file permissions of comms/outbox/worker-081.jsonl — new file, fine.
+
+Validation: import research_map/schemas.py and call validate_event on each. Note the module name `schemas` might conflict with other packages; sys.path.insert research_map dir.
+
+Also: should I append to an existing worker-081 outbox if one exists? Let me check — comms/outbox/worker-081.jsonl likely doesn't exist (first wave's 081 didn't finish). I'll append in append mode and check existing event_ids to avoid duplicates (idempotent script).
+
+Let me write README.md and emit_w081_events.py.
+dsh: reasoning:
+Now the emit script. It will:
+1. Compute sha256 of the four artifacts (script, evidence_check.json, review.json, README.md).
+2. Build events with unique event_ids incorporating timestamp.
+3. Validate each event with research_map/schemas.validate_event.
+4. Append to comms/outbox/worker-081.jsonl (skip event_ids already present).
+5. Write checkpoint runtime/state/w081_checkpoint_1.json and append to w081_checkpoints.jsonl.
+
+Let me write it carefully. Event IDs: `w081-20260912T00XX-<suffix>`. I'll use a fixed stamp from now.
+
+Evidence refs format: `${path}#${sha[:16]}`.
+
+For the review event, include:
+- event_id, event_type review, created_at, actor worker-081
+- target_id "G-NUM-protocol", reviewer "worker-081", verdict, score, hard_failures, findings
+- node_id N0, gate G-NUM, class_id/class_ids, artifact_sha256, reviewed_artifacts, criteria_verdicts, falsifier, evidence_refs, reviewer_independence, task_id, authority_note.
+- Also `reviewed_sha256`.
+
+Claim event:
+- class_id "AF-WCC-SCALAR-SPH", class_ids [...], statement: "For the N0 flat-space calibration sub-case at protocol hash 1e6cdf04d7a2, all binding path#hash references resolve on disk (17/17; 4 mismatches are non-binding supersedes/snapshot/acknowledged-superseded pins), the four C8 criteria are present with line anchors, the 4-rung studies independently re-fit to the reported orders and R5 uncertainties (max pairwise 0.007765 <= 0.25), and the numerics lock guard passes with numerics_lock locked." 
+- conclusion_type "formal_model"
+- assumptions list
+- falsifier
+- evidence_refs
+- artifact_refs
+- gate G-NUM, node_id N0, task_id.
+
+Hmm, is "formal_model" the right conclusion type? The allowed types: theorem, conditional_theorem, stability_result, counterexample, numerical_evidence, formal_model, open_problem. My claim is a machine-checked statement about artifacts — "formal_model" fits best.
+
+Status events:
+- Start: status active, hours 0.1, summary task claim, next_falsifier.
+- End: status active (workers can't set done), hours 0.4, summary complete + no gate verdict, next_falsifier "an independent re-run of verify_protocol_evidence.py that yields a binding hash mismatch, a failed 4-rung refit, or a lock-guard failure; or protocol hash change".
+
+Artifact events (4): node_id N0, artifact_type: "verification_script"/"evidence"/"review"/"summary", path, sha256, validation_status "unverified", class_id, gate, task_id.
+
+Checkpoint content:
+```json
+{
+ "checkpoint": 1,
+ "at": ...,
+ "worker": "worker-081",
+ "hours_spent_estimate": 0.4,
+ "assignment": "astra-life02-n0-c8-refresh (Astra, 2026-09-12T00:15+08:00) - C8 protocol review at measured hash",
+ "node_id": "N0",
+ "gate_routing": {"gate":"G-NUM","class_id":"AF-WCC-SCALAR-SPH","worker_may_set_gate_verdict": false, "effect":"independent accept verdict evidence supplied to lead-audit/controller for C8; C4/C5 registration remains controller-owned"},
+ "class_ids": ["AF-WCC-SCALAR-SPH"],
+ "status": {"delivered": true, "validation_status": "unverified", "verdict":"accept","score":4.0,"hard_failures":[],"reviewed_sha256":..., "checks": {...summary...}, "no_completion_claim": "..."},
+ "artifacts": {path: {"sha256":...}},
+ "falsifier": "...",
+ "next_falsifier": "..."
+}
+```
+
+Write both to runtime/state/w081_checkpoint_1.json and append a single line to runtime/state/w081_checkpoints.jsonl.
+
+Also: should I run `research_map/comms.py ingest --dry-run` on my outbox to confirm acceptance? That's read-only (dry-run) and safe: it prints what would be ingested. Let me do that after writing events. Good verification. But careful: `comms.py ingest --dry-run` may still write nothing. Let me check the code for dry_run handling... I'll just run it and see output; dry-run shouldn't mutate. Actually, to be safe, I could call validate_event directly (already) plus `normalize_event` in a small python snippet without writing. I'll do direct local validation with normalize_event from comms module (import), no file writes except none.
+
+Let me write emit script now.
+dsh: reasoning:
+Wait: the emit script computes `artifacts = {p.name: sha256(p) for p in sorted(ART.iterdir()) if p.is_file()}` — this includes emit_w081_events.py itself, README.md, evidence_check.json, review.json, verify_protocol_evidence.py. But the artifact hashes for the *events* are computed at the start, before emit writes anything new (it doesn't write into ART). Fine. However, the checkpoint's artifacts map will include emit_w081_events.py itself, which is fine.
+
+But there's a subtlety: artifacts dict is computed before events are built; emit script's own hash doesn't change. Good.
+
+One concern: `registration_gap` field in the claim event contains bool `checked[...]["fixed_run_registered"]` = False. I named it "registration_gap": False — confusing. It means "fixed_run_registered=False" → the gap exists. Let me rename to `fixed_run_registered` and add `registration_gap_present: not ...`. Minor but clarity matters. Let me edit.
+
+Also, run the script and then validate with comms.normalize_event to simulate ingest. Let me patch first.
+dsh: reasoning:
+8 events written and checkpoint created. Now verify:
+1. The outbox file parses as JSONL, each event validates via schemas, and the comms normalize+validate pipeline accepts them (simulate ingest without writing).
+2. The checkpoint is valid JSON.
+3. Confirm all artifact files exist and the hashes in events match.
+
+Let me run a verification snippet using comms.normalize_event + schemas.validate_event on each line (this is read-only). I need to check normalize_event's signature: `normalize_event(doc, source)`. Let me call it and validate result. Also check for rejects reasons if any.
+
+Also, per PROTOCOL, workers shouldn't run ingest; I'll just simulate.
+dsh: reasoning:
+Everything validates. One more check: the protocol hash may have changed again due to concurrent agents between my review and now. Let me re-measure the protocol and the reviewed artifacts state, and record whether it's still 1e6cdf04d7a2. If it changed, my verdict is void and I should report a moving-target blocker instead. Let me check now.
+
+Also verify that the evidence_check.json/review.json currently on disk still match the emitted hashes (they do, per hash check above).
+
+Let me re-measure protocol + key files. If protocol changed, I need to handle: emit a blocker event or update. Let me check.
+dsh: reasoning:
+The protocol is still 1e6cdf04d7a2 — my verdict stands. The review record is 8137f18f (concurrent lead accept, recorded). Taxonomy drifted to 276009f4 (acknowledged provisional; my finding recorded it).
+
+Now, final housekeeping:
+1. The task said "checkpoint, then exit". I've written the worker checkpoint. Should I also run `research_map/checkpoint.py`? No — controller-owned; workers wrote their own checkpoints (w06/w13/w14). My checkpoint is at runtime/state/w081_checkpoint_1.json and w081_checkpoints.jsonl. Good.
+
+2. Maybe verify the events file will be picked up by ingest (outbox rglob — yes, comms/outbox/worker-081.jsonl).
+
+3. Should I add my task to claims? I emitted a claim event. Good.
+
+4. There might be a concern: my claim event's `conclusion_type: formal_model` with class binding. Fine.
+
+5. The prompt says "emit valid JSON with IDs evidence hash falsifier". Done: event_ids, evidence_refs with path#hash, artifact sha256, falsifier fields in review/claim/status.
+
+Let me do a final summary read of the emitted events (last line / complete status) and make sure there is nothing else expected, e.g., a "review" event must be in outbox for the lead. Done.
+
+One more consideration: the review.json's `reviewed_artifacts` includes `numerics/tests/n0_gate_proposal.json` hash 58a175b5 (measured mid-review) — the proposal might be modified concurrently by the lead. My review pins what I read; the falsifier covers it.
+
+Also note: my claim says "of 21 cited path#hash references 17 match on disk and 4 are non-binding" — that's consistent with evidence_check B (total 21, match 17, mismatch 4, binding_mismatch 0).
+
+Two last verifications:
+- Confirm the outbox file content shape quickly (head -c).
+- Confirm no stray files/permissions issues.
+
+Then write the final answer: concise summary with task, verdict, artifact paths + hashes, evidence, falsifier, checkpoint, and exit.
+
+Let me also clean up? Nothing to clean. The `/tmp` session files irrelevant.
+
+Let me look at the final outbox once to be sure the JSON is one object per line and readable, then finish.
+dsh: reasoning:
+Everything is in place. One small inconsistency: the emitted artifact events have hashes computed *before* the emit script ran, and the artifact events cover verify_protocol_evidence.py, evidence_check.json, review.json, README.md — all match current disk (verified). The emit script itself and checkpoint are not covered by artifact events, but that's fine (the checkpoint lists all 5 artifact hashes; the emit script isn't a deliverable per se). Could add an artifact event for the emit script and checkpoint — optional. The task says emit valid JSON with IDs evidence hash falsifier; done.
+
+Wait, checkpoint's artifacts map includes emit_w081_events.py hash cc09f17e... but the checkpoint file was written by that script, so the hash in the checkpoint is of the file at read time — current hash matches (cc09f17e). Good.
+
+I'm done. The instruction: "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit."
+
+Final answer: report what was done, concisely, with paths, hashes, evidence, falsifier, checkpoint. Keep it bounded.

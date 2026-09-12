@@ -1,0 +1,714 @@
+dsh: reasoning:
+Let me start by exploring the workspace to find handoff/map and comms.
+dsh: reasoning:
+Found the swarm dir: /data3/guoshaoyang/workdir/ai4math-swarm with comms and research_map. Let me explore.
+dsh: reasoning:
+Let me read the HANDOFF.md, comms/PROTOCOL.md, README.md, and look at runtime/inbox for worker=099 tasks.
+dsh: reasoning:
+Now let's read the README and ASTRA_HANDOFF.md, and the inbox for worker 099. The worker ids listed are deepseek-flash-01..20 but the task says worker=099. Let me check comms/inbox.
+dsh: reasoning:
+The task says "worker=099". There's a `worker-099` maybe no inbox file. Let me check for worker-099 specifically and the assignments directory in outbox. Also check `comms/outbox/assignments`. Let me grep for "099".
+dsh: reasoning:
+There are runtime instances for worker-099. Let me look at the meta.json and stderr/stdout to understand what the harness gives worker-099. There's also probably a launch_swarm.sh that generates the prompt. Let me check.
+dsh: reasoning:
+The bash output was truncated but I got a lot of context: apparently this session (worker=099) had already been running? Wait — that output was the *old* trajectory log content from a prior worker-099 instance? Actually the output shown in my first tool result for the "latest 099 instance" meta/stderr looks like it accidentally printed `cat .../trajectory.log`? No — I asked for meta.json and stderr.log. The printed content is a trajectory-like reasoning log. Hmm, actually the command was `cat meta.json; echo; cat stderr.log`. That content appears to be... the stderr.log containing old trajectory? That seems odd. Wait, looking closer: the output shows "dsh: reasoning:" blocks — this looks like the deepseek harness's trajectory log. Possibly the stderr.log of a previous worker-099 run contains the full agent transcript (the dsh wrapper logs reasoning to stderr). Actually it might be that meta.json is small and stderr.log huge.
+
+Key: This is a fresh session but the environment already contains traces of previous worker-099 runs that did the L1 spotcheck task. But wait — the content I saw is what a *previous* worker-099 did (rev1-rev7 of a spotcheck artifact). Actually, did *I* do that? No — this is my current session; I've only run two tool calls. The huge output was from the old instance's stderr.log. Interesting: it describes a complete task already performed by a previous worker-099: 7-row spot check, artifacts/worker-099/l1_spotcheck/spotcheck-l1-099.json, etc.
+
+Hmm, but hold on. That output was truncated at the beginning: "grounded sources contradiction may still be computed..." to the final report. So there's a prior worker-099 that completed this exact kind of task. But the runtime instance worker-099-20260912T001657-968807 exists with that trajectory. The current session is a new incarnation.
+
+Wait, actually — was that output from stderr.log of worker-099-20260912T001657? The command concatenated meta.json (small) and stderr.log. The output was huge and looked like the reasoning transcript. So stderr.log holds the transcript. That means a previous worker-099 already did: L1 spot check on 7 rows, final artifact sha 7e896a17..., outbox events, checkpoint. Hmm, but wait — the output ended with "All done. Let me give a concise final report..." — that's the end of that worker's run.
+
+But is that real, or is it a hallucinated transcript in the log? The artifacts might genuinely exist. Let me check the actual filesystem: does artifacts/worker-099/l1_spotcheck/spotcheck-l1-099.json exist? Does comms/outbox/worker-099.jsonl exist? Does runtime/state/w099_checkpoint_1.json exist?
+
+If the previous worker-099 already completed the task, then my job now: "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit." I should verify what exists and either (a) if the work is done and unclaimed/incomplete, resume/complete it properly, or (b) take a different class-bound task to avoid duplicate work (CF-12: one canonical path, one owner — do not duplicate).
+
+Hmm, but the stderr output I saw was truncated at the head. It might be a *spill* of the previous session. Note the harness message earlier: "(Omitted 14364 bytes. Full formatted result stored at: /tmp/dsh-spill-vmSYnB/...)". The huge output was the first bash call's result? No wait. Let me re-read.
+
+My first tool block had two calls:
+1. bash: pwd && ls -la && ls -la handoff
+2. bash: ls -la /data3/guoshaoyang ... find
+
+Then second block: ls comms/inbox etc. + read ASTRA_HANDOFF.
+
+Third block: bash ls comms/inbox | grep 099 ; assignments; grep 099 → output was the runtime instances list. Good.
+
+Fourth block: two calls:
+1. bash: `ls -la runtime/instances/ | grep 099; cat meta.json; cat stderr.log`
+2. bash: `sed -n '1,120p' launch_swarm.sh`
+
+The result of call 1 is the huge truncated output with the reasoning transcript. So yes, stderr.log for worker-099-20260912T001657-968807 contains a full transcript of a previous worker-099's run, which did the L1 spot-check task. The output shown starts mid-transcript ("grounded sources contradiction may still be computed...") — the beginning was truncated (omitted 14364 bytes, with the full log at /tmp/dsh-spill-vmSYnB/session-05fd68e9861c/3d290907146e-bash.txt).
+
+So: the previous worker-099 instance (20260912T001657) apparently ran and completed this. But wait — did it? The stderr.log may be from an instance that was launched by the independent supervisor and whose session is... me? Am I the same instance? The launch time 20260912T001657 = 00:16:57 on Sep 12. Current dir timestamps show things modified up to 01:08. My session started... unclear. The runtime context says worker=099. The previous instance's transcript may be exactly the run that produced the artifacts, and my current session might be a *resumed/forked* instance? But my conversation has no prior turns.
+
+Important: The instructions say "Read handoff/map and comms. Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit. worker=099". This is the same prompt the previous worker-099 got (probably). The previous instance seems to have completed it (artifact 7e896a17, events, checkpoint). But were those events ingested? Did the checkpoint get written? Let me check the filesystem directly.
+
+Also note: the stderr transcript ends with the final report — meaning that instance finished. If it finished successfully, then a new worker-099 session is likely a supervisor restarting the worker (perhaps the exit didn't register, or a new instance was launched). Hmm, but the instance dir name 20260912T001657 suggests launch at 00:16:57; the transcript's artifact was 00:44-00:48 ish. The second instance 20260912T001231-897883 = 00:12:31 (different supervisor batch). So the previous worker-099 at 00:16:57 did the work.
+
+So what should I do now? The safe approach:
+1. Verify state on disk: artifact, events, checkpoint, whether ingested (events.jsonl contains my event ids), rejected.jsonl.
+2. If the deliverable is complete and consistent, don't duplicate: check whether a *different* class-bound task is needed. The instruction says "Take one class-bound task" — if the task was already taken and completed by the prior instance, then my correct action is to verify and report/exit, or take a new unclaimed class-bound task.
+
+But careful: maybe the supervisor launched me to continue because the previous instance's work was rejected or incomplete. Let me inspect:
+- Does artifacts/worker-099/l1_spotcheck/spotcheck-l1-099.json exist with sha 7e896a17?
+- Does comms/outbox/worker-099.jsonl exist? Was it ingested (grep in research_map/events.jsonl for w099-)?
+- Does runtime/state/w099_checkpoint_1.json exist?
+- Check rejected.jsonl for worker-099 events.
+
+Let me do that now. Also read the beginning of the stderr transcript to know exactly what assignment was taken (to avoid duplicating). And check whether the artifact was superseded/deleted.
+
+Also note: there may be a `runtime/instances/worker-099-*/` for the current session too. Let me list.
+
+Let me be efficient: run a comprehensive state check.
+dsh: reasoning:
+So the previous worker-099 instances have already emitted multiple tasks:
+1. L1 spotcheck #4 (00:44) — ingested.
+2. scalar_locator_readiness (00:52)
+3. bl7_hf02_binding (00:58)
+4. form_direction_census (01:05) — artifact dir exists, README written 01:05; check whether events for it were emitted (grep showed 13 w099 events; let me list all event ids).
+
+There have been multiple worker-099 instances launched at 00:12, 00:16, 00:44, 00:52, 00:58, 01:06, 01:06 — so the supervisor keeps restarting worker-099 (probably each instance runs ~5 min then exits, and the supervisor relaunches). My session is likely the latest instance (launched ~01:06 or later).
+
+Important: the instruction says "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit."
+
+Given the supervisor keeps relaunching worker-099, each incarnation takes one task. My job: take ONE class-bound task, do it, emit, checkpoint, exit. I must avoid duplicating the 4 tasks already done, and check what the latest instance did (form_direction_census at 01:05-01:06) — maybe it was interrupted mid-way (no events?). Let me list all w099 event ids and check the outbox tail.
+
+Also, I need to check the current open assignment state (map) to pick a class-bound task not yet owned. There may be open assignments in the inbox for worker-099 — but comms/inbox has no worker-099 file; assignments for workers appear to be in `artifacts/worker-099/*/ASSIGNMENTS.json` (e.g., bl7_hf02_binding/ASSIGNMENTS.json) written by leads. Or the swarm's worker instances get their task from... hmm, actually the prompt is generic ("Take one class-bound task").
+
+The "immediate queue" and open astra assignments: astra-life06-classsep-detector-adjudication (audit lead), astra-life05-verify-gform-r3, astra-life05-verify-l0-final, astra-life05-gnum-protocol-adjudication, astra-life05-a0-detector-scope, astra-life04-n0-stoprule, astra-life04-n0-verify. Those are lead tasks, not worker tasks. But workers take class-bound subtasks.
+
+Let me first check:
+1. All w099 events (13) and the latest one (form_direction_census?) to see whether it was ingested/complete.
+2. comms/inbox for any new worker-099 assignment (may have appeared since my first ls — my first ls at ~01:08 showed no worker-099.jsonl in inbox).
+3. The newest instance dir worker-099-20260912T010638-968807 (01:06:38) — that might be *me* or the previous one. Actually my session's instance dir is likely created at launch; the dirs at 01:06 (two: 010638 and 005851) — hmm, 005851 = 00:58:51, 010638 = 01:06:38.
+
+Let me check meta.json of 010638 to see if it's me, and read the trajectory/exit statuses. Also check `runtime/state/*.exit` files for worker-099 sessions.
+
+Then decide the task. Since worker-099 has done:
+- L1 spotcheck #4
+- scalar locator readiness
+- B-L7/HF-02 binding
+- form direction census (maybe in progress / just emitted?)
+
+I should pick something distinct and class-bound, valuable, quick (<~10 min), with artifact + evidence + falsifier + checkpoint. Given the swarm state (astra pass 06, G-FORM/G-LIT/G-NUM/G-AUDIT pending), useful worker tasks might be:
+- A0 detector-scope verification (but that's lead-audit: astra-life04-verify-a0).
+- G-FORM rev29 review support: F2b coverage is 0 — someone needs to write F2b (strong-censorship C0 shape) review? That's formulation lead.
+- class_separation detector adjudication (lead-audit, deadline 02:30). Worker-098 did revise 3.0; worker-049 did FN audit. A worker could provide independent evidence for the adjudication: e.g., run the detector at both pinned hashes on a pre-registered probe corpus and measure over/under-suppression. But "detector writes are frozen until adjudication" — writing detector is frozen, but *measurement* at pinned hashes is not a write to the detector. However, the adjudication expects exactly one decision by audit lead; extra measurements might be noise. Hmm.
+
+Wait — the latest instance (01:06:38) may already be working on something. Let me check what the *newest* instance is doing: if it's me, then no prior work in progress beyond 01:05 census. Let me look at the last lines of comms/outbox/worker-099.jsonl to see the most recent events (13 total: 4 from spotcheck + 3 scalar locator + 3 bl7 binding = 10, plus 3 more from form_direction_census = 13).
+
+Let me check event ids 11-13.
+
+Actually the grep output only showed 10 ids (head limited). Let me get all.
+
+Plan:
+1. Inventory w099 events + outbox tail + whether census events ingested.
+2. Check inbox for worker-099 (maybe new assignment card).
+3. Check the newest instance meta + processes state to see if the supervisor expects me to continue.
+4. Decide task: likely a distinct class-bound task.
+
+Let me also look at the swarm's current map for open work — but the map is 5.5 MB. Better: look at the latest controller lifecycle report (runtime/state/controller_verification/lifecycle_*.json) and the astra inbox (assignments to leads), plus `runtime/state/` for assignment cards. Let me look at artifacts/worker-099/*/README.md to understand the pattern of "self-assigned from queue" tasks.
+
+Let me run the inventory commands.
+dsh: reasoning:
+The instance worker-099-20260912T010638-968807 started at 01:06:38 and is *currently running* — that's me (stderr.log has 13KB already). Let me confirm by checking prompt.txt and trajectory.log.
+
+So I'm the 7th worker-099 incarnation. Prior incarnations completed 4 tasks, each ~6 minutes, each ingested. The supervisor relaunches every ~6 minutes and expects each incarnation to "take one class-bound task, emit JSON, checkpoint, exit".
+
+My job: pick ONE class-bound task not already taken, do it quickly (~5-6 min), emit events, checkpoint, exit before the supervisor's next window (next launch ~01:12?).
+
+Time budget: it's ~01:08 now. I should target completing by ~01:13.
+
+Let me read prompt.txt/trajectory.log to confirm my identity and the exact prompt.
+
+Then pick a task. To choose wisely, I need to know what's most valuable and unclaimed. Let me look at:
+- The latest controller lifecycle report (lifecycle_20260912-010117.json) for open needs.
+- The astra-lead-audit inbox/outbox for open verify tasks (astra-life05-verify-gform-r3, etc.). But those are lead-owned; a worker could provide independent evidence for them, which is exactly what workers are for: "independent" verification requires non-author workers.
+- The most recent worker tasks already taken (from outbox files) to avoid duplication.
+
+Given the pending gates, the highest-value quick worker contribution might be:
+1. **Independent verification for `astra-life05-verify-gform-r3`**: verify G-FORM rev29 FROZEN bytes and per-file pins (F1 rev13, F2a, F2b) — i.e., a hash/pin consistency audit + schema comparison against the frozen taxonomy, checking for class leakage and conclusion inflation. This is class-bound (AF-* classes) and quick (hash + structural checks).
+2. **Independent verification for `astra-life05-verify-l0-final`**: L1/L0 ledger verification.
+3. **G-NUM protocol adjudication evidence**.
+4. **F2b coverage 0**: G-FORM needs F2b ≥2 accepts. F2b = strong-censorship C0? The FROZEN rev29 has F2b artifact. A worker could do an independent F2b review (accept/revise), which directly unblocks G-FORM. But writing a review of F2b requires reading the F2b content deeply.
+5. **Class separation detector adjudication evidence** (deadline 02:30): independent measurement of the two pinned detector revisions on a pre-registered corpus. This is contested and high-value: worker-098 says a8c04 passes corpus probes; worker-049 says it suppresses 10/10 cue-carrying merge assertions. An independent run at both pinned hashes could settle it. But that's the audit lead's adjudication; adding a third measurement could help or add noise. The task says "Every CLASSSEP measurement must cite the detector hash it used."
+
+Given my limited time (~5 min) and the need for a real artifact with evidence + falsifier, I think the best choice is something computationally simple and independently checkable:
+
+**Option A: F2b independent review** — read the F2b artifact (strong-censorship C0 or C2 schema) at pinned hash, check exact quantifiers, class binding (C0 vs C2 not mixed), I+ convention, conclusion type, and emit a review with verdict accept/revise. That directly addresses "F2b 0 accepts" which is one of the two things G-FORM waits on. High value if done well; risk: I need to understand the F2b content deeply in a few minutes and produce a defensible review. Also, reviews must be independent — I'm a worker, fine.
+
+**Option B: G-FORM r3 pin-consistency verification** — a mechanical audit: recompute sha256 of FROZEN.json and each per-file pin at the r3 window, compare to the declared pins in the map/reviews, check that the moving-target stop rule is satisfiable. Low intellectual risk, quick, produces hard evidence (hashes). This complements lead-audit's r3 verification. It's exactly "hash + evidence" work.
+
+**Option C: Class-separation detector FN/FP replication at both pinned hashes** — run worker-049's audit corpus and worker-098's probes against c266dbec and a8c04fc3, verify the claims (10/10 suppressed, 3/4 FP probes fire), and emit a reproduction report. This is high-value for the 02:30 adjudication. But wait: worker-049's corpus file path existed; worker-098's probes too. Running both at both hashes is mechanical. Time: need to find the artifacts, write a small runner, execute. Maybe 5-8 min. Risk: the detector scripts may need data paths; but they take a corpus file.
+
+Hmm. Let me look at what's *most* on the critical path and what a fresh worker with ~5 minutes can do best. The G-FORM gate requires F2b ≥2 accepts + r3 non-author independence. A worker review of F2b could count as one accept (if justified). But careful: G-FORM needs *distinct independent accepts*; as a worker I can emit a review with verdict accept and score. The controller decides.
+
+Let me look at the F2b artifact and the FROZEN rev29 pins. Let me find where F2b lives: probably artifacts/formulation/F2b_*.json or similar. Let me check the map's formulation section and the FROZEN.json.
+
+Actually, the fastest high-value option: independent **pin-consistency + content-binding audit of the G-FORM rev29 frozen set** (Option B), which also lets me *review* the F2b artifact content at its pinned hash and emit both an artifact (hash audit) and a review (F2b verdict). Combining both could be too much for 5 min.
+
+Let me first gather facts quickly:
+- `artifacts/formulation/FROZEN.json` current sha + content (what files are pinned).
+- The F2b artifact path + sha + content.
+- What the r3 review pins require.
+
+Let me read FROZEN.json and list artifacts/formulation.
+
+Also check the outbox of astra-lead-formulation (latest events) for the r3 review assignment details, and astra-lead-audit's inbox for the r3 card (astra-life05-verify-gform-r3). The inbox file astra-lead-audit.jsonl contains the assignment card with gate criteria — that's the authoritative ask. Let me read the tail of comms/inbox/astra-lead-audit.jsonl for the card.
+
+Let me do this in parallel: (1) read tail of astra-lead-audit inbox, (2) list artifacts/formulation + FROZEN.json, (3) grep for F2b artifact path in reviews.
+dsh: reasoning:
+Now the picture is clear. The swarm is in a live, contested state. It's 01:08+; a new controller event at 01:12 appears (astra-detector-patch-result-0112 blocker) — wait, that's created_at 01:12 but I read it at ~01:08? The file timestamps may be ahead? Actually the tail shows a blocker with created_at 01:12:00 — future? The system clock... let me check current time. Earlier dirs showed 01:06. The prompt says 15-min checkpoints; the event at 01:12 may have just been written as I read (time might now be ~01:12). Let me check date.
+
+Anyway: the top of my time budget. I need a fast, independent, class-bound task.
+
+The most useful and safe task for a bounded worker right now:
+
+**Independent verification supporting `astra-life05-verify-gform-r3`** — specifically pin-consistency of the FROZEN rev29 set plus F2b content review? Or:
+
+**G-FORM F2b independent review**: G-FORM waits on F2b ≥2 accepts. Wait — the handoff said F2b 0 accepts. A worker review with a defensible verdict could help. Let me find F2b artifact.
+
+But hold on: the astra-detector-patch-result-0112 blocker says a detector patch was tested and not accepted, and full audit_evidence reports 21 hard findings plus drift (current e36b0d644ca). The critical path right now is the CLASSSEP adjudication (deadline 02:30) and G-FORM r3 verification.
+
+For a bounded worker with ~4 minutes, the strongest contribution is a **hash-bound, reproducible measurement** that others can use. Options:
+
+A) **F2b review** (unblocks G-FORM). Need F2b artifact content. Let me check the FROZEN files list for F2b and the map's F2b node.
+
+B) **Independent replication of the CLASSSEP FN claim**: run worker-049's pinned corpus at both c266 and a8c04 (and maybe e2d24b), reproducing 10/10 suppression vs 3/4 FP probes. This is directly responsive to the open adjudication and cheap to run if the corpus + driver exist. But careful: running the detector at pinned copies doesn't modify research_map/class_separation.py, so it's allowed (no detector writes). Evidence: a JSON with per-fixture results at cited hashes. That's exactly what the adjudication needs ("per-fixture TP/FP/FN census"). But the adjudication is the audit lead's; still, independent replication is the protocol's currency. Risk: I might duplicate worker-098/worker-049. A *third* independent measurement at pinned hashes is valuable for "two independent reviews on unchanged hashes".
+
+Hmm, time. Let me check what's quickest to execute reliably:
+
+The F2b review requires understanding; the CLASSSEP replication requires running existing scripts with known paths. Let me quickly check the existence of:
+- artifacts/worker-049/classsep_fn_audit/ (corpus, results.json)
+- runtime/bin/classsep_regression.py
+- artifacts/worker-098/classsep_prose_shadow/drift_recheck.json
+- the pinned detector copies
+
+If there's a self-contained runner (classsep_regression.py) with fixtures, I can run it against each candidate hash by copying the pinned bytes to a temp module and importing. That's a clean, independent, hash-bound measurement: for each of c266dbec, a8c04fc3, e2d24b92 (and current e36b0d64), run the 27-fixture regression + the cue-carrying FN corpus + FP probes, and produce a census JSON.
+
+Actually wait — detector writes are frozen, and there's an incident about *no recorded authorizing event* for changes. The current file is now e36b0d644ca (per the 01:12 blocker) — a direct patch that is NOT accepted. Someone (lead-audit?) patched it despite the freeze. This is messy. My independent measurement should cite hashes and NOT write to the detector.
+
+Given the time pressure, I'll pick the task based on what I can verify fastest. Let me inventory the relevant files (existence + sizes) in one command, then decide. Also check the current time.
+
+Let me also consider a *fully self-contained* quick task with high value: **independent verification of the frozen-hash drift guard**: measure sha256 of every file in FROZEN rev29 + the three detector revisions + the taxonomy, compare against declared pins in FROZEN.json / map / reviews, and emit a `gate_evidence` artifact: "pin drift census" at time T. This is mechanical, fast, reproducible, and directly serves both G-FORM r3 verification (which must pin FROZEN bytes + each per-file pin) and CF-26/CF-27 (instrument drift). Falsifier: any file's measured sha differs from its declared pin; re-run returns different set. Evidence: hash table. That's a solid ~2-minute task with real value.
+
+But is it *class-bound*? Yes: bind to the formulation classes (AF-WCC-VAC-GEN, AF-SCC-C2-VAC-GEN, AF-SCC-C0-VAC-GEN, AF-WCC-SCALAR-SPH) via the FROZEN files that carry the class schemas; node F1/F2, gate G-FORM. The task instruction says "Take one class-bound task" — a pin-drift audit of the class schemas is class-bound if I bind class IDs.
+
+Even better: combine the pin census with a *content check* that the three class schemas in FROZEN are distinct (disjointness) and that conclusion types match — but that's more work.
+
+Decision: Let me do the **G-FORM rev29 pin-drift + class-binding census**:
+1. Measure sha256 of every file listed in FROZEN.json (rev29 as currently on disk) and compare to declared.
+2. Also measure the declared r3 pins from the review cards / map (F1 rev13 d9cebb9404b2/e9a27996dfd3/b2ab6acb2bbe, FROZEN 815e08079aefbc) and the detector hashes (c266dbec, a8c04fc3, e2d24b92, current).
+3. Extract from FROZEN-listed class schema files the class IDs they define, and verify each of the four frozen class IDs appears in exactly one schema file and no schema mixes C0 and C2 (the hard rule from ASTRA_HANDOFF: "Do not use C0 or C2"; separate schemas).
+4. Emit artifact JSON + artifact/claim/review/status events + checkpoint.
+
+This yields hard evidence for the r3 verification (pin stability across my window: measure twice, 20s apart, to show stability) and directly tests the moving-target CF-27 with byte timestamps.
+
+But wait: is F2b review more valuable? G-FORM's blocker is F2b ≥2 accepts. My pin census wouldn't add an accept. The r3 verification is by lead-audit anyway.
+
+Hmm. Let me look at what F2b is and whether I can review it in-time. Let me check the map for F2b artifact path and the FROZEN files. Actually, let me check `artifacts/formulation/reviews/` and the FROZEN files list (full). Also the astra-lead-formulation outbox for F2b.
+
+Let me run a quick reconnaissance (one command, parallel with a clock check), then commit to a task. I'll spend ≤60s on recon.
+dsh: reasoning:
+Current time 01:07:45 (the system clock is behind the file timestamps I saw earlier? The dirs listed 01:06-01:07; fine, current time ~01:07:45). Wait, the astra inbox had an event created_at 01:12:00 — that's future-dated (or the clock is off). Not my concern.
+
+Time budget: I should complete within ~5 minutes (supervisor relaunches ~every 6 min: 00:52, 00:58, 01:06 → next ~01:12). So I have until ~01:12-01:13.
+
+Given that, the fastest high-value class-bound task:
+
+**Run the existing `runtime/bin/classsep_regression.py` and the FN corpus at the pinned hashes to produce an independent per-fixture census.** But that may take a while to set up (imports, fixtures).
+
+Alternative fast one: **FROZEN rev29 pin verification (`verify_frozen.py` exists!)** — `artifacts/formulation/tools/verify_frozen.py` (745 bytes) likely verifies all pins. Running it and emitting an independent hash-pinned verification report is very fast. But it's the author's tool; independent verification should use my own measurement. I can write a tiny independent script (not using their tool) that:
+- reads FROZEN.json, recomputes sha256 for all 50 files, compares bytes and sha;
+- verifies FROZEN.json's own sha (815e08079aefbc) and dual-mirror equality (artifacts/formulation/schemas/* vs schemas/*);
+- verifies the taxonomy hash (research_map/formulation_taxonomy.yaml 0abb9ed8a961, artifacts/formulation/formulation_taxonomy.yaml d7419b4e8963) unchanged;
+- runs the check twice ~15s apart to detect mid-window drift (CF-27/moving target);
+- emits a JSON artifact + events.
+
+This is a genuinely useful, class-bound (G-FORM, F1/F2 classes), independent verification with hard hash evidence, complementing lead-audit's r3 verification. It addresses the exact thing r3 reviewers must pin: "r3 reviewers must pin the FROZEN bytes plus each per-file pin, and the moving-target stop rule applies."
+
+Also it can detect the current detector drift (e36b0d64 vs c266/a8c04) — but that's G-AUDIT not G-FORM. I can include the detector hashes as a secondary observation (CF-26 status) — but careful not to overreach; keep it in the artifact as a recorded observation with hashes, not a verdict.
+
+Wait: the r3 review window — "FROZEN rev29 same-revision move inside the r3 window" (CF-27). If my measurement shows all 50 files match declared pins at two instants, that's exactly the evidence the r3 verifier needs (a fresh quiescent pin census). Good.
+
+Also note: the FROZEN.json itself is listed? Let me check: the files dict has 50 entries; `artifacts/formulation/FROZEN.json` may not be self-listed. The map cites FROZEN sha 815e08079aefbc.
+
+I'll write `artifacts/worker-099/frozen_r3_pin_census/`:
+- `run_pin_census.py` (my own, ~120 lines)
+- `pin_census.json` (result: per-file declared/measured/bytes_match/sha_match; FROZEN self-sha; dual mirrors; class-schema binding map; detector hashes observed; two measurement instants; mtimes)
+- `.sha256` sidecars.
+- Plus a `README.md`.
+
+Then 4 events (artifact, claim, review, status) + checkpoint `runtime/state/w099_checkpoint_frozen_r3_pin_census.json`.
+
+Class binding: classes = AF-WCC-VAC-GEN, AF-SCC-C2-VAC-GEN, AF-SCC-C0-VAC-GEN; node F1/F2; gate G-FORM. Also check the dual mirrors `schemas/*` equal artifacts/formulation/schemas/*; and extract class ids from the schema YAMLs to confirm each of the four class ids appears in exactly one schema file (class binding check). The four frozen classes: AF-WCC-VAC-GEN, AF-SCC-C2-VAC-GEN, AF-SCC-C0-VAC-GEN, AF-WCC-SCALAR-SPH. Note the FROZEN list has 3 schema files (wcc, scc_c2, scc_c0); AF-WCC-SCALAR-SPH may be in the taxonomy/registry. Let me just grep the class ids in the frozen schema files and taxonomy.
+
+Time check: writing the script + running + events + checkpoint ≈ 3-4 min if I'm efficient. Let's go.
+
+Plan:
+1. Write script (fast).
+2. Run it (fast, all local hashing).
+3. Write events + checkpoint.
+4. Verify JSON parses.
+5. Exit summary.
+
+Let me write the script now. It must be robust and self-contained (stdlib only). Design:
+
+```python
+#!/usr/bin/env python3
+"""Independent G-FORM rev29 pin census (worker-099).
+
+Purpose: at two instants separated by a short quiescent gap, recompute sha256 for every
+file pinned in artifacts/formulation/FROZEN.json (rev29), verify dual mirrors, verify the
+frozen taxonomy hashes, and census the class-id -> schema binding for the four frozen
+classes. Does not import or use the formulation author's verify tool.
+"""
+import hashlib, json, os, sys, time, datetime
+
+ROOT = ... based on script path: parents[3]
+FROZEN = "artifacts/formulation/FROZEN.json"
+TAXONOMY = {...}
+
+def sha256(p): read bytes -> hexdigest, bytes
+def measure(): returns dict of per-file measured {sha256, bytes, mtime_ns}
+def class_binding(): grep class ids in frozen yaml files + taxonomy.
+
+run 1 (measure all), sleep 20, run 2 (measure all), compare.
+```
+
+Class IDs: I need the exact four class ids. The frozen classes are AF-WCC-VAC-GEN, AF-SCC-C2-VAC-GEN, AF-SCC-C0-VAC-GEN, AF-WCC-SCALAR-SPH. I'll count occurrences of each ID string in each of the 3 schema files and in formulation_taxonomy.yaml (both copies).
+
+Also verify dual-mirror pairs: entries where key startswith 'schemas/' and the artifacts/formulation/schemas/ counterpart have equal sha (they're separate entries in FROZEN with same hashes: af_scc_c0 b2ab..., af_scc_c2 e9a2..., af_wcc d9ce... — yes identical).
+
+Also detect FROZEN self-sha (measure vs the map-cited 815e08079aefbc). I'll include declared expectations: the map/reviews cite FROZEN sha 815e08079aefbc — I'll hardcode that expected value from the handoff but mark it as "external reference (ASTRA_HANDOFF/CF-27), re-checked at runtime".
+
+Also record the detector hashes observed at census time (research_map/class_separation.py, proposed/, pinned copy) as a secondary CF-26 observation, clearly separated (not a G-FORM verdict).
+
+Timing: 50 files hashing is fast. Sleep 15s between passes to bound the window. Total run ~20-25s. Good.
+
+Verdict logic:
+- `pin_census_verdict`: PASS if all 50 files match declared sha256 AND bytes AND no changes between instant A and B AND FROZEN self-sha matches 815e08079aefbc AND dual mirrors equal; else DRIFT.
+- `class_binding`: per class id, list of files containing it with counts; flag if an id appears in >1 schema file or a schema file contains both C0 and C2 markers.
+
+Output JSON with:
+- artifact id, worker, created_at, node F1/F2, gate G-FORM, class_ids
+- frozen_manifest: path, sha256, bytes, revision, frozen_at
+- declared_external_reference: FROZEN 815e08079aefbc
+- instants: [ts1, ts2], quiescent_gap_seconds
+- per-file table (50 entries): declared_sha256, measured_sha256_a, measured_sha256_b, sha_match, bytes_match, stable, mtime_a, mtime_b
+- summary: n_files, n_sha_match, n_stable, n_drift, drift_list
+- dual_mirrors: pairs
+- taxonomy_hashes: {artifacts/formulation/formulation_taxonomy.yaml: measured vs declared d7419b4e8963, research_map/formulation_taxonomy.yaml: measured vs 0abb9ed8a961}
+- class_binding: {class_id: {files: {...}, n_files}}
+- detector_hashes_observed: {...} (secondary, CF-26)
+- falsifier text
+- reproduce command
+
+Then events + checkpoint. Falsifier: "any pinned file's measured sha256 differs from its FROZEN rev29 declaration, or the two quiescent instants differ, on re-run at the recorded mtimes."
+
+Let me write it now.
+
+One caution: FROZEN.json lists `artifacts/formulation/reviews/ADJUDICATION_flash04_ambiguity.md` etc. hashing all fine.
+
+Note the output paths: artifacts/worker-099/frozen_r3_pin_census/. Directory creation.
+
+Write with the write tool, then run.
+
+Also — "class-bound" means the task must bind to class ids; my census covers the class schemas. Good.
+
+Let me write the script.
+dsh: reasoning:
+Now run it. It takes ~16 seconds (15s gap + hashing). Let me run it in the background? No, it's quick; run in foreground with timeout 120s.
+
+Then write the README, events, checkpoint. Let me run now.
+dsh: reasoning:
+Interesting! Verdict DRIFT: `artifacts/formulation/evidence/taxonomy_consistency.json` does NOT match its declared pin. This is a real, actionable finding — a pinned FROZEN rev29 file has drifted (or was already drifted at freeze time). Let me inspect the details:
+- declared sha vs measured first/second
+- mtime
+- whether it changed across my 15s gap.
+
+Let me look at the row for that file and the file's content. This is potentially a G-FORM pin violation (CF-27-like: a pinned file that doesn't match its declaration). Need to characterize precisely: maybe the frozen_at is 00:57:26 and the file was modified after (e.g., at 00:59 or 01:04 by formulation lead). Let me check mtime and content; also which declared hash it has in FROZEN vs actual.
+
+This is exactly the kind of evidence the r3 verifier needs. Let me extract details quickly, then decide the correct interpretation:
+- If measured != declared, the FROZEN rev29 manifest is internally inconsistent: a reviewer binding to the declared pin would reject the on-disk file.
+- Falsifier for that file: re-hash.
+
+Let me get the details now. Also check the file's mtime and compare with FROZEN frozen_at.
+dsh: reasoning:
+Nuance: the sha256 and bytes MATCH the declared pin (identical content), but the **mtime changed** between my two instants (01:07:35 → 01:08:20). So a writer rewrote the file with *identical bytes* mid-window. My `stable_across_gap` criterion includes mtime equality, which is too strict for the "moving target" question (CF-27 was about *bytes* changing under the same revision number). The content is byte-stable; only mtime moved. This is a touch/rewrite (probably the formulation tooling re-running `check_taxonomy_consistency.py` which rewrites its report deterministically).
+
+This is actually an important and honest distinction:
+- **Byte-level pin fidelity: PASS for all 50 files** (all declared sha256 and bytes match).
+- **mtime quiescence: FAIL for 1 file** — a writer rewrote it with identical bytes during the census window, i.e., instrument activity continues inside the r3 window even though canonical bytes are stable.
+
+I must not overstate this as a pin violation. The right verdict: content pins PASS (50/50), but the frozen set is **not quiescent**: 1 file's mtime advanced during a 15-second window while bytes stayed identical. This is direct evidence for the moving-target stop rule: r3 reviewers must bind bytes+sha, and "any write" (even byte-identical) voids quiescence.
+
+Which tool rewrites it? Likely `artifacts/formulation/tools/check_taxonomy_consistency.py` run by formulation lead's monitor cycle. The mtime changed at 01:08:20.982 — right during my run (my first instant was ~01:07:35? Let me compute: mtime_ns 1789146455 ≈ ... and second 1789146500 ≈ 01:08:20. Actually my first measurement was at 01:08:05 and second at 01:08:20 roughly. The file's first mtime was 1789146455 = 01:07:35?? Let me convert: the script ran at 01:08:0x (started after I wrote the file at 01:08). Hmm, t0 could be 01:08:05, and mtime_first = 1789146455.107 ≈ ... I need a conversion. Let me just note the timestamps as measured and compute the actual ISO times.
+
+Wait, I should double check my stability criterion and fix the script/census to distinguish:
+- `bytes_stable_across_gap` (sha equal)
+- `mtime_stable_across_gap` (mtime equal)
+- verdict: `PINS_PASS` / `PINS_DRIFT` (declared mismatch) vs `QUIESCENCE_WARN` (mtime moved, bytes stable)
+
+I should update the script and re-run to produce a corrected artifact, because the claim I'll emit must be precise. Time: rerun takes ~16s. Fine.
+
+Also valuable: capture which file(s) moved and when, and note the writer hypothesis (not proven — but I can check whether any process is running: monitor_cycle.py / formulation_checkpoint_loop.pid exists). I can note "a writer process rewrote the file with identical bytes; candidate instrument: artifacts/formulation/tools/check_taxonomy_consistency.py (deterministic report) — not proven by this census."
+
+Let me also do a third measurement pass at the end to see if mtime moves again (evidence of an active writer). I'll restructure:
+- Pass A, gap, Pass B: as now, but classify separately:
+  - `pin_verdict`: PASS if all sha+bytes match declared and FROZEN self-sha matches and dual mirrors/taxonomy ok.
+  - `quiescence`: `quiescent` if all mtimes stable across gap, else `active_writer` with list of files whose mtime moved (with byte_stable flag).
+
+Then re-run (passes A/B) — and if a file's mtime moves again, that's stronger evidence. I'll also record the number of files whose mtime moved.
+
+To keep the artifact reproducible and simple, I'll update the script:
+- row fields: sha_match_declared, bytes_match_declared, bytes_stable_across_gap, mtime_stable_across_gap, mtime_first_iso, mtime_second_iso.
+- summary: n_sha_match_declared, n_bytes_stable, n_mtime_stable, byte_drift_list, mtime_moved_list.
+- verdicts: `pin_verdict` (PASS/DRIFT) and `quiescence_verdict` (QUIESCENT/WRITER_ACTIVE with mtime_moved_list).
+- keep overall `verdict` field but define it as pin fidelity; the finding about writer activity goes in `quiescence`.
+
+Then the event claim can say: 50/50 content pins verified byte-identical to FROZEN rev29 declarations at two instants; FROZEN self-sha 815e08079aefbc confirmed; dual mirrors equal; taxonomy hashes confirmed; BUT 1 pinned file (taxonomy_consistency.json) was rewritten with identical bytes inside the 15s window → the frozen set is not quiescent; r3 reviewers must bind bytes/sha not mtime, and the moving-target stop rule remains live.
+
+This is a genuinely useful independent verification finding, and it's honest.
+
+Let me update the script now — replace the relevant parts. I'll rewrite the whole file with the write tool (faster than multiple edits), then rerun.
+
+Also I want to record the ISO mtimes. Let me use datetime.fromtimestamp(ns/1e9).astimezone().isoformat(timespec='milliseconds').
+
+Additionally, maybe do 3 passes: A, gap 15s, B. That's enough.
+
+Let me rewrite.
+dsh: reasoning:
+Now the run shows PASS / QUIESCENT, but the previous run detected the mtime move. This is an important finding either way: the writer rewrote the file at 01:08:20 with identical bytes; this run (01:09-ish) saw no move. So the writer is intermittent (probably a loop running every ~60s or on-demand).
+
+Also two observations:
+1. `detector_hashes_observed_secondary`: research_map/class_separation.py now shows **a8c04fc31e4a** — but ~90 seconds ago (at 01:07:45) it was **e36b0d644ca**! So the detector was rolled back/adopted to a8c04 within the last minute. That's a live CF-26-relevant observation: the instrument moved again (e36b0d64 → a8c04fc3). My census captured `mtime` for it. This is important evidence for the adjudication: the file changed hash during a period when "DETECTOR WRITES FREEZE" was declared. I should record the observed *sequence* of detector hashes rather than a single snapshot.
+
+Wait — careful: at 01:07:45 sha256sum showed e36b0d644ca for research_map/class_separation.py. The 01:12 blocker event (future-dated) said "detects frozen artifact drift in research_map/class_separation.py (previous c266dbceca87, current e36b0d644ca)". And now it's a8c04fc31e4a. Let me re-check the current hash right now to confirm and get mtime. If it changed again, that's a third move in ~3 minutes.
+
+Hmm, but could *my* script have caused it? No — I never touch it. Could the "restore to a8c04" be the audit lead's action? Possibly the adjudication process restored a8c04fc31e4a (the previously "applied canonical"). Or someone reverted e36b0d64.
+
+This is time-sensitive, high-value evidence for CF-26 / the open adjudication. But note the freeze is about detector *writes*; recording hashes is measurement, allowed.
+
+2. The literal "C0 or C2" count: my regex found `C0 or C2`/`C2 or C0` literals in the schemas — e.g., af_scc_c0_vacuum.yaml has 2. ASTRA_HANDOFF rule 2 says "never use 'C0 or C2'". But careful: the literal may appear in *prohibition/negative* context (e.g., "must not be stated as C0 or C2") or in quotes of the anti-pattern. I must not claim leakage from a raw count. I can include the co-mention counts as *observations* with context lines — that's the honest thing: extract the matching lines so a reviewer can judge. Let me add context extraction: for each schema file, the lines containing the literal C0-or-C2 pattern. That turns a noisy count into usable evidence.
+
+But time: it's ~01:09:30 now. The supervisor may relaunch at ~01:12. I need to finish: artifact, README, events, checkpoint. Adding context lines requires a rerun (~20s) plus edit. Worth it? The C0/C2 literal is potentially a *hard rule* violation and a reviewer would want the lines. But my task's scope is the pin census; class binding is secondary. I can report counts and note "literal occurrences include prohibition/quotation contexts; context lines not extracted in this artifact" — that's a weakness. Better: quickly grep the lines now and include them in the README (not the artifact) or in the findings of the review event. Let me grep them (fast, no rerun) and include exact lines in the finding.
+
+Actually, I can enrich the census artifact by adding a `literal_c0_or_c2_context` field. That requires rerunning the script (16s) — acceptable. But keep scope tight: I'll add the context extraction to the script (3 lines) and rerun. Total ~40s. Then events+checkpoint ~1.5 min. Should be fine by 01:12.
+
+Hmm, but there's a risk the writer rewrites files mid-run again (fine, artifact handles it) and a risk the supervisor kills my session at ~01:12 (launch interval 6-8 min; last launch 01:06:38; the supervisor script may wait for the previous process to exit before relaunching — actually the instances show exits at 00:58, 01:06 etc., and new ones start ~30s later: 00:52:46 start → exit 00:58; 00:58:51 start → exit 01:06; 01:06:38 start → next would be after my exit. Looking at the pattern: starts 00:52:46, 00:58:51 (gap 6:05), 01:06:38 (gap 7:47). These look like relaunch ~30-60s after previous exit. So the supervisor waits for exit! That means I have more time than I thought — the next launch happens after I exit. Previous instances ran ~5-8 min each. Good, but I should still be efficient.
+
+Let me check the supervisor script quickly? No — the pattern is clear enough. I'll aim to finish within ~5 more minutes.
+
+Priority now:
+1. Add literal C0/C2 context lines to the census + rerun (1 min).
+2. Write README.md.
+3. Emit 4 events (artifact, claim, review, status) + validate.
+4. Write checkpoint JSON.
+5. Exit.
+
+Also: capture the detector hash transition evidence. I have:
+- 01:07:45 measurement: e36b0d644ca75b1e... (from my earlier `sha256sum`, in this session's transcript)
+- 01:09 census: a8c04fc31e4a...
+I should record both with the caveat that the 01:07:45 value came from a sha256sum in this session (not in the artifact), and the census records the current value + mtime. To make it self-contained, I can note it in the checkpoint (a record of my session) and in the review finding as an observation with both hashes and times. The artifact records the current hash + mtime; that's reproducible.
+
+Actually — I can strengthen: record the *current* detector hash plus the mtime. If the mtime is ~01:08:5x, that's the moment of the e36b0d64→a8c04fc3 transition, right after the 01:07:45 observation. Let me get that now from the artifact (mtime field).
+
+Let me do the script edit + rerun + grep detector mtime in one go.
+dsh: reasoning:
+Key facts:
+
+1. **Detector transition confirmed**: `research_map/class_separation.py` mtime 2026-09-12T01:08:14.862 with hash a8c04fc31e4a. My earlier sha256sum in this session at ~01:07:45 (clock) showed e36b0d644ca. Hmm, wait — the clock: the current time was 01:07:45 when I ran `date -Is` (first command in that batch), and the `sha256sum` ran in the *next* batch (maybe 01:07:50). The file mtime is 01:08:14, which is *after* my sha256sum. So the sequence is: e36b0d64 at ~01:07:50 → a8c04fc3 written at 01:08:14. My census's first instant was 01:08:55, so it saw a8c04. Good: the census records a8c04 with mtime 01:08:14.
+
+So within ~25 seconds the frozen detector was replaced again during the declared freeze window. That's CF-26-relevant live drift evidence: the file moved e36b0d64 → a8c04fc3 at 01:08:14, and the 01:12-dated blocker (astra-detector-patch-result-0112) says the patch e36b0d64 is not accepted. So someone rolled it back to a8c04. This is exactly the kind of event the adjudication needs recorded with hashes and times.
+
+Careful about attribution: I don't know who wrote it or why. I'll record the observation: at 01:07:5x (session clock) the canonical detector was e36b0d64; at 01:08:14 the file was rewritten to a8c04fc3 (mtime), observed live at 01:09; consistent with a rollback of the unaccepted patch. I'll note "author unknown to this worker; no authorizing event seen in comms as of 01:09" — I should verify whether there's an authorizing event in the accepted stream for the e36b0d64→a8c04 move. I can grep events.jsonl/rejected for "a8c04" or "e36b0d" recent entries. Quick grep.
+
+2. **C0/C2 literal contexts are all prohibitions/quotation** ("any 'C0 or C2' composite regularity" in the *prohibited* list; "No containment with C2 or C0 is asserted"). So no rule violation — the literal appears as the prohibited composite, which is precisely the correct usage. Good: I can report class_binding with this context and conclude no composite leakage in the sampled literals. I must be careful: rule 2 in ASTRA_HANDOFF is "write separate C0 and C2 schemas; never use 'C0 or C2'" — meaning never use it as a class definition. The occurrences are in the `forbidden`/`anti_patterns` sections. Fine.
+
+3. Class binding: all four class IDs appear 9× in the corpus files I scanned; each schema file mentions other class IDs too (cross-references), so "appears in exactly one file" isn't the right test. The right quick test: does each schema file *define* its own class and include the others only as references/prohibitions? I can note the co-mention counts and the literal-context lines, and explicitly scope the claim: "no composite-regularity class definition found; all 5 literal 'C0 or C2' occurrences are inside prohibition/quotation contexts (lines listed)". That's defensible.
+
+Now, add to the script: `literal_c0_or_c2_context` extraction (lines with line numbers). Rerun (16s). Then finalize. It's 01:10:0x now. Budget fine.
+
+Actually, to save time and avoid another rerun of the 15s census, I could add the context extraction and accept a rerun. It's worth it for artifact completeness: the artifact should contain the evidence, not just my chat. Let me do a quick edit to the class_binding function to include context lines.
+
+Then run, write README, events, checkpoint. Let me move fast.
+
+Edit: in `class_binding`, in the co_mention loop add:
+```python
+        lines = []
+        for i, line in enumerate(text.splitlines(), 1):
+            if re.search(r"C0\s+or\s+C2|C2\s+or\s+C0", line):
+                lines.append({"line": i, "text": line.strip()[:300]})
+```
+and include `"literal_C0_or_C2_lines": lines`.
+
+Then rerun.
+
+Also for the detector observation, I'll record in the *checkpoint* and review finding (not re-run). Good.
+
+Let me edit now.
+dsh: reasoning:
+Interesting: events.jsonl has a mention of e36b0d64 (1 occurrence) and there are events created at 01:08:15 — exactly when the detector file was rewritten (mtime 01:08:14.862). Let me find that event to see whether it authorizes the move (likely a `direction_update` or `artifact` event from the audit lead reporting the rollback). This is important context: if an authorizing event exists at 01:08:15, then the move is recorded (though the freeze said detector writes freeze — the audit lead may have rolled back to the accepted canonical).
+
+Let me grep the events around 01:08:15 for classseparation/a8c04/e36b0d. Quick. Also rerun the census in the background while I do this? The census takes 16s; run it in background and meanwhile inspect events. Yes — start it as a background job.
+
+Actually simpler: run census in background with job, then inspect events, then collect.
+
+Let me do both: start background job for census; grep events.
+dsh: reasoning:
+Very informative. Key facts from ingested events:
+
+- The detector moves: 23:30 pin c266dbec → 00:52 write a8c04fc3 → 01:06:12 write e36b0d64 → **01:08:14 write back to a8c04fc3** (my observation!). Note worker-073 recorded a8c04→e36b0d64 at mtime 01:06:12. My session measured e36b0d64 at ~01:07:50 and the census observed a8c04fc3 with mtime **01:08:14.862**. So the fourth move (e36b0d64 → a8c04fc3 at 01:08:14) may be unrecorded so far — the events I saw are up to ~01:09:28 received; worker-090's blocker at 01:08:56 says live e36b0d64 (their measurement predates 01:08:14? their event created_at 01:08:56 but received 01:09:28 — their measurement may have been taken earlier).
+
+So my independent observation has genuine incremental value: **a fourth canonical-detector write at 01:08:14.862 (e36b0d64 → a8c04fc3), during the open REC-22 freeze round, with no authorizing event observed**, restoring the adjudication's "applied canonical" a8c04fc3 bytes. That's directly relevant to CF-26 and to the 02:30 adjudication. My census artifact records the a8c04 hash + mtime 01:08:14.862; my session transcript records e36b0d64 at ~01:07:50 (from the `sha256sum` command). I should record this carefully as an observation with the caveat about how each value was obtained (both are direct sha256sum/measurement on the canonical path).
+
+Let me verify the exact mtime and confirm no other writer after 01:08:14: current hash a8c04fc3, mtime 01:08:14.862. Yes from the live check at ~01:10.
+
+Also, importantly: my census's `detector_hashes_observed_secondary` records the snapshot of all three at census time (a8c04 for canonical, e2d24 for proposed, c266dbec for pinned recovered copy). This is a hash-bound record that the canonical path was back at a8c04fc3 at 01:08:55–01:09:10.
+
+Now I must decide how to present this. My task: "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit." My chosen task: independent G-FORM rev29 pin census. The detector observation is secondary but valuable; I'll include it as a separate finding in the review event (clearly not a G-FORM verdict) and in the checkpoint. Since it's an independent observation of a *second* unrecorded write, it strengthens worker-073's W073-02 and worker-090's blocker.
+
+Now let me collect the background census result (with C0/C2 context), write README, then events + checkpoint. Time ~01:11. Let me move.
+
+First check the background job.
+dsh: reasoning:
+This run again caught the writer: `WRITER_ACTIVE`, mtime moved on `taxonomy_consistency.json` (bytes identical). So across three consecutive census runs at 01:08:0x, 01:08:55, and ~01:10:5x:
+- Run 1: mtime moved (writer active at 01:08:20)
+- Run 2: quiescent
+- Run 3: mtime moved again (writer active)
+
+This is solid evidence: **the FROZEN rev29 set is not quiescent during the r3 window**; a writer rewrites `artifacts/formulation/evidence/taxonomy_consistency.json` with byte-identical content periodically. This validates the CF-27 moving-target concern in the *mtime* channel (though bytes are stable).
+
+Final artifact sha: a08327006a54d48f7c585a29e5656a8a1f35654787017511e33f05269ddcfe94 (41028 bytes).
+Script sha: bd6de97bd7448ba1fd7d0ad9b146340cb317a3ba0552bb32c138b57967acf5aa.
+
+Let me extract the mtime detail for the artifact's record from this final run, plus check `taxonomy_consistency.json`'s mtime now. And get the detector mtime/hash from the final artifact (a8c04, 01:08:14.862) — the census recorded it again.
+
+Then:
+1. Write README.md for the artifact dir with the three-run timeline and interpretation + the detector-drift note.
+2. Build events JSONL (artifact, claim, review, status) and validate with schemas.validate_event.
+3. Write checkpoint runtime/state/w099_checkpoint_frozen_r3_pin_census.json.
+4. Verify, then final summary.
+
+Note: the artifact itself is the authority for the final run (quiescence WRITER_ACTIVE with the mtime_moved list and times). The interpretation field explains both verdicts. Good.
+
+One nuance: the artifact's interpretation says "quiescence_verdict=WRITER_ACTIVE means at least one pinned file's mtime advanced inside the gap even though its bytes stayed identical; that is writer activity inside the r3 window, not a pin violation". Good.
+
+Also worth including in the claim: the writer identity is not established by my census; candidate tool `artifacts/formulation/tools/check_taxonomy_consistency.py` regenerates exactly this report deterministically. I can note it as a hypothesis flagged as unproven. Let me quickly test the hypothesis? Running their tool would write the file (that's a formulation artifact write) — NOT allowed for me (I must not write others' artifacts). I could copy the tool + target to a temp dir... too complex. I'll state it as an unverified hypothesis.
+
+Actually, I can partially verify without writing: inspect the tool source to see whether it writes `evidence/taxonomy_consistency.json`. Let me grep quickly. That's read-only and makes the note much stronger ("the only tool in the frozen set whose source writes exactly this path is X" — evidence-based, not proof of who ran it).
+
+Let me do: grep -l "taxonomy_consistency.json" artifacts/formulation/tools/*.py and grep -n "taxonomy_consistency" in monitor_cycle.py / run_acceptance.py.
+
+Then write README + events.
+
+Time: ~01:11. Let's be quick.
+dsh: reasoning:
+Excellent evidence:
+- Final run window: 01:09:32 → 01:09:47; the file's mtime moved 01:09:30.215 → 01:09:34.235 with byte-identical content (sha matches declared 9e335e9b).
+- So the writer is active roughly every ~60s (01:08:20, 01:09:34).
+- The tool whose source writes exactly that output path: `artifacts/formulation/tools/check_taxonomy_consistency.py:79` (plus 3 other tools referencing it: close_findings_rev27.py, evidence_binding_repair_rev29.py, verify_freeze_hold_findings.py). This is a source-level observation, not proof of which process ran.
+
+Now write the README and events. Time ~01:11:30.
+
+README content (concise):
+- Task, node/gate/classes
+- What was measured (3 runs timeline)
+- Findings F1-F4:
+  - F1: pin fidelity PASS 50/50 at all runs; FROZEN self-sha 815e08079aefbc; dual mirrors byte-equal; taxonomy prefixes match.
+  - F2: quiescence WRITER_ACTIVE: taxonomy_consistency.json rewritten byte-identically at 01:08:20 and 01:09:34 inside the r3 window; candidate writer tool check_taxonomy_consistency.py:79 (unproven).
+  - F3 (secondary, G-AUDIT): canonical detector byte history observed 01:07:50 e36b0d64 → 01:08:14.862 a8c04fc3, i.e. a fourth write in the open REC-22 round restoring a8c04fc3; no authorizing event observed by this worker; all detector-bound verdicts must cite the hash measured.
+  - F4: C0/C2 literal census: 10 literal occurrences across 3 canonical schemas + mirrors, all in prohibition/quotation contexts (lines listed in artifact); no composite class definition found in the sampled literals.
+- Falsifiers
+- Reproduce
+
+Then events. Let me write both files now with the write tool.
+
+Event contents:
+
+artifact event:
+- event_id: w099-20260912T0112-artifact-frozen-r3-pin-census
+- created_at: 2026-09-12T01:12:00+08:00 (approx; use current time when writing)
+- actor worker-099
+- node_id "F1/F2", gate "G-FORM", class_ids 4
+- artifact_type "gate_evidence_pin_census"
+- path "artifacts/worker-099/frozen_r3_pin_census/pin_census.json"
+- sha256 a08327006a54d48f7c585a29e5656a8a1f35654787017511e33f05269ddcfe94
+- bytes 41028
+- validation_status "unverified"
+- plus evidence_refs [artifact#a0832700, script#bd6de97bd744, FROZEN.json#815e08079aef]
+- summary + falsifier + reproduce
+
+claim event:
+- statement: At the FROZEN rev29 declarations (manifest self-sha 815e08079aefbc, measured twice), all 50 pinned files match declared sha256+bytes, dual schema mirrors are byte-equal, both taxonomy hash prefixes match; the frozen set is byte-stable but not quiescent: one pinned file (taxonomy_consistency.json, declared 9e335e9b...) was rewritten with identical bytes at 01:08:20 and again at 01:09:34 inside the r3 window (3 census runs; runs 1 and 3 caught mtime moves, run 2 quiescent). Secondary: canonical detector path was e36b0d64 at 01:07:50 and a8c04fc3 at 01:08:14.862, i.e. a further unannounced write in the open REC-22 round. Conclusion_type "formal_model". assumptions. falsifier. evidence_refs. artifact_refs.
+
+review event:
+- target_id "artifacts/formulation/FROZEN.json" (rev29)
+- reviewer worker-099
+- verdict "revise" — hmm. What's the right verdict for a pin census? The artifact isn't a schema; the review is about the frozen set's reviewability. Given the writer activity, "revise" might be misread as demanding FROZEN changes. But the protocol's review verdicts: accept|revise|reject|inconclusive. For the r3 verification support: my census does not verify schema *content*; it verifies pins. As a review of the FROZEN manifest: pin fidelity passes, but the window is not quiescent. I'd say verdict "inconclusive" with score 4.0? Hmm.
+
+Let me think about what's most useful and honest. The review is advisory. I'll use verdict "inconclusive" with score 4.0, findings stating: pins verified; quiescence not achieved (writer active); detector instrument also moved; therefore the r3 window is not quiescent and any content verdict must pin sha256s and record the writer activity. An "inconclusive" review with positive pin evidence is more honest than "accept" (which would assert schema content correctness my census didn't test) or "revise" (which implies a defect in FROZEN itself).
+
+Actually — is score 4.0 with inconclusive incoherent? Other workers used accept 4.5, revise 3.0, etc. Score semantics: quality of the artifact under review presumably. I'll set score 3.5, verdict "inconclusive", and state the pin fidelity PASS separately. Hmm, but the FROZEN manifest itself is fine; what's inconclusive is the r3 reviewability framework. Let me instead make the review target the *pin census support for r3*: target_id "astra-life05-verify-gform-r3"? Protocol says review target_id. Reviewers review artifacts/targets. I'll set target_id "artifacts/formulation/FROZEN.json#815e08079aef" and verdict "inconclusive" — with a clear rationale in findings: "not a schema verdict; pin-fidelity PASS; quiescence fail; see artifacts".
+
+Wait: the protocol says a `review` needs target_id, reviewer, verdict, score 0-5, hard_failures, findings. Is a worker review allowed to be inconclusive? Yes: verdict enum includes inconclusive.
+
+- hard_failures: I'd say [] (no pin violation; writer activity is a process finding, not a hard failure of the manifest). But then the writer-activity finding is in findings with severity. Actually, per the protocol, hard_failures is required and can be empty list. I'll put [] and keep the quiescence finding as a major finding (not a hard failure) since no declared pin was violated.
+
+Hmm, but is the writer-activity a hard failure of the *r3 review window*? The controller's stop rule for moving targets presumably means reviewers must stop when bytes move; here bytes did NOT move (content identical). So it's not a hard failure of the artifact. I'll keep [] and explain.
+
+status event:
+- node_id "F1/F2", status "active", hours ~0.25, summary, evidence_refs, next_falsifier, claims_completion false.
+
+Checkpoint file: runtime/state/w099_checkpoint_frozen_r3_pin_census.json with:
+- checkpoint id, at, worker, lifecycle, task, hrs, artifacts (paths+sha), evidence (ledger? not needed), events emitted, prior-instance context (I'm incarnation 7; took new task to avoid duplicating inc 1-6 tasks), detector drift observation, next falsifiers, claims (no completion/gate).
+
+Let me write README + events + checkpoint now. I'll use a Python script to build and validate the events (importing schemas.py) and dump JSONL — faster and ensures validation. Let me write that script to a temp path and run it.
+
+Paths: repo research_map/schemas.py has validate_event. Let me check its signature: earlier transcript mentioned `schemas.validate_event(event, "up"|"down")` likely. Let me read schemas.py quickly (4KB).
+dsh: reasoning:
+Now write README + build events + checkpoint in one Python script run. Let me write the README via the write tool and the event-builder via write then run.
+
+README.md content — concise but complete.
+
+Then build_events.py in the artifact dir? Better in /tmp? The event builder is a worker tool; keep it in the artifact dir as provenance (`emit_events.py`) — consistent with other workers (worker-098 had emit_events.py). I'll put `emit_events.py` in the census dir, run it, and include its sha in the checkpoint (not in the events themselves to avoid self-reference).
+
+Event timestamps: use current time. Let me generate them at run time (datetime.now) rather than hardcode — but then the events can't reference a fixed created_at in the checkpoint... I can print them. Fine.
+
+Let me define in emit_events.py:
+- ART_SHA = sha of pin_census.json (computed at runtime)
+- SCRIPT_SHA = sha of run_pin_census.py (computed)
+- EMIT_SHA = sha of emit_events.py itself (computed via __file__) — avoid referencing it in events to prevent circularity; just record in checkpoint.
+- FROZEN_SHA prefix 815e08079aef...
+- events list, validate each with schemas.validate_event, write to comms/outbox/worker-099.jsonl **append** (existing file has prior incarnations' events; must append, not overwrite!). Use open(..., 'a').
+- Also print the event ids.
+
+Check for duplicate event ids: my ids use current timestamp HHMM (e.g., 0113). Prior events used 0044/0052/0058/0104. No collision.
+
+Events:
+
+1. artifact:
+```python
+{
+ "event_id": f"w099-{ts}-artifact-frozen-r3-pin-census",
+ "event_type": "artifact",
+ "created_at": iso,
+ "actor": "worker-099",
+ "node_id": "F1/F2",
+ "gate": "G-FORM",
+ "class_ids": CLASS_IDS,
+ "artifact_type": "gate_evidence_pin_census",
+ "path": "artifacts/worker-099/frozen_r3_pin_census/pin_census.json",
+ "sha256": ART_SHA,
+ "bytes": ART_BYTES,
+ "validation_status": "unverified",
+ "runs": 3,
+ "pin_verdict": "PASS",
+ "quiescence_verdict": "WRITER_ACTIVE",
+ "summary": "...",
+ "evidence_refs": [f"artifacts/.../pin_census.json#{ART_SHA[:12]}", f"artifacts/.../run_pin_census.py#{SCRIPT_SHA[:12]}", "artifacts/formulation/FROZEN.json#815e08079aef"],
+ "falsifier": "...",
+ "reproduce": "python3 artifacts/worker-099/frozen_r3_pin_census/run_pin_census.py"
+}
+```
+
+2. claim: conclusion_type formal_model; class_id joined by ";" + class_ids list; statement; assumptions; falsifier; evidence_refs; artifact_refs.
+
+3. review: target_id "artifacts/formulation/FROZEN.json#815e08079aef"; reviewer worker-099; verdict "inconclusive"; score 3.5; hard_failures []; findings list of dicts/strings; evidence_refs; falsifier; class_ids; gate G-FORM; counts_toward_gate_accept false; authority_note.
+
+Findings (strings, each prefixed W099-PC-xx):
+- W099-PC-01 (info): pin fidelity PASS — 50/50 declared sha256+bytes matched at three independent instants (01:08:05/01:08:55/01:09:32 first-instants); FROZEN self-sha 815e08079aefbc... matches controller-cited prefix; 3/3 dual mirrors byte-equal; taxonomy prefixes 0abb9ed8a961/d7419b4e8963 matched.
+- W099-PC-02 (major, process): frozen set not quiescent — artifacts/formulation/evidence/taxonomy_consistency.json (declared 9e335e9ba1bf..., bytes 495) rewritten with byte-identical content at 01:08:20.982 and 01:09:34.236 inside the r3 window; 2 of 3 census windows caught the mtime move; source-level candidate writer artifacts/formulation/tools/check_taxonomy_consistency.py:79 (writes exactly this path) — process identity not proven by this census.
+- W099-PC-03 (major, CF-26 secondary observation): canonical research_map/class_separation.py measured e36b0d644ca7 at ~01:07:50 and back at a8c04fc31e4a with mtime 01:08:14.862; i.e. a further write inside the open REC-22 freeze round, restoring the adjudication's applied canonical bytes; no authorizing event was observed by this worker at write time; every detector-bound verdict must cite the hash it measured.
+- W099-PC-04 (info, class binding): no composite C0/C2 class definition found — all 10 literal "C0 or C2"/"C2 or C0" occurrences across the six frozen schema mirrors are inside prohibition/quotation contexts (lines listed in artifact class_binding.schema_co_mention); each of the four frozen class IDs appears in both taxonomy copies, both schema mirrors, KEY_MANIFEST and VARIANT_REGISTRY.
+- W099-PC-05 (scope): this is not a schema-content verdict; the census tests pins/quiescence/binding only, and the inconclusive verdict reflects that the r3 window was not quiescent, not a defect in the FROZEN declarations.
+
+4. status: node F1/F2, status active, hours 0.3, summary, evidence_refs, next_falsifier.
+
+Also maybe a `blocker` event for the unrecorded detector write? The review finding covers it; but a blocker is the protocol's way to flag it. Worker-073/090 already emitted blockers/artifacts for the 01:06:12 write. My observation is the 01:08:14 *revert*, which nobody has reported yet. A separate `blocker` event would be appropriate and high-value. But the task says "emit valid JSON with IDs evidence hash falsifier" — 4-5 events are fine. However, the detector drift is secondary to my G-FORM task and A1/G-AUDIT-owned. I'll fold it into the review findings and *also* emit one `blocker` event? Hmm, worker events can emit blocker; it doesn't claim completion. I think it's worth it: the adjudication (deadline 02:30) needs the full write timeline. But over-emitting could add noise; the finding is already in the accepted stream via my review event. I'll include it as a blocker event because it names node A1/G-AUDIT and gives needed_to_unblock, matching the protocol precisely. Total 5 events.
+
+Wait — but is my claim "no authorizing event observed" solid? I grepped events.jsonl for e36b0d64/a8c04fc3 and saw worker-073/090 blockers saying no announcing event. Events at 01:08:15 exist (5 of them) but they were w015/w032/w073 etc. I checked lines containing a8c04fc3/e36b0d64; none authorize a canonical write. I'll phrase carefully: "no announcing artifact/assignment event for this specific byte transition was observed in the accepted stream as of 01:10".
+
+Blocker event:
+- node_id "A1", gate "G-AUDIT", class_id "AF-SCC-C2-VAC-GEN;AF-SCC-C0-VAC-GEN"
+- description: fourth canonical detector write in the open REC-22 round observed: e36b0d644ca7 (~01:07:50 measured) -> a8c04fc31e4a (mtime 01:08:14.862); bytes restored to the adjudication's applied canonical; no announcing event observed at write time; recorded independently by the G-FORM pin census (artifact sha a0832700...).
+- needed_to_unblock: adjudication astra-life06-classsep-detector-adjudication must cite the write timeline with hashes/mtimes and decide adopt/rollback/re-freeze; freeze writers at a published pin before any detector-bound verdict.
+- evidence_refs: census artifact, detector mtime live, worker-073/090 events? cite paths: "artifacts/worker-099/frozen_r3_pin_census/pin_census.json#a0832700", "research_map/class_separation.py#a8c04fc31e4a", "artifacts/worker-073/classsep_union_separability/frame_drift_note.json#9a3a3ab9e2f5"
+- falsifier: "A copy of research_map/class_separation.py at mtime 01:08:14.862 whose sha256 is not a8c04fc31e4a, or an announcing event for that write with created_at ≤ 01:08:14, falsifies this record."
+
+OK. Now the checkpoint:
+runtime/state/w099_checkpoint_frozen_r3_pin_census.json:
+- checkpoint "worker-099/incarnation-7/frozen_r3_pin_census", at, worker, instance id (from prompt/traj: worker-099-20260912T010638-968807), lifecycle "independent_supervisor_100"
+- task_origin: "no assignment card in comms/inbox/worker-099.jsonl; self-selected bounded class-bound task from the open G-FORM r3 verification need (ASTRA_HANDOFF pass-06), chosen to avoid duplicating incarnations 1-6 tasks (l1 spotcheck #4, scalar locator readiness, bl7/hf02 binding, form direction census)"
+- artifacts: paths + sha256 + bytes
+- evidence/observations incl. detector timeline
+- events_emitted ids + outbox path + ingest: "not run by this worker (controller ingest)"
+- claims: no gate verdict, no validation_status=passed, no completion
+- next_falsifiers
+- prior_incarnations list with their event id prefixes
+
+Then verify: outbox parses, event ids, sha matches. Done.
+
+Let me write the README first (write tool), then emit_events.py, run, then checkpoint via Python inline (or another script). To save turns: write README + emit_events.py in parallel (two write calls in one block), then run emit + build checkpoint in one bash.
+
+Note: emit_events.py needs the prior outbox content untouched (append). Also it should not run comms.py ingest.
+
+Let me write.
+dsh: reasoning:
+5 events appended and validated. Now write the checkpoint: `runtime/state/w099_checkpoint_frozen_r3_pin_census.json`. Include all data. Then final verification and exit.
+
+Let me write the checkpoint via a small Python script (or write tool with fixed content — but hashes are known now; simpler to use write tool with JSON literal). Actually the checkpoint should include live sha256 of itself? No, checkpoints don't self-hash typically (worker-07's checkpoint had "sha256" of the checkpoint file maybe). I'll include the file paths + hashes of artifacts and the event ids. Let me use the write tool with a complete JSON.
+
+Also record prior incarnations' tasks to justify non-duplication, and the instance id.
+
+Let me compose:
+
+{
+ "checkpoint": "w099/incarnation-7/frozen_r3_pin_census",
+ "checkpoint_at": current ISO,
+ "worker": "worker-099",
+ "instance": "worker-099-20260912T010638-968807",
+ "lifecycle": "independent_supervisor_100",
+ "task": {
+   "origin": "no assignment card in comms/inbox/worker-099.jsonl; self-selected",
+   "node_id": "F1/F2",
+   "gate": "G-FORM",
+   "class_ids": [...],
+   "why_not_duplicate": "worker-099 incarnations 1-6 delivered l1_spotcheck#4 (w099-20260912T0044-*), scalar-locator-readiness (0052), bl7-hf02-binding (0058), form-direction-census (0104); this census is a distinct pin-level verification on the G-FORM r3 critical path",
+   "hours_estimate": 0.3
+ },
+ "artifacts": [
+   {"path": ".../pin_census.json", "sha256": "a083...", "bytes": 41028},
+   {"path": ".../run_pin_census.py", "sha256": "bd6d..."},
+   {"path": ".../emit_events.py", "sha256": "<computed>"},
+   {"path": ".../README.md", "sha256": "117cb2de..."}
+ ],
+ "result": {"pin_verdict":"PASS","n_files":50,"frozen_sha256":"815e...", "quiescence_verdict":"WRITER_ACTIVE","mtime_moved_list":[...],"taxonomy_ok":true,"dual_mirrors_ok":true},
+ "observations": {
+   "writer_activity": "taxonomy_consistency.json rewritten byte-identically 01:08:20.982 and 01:09:34.236; candidate writer tool check_taxonomy_consistency.py:79 (unproven)",
+   "detector_write_back": "research_map/class_separation.py e36b0d64 (~01:07:50 measured by this session) -> a8c04fc3 mtime 01:08:14.862; no authorizing event observed; recorded in blocker event"
+ },
+ "events": {"outbox":"comms/outbox/worker-099.jsonl","appended":5,"ids":[...],"ingest":"not run by worker; controller owns accepted stream"},
+ "claims": {"gate_verdict":false,"validation_status_passed":false,"status_done":false,"counts_as_gate_accept":false},
+ "next_falsifiers": [...],
+ "session_notes": "e36b0d64 measured via sha256sum in this session at ~01:07:50; the census artifact's own detector snapshot is a8c04fc3 at 01:08:55-01:09:10."
+}
+
+I need emit_events.py sha256. Let me compute it and then write the checkpoint with a Python script in one bash call (avoids me copying the hash wrong). I'll use a heredoc python that builds the dict and dumps. That's not a "file creation via shell" issue — it's fine (writes JSON under runtime/state). Actually the guidance prefers the write tool for creating files, but this is programmatic JSON with computed hashes; a small script is appropriate. I'll run python3 - <<'EOF'.
+
+Then verify JSON parses and print summary. Also record the current time.
+dsh: reasoning:
+Everything is in place. Final quick sanity:
+- 5 events appended, validated.
+- Artifact + sidecar + script + emit + README.
+- Checkpoint written.
+- No files outside worker-099's own dir and runtime/state were modified (I only wrote my own artifacts, outbox append, checkpoint). I did not run ingest or touch other agents' artifacts.
+
+One last check: the artifact sidecar sha still matches the file (yes, written by the script). And the event's artifact sha matches the file (yes, a0832700).
+
+Now exit: give the concise final report as the worker's reply (this is what the supervisor captures in stdout.log). Keep it structured and short: task, class/gate binding, evidence hashes, falsifier, checkpoint, exit.
+
+I should not do more work. The instruction: "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit."
+
+Final answer: concise summary.

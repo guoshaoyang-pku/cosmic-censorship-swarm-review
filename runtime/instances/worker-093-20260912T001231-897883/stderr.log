@@ -1,0 +1,436 @@
+dsh: reasoning:
+Let me start by understanding the task. I'm a bounded execution worker named worker=093. I need to read handoff/map and comms, take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit.
+
+Let me explore the workspace.
+dsh: reasoning:
+There's no `handoff` directory at the workspace root. Let me look for handoff/map and comms elsewhere. The task mentions "Read handoff/map and comms". Perhaps under workdir or .agents or ai4math-swarm. Let me search.
+dsh: reasoning:
+There's `/data3/guoshaoyang/workdir/ai4math-swarm`. Let me look there for handoff/map and comms.
+dsh: reasoning:
+Now let's read HANDOFF.md, README.md, and the comms and research_map. Let me start with HANDOFF.md.
+dsh: reasoning:
+Now let me read the README.md and the comms directory. Also let's look at research_map/research_map.json which may hold the task map with class-bound tasks.
+dsh: reasoning:
+The task says: "You are a bounded execution worker. Read handoff/map and comms. Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit. worker=093"
+
+This looks like I'm being spawned as worker 093 in a running swarm. There is likely a prompt at runtime/instances/worker-093-*/prompt.txt. Let me check for the most recent prompt for worker-093.
+dsh: reasoning:
+There's a worker-093 instance directory at `/data3/guoshaoyang/workdir/ai4math-swarm/runtime/instances/worker-093-20260912T001231-897883`. Let me read its prompt.txt — that's my instruction.
+dsh: reasoning:
+My prompt is exactly the task given in the user message. So worker-093 is a swarm worker. I need to:
+1. Read handoff/map and comms
+2. Take one class-bound task
+3. Emit valid JSON with IDs, evidence, hash, falsifier
+4. Checkpoint
+5. Exit
+
+Let me look at the swarm framework — the comms.py, checkpoint.py, schemas.py, research_map.json, ASTRA_HANDOFF.md, and the recent comms to understand the protocol and what "class-bound task" means. Let me also check meta.json for worker-093.
+
+Let me read the key files. ASTRA_HANDOFF.md is most recent (00:10), likely most relevant.
+dsh: reasoning:
+I see — the stderr.log is being written with my reasoning as I go (that's the dsh harness capturing my trajectory/output). So this is a real worker in a swarm. I need to:
+
+1. Read comms/PROTOCOL.md
+2. Read my inbox `comms/inbox/worker-093.jsonl` if it exists
+3. Read the map assignments
+4. Take one class-bound task
+5. Emit valid JSON with IDs, evidence, hash, falsifier
+6. Checkpoint
+7. Exit
+
+Let me look at comms dir structure and PROTOCOL.md.
+dsh: reasoning:
+There's no inbox for worker-093. Let me check the inbox listing more fully — maybe there's a "worker-093.jsonl" or similar. Also read PROTOCOL.md. And find the latest assignments in research_map.json.
+
+Let me check inbox for worker-* files.
+dsh: reasoning:
+No inbox for worker-093. The workers are spawned by the supervisor script (supervise_swarm.sh / launch_swarm.sh / independent_supervisor*.sh) with a generic prompt. So worker-093 has a generic prompt with no specific assignment. The instruction says "Take one class-bound task" — so I should pick from the map's assignments/classes, do a bounded piece of work, and emit a valid JSON artifact (event) with IDs, evidence, hash, falsifier, checkpoint, then exit.
+
+Let me understand what "class-bound" means here. The map has class IDs like AF-WCC-VAC-GEN, AF-SCC-C2-VAC-GEN, AF-SCC-C0-VAC-GEN, AF-WCC-SCALAR-SPH. Tasks are bound to classes. Let me inspect research_map.json structure — particularly `assignments`, `gates`, `nodes`/`classes`.
+
+Let me also check what other workers did (worker-01, worker-06, worker-16, worker-09) as examples of valid output. The worker-03 outbox may be from a similar generic worker. Let me look at launch_swarm.sh to see the prompt templates.
+dsh: reasoning:
+My prompt matches the worker template: "You are execution worker $n ... Work only on a class-bound task assigned by a group lead; if no assignment exists, inspect the immediate queue and propose one artifact-backed task without claiming completion."
+
+The user message says: "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit."
+
+So I should:
+1. Check if there's an assignment for me (worker-093). Since worker ids in the map are deepseek-flash-01..20 and workers, maybe not.
+2. Otherwise, inspect immediate queue, pick one class-bound task, produce an artifact-backed task result.
+
+Let me look at the assignments and open items. Let me dump the assignments, gates, claims, controller_findings to see what's pending.
+
+Also check lead inbox files for open assignments; and check the events.schema.json so my emitted JSON is valid.
+
+Let me look at the most recent outbox from a comparable generic worker (worker-03, worker-06, worker-09-v8) to see the expected event format.
+
+Plan:
+- Read schemas/events.schema.json
+- Read a couple of assignments from map
+- Read lead inbox for open tasks (astra-lead-formulation.jsonl, etc.)
+- Pick one class-bound task I can actually execute with real evidence: e.g., a bounded verification/hash/audit task on formulation taxonomy or an artifact schema, since no LLM calls needed.
+
+Let me inspect.
+dsh: reasoning:
+Now I understand the ecosystem. I'm worker-093, a fresh worker with no assignment in the inbox. The prompt says: "Work only on a class-bound task assigned by a group lead; if no assignment exists, inspect the immediate queue and propose one artifact-backed task without claiming completion."
+
+The user message specifically says: "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit."
+
+So I need to do a bounded piece of useful work, produce an artifact with a sha256, emit a claim/artifact event JSON in comms/outbox/worker-093.jsonl (or similar), and run the checkpoint.
+
+Given the constraints (bounded, must produce valid JSON with IDs, evidence, hash, falsifier), the best move is to pick one concrete, machine-verifiable task from the immediate queue that I can actually complete with real evidence in this session. Candidates:
+
+1. **Class-token census / class-binding verification** — machine-checkable: scan an artifact for class ids and verify they are among the frozen four. This is a real, verifiable task. Evidence: computed counts, hashes.
+
+2. **Hash binding verification of frozen artifacts** — verify that declared sha256 in map matches measured bytes on disk; verify frozen manifest. This is a real audit task: `declared_hash_matches_measured` per node. I could independently re-measure and report divergences. That's a strong, falsifiable artifact.
+
+3. **Publish-frozen verification**: check that canonical paths bytes match the frozen manifest hashes; run verify_frozen.py.
+
+4. **Class-separation regression on a formulation schema**: run a checker for class leakage.
+
+The strongest bounded contribution given "emit valid JSON with IDs evidence hash falsifier" is probably an independent hash-binding audit: verify per-node `artifact_sha256_measured` and `declared_hash_matches_measured` flags in the map against actual files, plus the frozen manifest. That generates an artifact JSON with measured hashes and explicit falsifier, and a claim.
+
+But careful: the map says worker events cannot set status=done/gates. I must not claim completion of a node. I should emit an `artifact` event with validation_status (e.g., "self-checked" / "unverified") and perhaps a `claim` with conclusion_type that is not "theorem" (e.g., "audit_finding" — but protocol says conclusion_type: theorem requires artifact_refs; other conclusion types likely allowed). Let me check what conclusion_types have been used.
+
+Also, "checkpoint" — run `python3 research_map/checkpoint.py`. Let me read checkpoint.py to see what it does (it may be controller-level, but running it is probably fine and it's requested).
+
+But before doing all this, let me check whether some group lead has an open assignment intended for a generic worker. Let me look at the most recent lead inbox/outbox messages mentioning worker assignments, and the map's `assignments` with assignee "worker-*". Also there's a possibility that my worker slot is meant to take from the "immediate queue" in ASTRA_HANDOFF (F1, F2, L0/L1, A1, N0, A2) — but those are lead-assigned.
+
+Let me check the `run` state and `comms` to see how many workers are running and what the controller expects. Also inspect the audit task CF5 (deepseek-flash-19) — class token census. I shouldn't duplicate existing assignments. Let me check what's already assigned and what's unassigned.
+
+Let me dump all assignments with assignee and node/gate, and see which are open. Also check `runtime/state/` for checkpoints and artifact_hashes.
+
+Let me be efficient: run a Python summary.
+dsh: reasoning:
+Let me look for open/unclaimed work. The controller_gate_audit has hash-bound reasons; there are five pending gates. The most useful bounded worker contribution: independent verification that declared hashes match measured bytes (a core premise of every gate), across canonical artifacts. This is machine-checkable, cheap, and falsifiable. And worker-093 can do it independently of anyone.
+
+Actually, wait — the map has `artifact_sha256_measured` + `declared_hash_matches_measured` per node. Let me check what nodes exist and whether any mismatch is currently recorded. If all match, my artifact would be an independent replication of that audit with hashes — useful for A1/G-AUDIT hash-bound evidence.
+
+But is there a more "class-bound" task? The prompt says "Take one class-bound task". Class-bound = bound to one of the four classes: AF-WCC-VAC-GEN, AF-SCC-C2-VAC-GEN, AF-SCC-C0-VAC-GEN, AF-WCC-SCALAR-SPH. So my artifact should cite a class_id.
+
+A good class-bound task that is genuinely checkable and not yet done: **class-binding of the formulation schemas — verify each canonical schema file's declared class id, quantifier, visibility predicate, and conclusion type, and check for class leakage (composite "C0 or C2" strings, foreign class tokens)**. But flash workers are already doing class separation. Also worker-07 (deepseek-flash-07) did class_separation_falsification. Duplication is penalized (duplication metric).
+
+Alternative: the map says "Latest lifecycle report ... 0 hard audit failures, 8 soft: 4 class-separation annotation flags + 4 canonical/authoring divergences". The canonical/authoring divergence soft flags are being worked by lead-formulation (publish-frozen). Independent verification of that specific claim (dual-tree byte divergence) is exactly what `audit_evidence.py` checks, and A1 needs independent reviewers.
+
+However, as a generic worker with no assignment, the safest useful deliverable: an independent, hash-bound **verification of the canonical-vs-authoring divergence claim** or **a class-token census**. Wait — flash-19 has assignment CF5: machine census of every class token in ledger/theorems.jsonl and ledger/citation_audit.csv. So that's taken. Don't duplicate.
+
+Let me look at what "immediate queue" items are unassigned. The ASTRA_HANDOFF immediate queue: F1, F2, L0/L1, A1, N0, A2. A2 (four-arm equal-budget ablation) is not assigned to anyone and is audit group lead's item. But it's not something I can execute with real evidence in a short session (needs LLM calls).
+
+Given bounded execution, the best is an artifact-producing verification task. Let me check the `controller_gate_audit` in detail to see exactly what's blocking each gate — maybe there's a concrete machine-checkable item I can independently verify and produce evidence for.
+
+Let me dump controller_gate_audit, controller_findings, and the state files.
+dsh: reasoning:
+Very clear picture now. The binding blocker across gates is: **review verdicts do not bind to current measured canonical hashes; A1 needs two independent verdicts per target at the cited measured canonical sha256.** Also pending publication of frozen canonical bytes.
+
+As a bounded worker without an assignment, I can produce a genuinely useful, machine-verifiable artifact: **an independent hash-binding audit of the canonical artifact registry** — i.e., re-measure sha256 for each node's declared canonical artifact path, compare against `artifact_sha256_measured` in the map and against the `declared_sha256` from events / FROZEN.json, and produce `artifacts/worker-093/hash_binding_audit.json` with per-artifact hashes, plus an explicit falsifier.
+
+But wait — is that duplicating `audit_evidence.py`? The map's controller already does this. Independent replication is the *point* of evidence (independent measurement). But "duplication" metric may penalize re-running the same tool. Better: add value beyond the controller's own tooling by checking things the lifecycle pass doesn't:
+
+Idea: **A class-bound claim-review binding table.** For each target (F0, F1, F2a, F2b, L0) and each recorded verdict in `reviews/`, extract the sha256 that the verdict cites (path#sha256-prefix) and compare with the current measured canonical hash. Output: `artifacts/worker-093/verdict_hash_binding.json` — a machine-checkable table of which verdicts bind to the current canonical hash. This directly serves A1-REBIND-01 acceptance ("each citing the measured canonical sha256") and provides evidence for G-AUDIT/G-FORM with a real falsifier.
+
+That's:
+- Class-bound: I can scope it to the three formulation classes + literature (class_id list), or focus on one class, e.g. AF-SCC-C0-VAC-GEN / F2b, which is the one with the class-separation soft flags. "Take one class-bound task" — I could bind to the class `AF-SCC-C0-VAC-GEN` (F2b) and audit all verdicts/hash bindings for its artifact, plus check the exact quantifier/class tokens at the cited lines.
+
+Hmm, but "class-bound task" probably just means a task bound to a class id in the map. Let me choose something concrete, bounded, and independently verifiable with artifacts on disk:
+
+**Task choice: independent hash-binding audit of the F2b canonical schema `schemas/af_scc_c0_vacuum.yaml` (class AF-SCC-C0-VAC-GEN) — verify canonical/authoring byte alignment, measured sha256, the two flagged candidate-variant token sites, and whether any recorded review verdict binds to the measured hash.**
+
+That combines:
+1. Measured sha256 of canonical + authoring trees; divergence check (CF-7).
+2. Class-token/annotation check at the flagged lines (CF-9): are AF-SCC-L2LOC-VAC-GEN and AF-SCC-C0-DISTRIBUTIONAL-VAC-GEN annotated as candidate variants or asserted classes? Determine whether the checker's soft flag is a false positive and whether the annotation is machine-detectable.
+3. Verdict binding: list all reviews for F2b and the hash each cites vs measured hash → enforce A1 binding rule.
+
+That's a real audit deliverable, class-bound, with evidence hash and falsifier. It doesn't claim gate completion.
+
+But careful with time. Let me first check the relevant files. Let me look at:
+- schemas/af_scc_c0_vacuum.yaml around lines 316-317
+- artifacts/formulation tree
+- reviews for F2b
+- runtime/state/artifact_hashes.json
+- research_map/class_separation.py and audit_evidence.py to know the tooling (and to avoid duplicating incorrectly)
+
+Let me check what "measured canonical hash" F2b is: a8d899d2941f. Let me verify the file exists.
+
+Let me also check if there's a `runtime/bin/classsep_regression.py`.
+
+Let me look at these.
+dsh: reasoning:
+Interesting! Very important observation: the F2b schema file was modified at 00:15:00 (rev9 delta) — but wait, the file listing shows `schemas/af_scc_c0_vacuum.yaml` modified Sep 12 00:10, and inside the file, `revised_at: "2026-09-12T00:15:00+08:00"` with rev9 delta annotation. Hmm, the file mtime is 00:10 but it contains a revised_at of 00:15 (future timestamp — that's CF-6: agent-written timestamps run ahead of wall clock). Actually, right now it's ~00:14-00:15. So the lead-formulation is actively working on this file right now (publish-frozen).
+
+Wait: the canonical sha256 I just measured is a8d899d2941f which matches the artifact registry. Good.
+
+Now `artifacts/formulation/af_scc_c0_vacuum.yaml` is MISSING — so the authoring tree for this file doesn't exist, meaning "aligned" per gate audit reason. Hmm, the gate audit says canonical/authoring divergence: schemas/af_scc_c0_vacuum.yaml=aligned. That's consistent with the authoring file being absent? Let me check what's in artifacts/formulation/.
+
+Also note the F2b file has a `f0_binding` declaring declared_f0_sha256: 66bf917b... while the current F0 canonical measured hash is 565a6e505188. So the F2b schema's F0 binding is stale! That's a real, concrete, verifiable finding: `f0_binding.declared_f0_sha256` (66bf917b) ≠ current measured F0 canonical sha256 (565a6e505188). The F2b file says the rule: "if the declared F0 artifact changes hash, refresh this binding and re-run the consistency check before any gate verdict". And G-F0's pending reason says canonical taxonomy 565a6e505188 revised after every verdict; latest verdicts cite 66bf917b or a82f249c.
+
+This is a genuine blocker: F2b (and likely F1, F2a) carry a stale F0 hash binding. That's exactly the kind of cross-artifact hash-binding defect A1-REBIND-01 needs to catch, and the lead-formulation's publish-frozen task might not fix it (it focuses on canonical/authoring alignment).
+
+So my bounded class-bound task: **Independent cross-artifact hash-binding audit for the frozen class schemas**: for each of F1/F2a/F2b, extract declared artifact hash bindings (f0_binding and any other `declared_*_sha256` / `supersedes` references) and verify them against the measured canonical hashes. Output `artifacts/worker-093/class_hash_bindings.json` with per-file results, stale-binding list, falsifier, and evidence hashes. Class-bound: covers AF-WCC-VAC-GEN (F1), AF-SCC-C2-VAC-GEN (F2a), AF-SCC-C0-VAC-GEN (F2b) — or I can scope to one class to honor "one class-bound task". 
+
+The prompt says "Take one class-bound task". I think scoping to one class demonstrates discipline; but the audit is cheap for all three. Hmm. To respect "one class-bound task", I'll bind to **AF-SCC-C0-VAC-GEN / F2b** as primary and note the cross-file check as supporting evidence (I can still scan all schemas and report, but the claim is about F2b... actually a claim about one artifact with stale F0 binding is enough).
+
+Wait, but careful: the file is being actively edited (mtime 00:10 vs current ~00:15; rev9 says 00:15). Hash may change under me. If lead-formulation publishes a new revision, my measured hash changes and my finding may be invalidated. But that's fine — I'll measure at a pinned hash and record it; the falsifier explicitly handles revision. Actually if the file changes after I measure, my artifact still records what I measured at a timestamp. That's honest.
+
+Also I should check `artifacts/formulation/` state and the FROZEN.json, since publish-frozen is in flight.
+
+Let me:
+1. Inspect artifacts/formulation/ tree.
+2. Scan all three canonical schemas for declared sha256 bindings and compare to measured hashes of the referenced paths.
+3. Check reviews for F2b to see cited hashes vs measured (verdict binding table) — this is a strong evidence contribution to A1.
+4. Write artifact JSON with IDs (class_id, node_id, event_id), evidence (paths + hash prefixes), sha256 of my artifact, falsifier, and a next_falsifier.
+5. Emit comms/outbox/worker-093.jsonl with `artifact` and/or `claim` events (valid against schema).
+6. Run checkpoint.py.
+7. Append a trajectory/summary maybe. Exit.
+
+Let me look at the tooling first: checkpoint.py, comms.py (to know outbox ingestion expectations, and whether there's an "agent id" for worker-093 allowed — PROTOCOL says agent ids are astra, leads, deepseek-flash-01..20; but worker-03, worker-09, worker-16 exist as outbox files, so worker-NN ids are accepted by ingest presumably). Let me check comms.py ingest validation for actor naming.
+
+Let me read checkpoint.py and comms.py briefly.
+dsh: reasoning:
+Important: `artifacts/formulation/schemas/` DOES have the authoring copies. Earlier I checked `artifacts/formulation/af_scc_c0_vacuum.yaml` (missing) but the actual authoring path is `artifacts/formulation/schemas/af_scc_c0_vacuum.yaml`. So the dual-tree comparison is canonical `schemas/*.yaml` vs authoring `artifacts/formulation/schemas/*.yaml`.
+
+Also FROZEN.json is revision 23 frozen at 00:26 — future timestamp again (CF-6), someone is actively working.
+
+Let me now do the core measurement for my audit:
+
+1. Measure sha256 of canonical `schemas/af_scc_c0_vacuum.yaml` (F2b), `schemas/af_scc_c2_vacuum.yaml` (F2a), `schemas/af_wcc_vacuum.yaml` (F1), and the authoring tree copies.
+2. Extract declared hash bindings inside each schema (f0_binding.declared_f0_sha256 etc.) and compare to measured current hashes of referenced artifacts (research_map/formulation_taxonomy.yaml = F0).
+3. Check FROZEN.json entries for the canonical paths (does FROZEN.json list canonical schemas/ paths or only artifacts/formulation/...?). The acceptance criterion in astra-life01-publish-frozen says FROZEN.json must list canonical paths; falsifier says "a FROZEN.json revision that lists an authoring-only path as canonical".
+4. Check reviews citing F2b hashes: scan reviews/*.json for F2b/a8d899d2941f or other hash prefixes.
+
+This yields a strong, bounded audit artifact with concrete findings. Let me be careful and precise.
+
+Let me write a Python script to do this and emit the artifact JSON. First, explore the bindings inside each schema with grep.
+dsh: reasoning:
+Excellent. Confirmed concrete findings:
+
+1. **Canonical vs authoring schemas are byte-identical** now (a8d899d2941f, 8dae50da1ab5, b65fcc0f0118) — so the dual-tree divergence for the three schemas is resolved (matches gate audit "aligned"). Good — publish-frozen is progressing.
+
+2. **All three canonical schemas carry a stale F0 binding**: `declared_f0_sha256: 66bf917b...` while the current canonical F0 (`research_map/formulation_taxonomy.yaml`) measures `565a6e505188...`. The schemas' own rule says the binding must be refreshed "before any gate verdict". This is a **live, hash-measurable defect blocking G-FORM/G-F0**. This is a strong finding.
+
+3. **The class_contract_supplement pointer** is `artifacts/formulation/formulation_taxonomy.yaml` which measures `01e7f841643c`, differing from declared F0 artifact `research_map/formulation_taxonomy.yaml` (565a6e505188). Under the canonical-path policy, the supplement is authoring-tree and non-authoritative — but the binding should probably point to canonical. Worth noting as a divergence annotation.
+
+4. **consistency_evidence**: `artifacts/formulation/evidence/taxonomy_consistency.json` — let me check whether its recorded hashes match. This is the "re-run the consistency check" part.
+
+Now also check review verdict binding for F2b/F2a/F1: which hashes do reviews cite? Let me scan reviews/ for hash references and the target. Also check the FROZEN.json entries for canonical paths.
+
+Let me write one comprehensive audit script that produces the artifact. But first gather: reviews JSON structure.
+dsh: reasoning:
+Now I have a full picture, and a strong candidate finding. Let me refine:
+
+**Key finding (class-bound, AF-SCC-C0-VAC-GEN / F2b, and shared by F1/F2a):** Each canonical class schema's `f0_binding.declared_f0_sha256` = `66bf917b...`, but the current canonical F0 taxonomy measures `565a6e505188...`. The schemas' own rule requires refresh before any gate verdict. So G-FORM cannot be judged while bindings are stale, and any verdict that binds to the schema hash without refreshing the inner F0 binding inherits the stale reference.
+
+Also note: `reviews/F0-review-lead-audit.json` has artifact_sha256 = full 565a6e505188... and verdict accept — but its evidence_refs cite `research_map/formulation_taxonomy.yaml#a82f249c` (an older prefix). Interesting: the controller audit says "latest verdicts cite 66bf917b or a82f249c and none is an accept binding to the measured canonical sha256". Hmm, but F0-review-lead-audit.json records artifact_sha256 = 565a6e505188 (current!) and verdict accept. Yet the controller reason for G-F0 says none is accept binding to measured canonical sha256. That's a contradiction worth flagging! Let me check that review file in full.
+
+Wait — maybe the controller's gate audit at 00:11:13 preceded the review's creation (file mtime?). Let me check mtime of reviews/F0-review-lead-audit.json and whether it was recorded after 00:11:13. If the review exists at the current hash, the gate reason may be stale. That's another useful audit finding: G-F0's pending reason may be falsified by a verdict already on disk.
+
+Let me check:
+- mtime of F0-review-lead-audit.json
+- full content
+- whether it appears in map['reviews'] and its hash
+- reviews for F2b at current hash a8d899d2941f
+
+Let me scan all reviews for artifact_sha256 values and compare with current measured canonical hashes, producing the verdict-binding table. This is exactly the A1-REBIND-01 acceptance evidence and an independent check of the controller's gate audit reasons.
+
+Let me do that now.
+dsh: reasoning:
+This is a rich finding set. Observations:
+
+1. **F0**: `reviews/F0-review-lead-audit.json` verdict accept, artifact_sha256 = 565a6e505188 (current measured), mtime 00:07:29. But controller_gate_audit (checked 00:11:13) says "none is an accept binding to the measured canonical sha256". Contradiction → either the map's `reviews` entry for this file lacks artifact_sha256 (schema requires `target_id`, `reviewer`, `verdict`, `score`, `hard_failures`, `findings` — `artifact_sha256` isn't in the event schema so ingest may drop it), or the gate audit's criterion is "two independent accepts" and only one exists. The reason says "latest verdicts cite 66bf917b or a82f249c and none is an accept binding to the measured canonical sha256" — that's factually falsified by the on-disk review (accept at 565a6e505188). This might be because the controller's check looks at evidence_refs strings, not artifact_sha256. Either way, it's a reviewable finding: the gate reason is stale/incorrect w.r.t. artifact on disk.
+
+Hmm wait, careful: `F0-review-lead-audit.json` has reviewer `lead-audit`. Maybe the controller requires two independent accepts, and lead-audit is one. G-F0 criteria: "2 independent reviewer verdicts". So for G-F0, one accept (lead-audit) + need a second. The reason text says none binds, which is inaccurate. But maybe the gate reason was computed before 00:07:29? No — checked_at is 00:11:13, after.
+
+Let me verify what the map's `reviews` list contains for this review — because ingest maps `reviewer` from actor etc. The gate audit may compute bindings from the map's review entries only, which might lack the sha. Let me check.
+
+2. **F2a**: lead-audit accept at 23fec0e9cd68bc (old), F2a-review-19 revise at same old hash; current measured 8dae50da1ab5. No accept at current hash. Consistent with gate reason.
+
+3. **F2b**: lead-audit accept at e6b1af2bd6925f (old); F2b-review-18 revise; current measured a8d899d2941f. So no accept at current hash. The controller reason says "recorded verdicts at these hashes are revise (F1 16/17, F2a 17/18, F2b 18)". Note F2b-review-16-r3 was accept at F2 (no artifact_sha256 recorded). 
+
+4. **F1**: F1-review-16-r2 revise 3.0, no artifact_sha256 field; lead-audit revise at 7a3e1f93f77c38.
+
+5. **L0**: reviews cite 5fb8bf3a3d1456 (old), current ce42d205e761. No accept bind.
+
+So the pattern: every "accept" verdict on record binds to a **superseded** hash (or has no hash), exactly as the controller said for F1/F2a/F2b. The one counterexample textually is F0 lead-audit accept at current hash.
+
+But wait — F0-review-lead-audit.json mtime 00:07:29 and gate audit 00:11:13. The map's G-F0 reason mentions "2 class-separation soft flag(s) on the taxonomy await disposition" and canonical taxonomy revised at 565a6e505188 after verdicts. Since F0 was measured 565a6e505188 and there is an accept at that exact hash, the reason "none is an accept binding to the measured canonical sha256" is stale. Unless... the `reviews` entry in the map for F0-review-lead-audit lists a different artifact_sha256. Let me check the map reviews for target F0 and the review file's full content.
+
+Also: "canonical taxonomy 565a6e505188 was revised after every verdict on record" — if the review was created at 00:07:29 and the taxonomy mtime is... let me check mtime of research_map/formulation_taxonomy.yaml. If taxonomy mtime > 00:07:29 then the review at hash 565a6e505188 was written before the file changed... but then the file would have a different hash now. It measures 565a6e505188 now, so the hash at 00:07:29 may have already been 565a6e505188. Let me check mtimes.
+
+Actually the sha in the review is the full 565a6e...; and current measured equals that. So the taxonomy has not changed since the review was written (or changed to the same bytes). The gate reason "revised after every verdict on record" appears false for this verdict.
+
+This looks like a real, valuable audit finding: **the controller_gate_audit G-F0 reason is contradicted by an on-disk accept verdict bound to the measured canonical hash**. Either the binding parser misses `artifact_sha256` fields in review files, or the reason text is stale. Either way it matters for G-F0: if the accept is valid, G-F0 needs only a second independent verdict.
+
+Let me dig into how the gate audit computes "no accept binding". Look at astra_lifecycle.py or audit_evidence.py for the computation. Let me grep for "accept" and "binding" in astra_lifecycle.py.
+
+This is the kind of finding worth an artifact. But my bounded task should be focused. Let me decide the deliverable:
+
+**Artifact**: `artifacts/worker-093/verdict_hash_binding_audit.json`
+- Class-bound: `AF-SCC-C0-VAC-GEN` primary (F2b), with cross-target table F0/F1/F2a/F2b/L0 for context.
+- Content: measured sha256 of each canonical target, and for every on-disk review JSON: reviewer, target, verdict, declared artifact_sha256, binds_to_current (bool), superseded hash prefix or missing-hash.
+- Finding A: all three canonical class schemas (F1/F2a/F2b) carry a stale internal F0 binding (66bf917b) vs measured F0 565a6e505188; per each schema's own rule, no gate verdict may bind until refreshed.
+- Finding B: G-F0 controller reason claims no accept binds to 565a6e505188, but reviews/F0-review-lead-audit.json (reviewer lead-audit, verdict accept, score 4.0) declares artifact_sha256=565a6e505188... → the reason is contradicted by artifact; disposition needed (recompute or explain the parser).
+- Falsifier: if `research_map/formulation_taxonomy.yaml` measures ≠ 565a6e505188 (revision moved), Finding A's specific prefixes must be re-measured; if F0-review-lead-audit.json's artifact_sha256 is not in fact equal to the measured canonical hash, Finding B is false. Also if the controller's binding rule explicitly requires the hash inside evidence_refs (path#sha), then Finding B narrows to a documentation/consistency defect — I should state that as the exact falsifier/limitation.
+
+That's honest and precise. I should check how the gate audit computes it to characterize Finding B correctly. Let me grep.
+
+Also I should produce the artifact's own sha256 and emit events. And run checkpoint.
+
+Let me check `astra_lifecycle.py` for the binding logic, and the map's reviews entries for F0.
+dsh: reasoning:
+Now I have solid evidence. Key facts:
+
+- `research_map/formulation_taxonomy.yaml` mtime 00:07:07, measured sha 565a6e505188.
+- `reviews/F0-review-lead-audit.json` mtime 00:07:29, verdict accept, artifact_sha256 = 565a6e505188..., evidence_refs cite `#565a6e505188` (in the map's ingested event; the file's evidence_refs show `#a82f249c` — hmm, the file's evidence_refs still says a82f249c lines... while its artifact_sha256 and sha_history say 565a6e505188. Interesting internal inconsistency: evidence_refs line still points at old prefix a82f249c. The map's ingested review event `audit-review-f0-accept-20260912T000729` has evidence_refs `research_map/formulation_taxonomy.yaml#565a6e505188`. Wait, that's the ingested version which may have been normalized/rewritten? The on-disk file has evidence_refs with a82f249c. Hmm, the ingested event has `#565a6e505188`. Which means someone (lead-audit's outbox) emitted a different evidence_refs than the review file? Or apply_events normalized it? Either way, there's a discrepancy between the on-disk review JSON's evidence_refs and the ingest record — minor.
+
+- The controller's G-F0 reason says: "canonical taxonomy 565a6e505188 was revised after every verdict on record; latest verdicts cite 66bf917b or a82f249c and none is an accept binding to the measured canonical sha256."
+
+Now, the lifecycle code `astra_lifecycle.py` line ~150 computes coverage scanning review *files* and looking at verdicts; let me read lines 118-180 to see how it matches hashes. The gate reason may come from a different function (`gate_reason`). Let me read the relevant part of astra_lifecycle.py around gate audit computation.
+
+This matters because my finding B claims the gate reason is contradicted. Let me verify precisely by running the lifecycle audit function? That would be heavy (it mutates map?). `astra_lifecycle.py` writes the map. I should NOT run the controller's lifecycle pass (it applies events and mutates global state; I'm a worker, not the controller). I can read the code and evaluate the predicate manually.
+
+Let me read lines 80-180 and the gate-reason builder.
+dsh: reasoning:
+Important! `review_coverage` checks whether `h[:12] in text` — i.e., the 12-char hash prefix appears **anywhere in the review file text**. For F0, the review file `F0-review-lead-audit.json` contains `565a6e505188` in artifact_sha256 and sha_history → so it WOULD count as an accept binding.
+
+So why does the gate reason say none binds? Let me read gate_audit() for G-F0 to see the exact logic. Let me read lines 229-330.
+dsh: reasoning:
+Now I understand the actual G-F0 reason format in the *current* code:
+
+```
+"canonical taxonomy {h('F0')}; review scan at this hash: {accs('F0')} [{verd('F0')}]; criterion needs two distinct independent accepts. Publication pair F0 is {status}..."
+```
+
+But the **recorded** reason in the map (checked_at 00:11:13) is different text: "canonical taxonomy 565a6e505188 was revised after every verdict on record; latest verdicts cite 66bf917b or a82f249c and none is an accept binding to the measured canonical sha256. Publication pair F0 is divergent. 2 class-separation soft flag(s) on the taxonomy await disposition."
+
+So the recorded reason came from an **older version** of astra_lifecycle.py (the code was revised at 00:09, per mtime 00:09). The current code would produce a different (updated) reason. Also the recorded reason says "Publication pair F0 is divergent" while the current publication_status measures aligned (research_map/formulation_taxonomy.yaml vs artifacts/formulation/formulation_taxonomy.yaml: 565a6e505188 vs 01e7f841643c → that IS divergent! Different hashes → status "divergent"). Right: the F0 pair is still divergent (authoring taxonomy 01e7f841643c ≠ canonical 565a6e505188), which matches. The schemas pairs are aligned. Good, consistent.
+
+So finding B needs care. The recorded G-F0 reason text is from the code as of 00:11:13 (mtime of astra_lifecycle.py is 00:09). Was the reason generated by the version at 00:09? Let's check: the recorded reason's phrasing doesn't match the current gate_audit() text at all. So the recorded reasons likely came from `astra_lifecycle_events.py` or an earlier `astra_lifecycle.py` version — maybe the `.py` was edited after 00:11:13? mtime says 00:09, before 00:11:13. Hmm.
+
+Wait, maybe the recorded `controller_gate_audit` was written by a different tool: `astra_lifecycle_events.py` (mtime 00:08) or by the controller manually. Or the map's controller_gate_audit came from a "pass" run where the code differed. Let me check git status/log for these files. The repo is a git repo. Let me check `git log`/`git diff` for astra_lifecycle.py. But careful about time.
+
+Actually, whether finding B is "the gate reason is stale text from an older lifecycle version" or "the current scan logic also fails to count F0 accept", let me just test the current `review_coverage` function on the data to see what it reports. I can import astra_lifecycle without running the pass — importing may be safe if no top-level side effects. Let me check the top of the file and whether importing executes anything. It's a script with functions and a main guard? Let me check the tail.
+
+Actually simpler and safer: I can reimplement the same predicate myself in my audit script (h[:12] in text) and report. That's an independent verification and avoids importing/mutating anything. The predicate: for each target, scan reviews/*.json where verdict is one of accept/revise/reject/inconclusive, map target aliases, check whether measured 12-prefix appears in file text, count distinct accept reviewers with counts_as_full_schema_verdict != False.
+
+For F0:
+- F0-review-lead-audit.json: verdict accept, reviewer lead-audit, text contains 565a6e505188 (in artifact_sha256 and sha_history) → counts as accept.
+- Are there other F0 accept reviews? Possibly from the ingested events in outbox but not on disk in reviews/. The scan only looks at reviews/*.json. So current scan would report 1 distinct accept reviewer = [lead-audit]; needs 2.
+
+So the recorded reason's claim "none is an accept binding to the measured canonical sha256" is **stale/incorrect at 00:11:13** given the on-disk review at 00:07:29. But then the current code produces a different, accurate text ("review scan at this hash: 1 distinct accept reviewer(s) [lead-audit:accept]"). So the recorded reason was generated by a pre-00:09 version of the code whose scan didn't see F0's accept (maybe the review scan hadn't been added yet, or it only looked at evidence_refs lines).
+
+Hmm, let me verify with git: `git log --oneline -5` and check when the map was updated vs the code. Actually the important, robust, falsifiable finding is:
+
+**Finding B (controller-reason staleness):** `controller_gate_audit.G-F0.reason` (checked_at 00:11:13) asserts "none is an accept binding to the measured canonical sha256", but `reviews/F0-review-lead-audit.json` (mtime 00:07:29, verdict accept, score 4.0, artifact_sha256=565a6e505188...) does bind. The current `astra_lifecycle.review_coverage` predicate (h[:12] in file text) yields 1 distinct accept reviewer for F0 at the measured hash. Therefore the reason field is not reproducible from the code+corpus at that time; the unmet G-F0 requirement is "two distinct accepts", not "none". This changes the action needed: G-F0 is one independent second verdict away, not a re-review from scratch.
+
+That's genuinely useful for the controller and audit lead. And it's exactly the kind of "gate reasons cannot go stale against the review corpus" intent stated in the code comment.
+
+**Finding A (stale inner F0 binding in all three class schemas):** as described. This is class-bound (AF-SCC-C0-VAC-GEN primary).
+
+Now, which single class-bound task do I take? I'll take the F2b/`AF-SCC-C0-VAC-GEN` class and audit its hash bindings + verdict coverage, with the F0-binding defect as the main deliverable. This is class-bound and bounded.
+
+But hold on — I should also check whether the *schemas'* inner F0 binding is actually included in any gate criterion. The F2b schema's own rule says it must be refreshed before gate verdict. The controller's G-FORM reason doesn't mention it. So it's an undetected defect — high value.
+
+Also check F1/F2a/F2b for other internal hash bindings: provenance worker_sha256 (historical, not required to match), `supersedes`, `frozen_binding` etc. Let me scan YAML structure more systematically for `*sha256*` keys and compare where the referenced artifact exists.
+
+Let me also check whether the three schemas are currently being edited — F2b mtime 00:10, and my measured hash matches the registry a8d899d2941f. If lead-formulation's publish-frozen rewrites them, hashes change and my artifact records a snapshot. I'll note measured_at and the registry hash match.
+
+Also: I should verify the claimed authoring/canonical alignment independently — I measured identical hashes for all three schema pairs. Good, that's part of evidence.
+
+Now let me also produce an explicit falsifier and next falsifier, and the acceptance/evidence blocks.
+
+Artifact plan: `artifacts/worker-093/class_hash_binding_audit.json`:
+```json
+{
+  "artifact": "CLASS-HASH-BINDING-AUDIT",
+  "worker": "worker-093",
+  "created_at": "...",
+  "task": {...},
+  "scope": {"class_id": "AF-SCC-C0-VAC-GEN", "node_id": "F2b", "cross_checked_targets": ["F0","F1","F2a"]},
+  "method": {...},
+  "measured": {...},
+  "findings": [
+     {"id":"W093-F1","severity":"blocking-gate-verdict","class_id":"AF-SCC-C0-VAC-GEN","finding":"...","evidence":["schemas/af_scc_c0_vacuum.yaml#a8d899d2941f:311","research_map/formulation_taxonomy.yaml#565a6e505188"],"falsifier":"..."},
+     {"id":"W093-F2",... controller reason staleness ...}
+  ],
+  "verdict_binding_table": [...],
+  "falsifier": "...",
+  "next_falsifier": "...",
+  "non_claims": [...],
+  "sha256_self": null  # can't include own hash; provide method
+}
+```
+
+Then sha256 the file and emit events referencing the hash. Also write a `.sha256` sidecar? Other artifacts do that (e.g., schemas/af_scc_c0_vacuum.yaml.sha256). And append to runtime/state/artifact_hashes.json? That's controller-owned ("Checkpoint records the full artifact registry"); the checkpoint tool rebuilds it. I'll let checkpoint.py do that — actually checkpoint.py does its own registry. Let me check whether checkpoint.py includes artifacts/worker-*/**. It likely scans. Running checkpoint.py is requested by my prompt ("checkpoint"). It writes runtime/state/*, doesn't mutate the map. Good.
+
+Then comms outbox: `comms/outbox/worker-093.jsonl` with:
+- `artifact` event: event_id `w093-artifact-class-hash-binding-<ts>`, event_type artifact, created_at, actor worker-093, node_id F2b, artifact_type "audit_report", path, sha256, validation_status "self-checked-unreviewed", class_id AF-SCC-C0-VAC-GEN.
+- `claim` event: class_id AF-SCC-C0-VAC-GEN, statement, conclusion_type (not "theorem" — use "audit_finding" or "verification_result"), assumptions, falsifier, evidence_refs, artifact_refs.
+- `status` event maybe: node_id F2b, status active, hours ~0.3, summary, evidence_refs, next_falsifier.
+
+The comms ingest schema (events.schema.json) `oneOf` requires claim to have class_id, statement, conclusion_type, assumptions, falsifier, evidence_refs. Artifact requires node_id, artifact_type, path, sha256, validation_status. Status isn't in events.schema oneOf, but comms.py normalizes status separately (line 161 handles status). The rejected.jsonl will tell. To be safe, emit only `artifact` and `claim` (schema-valid). Maybe also `status` since comms.py handles it — but events.schema.json's oneOf would reject status? Let me check validate_events in validate_map.py. There's a `validate_events` imported. Let me check quickly.
+
+Also, should I write to `comms/outbox/worker-093.jsonl`? PROTOCOL lists agent ids astra, leads, deepseek-flash-01..20 — but worker-03/06/09/16 outbox files exist, so worker-NN is accepted practice. My meta.json id is `worker-093-...`, slot 093. I'll use actor `worker-093` and file `comms/outbox/worker-093.jsonl`. Ingest defaults actor to path stem if absent — I'll set actor explicitly.
+
+Should I run ingest? No — that's controller-only (`comms.py ingest` is the controller command). The prompt says "checkpoint". I'll run checkpoint.py with a label. Let me check checkpoint.py more to see if it's safe to run concurrently with the controller (it says never mutates research_map.json; it does ingest comms though — "ingest comms, validate map, audit evidence, account budgets, snapshot"). Hmm — checkpoint.py calls comms.ingest() which writes events.jsonl and rejected.jsonl. That's a mutation of shared state (accepted stream) but by design it's the controller command. The supervisor may be running its own checkpoint loop. Running it as a worker could race. The prompt explicitly says checkpoint, so I'll run it with a distinct label. Risk: concurrent writes. Files are JSONL appends. comms.ingest dedups by event_id in events.jsonl. Probably fine. But "bounded worker" — maybe "checkpoint" means record my own checkpoint state, not run the whole controller checkpoint.
+
+Let me read the rest of checkpoint.py to see the CLI and whether it has a --label. It says `python3 research_map/checkpoint.py [--label auto]`. I'll run it. If it fails/races, I'll fall back to writing my own checkpoint record. Actually, safer: run it since the ASTRA_HANDOFF says checkpoints are `runtime/state/current_checkpoint.json` and `checkpoint_log.jsonl`. That's the canonical "checkpoint" action.
+
+Let me also think about time budget: The worker prompt says "Run up to four hours with checkpoints" in launch_swarm, but my direct prompt is bounded: read, take one task, emit JSON, checkpoint, exit. So a focused ~1 hour of work is right; I should finish promptly.
+
+Let me now write the audit script. Steps:
+
+1. Compute measured hashes of: F0 canonical, F1/F2a/F2b canonical + authoring, taxonomy authoring.
+2. Parse each schema's `f0_binding` (line-level regex is fine; no yaml dependency? PyYAML is likely available. Use yaml if importable else regex. Let me just use a targeted regex since the binding is on one line).
+3. Build verdict table from reviews/*.json using the same predicate as astra_lifecycle.review_coverage (independent reimplementation) — record per-target accepts at measured hash, verdicts, distinct reviewers.
+4. Emit JSON.
+5. Hash it, append sidecar, emit comms events, run checkpoint.
+
+Wait — one more important check: does the review corpus contain a *second* F0 accept anywhere (e.g., F0-F1-review-17.json which might be accept at 66bf917b, or A1-rebind-coverage.json aggregate)? The controller wants 2 independent accepts at the current hash. Let me compute.
+
+Also, for F2b: is there an accept at a8d899d2941f from the convergence review (w18-review-20260912-conv-F2b-accept) — that event cites `artifacts/formulation/schemas/af_scc_c0_vacuum.yaml#bdb23f76b895` (authoring tree hash bdb23f76?). Let me check the convergence-18.json file content and whether it cites the canonical hash. `reviews/convergence-18.json` exists. It may be a `counts_as_full_schema_verdict: false` scoped verdict. Let me look at the text search for a8d899d2941f and 8dae50da1ab5 and b65fcc0f0118 across reviews/.
+
+Let me run the scan now.
+dsh: reasoning:
+Excellent. My independent recomputation confirms:
+- F0: 1 full accept binding to current hash (lead-audit) — needs second.
+- F1/F2a/F2b/L0: 0 accepts at current hash (all stale).
+- F2b has a scoped (non-full) accept: `reviews/F2b-softflag-disposition-review.json` by astra-lead-audit, which binds (contains a8d899d2941f) but counts_as_full_schema_verdict=false. That's relevant to A1-REBIND-01: the soft-flag disposition review exists and binds to the current F2b hash.
+
+And the recorded G-F0 reason "none is an accept binding to the measured canonical sha256" is definitively contradicted: 1 accept binds (lead-audit, full). That's Finding B.
+
+Now Finding A: stale inner f0_binding in all three schemas. Let me verify with precision and check whether `consistency_evidence` taxonomy_consistency.json has a recorded hash that matches. It has no hashes recorded at all — just paths + consistent:true. So the "re-run the consistency check" evidence is not hash-bound either. Another sub-finding: the consistency evidence artifact does not record the sha256 of either taxonomy it compared, so it cannot bind to any revision.
+
+Now let me also check the F2b soft-flag disposition review to see if it addresses the two candidate-variant tokens and whether it's hash-bound. It's `reviews/F2b-softflag-disposition-review.json`, verdict accept, counts_as_full_schema_verdict false, reviewer astra-lead-audit. Let me read it. This is directly relevant to the AF-SCC-C0-VAC-GEN class and A1-REBIND-01 (CF-9 disposal). If it disposes of the soft flags but is marked not-full, then the audit lead could reclassify. Let me read it.
+
+Also check the actual flagged tokens at line 316-317 — earlier grep found line 311 f0_binding; the file has changed since (rev9) so the flagged lines may have moved. Let me grep for the candidate variant tokens.
+
+Then write the artifact. Let me read the disposition review and grep candidate tokens.
+dsh: reasoning:
+Interesting — the disposition review was created at 00:14:00 (after the 00:11:13 gate audit). So the soft-flag disposition is fresh. Good.
+
+Note the disposition review says "0 class-separation findings at sha256 a8d899d2941f" — and the current canonical F2b measures a8d899d2941f. Still binding. Good.
+
+Now let me finalize:
+
+**W093-F1 (class-bound finding, AF-SCC-C0-VAC-GEN/F2b, shared by F1/F2a):** canonical F2b at `a8d899d2941f` declares `f0_binding.declared_f0_sha256 = 66bf917bd368...` but the canonical F0 (`research_map/formulation_taxonomy.yaml`) measures `565a6e505188...` (mtime 00:07:07). By the schema's own binding rule ("if the declared F0 artifact changes hash, refresh this binding and re-run the consistency check before any gate verdict"), no G-FORM verdict may bind to a8d899d2941f. Same stale binding in F1 (b65fcc0f0118, line 307) and F2a (8dae50da1ab5, line 294). Evidence: line numbers + hashes. Also `f0_binding.consistency_evidence` = artifacts/formulation/evidence/taxonomy_consistency.json records no sha256 of the compared taxonomies (consistent:true is unbound).
+
+**W093-F2 (controller reason staleness, G-F0):** `controller_gate_audit.G-F0.reason` (checked_at 00:11:13) says "latest verdicts cite 66bf917b or a82f249c and none is an accept binding to the measured canonical sha256". Independent recomputation using `astra_lifecycle.review_coverage`'s predicate finds `reviews/F0-review-lead-audit.json` — verdict accept, reviewer lead-audit, counts_as_full_schema_verdict true, artifact_sha256 565a6e505188... — binding. So G-F0's unmet criterion is "second distinct accept reviewer", not zero. The recorded reason is from an older gate-audit text and should be regenerated; the current gate_audit() code would print "1 distinct accept reviewer(s) [lead-audit:accept]".
+
+Careful about the causal claim: the recorded reason text doesn't match the current code's template at all, so my claim should be: the recorded reason is not reproducible from the current corpus + current code; either stale or generated by a superseded implementation. That's precise.
+
+**W093-F3 (minor, F2b support):** the only verdict binding to the F2b measured hash is the scoped soft-flag disposition (counts_as_full_schema_verdict=false); no accept exists at a8d899d2941f that can serve as the A1 full-schema verdict. This is consistent with the gate reason, and it's useful: it tells the audit lead exactly what is needed (a full-schema accept at the pinned hash), and that the soft-flag disposal is already done and hash-bound.
+
+Also note that F0's second verdict: an F0 accept at 565a6e505188 by another reviewer would satisfy G-F0.
+
+Now: should the artifact claim be a `claim` event? The statement would be about facts on disk, not a theorem. conclusion_type: I'll use "audit_finding" (not "theorem", so no artifact_refs required, but I include them anyway). Let me check what conclusion_type values are used in the map to stay consistent.
+
+Let me grep conclusion_type values in claims.
+
+Then build:
+- `artifacts/worker-093/class_hash_binding_audit.json`
+- `.sha256` sidecar
+- `comms/outbox/worker-093.jsonl` with artifact + claim + status events
+- run `python3 research_map/checkpoint.py --label w093-hash-binding-audit` (check CLI first).
+
+Let me check the checkpoint CLI args and whether running it is safe. Read the tail of checkpoint.py.
+
+Also check conclusion_type usage. Let me do both.

@@ -1,0 +1,505 @@
+dsh: reasoning:
+Let me start by understanding the environment. I'm worker=060, need to read handoff/map and comms, take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit.
+
+Let me explore the workspace.
+dsh: reasoning:
+No handoff/ at the workspace root. Let me look in likely places: `.dsh`, `workdir`, `transfer`, `tmp`. The swarm tar.gz at root suggests ai4math-swarm. Let me check `launch_swarm.sh`, `supervise_swarm.sh`, and look for "handoff" and "comms" directories.
+dsh: reasoning:
+The ai4math-swarm in workdir is likely the relevant thing. Let's inspect.
+dsh: reasoning:
+The task: "Read handoff/map and comms." So read HANDOFF.md, research_map, comms (inbox/outbox/PROTOCOL.md). Then take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit. worker=060.
+
+Let me read HANDOFF.md and PROTOCOL.md and check comms inbox for worker-060 or flash-XX assignment. Let me look at the schemas too.
+dsh: reasoning:
+Now read research_map/research_map.json and comms/inbox for worker-060. Also look at schemas. Note agent ids include deepseek-flash-01..20, and worker ids like worker-01..20 in artifacts. The task says worker=060, maybe "flash-06"? Hmm, "worker=060" possibly means worker id `worker-060` or `flash-06`? Let's look for inbox files.
+dsh: reasoning:
+There's `runtime/instances/worker-060-20260912T001230-897883`. Let's inspect it. That's likely my instance dir with a prompt/assignment.
+dsh: reasoning:
+Interesting — the stderr.log contains my own reasoning! That means this session is being logged as worker-060. OK. So I am worker-060, slot 060. There's a supervisor launching workers 060-069 presumably. Let me look at supervise_swarm.sh / launch_swarm.sh to understand what the expected output format is (class-bound task, JSON with IDs evidence hash falsifier, checkpoint).
+
+Also check inbox for instructions to workers 060-069 — maybe there's a fresh inbox file. The inbox has files up to deepseek-flash-20 etc. Maybe the supervisor sends assignment on stdin? stderr.log shows only my own reasoning.
+
+Let me read the ASTRA_HANDOFF.md, README.md, and the launch scripts. Also check `runtime/` structure and `checkpoint.py` (controller command `python3 research_map/checkpoint.py`).
+
+Key: "Take one class-bound task" — classes are in `research_map/formulation_taxonomy.yaml` and class ids like `F0`, `F1`, `F2a`, `F2b`, `L0`, `L1`, `N0`, `A1`... "class-bound task" means a task bound to a class_id. Need to emit valid JSON with IDs, evidence, hash, falsifier — likely a `claim` upward message in the comms protocol.
+
+Let me read the ASTRA_HANDOFF.md and README.md, plus formulation_taxonomy (huge; skim), and schemas/events.schema.json. Also check research_map.json structure (nodes with class_id, status, next_falsifier).
+
+Let me also check the supervisor scripts to see how workers get assignments. `independent_supervisor_100.sh` at root, `supervise_swarm.sh`, `launch_swarm.sh`.
+dsh: reasoning:
+Now I understand the pattern. My assignment should be in `comms/inbox/<agent-id>.jsonl` — but my id is worker-060, and there's no worker-060 inbox. Let me check the independent_supervisor_100.sh at root (newest, Sep 12 00:11), which likely spawned worker-060..069 with this exact prompt.
+
+Let me read independent_supervisor_100.sh, independent_supervisor.sh, and check runtime/instances/worker-06x. And check comms/inbox/deepseek-flash-06.jsonl (the closest match to "worker=060" → maybe slot 060 maps to flash-06?). Hmm. Actually the instance dirs worker-060 through worker-069 were created at 00:12:30 by one supervisor. worker-06 (no leading zero) is a different, older instance.
+
+Let me read the supervisor script.
+dsh: reasoning:
+Now, worker=060 from `independent_supervisor_100.sh` — there are 100 worker slots. There is no inbox assignment for worker-060. The instruction says "Take one class-bound task". So the class-bound task should come from the map/comms. I should pick an unclaimed class-bound node from the research map and do bounded work, then emit JSON events into `comms/outbox/worker-060.jsonl` (my agent id), plus a checkpoint.
+
+Let me understand the research_map.json structure: nodes, classes, assignments. Let me use python to inspect. Also read the latest checkpoint and check what tasks are pending.
+
+Also important: worker events cannot set status=done; must emit `status`/`claim`/`artifact` etc. The deliverable: "emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit".
+
+So plan:
+1. Read map: find a class-bound node with pending/active status and no artifact → pick one bounded task.
+2. Do the task (produce artifact), compute sha256.
+3. Emit JSON events (claim + artifact + status) into comms/outbox/worker-060.jsonl.
+4. Checkpoint: run `python3 research_map/checkpoint.py` (controller command) — but that writes to runtime/state, allowed in workspace. Or write a checkpoint file. It says checkpoint then exit. Probably run checkpoint.py or write my own checkpoint.
+5. Exit.
+
+But note the map.lock exists (created 00:12). The controller/leads are actively working. Running checkpoint.py might conflict. Let's read checkpoint.py and comms.py to see how ingest works and whether I can/should ingest. Protocol says ingest is controller-only ("research_map/comms.py ingest only"). So I write to outbox only.
+
+Let me first inspect the map with Python. Let me find classes and nodes. This is a large 737KB JSON.
+
+Let me get an overview of map keys, and the classes/nodes relevant. Also check the taxonomy yaml for class ids.
+
+Also check what work has already been done by other workers (worker-06 outbox etc.) to avoid duplication.
+
+Let me run python to summarize.
+dsh: reasoning:
+Now let's find class-bound nodes in the map. Where are nodes? Maybe under `comms`? The map has assignments, claims. But the nodes list might be in `groups`? Let's check. Also the dashboard research_map.js might render nodes from the JSON. Let me look for "nodes" key... top keys do not include "nodes". Perhaps nodes live in `groups[].nodes`. Let's inspect.
+
+Also check gate audit and pending items, plus assignments list (84). Let's summarize assignments with status and class ids.
+dsh: reasoning:
+Nodes have keys; let me print full node dict for a couple.
+dsh: reasoning:
+Let me see node ids across all groups, then find open assignments (with acceptance tests and falsifiers). The ASTRA_HANDOFF says open assignments issued 00:09 with deadline 01:30:
+- astra-life01-publish-frozen (lead-formulation)
+- astra-life01-a1-rebind (lead-audit)
+- astra-life01-l0-revise (lead-literature)
+- astra-life01-n0-proposal (lead-numerics)
+
+Those are for leads, not me. As a bounded worker, I should take one class-bound task — likely one that contributes to a gate. Given the current state, useful bounded tasks:
+
+1. Verify the class-binding of the three canonical schemas against the taxonomy (artifact hash pinned), producing an independent verification artifact with hashes — class-bound (F1/F2a/F2b). This is bounded and machine-checkable.
+
+2. Look at pending reviews/gates. E.g. A1 rebind coverage review exists (reviews/A1-rebind-coverage.json). The lead-audit is on it.
+
+3. Look for `schemas/semantic_contract_tests/` — there might be open tasks.
+
+Let me check assignments in the map with status and acceptance tests, which give class-bound tasks and their falsifiers. Let me list assignments with their fields (node_id, assignee, status, deadline, acceptance_test, falsifier).
+dsh: reasoning:
+Many assignments. Note "worker-06" appears as assignee for A1 class AF-WCC-VAC-GEN. My slot is 060. Hmm, worker-06 vs worker-060 — different. But there's no inbox for worker-060.
+
+Let me check the most recent assignments issued at 00:09 by the controller (astra-life01-*), and also see the inbox/outbox for leads to know what's currently hot. Since the prompt is generic ("Take one class-bound task"), I should select an unassigned-but-useful class-bound task, do it, and emit events.
+
+Let me check what recent worker outbox events look like (worker-06, worker-16, deepseek-flash-17..19) to match the JSON schema. Then choose a task.
+
+Good candidates for a bounded worker (with current state at 00:1x):
+
+1. **Independent hash-drift audit of the three canonical schemas vs FROZEN.json manifest** — class IDs AF-WCC-VAC-GEN / AF-SCC-C2-VAC-GEN / AF-SCC-C0-VAC-GEN. F1's last status mentions FREEZE DRIFT: schemas written 00:08:37–00:09:02 while FROZEN.json is revision 19 pinning older hashes. A worker could produce a verified drift report with measured sha256 of the current files and the manifest, and a falsifier. That's bounded, class-bound, evidence-backed.
+
+2. **Cross-check class separation invariants** — e.g. grep for composite "C0 or C2" strings.
+
+3. **Check gate evidence refs resolve** — but this may duplicate lead-audit work.
+
+Let me check the current state of the FROZEN.json and the exact assignments in map (full JSON of latest assignments with acceptance_test). Also check the semantic_contract_tests directory and f1_falsifier_tests.jsonl — worker 17 was doing QNF tests.
+
+Let's first look at the latest assignment entries (last ~8) in full.
+dsh: reasoning:
+The work is quite advanced. I'm a bounded worker with no specific assignment. "Take one class-bound task" — I should pick one from the map that is genuinely useful, bounded, class-bound, not duplicating, and produce an artifact + events with hashes + falsifier.
+
+Given the current critical state: FREEZE DRIFT between canonical schemas and artifacts/formulation/FROZEN.json; G-FORM blocked; A1 rebind needs hash-bound verdicts from reviewers who did not author artifacts.
+
+A useful independent task: **independent canonical-hash verification of the four class-bound artifacts vs FROZEN.json manifest + verify_frozen.py**, i.e. run the existing verification tool and measure. But lead-formulation owns publish-frozen; a worker doing independent verification is a good "audit" contribution.
+
+Another idea: The worker-060 slot may not have any assignment; per the launch prompt: "Work only on a class-bound task assigned by a group lead; if no assignment exists, inspect the immediate queue and propose one artifact-backed task without claiming completion." Wait — that was for deepseek-flash-N in launch_swarm.sh. The independent_supervisor_100.sh prompt is the one I got: "You are a bounded execution worker. Read handoff/map and comms. Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit."
+
+So: inspect the immediate queue, take one class-bound task. The immediate queue items from ASTRA_HANDOFF: F1/F2/L0/L1/A1/N0. Since the lead assignments are claimed, a bounded worker should pick a verification/evidence sub-task that a lead would need. Options:
+
+(a) Verify the FROZEN manifest ↔ canonical bytes (G-FORM evidence), independent of the lead. Class IDs: three vacuum classes. Deliver: `artifacts/worker-060/frozen_reconciliation/report.json` with measured sha256 per file, per-file drift status, plus a falsifier. This is bounded, deterministic, machine-checkable, evidence-bearing, and matches the acceptance test in astra-life01-publish-frozen ("reconcile artifacts/formulation/FROZEN.json so verify_frozen.py exits 0 against canonical hashes"; "audit_evidence.py reports 0 dual-tree divergence findings"). However, the lead is actively doing this; my independent measurement could still be useful as audit evidence but might collide/duplicate.
+
+(b) Independent check that class-separation invariants hold in the current canonical schema bytes (no composite "C0 or C2" strings, no cross-class leakage, quantifier consistency) — "A1-rebind coverage" review exists (reviews/A1-rebind-coverage.json) produced at 00:13 by someone. Let me read that to see what's already covered and what gap remains.
+
+(c) `schemas/semantic_contract_tests/` — maybe there's a test harness needing runs. Let me look.
+
+Let me check what recent artifacts exist (artifacts/worker-01..20, flash-XX) and the A1-rebind-coverage review to find an explicit gap. Since coordination is tight, best to find something the map says is missing.
+
+Let me check `controller_findings` (11 items) and `controller_gate_audit` — these list what's missing per gate. Then pick a task that closes a specific finding and is doable in bounded time.
+
+Let me print them.
+dsh: reasoning:
+The map at 00:11 says canonical/authoring alignment now says "aligned" for all three schemas — so the lead-formulation may have published frozen already (as of 00:11:13). Good.
+
+Key unmet items:
+- G-F0: no accept verdict at current hash 66bf917bd368 (taxonomy hash may have changed to 565a6e505188 per measured). 9 taxonomy cases open; 2 class-sep soft flags on taxonomy.
+- G-FORM: F1 at 7a3e1f93 revise verdicts; F2a/F2b revise. No single frozen data class shared by F1/F2a/F2b.
+- G-LIT: L1 spot checks <3.
+- G-NUM: N0 proposal in progress by lead.
+- G-AUDIT: A1 needs verdicts.
+
+The most valuable bounded class-bound task for a fresh worker (me) that isn't assigned: **independent verification contributor to G-FORM: the "single frozen data class (s,delta,norm) shared by F1/F2a/F2b" unmet criterion**. That is a concrete cross-artifact consistency check — machine-checkable, class-bound (three classes), evidence-bearing, and not duplicating hash publication. Actually wait: it's listed under G-FORM unmet. A worker could produce a **data-class concordance report**: extract the data-class declarations (s, delta, norm) from the three canonical schemas at measured hashes and check whether they are identical/shared; if not, produce exact diff with line numbers. That directly gives a lead evidence for the gate, or the exact blocker.
+
+Alternatively: **F2b soft-flag disposition support** — a checker calibration to detect the "candidate-variant" annotation (CF-9). That's assigned to audit lead though.
+
+Another candidate: an independent **witness/negation sanity check** like worker-17's QNF. But that's done.
+
+Hmm. But caution: I'm a worker with no reviewer authority; my artifact is evidence/verification. The best value-add: independent verification of a claim that currently rests on one agent's run — i.e. reproduce with different method. The map's hard rule: "every claim labelled with how strongly established"; controls matter.
+
+Let me look at the schemas directory and `schemas/semantic_contract_tests/` — perhaps there is an existing test harness meant to be run on canonical schemas, and it hasn't been run at the current hashes. Let me inspect.
+
+Also `research_map/class_separation.py` and `audit_evidence.py` can be run to reproduce findings — but those are controller tools; running them is read-only and gives independent measurements. Doing "run the checker, record output, hash" would be useful as gate evidence (independent reproduction at current hashes).
+
+Let me check what's in schemas/semantic_contract_tests/ and whether there's an existing harness. Also check `artifacts/worker-17/quantifier_nf/` to avoid duplication.
+dsh: reasoning:
+There's a fresh `schemas/semantic_contract_tests/` directory created at 00:14 (just now) with `run_contract_tests.py`, `manifest.json`, and fixtures — someone (probably another worker, e.g. flash-17/18) is building it. Let me check if it's complete and whether it has been run against canonical schemas. This may be an in-flight task by another worker; I shouldn't duplicate.
+
+Let me check the semantic_contract_tests directory's manifest and runner to see the intended task and whether a results file exists. Also check git status/recent commits to understand what's happening.
+
+Actually, wait. Time is 00:14-00:15 now (the checkpoint at 00:14:05). Files at 00:14 suggest active concurrent work. I must avoid stomping. Choose a task with a distinct output path under `artifacts/worker-060/`.
+
+Let me think about what's most valuable and bounded (target: ~10-30 min of work):
+
+Candidate A: **Cross-class data-class concordance check for G-FORM's unmet criterion** ("no single frozen data class (s,delta,norm) shared by F1/F2a/F2b, which disables the licensed C0=>C2 transfer"). Independently extract from the 3 canonical schemas the data class declaration and produce a concordance table. This is directly gate-relevant, class-bound to the three vacuum classes, machine-checkable, and independent (no one has produced this artifact yet; the unmet list asserts it as a blocker).
+
+Candidate B: **Independent reproduction of `audit_evidence.py` + `class_separation.py` at current hashes**, recording outputs and hashes, and verifying the soft flags. This yields evidence for A1/G-AUDIT. But it duplicates controller tooling runs; still, an independent run is evidence. However the tools are "controller" tools — the map says ingest only controller; running read-only audits is fine.
+
+Candidate C: **Verify the FROZEN-manifest reconciliation after publish** (if publish landed): run `python3 artifacts/formulation/tools/verify_frozen.py`, measure hashes, check `audit_evidence.py` reports 0 dual-tree divergence. This is the acceptance test of astra-life01-publish-frozen. As an independent verification, it's high value for G-FORM/G-F0, and it's bounded.
+
+Let me check the current state of things first: FROZEN.json, verify_frozen.py, and whether the canonical hashes changed after 00:11. Let me measure hashes now. If publish landed between 00:11 and now (00:14), an independent verification of the acceptance test is valuable.
+
+Let me look at the formulation artifacts tree and FROZEN.json.
+dsh: reasoning:
+Interesting! `schemas/semantic_contract_tests/` has `observed_verdicts.json` already (91087 bytes at 00:14) — so it appears the contract test suite has already been run by someone. Let me look at the runner's exit status/observed verdicts summary. If there's an integrity/validity failure, that's a lead adjudication item. But likely another worker (flash-18?) just did this. Let me check the manifest and whether the run passed.
+
+Hmm, I need to be careful not to duplicate concurrent work. Let me check the events stream for the newest events (last ~20) to see what workers are claiming right now, and see gaps.
+
+Actually, let me use the map — applied_event_ids / events.jsonl tail. Let me tail events.jsonl (parsed) for last 30 events with actor, event_type, node_id, summary.
+dsh: reasoning:
+Lots of concurrent activity. Newest events are 00:14:40. The lead-audit reports "CF-5 unknown-class-token recurrence confirmed in F0 and F1 at the measured hashes (F0 565a6e505188: AF-WCC-VAC-GEN-SET, AF-SCC-C0-CH-VAC-GEN; F1 b65fc...)". Note F2b soft flags disposition done (0/0). 
+
+Now, what's a good bounded class-bound task not yet taken?
+
+Look at the G-FORM unmet criterion: "no single frozen data class (s,delta,norm) shared by F1/F2a/F2b, which disables the licensed C0=>C2 transfer". I haven't seen any event addressing that. This is a concrete, machine-checkable cross-artifact invariant, class-bound (three classes), directly gate-relevant. It's exactly the kind of independent verification a worker can do: extract the data class from each canonical schema at measured hashes and test identity/topology; if they differ, produce an exact diff and state the consequence (C0=>C2 transfer unlicensed) with a falsifier.
+
+But wait — maybe the schemas were revised to align; a fresh measurement may show they now share it. Either way, the report is valuable: it either closes the unmet item with evidence or pins it precisely.
+
+Let me look at the schema structure to find the data class / regularity / genericity fields. Let's inspect `schemas/af_scc_c2_vacuum.yaml` and `af_wcc_vacuum.yaml` top-level keys. The yaml files are ~30KB; let me parse with python (yaml available? likely pyyaml). Let's check.
+
+Also the taxonomy hash changed to 565a6e505188 for research_map/formulation_taxonomy.yaml while the authoring one is 01e7f841... — the lead-audit says F0 mirror-equality breach (canonical 565a... != authoring 01e7...). Hmm, and FROZEN.json pins authoring artifacts/formulation/formulation_taxonomy.yaml at 01e7f841... So there IS still an F0 dual-tree divergence, contrary to earlier "aligned" claim for schemas.
+
+Wait: gate audit says F0 publication pair divergent, F1/F2a/F2b aligned. So the three schemas are aligned between canonical and authoring? Let me check authoring schemas: artifacts/formulation/schemas/*.yaml.
+
+Given all this, my best contribution might be: **independent cross-artifact data-class concordance + C0⇒C2 transfer licensing check at measured hashes**, producing:
+- artifact: `artifacts/worker-060/c0_c2_transfer_license/report.json`
+- measured sha256 of the three canonical + three authoring schemas
+- extracted data-class declarations (s, delta, norm / regularity token / genericity) with file:line
+- verdict: transfer licensed / not licensed, with exact mismatches
+- falsifier: a row where a claimed shared data class is not byte-equal in the three schemas, or the transfer rule is declared licensed while the shared data class differs.
+- JSON events: `artifact`, `claim`, `status` written to `comms/outbox/worker-060.jsonl`
+- checkpoint: run `python3 research_map/checkpoint.py`? That's the controller command. As a worker I can write my own checkpoint to `runtime/state/w060_checkpoint_*.json` and maybe call checkpoint.py. Hmm — "checkpoint" in my prompt likely means run checkpoint.py (the protocol's controller command) or write a checkpoint record. Since map.lock exists and controller runs checkpoint every 15 min, running checkpoint.py concurrently could race. I could instead write my own checkpoint JSON under runtime/state/ with a unique name (consistent with w06_checkpoint_N.json, w13_checkpoint_N.json patterns from other workers). That's safe and precedented.
+
+But hold on. Let me reconsider: is a "data class concordance" report likely to be what the swarm needs most? Let me check if it exists already: search artifacts for "data class" / "concordance". Let me grep.
+
+Also check the C0=>C2 transfer rule — where is it defined? Probably in the taxonomy (`c0_implies_c2` or "licensed transfer"). Let me grep the taxonomy and schemas.
+
+Let me investigate first, then decide. Use grep tool.
+dsh: reasoning:
+There's the transfer rule at taxonomy line ~472-495 and line 480: "data_class fields must match exactly (including s, delta once F2 fixes them)". Let me read the taxonomy transfer rules and the data_class blocks of the three schemas. This is exactly the "C0=>C2 transfer" licensing criterion.
+
+Let me read taxonomy lines 460-500 and the data_class sections (around lines 100-140 in each schema).
+dsh: reasoning:
+The three data_class blocks look identical in content (matter, cosmological_constant, equations, constraints, regularity_class with s>5/2, delta in (1/2,1), asymptotic_decay, symmetry: none_assumed). WCC's has different structure: `symmetry: none_assumed` yes; also WCC has `excluded_data` and admin mass rigidity. But WCC isn't part of the T1 transfer (T1 is C0->C2). The unmet criterion says "no single frozen data class (s,delta,norm) shared by F1/F2a/F2b, which disables the licensed C0=>C2 transfer". Hmm, maybe that statement was about F1/F2a/F2b needing to share for the genericity matching too? Actually T1 requires data_class fields match exactly between C0 and C2; F1 (WCC) sharing is about the ambient space consistency across the family.
+
+A machine check of exact field-level equality of data_class between C0 and C2 (and WCC where applicable) plus genericity_kind/genericity_topology matching is a genuine gate guard check. If they match now at current revisions, then the unmet item can be closed with measured evidence: "T1 guard 1 and guard 2 satisfied at hashes X, Y".
+
+Let me check genericity blocks of C0 and C2 for genericity_kind/topology. Let me extract and compare programmatically. Also check authoring vs canonical alignment at this instant.
+
+Let me write a quick script to:
+1. Load the three canonical schemas + authoring counterparts + taxonomy YAML (PyYAML).
+2. Extract data_class normalized (flattened key paths -> scalar values) and genericity kind/topology, I+ visibility, conclusion_type.
+3. Compare C0 vs C2 (T1 guards), compare all three for the shared data class.
+4. Compute sha256 of each.
+
+Let me check if `yaml` is importable.
+dsh: reasoning:
+Good. Now let me prototype the concordance check quickly (read-only) to see what it yields. If results are meaningful, I'll package it as an artifact with a proper script, run it, hash the outputs, and write events.
+
+Important: I should make my task "class-bound" and explicitly reference class IDs. My chosen task:
+
+**T-060-T1-GUARD: Independent measurement of the T1 transfer guards (data_class exact match + genericity match) between the canonical C0 (AF-SCC-C0-VAC-GEN) and C2 (AF-SCC-C2-VAC-GEN) schemas, with the WCC (AF-WCC-VAC-GEN) data-class concordance recorded as a cross-check.**
+
+Outputs:
+- `artifacts/worker-060/t1_transfer_guard/check_t1_guards.py` — deterministic script, self-contained
+- `artifacts/worker-060/t1_transfer_guard/t1_guard_report.json` — measured hashes, extracted fields, per-guard verdict, falsifier
+- `artifacts/worker-060/t1_transfer_guard/SHA256SUMS` maybe
+- Events in `comms/outbox/worker-060.jsonl`: artifact, claim, status
+- Checkpoint `runtime/state/w060_checkpoint_1.json` + append to w060_checkpoints.jsonl
+- Exit.
+
+But wait: is there a risk that another worker just did this? Search artifacts for t1 / transfer guard. Let me grep quickly. Also check the "G-FORM unmet" text is still current; the map may have been updated at 00:14+. Let me check the newest map hash/updated_at and whether the unmet list changed. Actually, the map is being updated continuously by the controller. My task should still be valid.
+
+Let me grep artifacts for existing t1_guard/data class concordance work.
+dsh: reasoning:
+Note the map's G-FORM unmet still cites old hashes (7a3e1f93/23fec0e9/e6b1af2b) that are stale relative to measured canonical b65fcc0f/8dae50da/a8d899d2 — map updated_at 00:12:11. Anyway, my task is valid and not obviously duplicated. There's `artifacts/flash-11/f1_aux_class_binding/...` and `artifacts/worker-06/spec_conformance_audit.py`, and R2/R3 formulation reviews. Let me check whether R2_scc_separation_review already asserts data-class identity. Quick grep for "data_class" in that review.
+dsh: reasoning:
+R2 review is a snapshot at rev5, stale. No T1 guard concordance at current hashes. Good — my task is distinct.
+
+Now, design the artifact carefully. Requirements:
+- valid JSON with IDs (event_id, node_id, class_id, assignment id?)
+- evidence (evidence_refs with path#sha256-prefix)
+- hash (sha256 of artifact)
+- falsifier (what would falsify the claim)
+- checkpoint
+- class-bound
+
+Deliverable plan:
+
+Directory: `artifacts/worker-060/t1_guard/`
+Files:
+1. `check_t1_guards.py` — deterministic checker:
+   - inputs: canonical `schemas/af_scc_c0_vacuum.yaml`, `schemas/af_scc_c2_vacuum.yaml`, `schemas/af_wcc_vacuum.yaml`, `research_map/formulation_taxonomy.yaml`, authoring mirrors.
+   - measures sha256 of each file at run time.
+   - extracts `data_class` subtree and `genericity.kind` / `genericity.topology_or_measure` (or whatever the field names are) from each schema via yaml.safe_load.
+   - normalizes deep structures (flatten to dotted paths, stable JSON), compares C0 vs C2 (T1 guard 1: data_class exact match; guard 2: genericity kind+topology match), and WCC vs C0/C2 for the shared-data-class question from G-FORM unmet.
+   - emits `t1_guard_report.json` with: measured hashes, extracted paths (file:line where feasible? maybe use key path), per-guard verdicts, mismatches list, and a `falsifier` field; also `conclusion_type` check.
+   - Exit code 0 if guards pass, 1 if mismatch. Also self-test: include a built-in negative control — mutate a deep copy of C0's data_class (e.g. delta -> "delta in (0,1)") and confirm the comparison detects it. Self-test result recorded. This addresses the project's "run the null first" rule and "falsifier actually falsifies".
+   - deterministic: no timestamps inside? Include `measured_at` maybe from arg or omit; determinism matters for hash. I'll omit wall clock from report body or use run label. Keep output byte-stable across runs (sorted keys, no timestamps) so hash is reproducible.
+
+2. `t1_guard_report.json` — output (generated by script).
+3. `SHA256SUMS` — hashes of script and report (generated).
+4. `README.md` — short: what/how/falsifier/limits, class binding.
+
+Then comms:
+`comms/outbox/worker-060.jsonl` with events:
+- `artifact` events for script + report (path, sha256, validation_status "unverified" — worker can't set passed)
+- `claim` event (class_id: "AF-SCC-C0-VAC-GEN;AF-SCC-C2-VAC-GEN", statement, conclusion_type: "verification" (not theorem — must avoid auto-reject), assumptions, falsifier, evidence_refs, artifact_refs)
+- `status` event: node_id F1,F2a,F2b? Better node_id "F2a,F2b" (C0/C2) with class ids; status "done" for my bounded task? Protocol says worker events cannot set status=done for nodes... Actually rule 2: "A node is done only when its declared artifact exists...". The `status` message type has status field: queued|active|blocked|done|rejected|killed. For my own bounded task I can report `status: done` meaning my execution task completed, not the node. But to be safe, I'll use `status: done` with node_id "F1,F2a,F2b" and a summary explicitly saying "bounded worker task complete; no node/gate status claimed". Hmm, risk of confusing the controller into thinking the node is done. The events from other workers do this: e.g. deepseek-flash-07 "Bounded lifecycle complete: class-bound task ... delivered." with event_type status. Let me check an actual status event from worker outbox to match field conventions, especially what `status` value they use.
+
+Let me look at a worker status event and a claim event in raw JSONL.
+
+Also need to know the exact event schema: `research_map/events.schema.json`. Let me read it.
+dsh: reasoning:
+I now have the event conventions:
+- status events use status "active" (meaning the node), and summary says no completion claimed. Worker events can include extra fields (hours, group_id, next_falsifier, evidence_refs).
+- artifact event requires node_id, artifact_type, path, sha256, validation_status.
+- claim event requires class_id, statement, conclusion_type, assumptions, falsifier, evidence_refs.
+
+conclusion_type values? Let's check what values are accepted by comms.py/apply_events.py to avoid auto-reject. Search for "conclusion_type" and valid values.
+
+Let me check comms.py ingest validation rules and apply_events.py for claim handling.
+dsh: reasoning:
+Good. claim conclusion_type values: formal_model, numerical_evidence, open_problem, stability_result, counterexample, conditional_theorem. For my check, `conclusion_type: formal_model` or `stability_result` fits a machine-verification claim. I'll use "formal_model" (used by worker-03 for a similar hash-binding audit) — actually for a "guard check result" maybe "stability_result". Let me use `formal_model` with `claims_theorem_status: false` explicitly, matching worker-03/worker-06 conventions.
+
+Now let me build the artifact. Steps:
+
+1. Create `artifacts/worker-060/t1_guard/check_t1_guards.py`.
+2. Run it → `t1_guard_report.json` + `SHA256SUMS`.
+3. Verify re-run determinism (same hash twice).
+4. Write README.md.
+5. Append events to `comms/outbox/worker-060.jsonl`.
+6. Write checkpoint `runtime/state/w060_checkpoint_1.json` (+ jsonl) and update trajectory.log? The instance dir trajectory is managed by supervisor. I'll write the checkpoint file.
+7. Maybe run `python3 research_map/validate_map.py` to make sure map still valid? Not needed.
+8. Print summary and exit.
+
+Let me design the checker rigorously.
+
+Extraction targets:
+- `data_class` subtree: full nested dict from yaml (deep).
+- `genericity`: the guard says "genericity_kind and genericity_topology must match exactly". Schema fields: `genericity.kind`, `genericity.topology_or_measure`. C0/C2 both have those? Let me check quickly by loading yaml and printing keys.
+- Also T1 requires "the source claim must carry artifact_refs and a reviewer verdict" — that's not checkable from schemas; record as out-of-scope/deferred to A1 (assumption).
+- For G-FORM unmet item "no single frozen data class (s,delta,norm) shared by F1/F2a/F2b": check across three: compare `regularity_class.sobolev_variant` and `regularity_class.default`, `asymptotic_decay`, matter/cosmological constant/equations/constraints/symmetry. Report the set of differing paths.
+
+Also check canonical vs authoring mirrors (publication alignment) for these files: `artifacts/formulation/schemas/*.yaml` vs `schemas/*.yaml` — byte equality. This is gate-relevant (dual-tree divergence). Note: FROZEN.json pins authoring paths? In the FROZEN.json head I saw it lists artifacts/formulation/... paths. The lead-audit said F1/F2a/F2b aligned. I'll include mirror equality as a secondary measured fact (cheap, useful), but my main claim is the T1 guards.
+
+Negative controls (self-tests) — crucial:
+1. Mutate C2 copy: deep-copy C0 data_class from C2? Better: construct four mutations and assert the comparison catches each:
+   - M1: change `data_class.regularity_class.sobolev_variant.delta` string.
+   - M2: change `genericity.kind`.
+   - M3: change `genericity.topology_or_measure`.
+   - M4: change `conclusion` / extension_regularity token? That's class distinction, not T1 guard; but include: mutate C2 `regularity.extension_regularity` from C2 to C0 → must flag conclusion-token mismatch (separate check).
+2. Positive control: identical copies → guards pass.
+The self-test result must be in the report: n_mutations_detected / n_mutations.
+
+Also handle a subtlety: what counts as "exact match" for data_class? The WCC data_class has an extra `excluded_data` field; C0 vs C2 may also have small differences (locator prose, hypotheses_reconciliation). If C0 vs C2 data_class differs only in non-semantic annotation fields, my report should distinguish:
+- `semantic_core` paths (equations, constraints, matter, cosmological_constant, regularity_class, asymptotic_decay, symmetry, gauge, diffeo_quotient)
+- `annotations` (citation_status, locator, hypotheses_reconciliation, status notes)
+And report both raw-diff and semantic-core diff, with a per-path classification. The guard says "data_class fields must match exactly" — so raw diff matters; but a prose annotation in adm_mass locator is not a data-space difference. I must be careful and honest: report raw mismatch count and semantic classification, and let the verdict be:
+- T1_GUARD_1_EXACT: pass only if raw canonical-scalar diff is empty (strict reading).
+- T1_GUARD_1_SEMANTIC: pass if all diff paths are classified as annotations (not data-space-defining).
+That's rigorous and gives the lead exactly what they need.
+
+Let me first prototype and see what the actual diff is between C0 and C2 data_class at current hashes. Let me run an exploratory script.
+dsh: reasoning:
+Excellent — the prototype already yields a meaningful, precise result:
+
+**C0 vs C2 data_class**: raw diff is only two `adm_mass` annotation paths (locator, hypotheses_reconciliation) — no data-space-defining field differs. The semantic core (matter, Λ, equations, constraints, regularity_class incl. s>5/2 and delta∈(1/2,1), asymptotic_decay, symmetry, gauge, diffeo_quotient) matches exactly.
+
+**genericity.kind and topology_or_measure**: need to check equality explicitly — my diff showed only `excluded_set` differs (prose wording "C-infinity (hence C0)" vs "C-infinity"), so `kind` and `topology_or_measure` match. 
+
+**WCC vs C0 data_class**: several prose-level differences including `regularity_class.sobolev_variant.spaces` (WCC has "(weighted Sobolev)" suffix) and `.status` wording, `asymptotic_decay.parity_conditions` (WCC more explicit), plus annotation fields. None are numeric (s, delta are equal). So the G-FORM unmet item "no single frozen data class (s,delta,norm) shared by F1/F2a/F2b" is **falsified at current hashes**: s="s > 5/2" and delta="delta in (1/2, 1)" are byte-identical across all three. The residual differences are prose/annotation level, not the (s, delta, norm) data class.
+
+That's a real, valuable, falsifiable result: it closes (with measured evidence) one of the G-FORM unmet criteria, while flagging the exact prose deltas that a reviewer might still treat as non-identical field values under the strict "data_class fields must match exactly" reading.
+
+So the artifact is: **T1 guard concordance + cross-class data-class (s,delta,norm) identity at measured canonical hashes**, with:
+- Guard T1-G1 (C0↔C2 data_class semantic-core exact match): PASS
+- Guard T1-G1-strict (raw whole-subtree equality): FAIL, with the exact 2 annotation paths listed and classification
+- Guard T1-G2 (genericity kind + topology_or_measure exact match): PASS (need to confirm equality byte-level)
+- Cross-class (F1/F2a/F2b) frozen numeric data class (s, delta, norm): IDENTICAL ({s: "s > 5/2", delta: "delta in (1/2, 1)", matter: none, Λ: 0, equations, symmetry: none_assumed}) → falsifies the G-FORM unmet statement "no single frozen data class (s,delta,norm) is shared", at these hashes
+- Mirror alignment canonical vs authoring for the three schemas (measure; lead-audit says aligned; verify)
+- Negative controls: mutations detected.
+
+Wait: "norm" — where is norm? The sobolev spaces string mentions H^s_delta and H^{s-1}_{delta+1}. The triple (s, delta, norm) probably refers to s, delta, and the weighted Sobolev norm/spaces. So compare the triple plus spaces.
+
+Let me confirm genericity.kind / topology equality, and check whether the C0/C2 genericity blocks differ elsewhere, and what `transfer_holds`/`transfer_failures` say (those are literally about the transfer!). Let me print them. That could be decisive: C0 or C2 may already declare T1 transfer_holds. Let me look.
+dsh: reasoning:
+`genericity.kind` and `topology_or_measure` are byte-identical between C0 and C2. And the genericity blocks differ only in the `excluded_set` prose wording. Good.
+
+So the T1 guards:
+- G1 data_class semantic core: PASS (only 2 annotation paths differ)
+- G1 strict: FAIL (2 annotation paths)
+- G2 genericity kind+topology: PASS (exact)
+- G2 strict (whole genericity subtree): FAIL (excluded_set prose)
+- T1 guard 3 (source claim artifact_refs + reviewer verdict): out of scope for schema measurement; explicitly deferred to A1.
+
+And the new result: (s, delta, norm/spaces) identical across F1/F2a/F2b in the numeric slots, falsifying the "no single frozen data class" unmet item (with the caveat that WCC's `spaces` string has a parenthetical suffix "(weighted Sobolev)" and `.status` prose differs).
+
+This is a great bounded task. Deliverables:
+
+Artifact dir: `artifacts/worker-060/t1_guard/`
+- `check_t1_guards.py` (checker, deterministic, self-test with mutations)
+- `t1_guard_report.json` (result)
+- `SHA256SUMS`
+- `README.md`
+
+Now let me write the checker carefully. Design:
+
+```
+#!/usr/bin/env python3
+"""..."""
+import argparse, hashlib, json, sys
+from pathlib import Path
+import yaml
+
+ROOT = Path(__file__).resolve().parents[3]  # artifacts/worker-060/t1_guard -> root
+```
+Wait: `artifacts/worker-060/t1_guard/check_t1_guards.py` parents: [0]=t1_guard, [1]=worker-060, [2]=artifacts, [3]=ai4math-swarm root. Yes, parents[3].
+
+Files:
+```
+CANON = {
+ 'F1': ('AF-WCC-VAC-GEN', 'schemas/af_wcc_vacuum.yaml', 'artifacts/formulation/schemas/af_wcc_vacuum.yaml'),
+ 'F2a': ('AF-SCC-C2-VAC-GEN', 'schemas/af_scc_c2_vacuum.yaml', 'artifacts/formulation/schemas/af_scc_c2_vacuum.yaml'),
+ 'F2b': ('AF-SCC-C0-VAC-GEN', 'schemas/af_scc_c0_vacuum.yaml', 'artifacts/formulation/schemas/af_scc_c0_vacuum.yaml'),
+}
+TAXONOMY = 'research_map/formulation_taxonomy.yaml'
+```
+
+Functions:
+- sha256_file
+- flatten(obj, prefix) -> dict path->scalar (json.dumps for lists? better: keep lists as canonical JSON strings; but for diffing display we want readable. For determinism, represent non-scalars as json.dumps(sort_keys=True).)
+- extract(doc): returns dict with `data_class`, `genericity.kind`, `genericity.topology_or_measure`, `regularity.extension_regularity`, `conclusion.conclusion_type`, `class_id`, `regularity_class_triple` = {'s':..., 'delta':..., 'spaces':...,'default':...}
+- classify(path): set of paths that define the data space ("core") vs annotations vs narrative. Define CORE prefixes for data_class:
+  matter, cosmological_constant, equations, constraints.*, regularity_class.default, regularity_class.sobolev_variant.s, .delta, .spaces, asymptotic_decay.*, symmetry — all data-space defining.
+  ANNOTATION: adm_mass.* (the sign/rigidity/locator/citation status — adm_mass is arguably part of ambient space but its statement is shared: exists, sign equal; locator differs), regularity_class.sobolev_variant.status, diffeo_quotient? Hmm — diffeo_quotient is a technical gap note; is it data-space defining? It describes genericity, and C0 vs C2 are identical there ("genericity is defined on data modulo asymptotically-identity diffeomorphisms; the quotient construction is a declared open technical gap") — indeed identical in C0/C2 (the diff was only WCC vs C0). So for C0↔C2 classification only two paths differ, both `adm_mass` annotations. I'll classify `adm_mass.locator` and `adm_mass.hypotheses_reconciliation` as `provenance_annotation` and everything under data_class as `data_space_core` by default. Better: define explicit annotation set {'adm_mass.locator','adm_mass.hypotheses_reconciliation','adm_mass.citation_status','regularity_class.sobolev_variant.status'} and default core. Report each diff path with its class.
+
+- compare(a,b) -> list of {path, a, b, class}
+
+Guards:
+- G1_EXACT: diff(C0.data_class, C2.data_class) == []
+- G1_CORE: no diff path classified core
+- G2_KIND: C0.genericity.kind == C2.genericity.kind and topology_or_measure equal
+- G2_EXACT: genericity subtree diff == []
+- CLASS_TOKENS: C0.regularity.extension_regularity == 'C0' and C2 == 'C2' and not equal (separation preserved)
+- CROSS_TRIPLE: for each of F1/F2a/F2b extract (matter, cosmological_constant, equations, sobolev s, delta, spaces) and check the numeric triple s/delta identical across all three; report full tuple comparison.
+- MIRROR: sha256(canonical) == sha256(authoring) for each of three.
+
+Self-test (negative controls) — on in-memory deep copies:
+- mut1: C2.data_class.regularity_class.sobolev_variant.delta = 'delta in (0, 1)' → G1_CORE must fail (detected)
+- mut2: C2.genericity.kind = 'full_measure' → G2_KIND must fail
+- mut3: C2.genericity.topology_or_measure = 'measure-theoretic' → G2_KIND must fail
+- mut4: C2.regularity.extension_regularity = 'C0' → CLASS_TOKENS must fail
+- mut5 (annotation-only): C2.data_class.adm_mass.locator = 'elsewhere' → G1_EXACT must fail while G1_CORE stays pass (discrimination test)
+- positive control: identical copies → all pass.
+
+Report structure (deterministic, sorted keys):
+```
+{
+ "report_kind": "class_transfer_guard_measurement",
+ "report_id": "w060-t1-guard-20260912T00xx",
+ "actor": "worker-060",
+ "task": {...},
+ "measured_at": <timestamp>,   # hmm determinism: include but from a fixed arg? 
+ ...
+}
+```
+Determinism: if I include wall-clock time, re-running changes the hash. That undermines "re-run reproduces the hash". Options: (a) no timestamp in the report; use `--label` only; record time in the event JSON and in SHA256SUMS comments? SHA256SUMS with timestamp also changes. Let me keep report body fully deterministic (no timestamps), and put timestamps only in the event file (which isn't hash-bound as artifact... actually the outbox event includes created_at; fine). The README can note "the report is byte-reproducible; the timestamp lives in the outbox event".
+
+Actually a `measured_at` inside the report is useful for provenance. Compromise: report includes `"generated_by": "check_t1_guards.py"`, `"inputs"` hashes, no time. The event carries created_at. Good.
+
+Report fields:
+```
+{
+ "schema": "w060.t1_guard.v1",
+ "actor": "worker-060",
+ "node_ids": ["F1","F2a","F2b"],
+ "class_ids": [...],
+ "claim_boundary": "structural measurement of the T1 transfer guards at measured hashes; not a gate verdict and not a theorem; T1 guard 3 (source claim artifact_refs + reviewer verdict) is not measurable from schemas and is deferred to A1",
+ "inputs": {path: {sha256, bytes}},
+ "guards": {
+   "T1_G1_DATA_CLASS_EXACT": {"verdict":"fail","n_diff":2,"diff_paths":[...]},
+   "T1_G1_DATA_CLASS_CORE": {"verdict":"pass",...},
+   "T1_G2_GENERICITY_KIND_TOPOLOGY": {"verdict":"pass",...},
+   "T1_G2_GENERICITY_EXACT": {"verdict":"fail",...},
+   "CLASS_SEPARATION_TOKENS": {"verdict":"pass", ...},
+ },
+ "diffs": {...},
+ "cross_class_data_class": {
+   "triple": {"s": ..., "delta": ..., "spaces": ...},
+   "s_identical": true, "delta_identical": true, "spaces_identical": false, "spaces_delta": {...},
+   "verdict": "numeric triple shared; WCC spaces string carries a parenthetical annotation suffix",
+   "gform_unmet_statement_tested": "no single frozen data class (s,delta,norm) is shared by F1/F2a/F2b",
+   "gform_unmet_statement_falsified_at_these_hashes": true
+ },
+ "mirror_alignment": {...},
+ "self_test": {"n_controls":6,"n_detected":6,"controls":[...]},
+ "falsifier": "Re-run after any input hash change: if the measured hashes below change, the verdict is void ... A reviewer who reads 'must match exactly' as requiring whole-subtree byte equality can reject G1_CORE as a weakening...; the strict verdict is published alongside so that reading remains falsifiable.",
+ "unresolved": [...]
+}
+```
+Self-test controls details for each mutation (which guard must flip).
+
+Verdict semantics: I must NOT claim the guard passes as a gate verdict — it's a measurement. I'll present "measured_verdict" per guard.
+
+Exit code: 0 if all self-tests detect and inputs present (i.e., run valid), regardless of guard verdicts; 3 if guards fail? To be useful in CI: exit 0 run-valid; exit 4 if a core guard fails (real finding). Hmm — since strict G1/G2 fail on annotations, exit code would be 4 always, which is noisy. Better: exit 0 = run valid (all controls behaved as expected); the guard verdicts are in the report. Add `--strict` flag to exit 4 if core guards fail. Keep simple: exit 0 on valid run; exit 2 on integrity failure (missing input, control failure); exit 4 on core guard failure. In this instance core guards pass, strict fail → exit 0. Good.
+
+Let me now also produce a small `findings.md`? Keep README.md with headline results.
+
+Time to write the files. I'll write the checker with the write tool. Must be careful with determinism and correctness. Let me write it.
+
+One more consideration: file mtimes/paths. I'll create the directory via write tool (it creates parent dirs? The write tool likely creates parents; if not, mkdir first). Let me mkdir first.
+
+Also: `artifacts/worker-060/` — is there already a worker-060 dir? artifacts listing showed worker-008, worker-01... no worker-060. Good. But there IS worker-06 (different). Use worker-060.
+
+Let me write the script now. I'll aim for clean, self-contained, stdlib+pyyaml.
+
+Details of flatten: for dicts recurse; lists -> json.dumps(list, sort_keys=True) string; scalars -> value. Note YAML may parse things like `C2` as str, floats, bools. Fine.
+
+Path prefixing with dots; keys could contain dots? Unlikely. Use dotted paths.
+
+For the cross-class triple: extract from each schema:
+- matter: data_class.matter
+- cosmological_constant
+- equations
+- s: data_class.regularity_class.sobolev_variant.s
+- delta: ...delta
+- spaces: ...spaces
+Compare:
+- numeric slots (s, delta): exact equality required → report
+- full tuple equality → report which slots differ
+Also record `default` regularity string.
+
+Mirror alignment: compare sha256 of `schemas/X` vs `artifacts/formulation/schemas/X`.
+
+Inputs dict should include taxonomy too (for T1 rule text authority) and the three canonical + three authoring files.
+
+Also include the transfer rule T1 text extracted from taxonomy: `transfer_rules.allowed[0].guards` — to show the guards being tested come from the taxonomy, not invented. Extract by scanning `transfer_rules.allowed` for id T1. Include `rule_id`, `from`, `to`, `guards`, `reason`. Excellent — that binds the check to canonical rule text.
+
+Let me write it.
+
+Report_id: deterministic string "w060-t1-guard-v1". Fine.
+
+Now write the script.
+dsh: reasoning:
+Now write the checker script. Task ID: I'll name the task "T060-T1-GUARD". Events: `w060-<ts>-...`.
+
+Let me write `check_t1_guards.py`.

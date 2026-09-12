@@ -1,0 +1,854 @@
+dsh: reasoning:
+I need to understand the task. I'm a bounded execution worker. I need to read handoff/map and comms, take one class-bound task, emit valid JSON with IDs, evidence, hash, falsifier, checkpoint, then exit. Worker ID is 074.
+
+Let me start by exploring the workspace to find the handoff/map and comms directories.
+dsh: reasoning:
+No handoff/ dir at root? Let me check workdir, .agents, tmp, etc. The task mentions "handoff/map" and "comms". Likely under workdir or somewhere. Let me search.
+dsh: reasoning:
+Found the swarm directory: /data3/guoshaoyang/workdir/ai4math-swarm with HANDOFF.md and comms. Let me read HANDOFF.md and the map.
+dsh: reasoning:
+This is a swarm working on AI4math. I need to read the PROTOCOL.md, the research_map, comms inbox/outbox, and figure out what "class-bound task" means and what my worker id 074 should do.
+
+Let me read PROTOCOL.md and look at the research_map and schemas.
+dsh: reasoning:
+The task says "Read handoff/map and comms. Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit. worker=074"
+
+So I'm worker-074. I need to check if there's an inbox file for worker-074. I don't see one in the inbox list. Maybe the assignment is directed to a different worker. Let me check the research_map.json (map) for tasks and classes. Also read ASTRA_HANDOFF.md (map?) and the schemas.
+
+Let me look at research_map/research_map.json and the runtime state.
+dsh: reasoning:
+The ASTRA_HANDOFF says my assignment is in comms/inbox/<my-agent-id>.jsonl. My worker id is 074, so likely `comms/inbox/worker-074.jsonl`. But the listing showed worker-075, worker-071, etc. There's no worker-074 in the inbox listing I saw. Maybe the file gets created dynamically or was just created. Let me check again, and also look at the map's assignments for worker-074.
+
+Also, the task says "Read handoff/map and comms. Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit."
+
+So I need to:
+1. Read handoff (done) and map (research_map.json) and comms.
+2. Find a class-bound task assigned to worker-074 or available.
+3. Do the work (bounded) producing an artifact + evidence + hash + falsifier.
+4. Emit valid JSON (outbox message) with event_id, event_type, created_at, actor, node_id, class_id, evidence_refs, artifact_refs, sha256, falsifier.
+5. Checkpoint (run checkpoint.py? or write checkpoint). Probably run `python3 research_map/checkpoint.py` — but that's controller-level. Hmm, but the task says "checkpoint, then exit". There's an OVERNIGHT_HANDOFF.md that may describe worker behavior. Let me read runtime/control/*.
+
+Let me first check for worker-074 inbox file and the map assignments. Also read OVERNIGHT_PLAN/HANDOFF/WAKE_CHECKS.
+dsh: reasoning:
+No worker-074 inbox. Perhaps the assignments go to worker-074 via the map's "assignments" or there's a queue. Maybe worker-074 was killed/exited and I'm a replacement. The task says "Take one class-bound task" — so I need to pick a class-bound task from the map myself, presumably one that's open/unassigned and relevant.
+
+Let me inspect the research_map.json structure: gates, assignments, classes. It's 6.5MB. Let me use python to introspect it (not jq maybe). Let me check the assignment structure and any pending worker tasks. Also check comms/outbox — maybe there's an outbox for worker-074 already.
+
+Also, "class-bound task" likely means a task bound to a class ID like AF-WCC-VAC-GEN, AF-SCC-C2-VAC-GEN, AF-SCC-C0-VAC-GEN, AF-WCC-SCALAR-SPH. Look at how other workers did it: read worker-075's inbox (a recent one), and outbox for a worker of the same kind, plus the ledger outputs like citation_audit_locator_remediation_worker-009.jsonl. That will show the exact JSON format expected.
+
+Let me look at a recent worker inbox + outbox pair, e.g. worker-075 inbox and outbox.
+dsh: reasoning:
+Interesting: there IS an outbox worker-074.jsonl. And the inbox doesn't have worker-074. So worker-074 already did something. My task: "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit. worker=074". So I'm resuming/replacing worker-074 slot. I should read worker-074 outbox to see what has been done, check if there's already an accepted task, and then take one new class-bound task (avoiding duplication) and emit the JSON.
+
+Let me read comms/outbox/worker-074.jsonl.
+dsh: reasoning:
+Worker-074 has a substantial history: multiple tasks done (evbind rehearsal, rev29 landing guard, r3 verdict independence census, n0 ckpt coverage patch). The last event was at 01:14:30 for W074-N0-CKPT-COVERAGE-PATCH-01. The current time seems to be around 01:14+ (files updated 01:14). So worker-074 just finished a task. But my instruction says "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit."
+
+Hmm. Perhaps this is a worker slot restart: I am worker=074, need to take one more bounded class-bound task. Note the pattern: workers with no inbox card choose their own task ("Took one class-bound task (no card for slot...)").
+
+Let me check:
+1. Current time.
+2. Whether worker-074's last task is fully emitted (checkpoint exists: runtime/state/w074_checkpoint_n0ckpt.json#01549a81314e).
+3. What open tasks/assignments exist in the map for classes, what priorities are pending.
+
+The instruction says emit valid JSON with IDs evidence hash falsifier — i.e., outbox events with event_id, class_id, evidence_refs with hashes, artifact sha256, falsifier. And "checkpoint" — write a checkpoint JSON in runtime/state/ (like w074_checkpoint_*.json) and/or run the checkpoint tooling. Then exit.
+
+So I need to actually do a piece of work. Let me first determine what's most needed. Current gate states: G-FORM pending (rev13 with coverage F1 4 accepts, F2a 2, F2b 2, withheld pending `astra-life05-verify-gform-r3` non-author independence + FROZEN/per-file pin binding), G-AUDIT pending (classsep review by worker-075, A0 unverified), G-LIT pending, G-NUM C8 met but N0 verdict revise 3.5.
+
+Open assignments: astra-life07-classsep-adjudication-review (worker-075), astra-life05-verify-gform-r3 (lead-audit), astra-life05-verify-l0-final (lead-audit), astra-life04-verify-a0, astra-life04-n0-stoprule (lead-numerics), astra-life04-n0-verify (lead-audit).
+
+Since I'm a worker (not a lead), I should take one bounded class-bound task that contributes evidence, not a gate verdict. Given G-FORM's blocker is "non-author independence + FROZEN/per-file pin binding" for the r3 verdicts — and worker-074 just did the r3 verdict independence census (W074-R3-VERDICT-INDEPENDENCE-CENSUS-01) — a natural next bounded task would be to check the FROZEN/per-file pin binding aspect: verify that each of the F1/F2a/F2b accept verdicts is bound to the currently live schema hashes and that FROZEN pins those per-file hashes correctly. But maybe someone else already did that.
+
+I must avoid duplicating existing work. Let me check recent outbox files across workers to see what tasks have been taken recently and find a gap. Especially tasks around G-FORM r3 binding, the remaining gate closure items.
+
+Let me check:
+- research_map/research_map.json for assignments (especially open/pending ones and worker-074).
+- Recent events (events.jsonl tail) to see what's landed.
+- The reviews directory listing to see the current reviews for r3 verdicts.
+
+Also check whether there is a card for worker-074 in some pending queue (maybe assignments in map). Let me grep the map for "worker-074".
+
+Let me be efficient with context. Use python to extract relevant map fields.
+dsh: reasoning:
+The gates key is a list. Let me inspect properly. Also very relevant: `reviews/W048-GFORM-COVERAGE-RECOUNT-01.json` (01:10) and `W090-A1-DETECTOR-PIN-RESTORATION-01.json` (01:14). Also `W078-REC12-acceptance-078.json`.
+
+Let me query the map structure more carefully. Also check pending assignments and controller_findings recent, and the "activation" of latest accepted events. I need to find a bounded class-bound task that isn't done.
+
+Let me extract gates list, assignments list (recent), and controller findings CF list tail.
+dsh: reasoning:
+Now I have a clearer picture. The most recent map audit: G-FORM pending with F1 4 accepts, F2a 2 accepts, F2b 4 accepts. The key blocker per ASTRA handoff: G-FORM withheld pending `astra-life05-verify-gform-r3` non-author independence + FROZEN/per-file pin binding.
+
+Recently landed reviews:
+- W048-GFORM-COVERAGE-RECOUNT-01.json (01:10) — probably counted coverage.
+- W090-A1-DETECTOR-PIN-RESTORATION-01.json (01:14).
+- W078-REC12-acceptance-078.json (01:00).
+
+I need to pick one class-bound task. The best candidates (bounded, independent, high-value for gate closure, not duplicating):
+
+1. **FROZEN/per-file pin binding for the r3 G-FORM verdicts**: verify that each of the accept verdicts (F1 ×4, F2a ×2, F2b ×4) is bound to the exact live canonical schema hash (d9cebb9404b2, e9a27996dfd3, b2ab6acb2bbe), and that artifacts/formulation/FROZEN.json (rev29 815e08079aef) pins each schema to those hashes; check that no accepted verdict relies on a superseded hash. This directly addresses the G-FORM blocker "FROZEN/per-file pin binding". Does something like this already exist? Let me check recent events/reviews for "pin binding" tasks. There's W019-rev13-preflight-review.json, w063-f2b-rev12-bindchain.json, and the audit-r2 bindchain assignments. The audit-r2 bindchain was for rev27 (superseded). The current need at rev13/rev29 might not be covered. Let me check the latest accepted events for r3 verdict binding.
+
+2. **F2a independence**: F2a has exactly 2 accepts (worker-017, worker-072) but worker-072 may have authored/edited the schema? Worker-074's last census measured "reviewer counted non-author" independence. Hmm.
+
+3. **A0/A1 audit items**.
+
+Since worker-074 just did the r3 verdict independence census (W074-R3-VERDICT-INDEPENDENCE-CENSUS-01), and the FROZEN pin binding is the second half of the same blocker ("non-author independence + FROZEN/per-file pin binding"), a pin-binding census would be a natural, non-duplicative continuation in the same class/G-FORM scope. But I should verify it hasn't already been done by another worker recently.
+
+Let me check:
+- The review files listed in the map's controller_gate_audit for G-FORM: which reviewers and hashes. The audit says "Review scan at these hashes" — so the map already scanned verdicts at live hashes! It counted F1 [worker-052, 072, 075, 085], F2a [017, 072], F2b [052,071,072,090]. So hash-binding at review level may be already done by the controller. The remaining part might be the FROZEN manifest pin binding (per-file pins inside FROZEN.json), specifically whether FROZEN rev29 pins the three schemas at their live hashes, and whether the hashes cited in verdicts match per-file FROZEN pins, not just the whole-file.
+
+Let me check FROZEN.json and the map's artifact_sha256_measured. Also check the most recent accepted events to see what's outstanding and whether a pin-binding census already exists.
+
+Let me look at FROZEN.json and search recent events for "pin". Also check outbox of other workers for recent pin-related tasks.
+dsh: reasoning:
+The swarm is very active; many workers are taking tasks on F2b rev14 landing, F2a hashbinding, etc. I need to find a task that's not already covered, bounded, class-bound, and useful.
+
+Key observation from worker-032 status: "W032-FROZEN29-LIVE-PIN-AUDIT-01 complete ... Verdict PASS at artifacts/formulation/FROZEN.json#8..." — so a PIN audit of FROZEN rev29 already landed at 01:14:22 (by worker-032). That was potentially the exact task I was considering. Let me read worker-032's full status/claim to see what it covered, so I don't duplicate.
+
+Also worker-058 did "F2B-ACCEPT-DISPOSITION" at 01:17:30. worker-076 F2b landing audit. worker-069 F2b repair readiness. worker-096 F2b candidate independent verify. worker-022 F2b rev14 preflight. worker-028 F2b carrier normativity. The F2b area is crowded.
+
+Given time is 01:17+ now (date showed 01:14:58 earlier; events at 01:17:30 exist — so real time is past 01:17). Wait, the `date` output was 01:14:58, but events show 01:17:30. Hmm, events.jsonl is being appended by the auto-cycle; maybe created_at timestamps are ahead or the date output was from a moment ago. Let me re-check time.
+
+I need to pick a genuinely unclaimed, bounded task. Options:
+
+1. **F1 acceptance audit / F1 pin binding**: F1 has 4 accepts at live hash. Is F1 covered? The G-FORM blocker mentions all three; worker-032 did FROZEN29 live pin audit (probably all pins). Let me read worker-032's claim.
+
+2. **G-AUDIT A0 scope**: `astra-life04-verify-a0` is a lead-audit assignment; A0 rubric unverified. As a worker I could do an independent verification of evaluation_rubric.yaml (A0) — e.g., check "no universal scalar score" criterion, hash-pin it, review scope. But that may be covered by lead-audit's assignment; as a worker I could produce supporting evidence without gate verdict. But duplicating a lead's task is risky.
+
+3. **G-LIT L1 locator remediation**: worker-075 flagged 67/97 search-query locators; worker-009 did locator remediation. L1 pending `astra-life05-verify-l0-final` (lead). A bounded worker task could verify the locator remediation artifact (worker-009's `citation_audit_locator_remediation_worker-009.jsonl`). Is that covered? Let me check recent events for locator.
+
+4. **G-NUM N0**: N0 verdict revise 3.5, `astra-life04-n0-verify` (lead-audit) and `astra-life04-n0-stoprule` discharged. Worker-074 already did the N0 checkpoint coverage patch. Could do N0 solver-independent verification, but N0 verdict is under lead review; numerics_lock allows N0. There's a review `N0-review-final-verify.json`, `N0-review-worker-012.json`, `N0-pin-split-adjudication-worker-081.json`. Maybe a gap: independent replication of N0 convergence order is criterion; worker-046 did `n0_fixed_dt_independent/verification.json#814452111bc8`. Already covered.
+
+Given the "one bounded class-bound task" and that I'm worker-074 with recent N0 and G-FORM work, a strong candidate: **independent verification of worker-032's FROZEN29 live pin audit?** No — verifying a verification is low value unless the audit is contested.
+
+Let me look at what the *actual* highest-priority open item is right now, from the controller's latest pass (astra-lifecycle-07) and any new findings at pass 08 (worker-075 review landing etc.). The auto-cycle updates the map. Let me check the latest checkpoints/controller verification dir and the recent accepted events around gate state, and the current map's G-FORM reason (checked at 01:12:39). Also check comms/inbox/astra.jsonl for the latest controller state and any "assignment" to worker-074 (none expected).
+
+Actually, an important nuance: worker-074's outbox shows the last event at 01:14:30 with a checkpoint `runtime/state/w074_checkpoint_n0ckpt.json#01549a81314e`. The instruction to me says "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit." This looks like the standard worker directive given to each spawned worker instance. Since I'm a fresh instance of the worker-074 slot, I should take one task.
+
+Best plan: find an open, bounded, high-value verification task in the current highest-priority gate (G-FORM). The F2b area is crowded; F1 and F2a have fewer recent workers. Let me check F1/F2a current state:
+
+- F1: 4 accepts at d9cebb9404b2 (worker-052, 072, 075, 085). Any open issue? The rev29 guard found F1 quantifiers.domains.D5.definition and visibility.definition changed beyond literal C3 variant text — "named in revision_history as direction/equivalence corrections (EXTRA_DECLARED, r3 reviewer to confirm)". That's an explicit open item: **r3 reviewer to confirm the two F1 beyond-literal-text leaf changes** (D5.definition and visibility.definition) are within scope and correct. This is bounded, class-bound (AF-WCC-VAC-GEN), G-FORM, and directly addresses the "r3 reviewer to confirm" request. But has another worker taken it? Let me search recent events for "D5.definition" or "EXTRA_DECLARED".
+
+- F2a: worker-091 review at 01:13 of w047 f2a freeze review; worker-027 F2a HB1 independent; worker-046 F2a classcontent review. Crowded.
+
+Let me grep recent events for D5/visibility/EXTRA_DECLARED and also for the specific items in the G-FORM blocker. Also check the `reviews/` dir for any F1 r3 confirmation file.
+
+Additionally, there's `reviews/W048-GFORM-COVERAGE-RECOUNT-01.json` at 01:10 — a coverage recount. And `W019-rev13-preflight-review.json` at 00:59. Let me read the map's G-FORM reason and recently accepted reviews list for F1.
+
+Let me grep events for "D5" and "EXTRA_DECLARED".
+dsh: reasoning:
+The F1 area is also crowded (worker-011, 029, 041, 077, 060, 034 on the f1_falsifier_tests rebind). The F1 suite rebind to rev13 is an active contested area.
+
+Let me now find a genuinely open gap. Consider the FROZEN rev29 pin audit: worker-032 did W032-FROZEN29-LIVE-PIN-AUDIT-01 (status at 01:14:22, verdict PASS). That's the FROZEN/per-file pin binding. Let me read the full worker-032 claim to see exactly what it covered and whether any residual remains. If it's complete, the other half of the G-FORM blocker is "non-author independence", and worker-074's previous census (W074-R3-VERDICT-INDEPENDENCE-CENSUS-01) addressed that. Let me check worker-074's r3 census conclusion and whether the map/lead accepted it. Maybe the token-worthy task: **independent verification of worker-074's own census**? No, self-verification is not independent.
+
+Alternatively: A0 verification (evaluation_rubric.yaml) — criterion "exists without a universal scalar score", review verdicts at hash. There's `reviews/A0-review-lead-audit.json`, `A0-review-lead-audit-r2.json#d748a9e3574e`, and `evaluation/A0_detector_scope_adjudication.json#a26be4b85706` unverified. `astra-life04-verify-a0` (lead-audit, deadline 02:00) is the open assignment. A worker could provide an independent check of A0's hash-binding and the "no universal scalar score" property as supporting evidence. But it's a lead's assignment — maybe fine as a worker supporting task if not duplicated.
+
+Let me check what other workers have done for A0 recently. Search events for A0/rubric.
+
+Also let me check `comms/inbox/astra.jsonl` latest entries (the controller's own inbox — probably injected + maybe new tasks). Actually there's no card for worker-074.
+
+Let me search events for "A0" recent and "evaluation_rubric".
+dsh: reasoning:
+worker-032 covered FROZEN rev29 live pins comprehensively (50/50, mirrors, stability window). So the FROZEN/per-file pin binding is well covered now by two independent workers (worker-032 and worker-074's own earlier guard).
+
+The remaining G-FORM blocker: non-author independence of the r3 verdicts (worker-074's r3 census) plus the lead-audit's `astra-life05-verify-gform-r3` dispatch. As a worker, a genuinely useful, non-duplicative task would be...
+
+Let me look at what's *actually* still open/contested and where no worker is running. Candidates seen in the recent event stream:
+
+1. **F1 suite rebind (schemas/f1_falsifier_tests.jsonl)**: heavily worked: workers 029, 041, 077, 034, 060, 011. The dry run by 077. Perhaps the F1 suite rebind itself hasn't landed. But that's the formulation lead's job.
+
+2. **F2b rev14 candidate**: heavily worked (076, 069, 096, 022, 028, 043, 087, 058).
+
+3. **F2a**: workers 046, 091, 027, 047.
+
+4. **A0**: worker-092 just did HF-03 staging recount (01:15), worker-021 another count. A0 detector scope adjudication `evaluation/A0_detector_scope_adjudication.json#a26be4b85706` unverified — maybe there's a gap: independent verification of that adjudication. But astra-life04-verify-a0 is lead-audit's open assignment (deadline 02:00); worker-092's recount probably feeds it.
+
+5. **CLASSSEP adjudication review** assigned to worker-075 (deadline 02:30) — taken.
+
+6. **The "201 citations" G-LIT figure** — worker-075 did census; worker-009 locator remediation.
+
+7. **L0 final verify** — lead-audit.
+
+8. **G-NUM N0** — N0 verdict revise 3.5, `astra-life04-n0-verify` lead-audit. Worker-014 just did independent verification of worker-064's frozen revision (01:14:57). Maybe N0's remaining item: the stop-rule/ledger. Let me check the N0 state.
+
+Hmm, wait. What about the **evaluation_rubric.yaml A0 criterion**: "exists without a universal scalar score". There might be an open question about whether the rubric has a universal scalar score. Let me check the rubric and reviews. The lead-audit's A0 review r2 at hash d748a9e3574e exists. `evaluation/A0_detector_scope_adjudication.json#a26be4b85706` unverified. 
+
+Actually, from the ASTRA handoff pass-07: "G-AUDIT A0 rubric `d748a9e3574e` + scope artifact `a26be4b85706` unverified (→ `astra-life04-verify-a0`)".
+
+Given that a lead owns verify-a0, a worker task that independently verifies the A0 scope artifact and rubric could be valuable and complementary. But would it duplicate worker-092's recount? Worker-092 recounted HF-03 staging under A0 scope. Hmm.
+
+Let me step back and consider the "bounded execution worker" framing: I should take ONE class-bound task, do it properly with an artifact, hashes, falsifier, checkpoint, and emit JSON. The task doesn't have to be the single most important thing in the swarm; it needs to be class-bound, non-duplicative, bounded, and honest.
+
+A good candidate with a clear gap: **independent verification of the A0 rubric's "no universal scalar score" property at the live hash d748a9e3574e, plus verification of the A0 scope adjudication artifact a26be4b85706**. Let me first check whether anyone has done that. Search events for "scalar score".
+
+Alternatively, given worker-074's slot history (formulation/audit guard work), and that the previous worker-074 instance's r3-verdict-independence census is the key input for the G-FORM blocker, a very high-value bounded task: **verify the r3 verdict independence census's own conclusion is not needed**... no.
+
+Let me search for what's missing more systematically: check the latest controller decisions (astra-lifecycle-07-decisions.json REC-29..35) and the newest checkpoint for open TODO items. Also check `runtime/state/controller_verification/` for latest lifecycle report (pass 08 may have run by now?).
+
+Let me read the pass-07 decisions REC list to see what the controller wants next.
+dsh: reasoning:
+A0 has been reviewed multiple times (flash-21, flash-22, worker-055, flash-19 revise). The A0 scope adjudication a26be4b85706 is unverified. A remaining open A0 item could be: **independent verification of `evaluation/A0_detector_scope_adjudication.json#a26be4b85706`** (scope artifact). The controller's assignment astra-life04-verify-a0 is lead-audit's. But a worker task verifying the artifact could directly feed it or be redundant.
+
+Alternatively, the HF-03 staging dispute: worker-092 and worker-021 counted 7 records vs b3's "1". That's a live dispute with two independent counts. A third count isn't useful.
+
+Let me think about what a worker-074 instance can do that's genuinely additive and bounded, class-bound, and has a crisp falsifier:
+
+Option A: **Verify the A0 detector-scope adjudication artifact a26be4b85706 independently** — reproduce its claims read-only, hash-pin, produce per-claim verdict. If it's the last unverified piece for G-AUDIT A0, this is useful. Let me examine that artifact first to see if it's tractable and whether its claims can be independently reproduced.
+
+Option B: **Independent L1 locator remediation verification** — worker-009 produced `ledger/citation_audit_locator_remediation_worker-009.jsonl` at 01:13. The G-LIT L1 criterion needs >=3 independent re-fetch spot checks; worker-075/079 did some. A bounded task: verify worker-009's locator remediation artifact (does it actually fix the 67/97? are the new locators exact?) — read-only. This is directly relevant to G-LIT and the locator adjudication that's blocking. Let me check if anyone else is on it. Worker-009's remediation artifact is fresh (01:13); the lead's `astra-life05-verify-l0-final` covers L0, not L1. The L1 locator adjudication `reviews/L1-locator-adjudication-025.json` exists (01:02). A verification of worker-009's remediation would be a natural independent check. But the worker-009 artifact is itself a remediation proposal; the lead literature will adjudicate. Hmm.
+
+Option C: **CLASSSEP A04 clause FN**: REC-30 mentions "1 HIGH cue-FN (A04 clause boundary)" and the audit lead recorded `audit-l08-b2-a04-clause-fn` blocker at 01:12:59. The adopted fix? "A04 clause FN live". Maybe an independent reproduction of the A04 clause-boundary false negative would be valuable. But worker-075 is reviewing the whole adjudication.
+
+Option D: **Verify the "no universal scalar score" property** — already done 5+ times.
+
+Option E: **The F1 f1_falsifier_tests.jsonl rebind**: Workers 029/041/077/034/060 have thoroughly established that the suite is not rebound to rev13 (25/25 rows stale, 4 rows exercise changed fields). Worker-077 did a dry-run rebind. A missing piece might be a **second independent rebind dry-run** confirming the shape/count of the required edits, but that risks duplicating 077.
+
+Option F: **F2a's f0_binding hash chain** — worker-027 did HB1 independent, worker-046 classcontent review, worker-091 review. Crowded.
+
+Option G: **A1 rebind coverage** (`reviews/A1-rebind-coverage.json`) — this appears in both G-FORM and G-AUDIT evidence refs. The A1 criterion is "2 independent verdicts per formulation/literature target with cited sha256". A bounded task: independently census which A1 verdicts are bound to the current live hashes vs superseded, for all formulation targets (F1/F2a/F2b) — but worker-074's own r3 census + worker-048's coverage recount + worker-058's F2b accept disposition did exactly this. Crowded.
+
+Hmm. Let me reconsider. The instruction is generic template text for workers: "Read handoff/map and comms. Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit." Every worker self-selects when no card. So the expectation is a solid, honest contribution, not necessarily the one most-critical task. But quality matters: the swarm rewards "novel accepted coverage" and avoiding duplication.
+
+Let me look for the *least covered* class. The four classes: AF-WCC-VAC-GEN (F1), AF-SCC-C2-VAC-GEN (F2a), AF-SCC-C0-VAC-GEN (F2b), AF-WCC-SCALAR-SPH (N0). F2a seems to have fewer recent workers (046, 091, 027, 047, flash-05). Let me check F2a's current state: live hash e9a27996dfd3, 2 accepts (worker-017, 072). F2a review files: F2a-review-047.json, F2a-review-018? Let me check if there's an open F2a issue.
+
+From earlier events:
+- worker-091 review w091-...-w047-f2a-freeze-review: findings about repair_spec.json enumerating five sites S1-S5 vs six axes.
+- worker-046 review w046-f2a-rev27-classcontent-review: "F-046-F2a-01 (major): C2 asserts E_H2loc subset E_C0 while pinned C0 declines that containment; H^2_loc is not C^0 at the 4D borderline".
+- worker-027 F2a HB1 indep.
+
+Hmm, the F-046-F2a-01 finding (C2 asserts E_H2loc ⊂ E_C0 while pinned C0 declines that containment) sounds like a real cross-class consistency issue for F2a at the live pin. Was it adjudicated? Let me search for that finding ID.
+
+Also the class_separation/A1 detector stuff is in flux (CF-29/30).
+
+Let me search events for "F-046-F2a-01" and "H2loc" and for the latest F2a status. Also look at what worker-072 (an F2a acceptor) is doing — maybe worker-072 is busy authoring.
+
+Actually, let me take a different approach to find the gap: read the latest controller lifecycle report (lifecycle_20260912-011239.json) — it may have a "next actions" / open items list. Also read the OVERNIGHT supervisor/watch log which may list per-slot status. But the strongest signal: the map's assignments with deadlines and their statuses. Let me compute which assignments are still open (no completion evidence in events) and pick one that is worker-appropriate and unclaimed.
+
+Let me parse the map assignments fully, plus check for recent matching events. But 127 assignments... Let me focus on ones not yet done and without recent activity.
+dsh: reasoning:
+The F2b containment repair area is extremely crowded: workers 002, 003, 007, 008, 020, 022, 023, 024, 036, 037, 038, 043, 044, 046, 047, 050, 052, 053, 054, 058, 060, 061, 066, 069, 072, 075, 076, 080, 083, 085, 087, 088, 089, 096, 097, 100 — all on the same b2ab6acb2bbe F2b repair. I should definitely NOT take another F2b repair candidate verification task; it would be pure duplication.
+
+Also interesting: F2a note "F-046-F2a-01 (major): C2 asserts E_H2loc subset E_C0 while pinned C0 declines that containment" — but that's the same F2b line-152/246 defect viewed from F2a. Already covered.
+
+So where's the gap? Let me look at the areas with less coverage:
+- Literature (G-LIT): worker-075 spot check, worker-079, worker-009 locator remediation, worker-022? Actually L0/L1 have fewer recent workers relative to formulation.
+- Numerics N0: workers 012, 042, 046, 064, 081, 014, worker-074. 
+- The A2 ablation arm: deepseek-flash-19 reviewed; deepseek-flash-20 built harness; no provider config → blocked.
+- A0 scope review.
+
+Given time constraints (I'm a bounded worker and should finish quickly), the L1 locator remediation verification seems like a good candidate:
+- Worker-009 produced `ledger/citation_audit_locator_remediation_worker-009.jsonl` (01:13) and `.csv` — remediation of 67/97 search-query exact_locators.
+- G-LIT criterion requires "ledger rows have resolvable locators; verification_status honest; >=3 independent re-fetch spot checks; unresolved marked unresolved".
+- The L1 locator adjudication `reviews/L1-locator-adjudication-025.json` (01:02) exists.
+- Is worker-009's remediation artifact accepted? It's a ledger-side proposal; a worker can independently verify that the remediation artifact actually resolves the locators it claims (e.g., re-fetch or at least check that the new locator strings are exact and not still search queries, and that rows/hashes match the ledger at a pinned hash).
+
+But wait — worker-009's remediation file was created at 01:13, and it's a "remediation" artifact. The natural task: **independent read-only verification of the locator remediation** — does it resolve all 67 search-query locators to exact locators, with valid DOIs, without changing any other field, and does its own claim match the ledger? That's tractable offline (no network needed if verifying structurally against the ledger and registry), bounded, class-bound (GLOBAL/L1 — hmm, "class-bound" might mean bound to a class_id; L1 is GLOBAL class. The instruction says "class-bound task". Worker-075 took L1 tasks with class_ids all four. That's acceptable.)
+
+Actually, hold on. Let me check whether the citation locator issue is still live: worker-075/079's spot checks found exact_locator search-query findings; worker-025's locator revise 71/97; worker-009 did remediation. The pending G-LIT decision is `astra-life05-verify-l0-final` (L0). L1's blocker: "L1 315c19145065 (23 spot checks; worker-025 locator revise 71/97) pending astra-life05-verify-l0-final". So L1 needs the locator adjudication too.
+
+Let me look at what worker-009's remediation artifact contains and whether there's a review of it. Search events for "locator" recent.
+
+Alternatively, another gap: **A0 scope artifact verification** (`evaluation/A0_detector_scope_adjudication.json#a26be4b85706`), which is explicitly listed as unverified in the handoff and the lead has an open assignment for it. Let me check if any worker has verified it. Search events for "a26be4b85706" / "A0_detector_scope".
+
+Let me do a combined search for recent locator work and A0 scope verification.
+dsh: reasoning:
+The A0 scope artifact has been independently verified by worker-092 (W092-A0-SCOPE-INDEP-01, 01:10:13) and worker-021 replicated HF-03. L1 locator has worker-025, 070, 062, 079, 009, 050, plus the lead's L11 adjudication at 01:15:30.
+
+So what's missing? Let me think about the most recent state as of ~01:15-01:20:
+- F2b: lead says BLOCKED on content, 0 accept / 7 revise at b2ab6acb2bbe. Repair candidates exist; many workers on it. A rev14 landing seems imminent. 
+- G-FORM: needs F2b repair + accept(s) at the new hash + F1 suite rebind + non-author independence.
+- L11 adjudication at 01:15:30 by the literature lead: "Under REC-6 (evidence_url is the locator column) L1 evidence binding is MET at 315c19145065; the 67/97 exact_locator defect is a documentation/quality finding..." — but wait, is REC-6 actually a valid ruling? There was a CF about the ledger's exact_locator. This is an adjudication by the gate owner; a worker could independently verify the L11 claim that evidence_url is record-shaped for 95/97 and 0 non-record. Hmm, but the lead just made it.
+
+- The controller's G-LIT pending reason: L0 has divergent verdicts (2 accepts vs 5 revise + 1 inconclusive) and L1 locator adjudication. The lead adjudicated L1 at 01:15:30. 
+
+Interesting new possibility: **verify the L11 locator-scope adjudication artifact** (lit-l11-20260912-001/002/003) — independent read-only re-measurement of the lead's L11 scanner claims (exact_locator 30 record-shaped/67 non-record; evidence_url 95 record-shaped/2 absent/0 non-record; 97/97 carry evidence_url). This is bounded, offline, deterministic, class-bound (GLOBAL/L1, four class_ids), directly relevant to G-LIT, and fresh (landed 01:15:30, no worker has verified it yet — worker-025's census measured 26/40/27/4 = 71 non-record, while L11 says 30/67 = 67 non-record; there's a discrepancy! 26+40+27+4? Wait: worker-025 said 26 DIRECT/40 DISCOVERY/27 TRUNCATED/4 other → 71 non-record (40+27+4), 26 direct. L11 says 30 record-shaped / 67 non-record (40+27). So worker-025 counts 26 direct vs L11 30 record-shaped; and worker-025 counts 4 "metadata-API/other" as non-record while L11 counts them as record-shaped: 26+4=30. Consistent! Good, so L11's 30 = 26 direct + 4 metadata-API. That reconciles.)
+
+Verifying L11 independently would be a solid, deterministic, bounded task. But is it duplicative? No worker has taken L11 yet (landed 5 minutes ago). The falsifier would be crisp: re-run the scanner at pinned hashes; if the counts differ or any classification predicate is misapplied, falsified.
+
+Alternatively, **verify the L0 rev3 "HF-14" dispute** — worker-093 settled the mechanism; worker-011/093 etc. Crowded.
+
+Or **A2 ablation** — `evaluation/ablation_design.yaml` / harness; deepseek-flash-19 and worker-067 reviews. A2 is audit node with an open design review. Could be a gap: independent verification of the A2 matched-budget harness at pinned hash. But no provider config means the actual ablation can't run. The design review has been done by flash-19 and worker-067. Hmm.
+
+Let me weigh: L11 locator-scope adjudication verification vs A2 harness verification vs N0 something.
+
+N0: G-NUM C8 met; N0 verdict revise; `astra-life04-n0-verify` open. Worker-014 verified worker-064's frozen revision at 01:14:57. Maybe N0 needs an accept at one measured hash. But that's the lead's job. A worker could independently replicate the N0 convergence-order measurement... that's heavy compute and likely done (worker-046 fixed-dt independent).
+
+I think the L11 locator adjudication verification is the best bounded task: deterministic, fresh, class-bound, hash-pinned, with a clear evidence chain, low duplication risk, and it directly tests a gate-owner ruling that just landed (G-LIT hinge). Also it fits the "verification layer" thesis of the project: independent check of a just-landed adjudication.
+
+But wait: the task must be "class-bound". L1 is GLOBAL class. Other workers doing L1 tasks listed class_ids as the four frozen classes. I'll use class_ids ["AF-WCC-VAC-GEN","AF-SCC-C2-VAC-GEN","AF-SCC-C0-VAC-GEN","AF-WCC-SCALAR-SPH"] and class_id "GLOBAL" or list them. In worker-075's L1 events, class_ids were the four classes and gate G-LIT, node L1. I'll follow that.
+
+Let me first inspect the L11 artifacts to understand exactly what to verify:
+- runtime/... or artifacts/literature/...? Let me find lit-l11 files. The events reference artifacts by path. Let me grep the most recent events for lit-l11 artifact paths and read the files.
+
+Let me fetch the full JSON of those events (artifact events) to get paths and hashes.
+dsh: reasoning:
+The L11 adjudication includes a claim tied to REC-6: "evidence_url is the locator column". Is that ruling actually in the decisions record? The lead cites `runtime/state/controller_verification/astra-lifecycle-07-decisions.json#REC-6`. Wait, REC-6 is from an earlier lifecycle (astra-lifecycle-04?) — the G-LIT criteria in the map: "ledger rows have resolvable locators". The L11 adjudication says "Under REC-6 (evidence_url is the locator column) L1 evidence binding is MET". This is a *contested interpretive move*: worker-025 and the L1 gate criterion treated `exact_locator` as the locator column (71/97 non-record); the lead now rules evidence_url is the locator column.
+
+An independent worker verification of the L11 machine record + the ruling's factual basis would be highly valuable:
+1. Reproduce the L11 machine record counts at the pinned ledger hash (30 record-shaped / 67 non-record exact_locator; 95/2/0 evidence_url; 97/97 carry at least one record anchor).
+2. Verify the 4-row residual predicate call and the claim "0/97 HF-03".
+3. Check whether REC-6 really says what the lead says it says (the citation `astra-lifecycle-07-decisions.json#REC-6` looks suspicious: pass-07 decisions are REC-29..35! REC-6 would be in a different file). This is a potentially significant provenance finding! Let me check: pass-07 decisions file has REC-29..35. The L11 adjudication cites `runtime/state/controller_verification/astra-lifecycle-07-decisions.json#REC-6`. If REC-6 is not in that file, that's a mis-citation (a binding defect). Let me check the actual decisions files.
+
+Also the L11 machine record was written by the *same actor* (astra-lead-literature) as the adjudication — it's the owner's own scanner, not independent. The lead says "Independent measurement" but it's their own tool. Actually the artifact summary says "Independent measurement at the frozen pins" — meaning independent of worker-025's tool? But it's the gate owner's own measurement. This is worth checking: is the L11 scanner genuinely independent of worker-025's? It's a different implementation, so mechanically independent of worker-025's code.
+
+This is a great bounded task: **independent non-author verification of the L11 locator-scope measurement and its REC-6 ruling basis**:
+- Pin: `ledger/citation_audit.csv#315c19145065` (verify hash), `artifacts/literature/reviews/L1-locator-scope-L11-machine.json#2a9f73b223ec`, `reviews/L1-gate-adjudication-lead-literature-L11.json#6d8e86e360c9`, `artifacts/literature/reviews/l11_l1_locator_scope_audit.py#1f70d279255c`, and the cited decisions file.
+- Reimplement the record-locator predicate independently (stdlib only), classify all 97 rows, and compare to the L11 machine record. Check the 4-row residual `inspirehep.net/api/literature/<id>` classification.
+- Verify the REC-6 citation actually exists in the cited file and supports "evidence_url is the locator column"; if REC-6 is from a different decisions file, report the mis-citation.
+- Check "0/97 HF-03" claim under evaluation_rubric.yaml's HF-03 definition (need to read the rubric's HF-03).
+- Deliver: report.json, a verification script, README, CHECKPOINT.json, and outbox events (status/artifact/claim/review), with sha256 hashes and a falsifier.
+- Checkpoint: write runtime/state/w074_checkpoint_l11verify.json (consistent with prior worker-074 practice) and maybe also run `python3 research_map/checkpoint.py`? That's the controller's full checkpoint tool — as a worker, prior workers wrote their own checkpoint JSON under runtime/state/. I'll do both if safe: run the checkpoint script? It might be heavy and is a controller command. Prior worker-074 wrote `runtime/state/w074_checkpoint_*.json`. I'll write my own bounded checkpoint + optionally append to a checkpoint log. Let me check what worker-075's checkpoint looks like and whether there's a canonical lightweight checkpoint helper for workers. There's `runtime/state/checkpoint_log.jsonl` from the controller. Workers write their own `runtime/state/wNNN_checkpoint_*.json`. I'll do that.
+
+Before committing, let me examine:
+1. The L11 artifacts on disk (machine json, scanner, adjudication).
+2. The REC-6 citation.
+3. evaluation_rubric HF-03 definition.
+4. The ledger structure (citation_audit.csv columns).
+
+Let me look. Also time is limited; this is a bounded task, should be doable in ~10-15 minutes.
+
+Let me read the artifacts.
+dsh: reasoning:
+Very interesting! The L11 adjudication cites `runtime/state/controller_verification/astra-lifecycle-07-decisions.json#REC-6` but that file contains REC-29..REC-35 — there is no REC-6 in it. So the lead's citation is a mis-citation (REC-6 must be from an earlier decisions record, e.g., astra-lifecycle-01/02/03 which may not have decisions files). Let me find where REC-6 actually lives. The files for lifecycles 01-03 may be .md or in the events stream. Let me search the events for "REC-6".
+
+This is a concrete, falsifiable finding. Let me check:
+1. Search events for REC-6 content (the actual ruling about evidence_url as the locator column).
+2. Check whether the map's G-LIT criterion or earlier controller decisions designate `evidence_url` as the binding locator column.
+
+Also I should verify the counts independently. Let me:
+- Look at the ledger CSV columns.
+- Read the L11 scanner to understand the predicate (for critique), but implement my own independently.
+- Check the 2 rows with absent evidence_url and whether they have alt anchors.
+- Check the 4 `inspirehep.net/api/literature/<id>` rows classification (the residual difference vs worker-025).
+- Check "0/97 HF-03": what does HF-03 mean in evaluation_rubric.yaml? Let me read that.
+
+Let me search for REC-6 first.
+dsh: reasoning:
+Key findings so far:
+
+1. The L11 adjudication cites `astra-lifecycle-07-decisions.json#REC-6`, but that file contains REC-29..REC-35 only. REC-6 is actually in `astra-lifecycle-04-decisions.json` (per the event "Pass-04 adjudications recorded in ...astra-lifecycle-04-decisions.json: REC-3 ...; REC-4/REC-5/REC-6 literature deferral, abstrac..."). The lifecycle-04 decisions file parsed as `[]` in my earlier scan — because its structure may be a dict with different keys (my extraction only looked at 'recommendations'/'decisions'). Let me inspect its structure directly.
+
+This matters: the lead's claim "Under REC-6 (evidence_url is the locator column)" must be checked against REC-6's actual text. Let me read REC-6 in lifecycle-04 decisions.
+
+2. HF-03 = unsupported_citation: "claim cites a citation whose resolution_status in {unresolved, contradicted} or whose class metadata mismatches the claim's class". The L11 statement "0/97 HF-03" refers to a different detector (the audit lead's A0 HF-03?) — actually in the A0 context, HF-03 was "218→194 records and REMAINS a live finding on build inputs" per the audit lead. Hmm, two different HF-03 usages? The evaluation rubric HF-03 is unsupported_citation. The A0 scope discussion mentioned "HF-14 586 -> 0 records (scope artifact); HF-03 218 -> 194 records" — those counts are of detector hits across corpora, not ledger rows. The L11 claim "0/97 HF-03" likely means 0 of 97 rows cite unresolved/contradicted sources. That's checkable from the ledger columns: resolution_status. Let me verify.
+
+Now, this is shaping into a genuinely valuable bounded task with a crisp falsifier and a real potential finding (mis-cited ruling + maybe classification issues). Let me be careful and rigorous:
+
+Task: **W074-L1-L11-SCOPE-VERIFY-01 — independent non-author verification of the L11 L1 locator-scope machine record and its REC-6 ruling basis.**
+
+Deliverables:
+- `artifacts/worker-074/l11_scope_verify/report.json` (main evidence: pins, independent predicate, counts, per-row diffs vs L11 machine record, REC-6 source verification, HF-03 check)
+- `artifacts/worker-074/l11_scope_verify/verify_l11_scope_074.py` (independent stdlib-only instrument; re-runnable; exit 0 iff pins stable and checks declared)
+- `artifacts/worker-074/l11_scope_verify/README.md` (method, results, finding, falsifier, reproduce)
+- `artifacts/worker-074/l11_scope_verify/CHECKPOINT.json`
+- `artifacts/worker-074/l11_scope_verify/SHA256SUMS`
+- raw outputs (e.g., per-row classification table)
+- `runtime/state/w074_checkpoint_l11scope.json`
+- outbox events: status, artifact events, claim, review of the L11 adjudication/machine record with a verdict.
+
+What exactly to verify:
+(a) Pins: ledger/citation_audit.csv = 315c19145065..., L11 machine json = 2a9f73b223ec..., adjudication = 6d8e86e360c9..., scanner = 1f70d279255c..., rubric = d748a9e3574e... All measured.
+(b) Independent re-classification of all 97 rows' exact_locator and evidence_url using my own predicate derived from the L11 adjudication's declared classes (record_shaped: DOI, RECORD_ENDPOINT, RECORD_PAGE; non_record: DISCOVERY_QUERY, METADATA_ENDPOINT, TRUNCATED). To be fair and independent, I should implement the same *declared* predicate semantics but from scratch, and document how I operationalize them. Compare per-row to the machine record: expect exactly equal classes. Note: the machine record's counts say exact_locator classes: DISCOVERY_QUERY 40, RECORD_ENDPOINT 10, RECORD_PAGE 20, TRUNCATED 27 (sum 97); evidence_url: ABSENT 2, DOI 1, RECORD_ENDPOINT 37, RECORD_PAGE 57 (sum 97). Note the declared non_record includes METADATA_ENDPOINT but the exact_locator classes in the machine record have no METADATA_ENDPOINT — yet worker-025 said 4 metadata-API. The 4 `inspirehep.net/api/literature/<id>` rows are classified RECORD_ENDPOINT by L11, whereas worker-025 counted them as non-record. The machine record's evidence_url has RECORD_ENDPOINT 37 — likely includes these. Fine.
+(c) Check the "2 rows absent evidence_url have alternative record anchors" claim; and "97/97 any record anchor".
+(d) Check "0/97 HF-03" against rubric HF-03 (resolution_status of cited sources not unresolved/contradicted, class metadata matches claim's class). I can check resolution_status = unresolved/contradicted counts in citation_audit.csv. Class metadata mismatch is harder; check what fields exist.
+(e) Verify the REC-6 citation: which file contains REC-6, its actual text, and whether it supports "evidence_url is the locator column". This is likely a finding: wrong file cited (astra-lifecycle-07 vs -04). Also check REC-35 (cited in evidence_refs) for the G-LIT criteria.
+(f) Check that the L11 machine record was made by the same actor as the gate owner (self-measurement) — a provenance note, not necessarily a defect, but relevant: G-LIT criterion requires ">=3 independent re-fetch spot checks" (those exist from workers 062/070/075/079/025 etc.).
+
+Also check the ledger's own columns to define "locator present" per the map gate criterion: "ledger rows have resolvable locators". The adjudication's move is exactly what's contested.
+
+Let me start by reading the CSV header and a few rows, REC-6 text, and the L11 scanner code briefly. Then write the independent instrument.
+
+Let me also check whether worker-074's task should avoid conflicting with the in-flight worker-075 CLASSSEP review (different area, fine).
+
+Time check: ~01:20. Bounded task: I'll target completion within a reasonable number of steps. Let me move.
+dsh: reasoning:
+Now let me read REC-6's actual text (line 53 in lifecycle-04 decisions).
+dsh: reasoning:
+REC-6 exists in `astra-lifecycle-04-decisions.json` and its text is exactly: "evidence_url is the locator column; exact_locator is query-provenance. G-LIT's 'resolvable locators' criterion is read per-row against evidence_url. No metadata-only rewrite of the 67 exact_locator cells is authorized now... column semantics are to be annotated in the post-verdict rev-4 patch."
+
+So the lead's substantive reading is correct, but the L11 adjudication cites the WRONG FILE: `astra-lifecycle-07-decisions.json#REC-6` (which contains only REC-29..35). The correct source is `astra-lifecycle-04-decisions.json#REC-6`. That's a real (if moderate) provenance/binding defect in a gate-owner adjudication that hinges on the ruling. It's exactly the kind of finding the audit values.
+
+Interesting: REC-6 also says "No metadata-only rewrite of the 67 exact_locator cells is authorized now" — so worker-009's locator remediation (replacing 67 cells) would need authorization; the lead's L11 says the same. Fine.
+
+Now, my task: independent non-author verification of the L11 machine record and its ruling basis. Plan:
+
+1. Pin and verify hashes.
+2. Independently reimplement the classification of both columns for all 97 rows with my own predicate (I must be careful to be genuinely independent, not copy their regexes; but I need to use the declared class semantics). I'll write my own predicate:
+   - TRUNCATED: value contains "..." or ends with "..." (ellipsis-truncated URL).
+   - DISCOVERY_QUERY: contains query/search markers (`?q=`, `/search`, `query`, `/api/query`).
+   - RECORD_ENDPOINT: known API record endpoint with an id (inspirehep.net/api/literature/<digits>, api.crossref.org/works/<doi>, api.openalex.org/works/..., api.semanticscholar.org/...).
+   - DOI: doi.org/10.x or bare 10.x.
+   - RECORD_PAGE: arxiv abs/pdf page, journal article page, etc.
+   - METADATA_ENDPOINT: other api./export endpoints.
+   - ABSENT: empty.
+   I'll compare per-row and count differences. Any difference is a finding; likely none if I mirror semantics. The point is independent reproduction.
+3. Check the 4-row residual vs worker-025: find rows classified RECORD_ENDPOINT by L11 that worker-025 classified as non-record (inspirehep api). Verify L11 classified them record-shaped (its predicate explicitly includes inspirehep api/literature). Confirm the machine record's exact_locator RECORD_ENDPOINT count 10 includes some inspirehep? Let me compute.
+4. Verify the "2 absent evidence_url" rows and their alt anchors; verify 0/97 no-record-anchor.
+5. Verify "0/97 HF-03" under rubric HF-03: check `status`/`resolver_result` columns for unresolved/contradicted. The rubric's detector: claim cites a citation whose resolution_status in {unresolved, contradicted}. In the CSV there's `status` (verified-primary etc.) and `resolver_result` (resolved). Count rows with resolver_result unresolved/contradicted or status in unresolved/contradicted. L11 claims 0/97. Let me check.
+6. Verify the REC-6 citation: confirm REC-6 text exists and where; report the mis-citation in the L11 adjudication (`astra-lifecycle-07-decisions.json#REC-6` does not resolve; correct file is `astra-lifecycle-04-decisions.json#REC-6`). This is a provenance finding candidate. Also verify the other evidence_ref in L11 (`astra-lifecycle-07-decisions.json#REC-35`) resolves (REC-35 exists).
+7. Check whether the L11 adjudication's statement "0/97 HF-03" is consistent with the rubric definition; also whether "the 67/97 exact_locator defect ... not HF-03" is a scope call (the lead's ruling).
+8. Deliverables + checkpoint + outbox events.
+
+One more consideration: the L11 machine record's class counts: exact_locator {DISCOVERY_QUERY 40, RECORD_ENDPOINT 10, RECORD_PAGE 20, TRUNCATED 27} — that's 97. But evidence_url {ABSENT 2, DOI 1, RECORD_ENDPOINT 37, RECORD_PAGE 57}. Notice evidence_url has 37 RECORD_ENDPOINT — likely many are inspirehep api endpoints? Let's just compute.
+
+Let me now write the instrument. I'll structure artifacts under `artifacts/worker-074/l11_scope_verify/`:
+- `verify_l11_scope_074.py` — independent instrument (stdlib only), writes report.json and per-row table; pins all inputs; exit 0 iff all declared checks hold.
+- `report.json` — machine record with pins, counts, per-row diffs, REC-6 provenance finding, HF-03 check, checks table.
+- `README.md` — human summary with finding and falsifier.
+- `CHECKPOINT.json` — checkpoint record.
+- `SHA256SUMS`.
+- `raw/` — optional.
+
+I need to be careful about writes: the workspace policy allows workspace-write. Only write under artifacts/worker-074/ and runtime/state/. Do not touch canonical files.
+
+Let me write the script. First, let me look at the whole CSV quickly to understand fields and check the 2 absent evidence_url rows and truncated ones. Let me also count resolution statuses. This informs the predicate.
+
+Let me run a quick exploratory script (not the deliverable) to see the data.
+dsh: reasoning:
+Now I understand the data. Key facts:
+- `resolver_result`: all 97 = "resolved" → so "0/97 HF-03" under the rubric definition (unresolved/contradicted) is trivially true; class metadata mismatch is the other half. I can verify resolution_status only.
+- exact_locator: 40 QUERY, 27 TRUNC, 20 PAGE, 10 OTHER_API (which includes inspirehep api/literature/<id> — my `fam` checks INSPIRE_API before OTHER_API but after QUERY; the 40 QUERY includes the ellipsis+?q= ones? Wait, my fam checks TRUNC before QUERY: `if '...' in v: return 'TRUNC'` — those SRC-011.. etc. have both `...` and `?q=`, so they're TRUNC in my quick classification. So 27 TRUNC includes those. And 40 QUERY are live discovery queries (like arxiv api queries). 20 PAGE = arxiv abs / doi pages. 10 OTHER_API = interesting: what are they? The L11 machine record says exact_locator classes: DISCOVERY_QUERY 40, RECORD_ENDPOINT 10, RECORD_PAGE 20, TRUNCATED 27. So L11 classified 10 exact_locators as RECORD_ENDPOINT = likely inspirehep.net/api/literature/<id> (10 rows). My quick fam put them as OTHER_API but INSPIRE_API check came after QUERY; hmm 10 OTHER_API — let me check which these are. Probably `inspirehep.net/api/literature/<id>` exactly 10. Good: L11 counts them RECORD_ENDPOINT (record-shaped), worker-025 counted 4 metadata-API as non-record — wait, the L11 summary says "residual 4-row difference is a predicate call on inspirehep.net/api/literature/<id>". Worker-025 said 26 DIRECT/40 DISCOVERY/27 TRUNCATED/4 other. So worker-025 had 26 direct record + 4 other(non-record) = 30; L11 has 30 record-shaped (20 PAGE + 10 ENDPOINT). So there are 10 inspirehep API record endpoints in exact_locator; worker-025 counted 4 of them as non-record? Possibly worker-025's categories: DIRECT 26, DISCOVERY 40, TRUNCATED 27, and 4 METADATA_ENDPOINT (non-record); i.e. of the 10 API endpoints, 6 were counted DIRECT and 4 as metadata endpoints. Either way, the L11 machine record classifies all 10 as RECORD_ENDPOINT.
+
+- evidence_url: 2 ABSENT (SRC-094, SRC-095) but both have `url` = arxiv abs + doi → alt anchors exist. L11 counts evidence_url RECORD_ENDPOINT 37 (27 inspirehep + 10 other?) and RECORD_PAGE 57, DOI 1, ABSENT 2. Wait 27+10=37 yes: 27 inspirehep api/literature + 10 other API endpoints (crossref/openalex/semanticscholar). Good.
+
+- L11 machine record's `any_record_anchor`: 97.
+
+So the L11 numbers should reproduce. My independent classifier will produce the same classes if I define the same semantics. To make the verification meaningful and independent, I'll implement my own predicate based on URL *semantics* (host + path patterns) and record classification. Then compare per-row.
+
+Potential independent findings I can produce:
+1. **Provenance defect**: L11 adjudication cites `astra-lifecycle-07-decisions.json#REC-6`; REC-6 is in `astra-lifecycle-04-decisions.json#REC-6`. The cited file does not contain REC-6. This is a binding defect in the gate-owner adjudication. Severity: moderate (the ruling text supports the decision; wrong file cited). Also verify `REC-35` citation resolves (it does, in the -07 file).
+
+2. **The "0/97 HF-03" claim**: all 97 rows have resolver_result=resolved; the rubric's HF-03 unsupported_citation detector also includes class metadata mismatch. I can check the `class_mapping` values against the frozen class list (AF-WCC-VAC-GEN, AF-SCC-C2-VAC-GEN, AF-SCC-C0-VAC-GEN, AF-WCC-SCALAR-SPH) — but the mismatch must be against a *claim's* class, which for L1 rows is the class_mapping itself. Let me measure how many rows carry class_mapping tokens outside the frozen four or multi-class values. This could be a finding, but it's about HF-02 (class leakage) rather than HF-03. Actually the rubric HF-03's "class metadata mismatches the claim's class" is about a claim citing a source whose class metadata mismatches; in the L1 ledger, class_mapping is the row's metadata. Since L11 only claims "0/97 HF-03" in the sense of resolution_status (probably), I can verify and bound the claim: resolution-based check is 0/97; the class-metadata half of the detector is not evaluated by L11's scanner. That's a scope note.
+
+3. **Two ABSENT evidence_url rows** (SRC-094, SRC-095): both have record anchors (url/doi), so "0/97 rows lack a record anchor" holds. But note: REC-6 says "G-LIT's 'resolvable locators' criterion is read per-row against evidence_url". For SRC-094/095, evidence_url is empty — so strictly per REC-6, those 2 rows have no evidence_url locator. The adjudication says "the remaining 2 rows carry record-shaped url/arxiv_id" — that's an extension of REC-6 beyond evidence_url (REC-6 says read against evidence_url; it doesn't say "or fall back to url/doi/arxiv_id"). Hmm, wait: REC-5 says abstract/metadata-level evidence is sufficient. REC-6 says per-row against evidence_url. The adjudication's `any_record_anchor` measure extends to url/doi/arxiv_id. This is a scope expansion beyond the literal REC-6 text — worth noting as a finding (minor/moderate): the "L1 evidence binding MET" claim rests partly on a fallback that REC-6 does not literally authorize; under the literal REC-6 reading, 2/97 rows have no evidence_url. However, REC-6's falsifier ("A row whose evidence_url does not resolve") doesn't quite fit empty values. This nuance is worth an explicit finding, not a verdict.
+
+4. Verify the 45s window claim? Not applicable (no network fetch claims in L11; it's offline classification). But "resolvable" for evidence_url: L11 measures record-shapedness, not resolution (no network). The adjudication says "L1 evidence binding is MET" — but G-LIT criterion is "ledger rows have resolvable locators". L11's scanner does NOT resolve anything (no network); it classifies shape. So "MET" is a shape-based judgment; resolvability was tested by the many spot checks (062, 070, 075, 079, 025) and the lead's own earlier fetches. This is a scope note: the L11 machine record cannot by itself establish "resolvable", only "record-shaped". Independent re-fetch of the 2 fallback rows (SRC-094, SRC-095) would strengthen, but the workspace may have network. Do I have web access? I have web_fetch/web_search tools but those go through my harness; I could use them to check the 2 arxiv URLs resolve. But the worker convention seems to use their own fetch scripts; the sandbox may allow network. Let me not depend on network; I can use the already-landed fetch evidence (worker-009's named-source verification of SRC-094 and SRC-016; worker-062/070/075/079 spot checks) as evidence. Actually worker-009 verified SRC-094 (Gundlach-Martin-Garcia) at 01:16 with arXiv:0711.4620 e-print resolved. And SRC-095? worker-009 named-src closed SRC-016 and SRC-094. Hmm, SRC-095 (1704.05790) — maybe covered by another check. I can note that.
+
+Let me keep the deliverable scoped and rigorous:
+
+**Independent checks (all offline, deterministic):**
+- P1: all 6 input pins resolve to declared hashes (ledger, L11 machine, L11 adjudication, L11 scanner, rubric, lifecycle-04 decisions, lifecycle-07 decisions).
+- P2: L11 machine record's declared pins match disk.
+- P3: independent re-classification of all 97 rows for both columns equals the machine record's per-row classes (0 diffs) — or enumerate diffs.
+- P4: counts table equals machine record counts (exact_locator record 30/non-record 67; evidence_url record 95/absent 2/non-record 0).
+- P5: the 2 ABSENT evidence_url rows are exactly SRC-094/SRC-095 and both carry alt record anchors (url and/or doi).
+- P6: 97/97 any_record_anchor; 0 rows with no record anchor.
+- P7: the 4-row "residual" vs worker-025 reproduces: rows whose exact_locator is inspirehep API record endpoint and which worker-025 counted non-record. Need worker-025's data to identify which rows. Let me read reviews/L1-locator-adjudication-025.json to get its per-row table (if it exists). Then measure the overlap.
+- P8: HF-03: 97/97 resolver_result=resolved → 0/97 unresolved/contradicted; note the class-metadata half is not covered by the machine record's predicate.
+- P9 (provenance): REC-6 resolves only in astra-lifecycle-04-decisions.json, not in the cited -07 file; REC-35 resolves in -07. Report the citation defect.
+- P10 (scope note): literal REC-6 reading covers evidence_url only; 2 rows lack evidence_url, so the MET conclusion needs the fallback-to-alt-anchor step; report as an assumption/scope extension, not a falsification.
+- P11: The L11 machine record is authored by the same actor as the gate-owner adjudication (astra-lead-literature) → it is not a non-author independent measurement; independence for G-LIT must come from worker spot checks (062/070/075/079/025). Report as provenance context.
+
+Also validate the scanner's exit/empty behavior? Not needed.
+
+Now, the "review" verdict on the L11 adjudication: probably `revise` with score ~3.5, one moderate finding (mis-cited REC-6 file) + scope notes. That's honest.
+
+Let me check worker-025's review JSON for its per-row classes to do P7 properly. Then write the instrument.
+
+Let me also check whether there's already an independent verification of L11 (posted after 01:15:30) — events up to 01:26 exist now (worker-054 at 01:26). Let me grep events after 01:15:30 for L11.
+dsh: reasoning:
+Good. Worker-025's review states 26 record locators in exact_locator, 71/97 non-record (matches worker-005's 67/97 query-style count and splits off 27 malformed). L11 says 30 record-shaped / 67 non-record, with the residual 4-row difference being the inspirehep API endpoint call.
+
+So P7: identify the 4 rows where the two predicates disagree: exact_locator classified as RECORD_ENDPOINT by L11 and as non-record by worker-025's categories (metadata-API endpoint). Actually worker-025 has 4 "metadata-API endpoint or other URL" that they call non-record; L11 calls the inspirehep api record endpoints RECORD_ENDPOINT. But 26+4=30, so the 4 are exactly the difference in the record count. Which 4? Probably rows where exact_locator is an inspirehep api/literature/<id> AND something else about them; but we saw many inspirehep api rows (SRC-042 etc.). Let me find rows whose exact_locator is inspirehep API and count: earlier fam had 10 OTHER_API which included inspirehep APIs. So 10 exact_locator values are inspirehep API endpoints. Worker-025 counted 26 record + 40 query + 27 truncated + 4 other = 97. If 10 exact_locators are inspirehep API, then worker-025 must have classified 6 of them as DIRECT(record) and 4 as "metadata-API endpoint or other URL" (non-record). Why? Maybe 4 of them are api.crossref/openalex rather than inspirehep, or 4 are inspirehep search API without id... Let me compute exactly, and try to reconstruct worker-025's rule from its script (reviews/... scripts under artifacts/worker-025/). But I shouldn't read too much of others' code — for independent verification, I mainly need to reproduce the L11 machine record and characterize the residual. I can cite worker-025's own review file for the 4-row statement and show which rows L11 counts as RECORD_ENDPOINT that are API endpoints. Let me find the 10 exact_locator RECORD_ENDPOINT rows.
+
+Then I'll write my instrument.
+
+Let me now write the deliverable script. Design:
+
+```
+verify_l11_scope_074.py
+- ROOT = parents[2]? File at artifacts/worker-074/l11_scope_verify/verify_l11_scope_074.py -> parents[3] = repo root? Let's count: .../ai4math-swarm/artifacts/worker-074/l11_scope_verify/verify.py; parents[0]=l11_scope_verify, [1]=worker-074, [2]=artifacts, [3]=ai4math-swarm. So parents[3] = root. Yes (L11 scanner uses parents[3] from artifacts/literature/reviews/).
+- PINS: ledger, machine json, adjudication, scanner, rubric, life04 decisions, life07 decisions.
+- classify(value) -> class, with explicit independent implementation.
+- Load rows; per-row record; compare to machine record row_detail keyed by citation_id for exact_locator_class and evidence_url_class; record diffs.
+- counts, alt anchors.
+- checks dict with PASS/FAIL list; exit 0 iff all required checks pass and pins stable.
+- Outputs: report.json (with per-row table) and raw/checks.txt.
+- REC-6 provenance check: search each decisions json's rulings for id REC-6; record which files contain it and whether the cited path contains it. Check the cited REC-6's `decision` text contains "evidence_url is the locator column".
+- HF-03 check: counter of resolver_result/status values in {unresolved,contradicted}; report.
+- Scope notes as data fields, not failures.
+```
+
+Expected: all pins match; classification reproduces L11 exactly (0 diffs); the provenance check flags `astra-lifecycle-07-decisions.json#REC-6` as NOT RESOLVING with correct file `astra-lifecycle-04-decisions.json#REC-6`. I'll make that a FAIL of a "binding" check (call it check C9) so the verdict is revise. But careful: if the script exits nonzero on the provenance finding, that's fine and documented — but the report must be written before exit. I'll structure exit code: 0 if all checks pass; 2 if any binding check fails (provenance), still writing report.
+
+Let me also decide on the per-row independence: to make it truly independent, I could classify by parsing host and path with urllib.parse:
+- empty → ABSENT
+- contains '...' → TRUNCATED
+- query present (?q=, search) → DISCOVERY_QUERY
+- host/path patterns:
+  - inspirehep.net path /api/literature/<digits> → RECORD_ENDPOINT
+  - doi.org/<doi> or host with /10.x → DOI
+  - arxiv.org/abs|pdf/<id> → RECORD_PAGE
+  - crossref api/works/<doi>, openalex api/works/<id>, semanticscholar api/... → RECORD_ENDPOINT
+  - other api./export → METADATA_ENDPOINT
+  - default → RECORD_PAGE
+This mirrors the declared semantics but implemented independently. Note the machine record's exact_locator classes have no METADATA_ENDPOINT and no DOI; but the declared classes include them. My implementation must match semantics, not copy code.
+
+Edge: SRC-041 evidence_url = https://doi.org/10.1142/... → DOI. Machine record: evidence_url DOI=1. Good.
+Edge: `https://inspirehep.net/api/literature?q=...role...` → contains '...' → TRUNCATED (machine record 27 TRUNCATED). My quick fam put those there. Good.
+Edge: `https://inspirehep.net/api/literature?q=...singularities...` also TRUNCATED.
+Edge: the 40 DISCOVERY_QUERY: live queries like `https://api.crossref.org/works?query=...`? Hmm, "live discovery query" — check marker `?q=` or `/search`. Since '...' comes first, the SRC-011..077 ellipsis ones are TRUNCATED. Let me see what the 40 discovery queries look like; I'll verify my classifier matches.
+
+Now, time to write. I'll create the directory and files. Note: I must use write tool for files. Let me first create the instrument as a file, then run it, then write README, CHECKPOINT, SHA256SUMS, checkpoint state, and outbox JSONL events.
+
+For the outbox events, I'll follow the established format from worker-075/worker-074: event_id, event_type, created_at, actor, node_id, gate, class_ids, status/claim/artifact/review events, evidence_refs with `path#sha256prefix`, artifact sha256 full, falsifier, task_id, validation_status "unverified". I'll append to `comms/outbox/worker-074.jsonl` using a script (or edit tool append — better to use a small python script to append JSON lines, since the file is huge and I shouldn't rewrite it). I'll generate the JSON lines with python to guarantee valid JSON, after computing all hashes.
+
+Checkpoint: write `runtime/state/w074_checkpoint_l11scope.json` and also `artifacts/worker-074/l11_scope_verify/CHECKPOINT.json`. Maybe also append to `runtime/state/checkpoint_log.jsonl`? That's the controller's log — better not. The convention from worker-032: `artifacts/worker-032/.../CHECKPOINT.json` + `runtime/state/w032_..._checkpoint_1.json` with identical content. I'll do that.
+
+Also should I run `python3 research_map/checkpoint.py`? The instruction "checkpoint, then exit" likely means write the checkpoint. Prior workers did exactly the two-file checkpoint. I'll do that.
+
+Let me look at how an existing worker checkpoint JSON is structured (e.g., runtime/state/w074_checkpoint_n0ckpt.json from the earlier worker-074 run) to match conventions.
+dsh: reasoning:
+Now I see the 30 record-shaped exact_locators: arxiv abs (many), crossref api/works (7), openalex api (3), journal page (SRC-001), PDF page with section marker (SRC-090), and... the inspirehep api/literature/<id> ones? In this list I don't see inspirehep api rows because my filter excluded `query` — wait, `https://inspirehep.net/api/literature/54979` has no query and no '...', so it should appear. It doesn't appear in this list! Because... let me check: SRC-016 exact_locator from the earlier output was `https://inspirehep.net/api/literature?q=...Universality...` (a truncated query), but evidence_url is `.../literature/33714`. Ah I misread earlier: the rows I printed were selected by "absent evidence_url OR '...' in exact_locator". So SRC-011..077 with `?q=...` are TRUNCATED. There may be no exact_locator inspirehep API record endpoints at all!
+
+Then what are L11's 10 exact_locator RECORD_ENDPOINTs? Count from this list: crossref 7 (SRC-059,060,067,068,086,087,089), openalex 3 (SRC-071,072,092) = 10. Yes! So exact_locator RECORD_ENDPOINT = the 10 API workspace endpoints (crossref/openalex), and worker-025's "4 metadata-API endpoint or other URL" were a subset of these (maybe openalex 3 + PDF 1 = 4, or crossref was counted direct). So the residual 4 rows are likely SRC-090 (PDF page with §), SRC-092 (openalex), and 2 others. Not critical.
+
+Also SRC-090 exact_locator includes a PDF URL with "(§1.3, p. 19)" — L11 classified RECORD_PAGE (default). Fine.
+
+Now my independent classifier:
+- 20 RECORD_PAGE = arxiv abs/pdf + SRC-001 journal page + SRC-090 pdf → count: arxiv abs rows in the list: SRC-002,003,004,014,043,054,055,056,057,058,061,080,088,093,094,095,096,097 = 18; + SRC-001 + SRC-090 = 20. ✓
+- 10 RECORD_ENDPOINT = 7 crossref + 3 openalex. ✓
+- 40 DISCOVERY_QUERY = live queries (not truncated). Let me confirm there are 40.
+- 27 TRUNCATED. ✓
+
+Machine record counts: exact_locator {DISCOVERY_QUERY 40, RECORD_ENDPOINT 10, RECORD_PAGE 20, TRUNCATED 27}. ✓ All 97.
+
+evidence_url: 57 RECORD_PAGE, 37 RECORD_ENDPOINT, 1 DOI, 2 ABSENT. Let me sanity check: inspirehep api/literature/<id> count should be 37? Earlier I counted 27 inspirehep API in evid by my crude fam + 10 OTHER_API = 37. Good.
+
+Now, my instrument should reproduce these counts. One subtlety: my classifier's ordering — TRUNCATED check before DISCOVERY_QUERY. The 27 truncated are `?q=...` types. The 40 discovery queries: probably `https://inspirehep.net/api/literature?q=...`? No wait — those have '...'. Let me quickly count patterns to make sure my classifier gets 40/27 right. The 40 live discovery queries might be arxiv api export queries or inspirehep search without ellipsis. Let me check a few. Then write the final script.
+
+Let me sample the exact_locator values grouped by my classification to validate before writing.
+dsh: reasoning:
+My independent classifier reproduces the exact counts for exact_locator: 20 RECORD_PAGE, 40 DISCOVERY_QUERY, 27 TRUNCATED, 10 RECORD_ENDPOINT. Let me also verify evidence_url counts with the same independent function: expect RECORD_PAGE 57, RECORD_ENDPOINT 37, DOI 1, ABSENT 2.
+
+Now I'm ready to write the deliverable instrument. Let me create the directory and write `verify_l11_scope_074.py`.
+
+Design details:
+- PINS dict with all 7 inputs (ledger, machine, adjudication, scanner, rubric, life04 decisions, life07 decisions) and their hashes (I have 5 from sha256sum; need life04/life07 hashes; compute in script from declared? No — the script should have pins hardcoded. I'll get them now or let the script compute and compare against map? Better: hardcode measured hashes I take now. But the pin for the decisions files needs to be a snapshot; I'll take sha256sum now.)
+- Checks:
+  C1 ledger pin; C2 machine pin; C3 adjudication pin; C4 scanner pin; C5 rubric pin; C6 decisions pins (life04/life07).
+  C7 machine record's declared pins match its measured; and its pins_match all true.
+  C8 per-row classification match (97 rows, 0 diffs) for both columns.
+  C9 count table match.
+  C10 absent evidence_url rows = {SRC-094, SRC-095}, alt anchors present.
+  C11 any_record_anchor = 97/97; no_record_anchor=0.
+  C12 4-row residual reproducibility: identify the exact_locator API endpoint rows (10) and confirm L11 RECORD_ENDPOINT; report which of worker-025's categories (from its finding text: 26 record / 40 query / 27 trunc / 4 other) — measure that 26+4=30 and 10 API endpoints ⊆ the 30, i.e. worker-025's 4 "other" is a subset of the 10 API endpoints; the difference 30 vs 26 is 4, consistent with worker-025 counting exactly 4 of the 10 API endpoints as non-record. I can't identify exactly which 4 without worker-025's per-row data; I'll state the reconciliation is count-consistent and cite worker-025's own finding text. Let me check if worker-025 shipped a per-row table (artifacts/worker-025/l1_locator...). Let me look quickly. If available, I can compare row-level. If not, count-level.
+  C13 REC-6 provenance: which files contain REC-6; does `astra-lifecycle-07-decisions.json` contain REC-6? (expect NO) → binding FAIL; does `astra-lifecycle-04-decisions.json` contain REC-6 with the text "evidence_url is the locator column"? (expect YES).
+  C14 the other cited ref REC-35 resolves in life07 (expect YES).
+  C15 HF-03 resolution half: 97/97 resolver_result=resolved, 0 unresolved/contradicted (supports "0/97" on the resolution axis); note class-metadata half not evaluated by L11.
+  C16 scanner is deterministic/read-only: sanity — re-running the scanner would rewrite the machine record (it writes OUT_JSON), so I must NOT run the lead's scanner (it would rewrite an artifact — dangerous during freeze). Good thing to note: re-running the lead's scanner would rewrite `artifacts/literature/reviews/L1-locator-scope-L11-machine.json`; my verification must be read-only. I will not run it. Instead I implement independently. Note in README: the L11 scanner is not read-only in the strict sense (it writes its own output JSON), but it writes only its own output path; my instrument writes only under artifacts/worker-074/.
+- Outputs: report.json + raw/run_log.txt.
+- Exit codes: 0 all checks pass; 3 binding check failure (provenance); 4 unexpected diff. Since provenance check will fail, exit 3. That's fine and honest.
+
+Actually — wait. Should a mis-citation in the *adjudication* file be treated as a "binding check failure" in my verification of the machine record? My task is verifying the L11 machine record + its ruling basis. I'll make it a first-class check (C13) with FAIL status and mark the adjudication verdict "revise" while the machine record itself "reproduced". That's clean.
+
+Findings:
+- W074-L11-F1 (moderate/provenance): adjudication cites `astra-lifecycle-07-decisions.json#REC-6`; REC-6 is not in that file (REC-29..REC-35); the operative text is `astra-lifecycle-04-decisions.json#REC-6`; the cited path does not resolve, so the binding of the scope ruling in the gate-owner adjudication is defective (rule text itself confirmed at the correct location). Fix: re-emit adjudication (or an addendum) citing the correct path; do not edit the file.
+- W074-L11-F2 (minor/scope): the MET conclusion rests on `any_record_anchor` (evidence_url OR url/doi/arxiv_id); literal REC-6 reads the criterion "per-row against evidence_url". Under the literal reading 2/97 rows (SRC-094, SRC-095) have an empty evidence_url; the MET call therefore needs the explicit fallback rule to be recorded (or those 2 rows annotated), otherwise the adjudication is broader than the cited ruling.
+- W074-L11-F3 (info): the L11 machine record is authored by the same actor as the gate-owner adjudication; it is a single-owner measurement. The non-author independence for the L1 half comes from the worker spot checks (025/062/070/075/079/009), not from L11. This matters if the lead counts L11 toward "independent" evidence.
+- W074-L11-F4 (info/positive): machine record fully reproduced: 97/97 rows, all counts, 0 diffs, residual vs worker-025 is count-consistent.
+
+Now let me get the decisions hashes and check worker-025 per-row artifacts. Then write the script.
+dsh: reasoning:
+worker-025's `l1_locator_adj/report.json` should have per-row classification. Let me check its structure to do a row-level reconciliation between L11's predicate and worker-025's. This is valuable: the L11 summary claims "residual 4-row difference is a predicate call on inspirehep.net/api/literature/<id>". Wait — that says the residual is on inspirehep.net/api/literature/<id>. But I found the 10 RECORD_ENDPOINT rows are crossref/openalex, not inspirehep. Hmm, but worker-025's "4 metadata-API endpoint or other URL" probably includes openalex endpoints. The L11 summary's claim that the residual is "a predicate call on inspirehep.net/api/literature/<id>" might be inaccurate! Let me check worker-025's per-row report carefully.
+
+Actually wait: evidence_url contains 27 inspirehep api/literature/<id> (record endpoints). Worker-025's census was on exact_locator only. In exact_locator, the inspirehep api URLs are all `?q=...` truncated (27) — none are /literature/<id>. So L11's statement "residual 4-row difference is a predicate call on inspirehep.net/api/literature/<id>" cannot be right for exact_locator... unless worker-025's classifier counted some of the truncated inspirehep query URLs differently. Let me look at worker-025's report.json per-row.
+
+This could be a genuine second finding: the L11 machine-record summary mis-describes the residual 4-row difference. Let me check.
+dsh: reasoning:
+worker-025's report has per-row data. Let me extract its classification field per row and compare with L11's machine record per row. Let me inspect the row schema.
+dsh: reasoning:
+Now I can compare row by row: worker-025's `exact_locator_class` (DIRECT/DISCOVERY/OTHER/TRUNCATED) vs L11's classification (RECORD_PAGE/RECORD_ENDPOINT/DOI/DISCOVERY_QUERY/TRUNCATED/METADATA_ENDPOINT).
+
+Mapping:
+- worker-025 DIRECT=26 vs L11 record=30 → the 4-row difference.
+- Which 4 rows? worker-025 OTHER=4. Let me list them and see L11's class. If L11 classifies those 4 as RECORD_ENDPOINT (crossref/openalex APIs), then the L11 summary's claim that the residual is "a predicate call on inspirehep.net/api/literature/<id>" is WRONG — the 4 OTHER rows are crossref/openalex endpoints. Unless worker-025's OTHER 4 are something else. Let me compare directly.
+
+This would be finding W074-L11-F3 (minor): machine-record summary mis-attributes the 4-row predicate difference to inspirehep.net/api/literature/<id>; the actual 4 rows are [whatever], which are crossref/openalex API endpoints (or other). Let me verify precisely.
+
+Also check worker-025's DISCOVERY=40 vs L11 DISCOVERY_QUERY=40, TRUNCATED=27 both match.
+
+Let me run the comparison now (as part of exploration), then encode as a check in my instrument.
+dsh: reasoning:
+Confirmed! The 4-row residual is:
+- SRC-087 (api.crossref.org) → L11 RECORD_ENDPOINT
+- SRC-089 (api.crossref.org) → L11 RECORD_ENDPOINT
+- SRC-090 (institutional PDF page with § locator) → L11 RECORD_PAGE
+- SRC-092 (api.openalex.org) → L11 RECORD_ENDPOINT
+
+So the L11 machine-record summary (in the event, and possibly inside the machine record / scanner docstring) says: "residual 4-row difference is a predicate call on inspirehep.net/api/literature/<id>". That's factually wrong: none of the 4 residual rows involves inspirehep.net/api/literature/<id>; three are crossref/openalex metadata-API endpoints and one is a PDF page. The *direction* of the difference is that L11 counts 3 API endpoints + 1 PDF as record-shaped whereas worker-025 counted them OTHER/non-record.
+
+Wait — is that text in the machine record file itself, or only in the event summary? Let me check the machine record JSON: earlier I printed it and saw `predicate` but didn't see the residual note. The summary text "residual 4-row difference is a predicate call on inspirehep.net/api/literature/<id>, reported as such" appears in event lit-l11-20260912-002 (artifact event summary). The machine record might not contain it. Let me grep. Regardless, the artifact event carries the claim; the machine record's row_detail supports the correct attribution. So my finding: the accepted-stream artifact-event summary mis-describes the residual 4 rows (crossref/openalex endpoints + PDF page), and this matters because the same text appears in the lead's status (lit-l11-...-005?). Let me grep where exactly.
+
+Also: L11's classification of SRC-090 (PDF with a substring in the URL) as RECORD_PAGE and SRC-087/089/092 as RECORD_ENDPOINT is a *permissive* predicate call. Worker-025 called them non-record ("OTHER"). Are crossref/openalex API endpoints "record-shaped locators"? They do identify a record (they return the metadata record for a DOI). The L11 predicate explicitly lists api.crossref.org/works as RECORD_ENDPOINT. So it's a reasonable call, but note that L11's declared `predicate.record_shaped` classes include RECORD_ENDPOINT. Fine — this is a documented judgment, not an error. But the summary's attribution of the residual to a different URL family is an error.
+
+Let me find the exact event text and whether the machine record includes the claim. grep for "inspirehep.net/api/literature/<id>" in the machine json and adjudication.
+
+Also check the L11 adjudication file for its exact claims (to review it properly). Let me read `reviews/L1-gate-adjudication-lead-literature-L11.json`.
+dsh: reasoning:
+Now I have the full picture and a clear second finding:
+
+The adjudication says: "L11 differs only on the 4 metadata-endpoint rows: 10 rows carry inspirehep.net/api/literature/<id>, which L11 counts as a record endpoint (a record id is present) while worker-025's predicate classes 4 of them as metadata APIs."
+
+But that's factually wrong in two ways:
+1. In the `exact_locator` column, no row carries `inspirehep.net/api/literature/<id>` as a record endpoint — the 10 exact_locator RECORD_ENDPOINT rows are 7× api.crossref.org/works/<DOI> + 3× api.openalex.org/works/doi:<DOI>. (The `inspirehep.net/api/literature/<id>` values live in `evidence_url`, 27 of them, and in `url`.) Wait — let me double check the 10: earlier list from my independent classifier: SRC-059,060,067,068,086,087,089 (7 crossref) + SRC-071,072,092 (3 openalex) = 10. Yes.
+2. The 4 rows where worker-025 used OTHER are SRC-087, SRC-089, SRC-090, SRC-092: two crossref endpoints, one openalex endpoint, and one institutional PDF page (SRC-090). So even if the intended statement were "which L11 counts as record endpoints", only 3 of the 4 are endpoints and the fourth is a PDF page.
+
+So the adjudication's attribution is incorrect. The correction: L11 counts api.crossref.org/works and api.openalex.org/works as RECORD_ENDPOINT (3 of the 4 worker-025 OTHER rows) and the institutional PDF (SRC-090) as RECORD_PAGE; the inspirehep api/literature/<id> family appears in exact_locator only as 27 truncated `?q=...` queries (all classified TRUNCATED by both), and as evidence_url (record endpoints, 27 of the 37).
+
+Hmm wait, let me double check the exact_locator for any inspirehep /literature/<id>. My classifier put 10 exact locators as RECORD_ENDPOINT, all crossref/openalex. Let me verify the count of `inspirehep.net/api/literature/<digits>` in exact_locator column specifically = 0. And in evidence_url = 27. Let me verify to be safe.
+
+This is a solid, concrete finding for the verification: **W074-L11-F2 (moderate, attribution error)**: the L11 adjudication's reconciliation paragraph mis-attributes the 4-row predicate difference to `inspirehep.net/api/literature/<id>` in exact_locator. Measured: 0/97 exact_locator values are inspirehep record endpoints; the 10 RECORD_ENDPOINT exact_locators are 7 crossref + 3 openalex; the 4 worker-025 OTHER rows are SRC-087/089 (crossref), SRC-090 (PDF page), SRC-092 (openalex). The direction of the L11 count (30 record vs 26) is still reproducible; only the explanation is wrong.
+
+And **W074-L11-F1 (moderate, provenance)**: the REC-6 citation resolves only in astra-lifecycle-04-decisions.json, not the cited -07 file.
+
+And **W074-L11-F3 (minor/scope)**: literal REC-6 reading vs any_record_anchor fallback for SRC-094/095.
+
+These are good, bounded, honest findings. Now let me build the deliverable.
+
+One more check: does the adjudication contain the exact phrase "(astra-life04-verify-l0-rev3 card)" while citing REC-6? Yes: "Controller ruling REC-6 (astra-life04-verify-l0-rev3 card)". Hmm, REC-6's scope is "L1 locator column semantics (lit-l4-20260912-006)" — it's recorded in the lifecycle-04 decisions (which is the pass-04 adjudication record, not necessarily the astra-life04-verify-l0-rev3 card). The correct citation is `runtime/state/controller_verification/astra-lifecycle-04-decisions.json#REC-6`. The adjudication's evidence_refs cite `astra-lifecycle-07-decisions.json#REC-6` and `#REC-35`. So check C13 = FAIL for the REC-6 ref; C14 = PASS for REC-35.
+
+Let me now write the instrument. I'll write the files with the write tool. Then run it, inspect output, then write README/CHECKPOINT/SHA256SUMS, then append outbox events and checkpoint state.
+
+Script outline:
+
+```python
+#!/usr/bin/env python3
+"""W074-L1-L11-SCOPE-VERIFY-01 ... independent non-author verification ..."""
+from __future__ import annotations
+import csv, hashlib, json, re, sys
+from collections import Counter
+from pathlib import Path
+from urllib.parse import urlparse
+
+ROOT = Path(__file__).resolve().parents[3]
+OUT = ROOT/"artifacts/worker-074/l11_scope_verify"
+LEDGER = ROOT/"ledger/citation_audit.csv"
+MACHINE = ROOT/"artifacts/literature/reviews/L1-locator-scope-L11-machine.json"
+ADJ = ROOT/"reviews/L1-gate-adjudication-lead-literature-L11.json"
+SCANNER = ROOT/"artifacts/literature/reviews/l11_l1_locator_scope_audit.py"
+RUBRIC = ROOT/"evaluation_rubric.yaml"
+DEC04 = ROOT/"runtime/state/controller_verification/astra-lifecycle-04-decisions.json"
+DEC07 = ROOT/"runtime/state/controller_verification/astra-lifecycle-07-decisions.json"
+W025 = ROOT/"artifacts/worker-025/l1_locator_adj/report.json"
+
+PINS = {...}
+
+def sha256(p): ...
+
+def classify(v): independent implementation as above
+
+def main():
+    measured = {relpath: sha256(path)}
+    checks = []  # (id, status, detail)
+    ...
+    write report.json + raw/run_log.txt
+    print summary
+    return exit code
+```
+
+I need paths relative for pins: "ledger/citation_audit.csv" etc. I'll define PINS as dict of relpath→sha and PATHS relpath→abs.
+
+Check list (binding = required for exit 0):
+- C01 ledger pin
+- C02 machine json pin
+- C03 adjudication pin
+- C04 scanner pin
+- C05 rubric pin
+- C06 lifecycle-04 decisions pin
+- C07 lifecycle-07 decisions pin
+- C08 machine.pins_match all true and declared pins equal measured
+- C09 per-row exact_locator class equality: 0 diffs
+- C10 per-row evidence_url class equality: 0 diffs
+- C11 counts equality (both columns)
+- C12 absent evidence_url = SRC-094/095 and both have alt anchors; any_record_anchor 97; no_record_anchor 0
+- C13 REC-6 provenance: cited path contains REC-6? FAIL expected → binding check "REC-6 citation resolves in cited file" FAIL
+- C14 REC-6 text at correct location contains "evidence_url is the locator column" → PASS
+- C15 REC-35 resolves in life07 → PASS
+- C16 worker-025 residual: 4 rows {SRC-087,089,090,092}; L11 classes {RECORD_ENDPOINT×3, RECORD_PAGE×1}; zero of the 10 exact_locator RECORD_ENDPOINTs are inspirehep → mark as finding check "residual attribution matches measurement" FAIL (the adjudication's stated attribution is wrong)
+- C17 HF-03 resolution axis: 97/97 resolver_result resolved, 0 unresolved/contradicted → PASS (scope note: class-metadata half not evaluated)
+- C18 no canonical writes: verify mtimes/hashes stable from start to end for the 7 inputs (T0=T1) → PASS
+
+Findings list:
+- W074-L11-F1 moderate provenance: REC-6 mis-cited file.
+- W074-L11-F2 moderate attribution: 4-row residual mis-attributed to inspirehep exact_locator; actually crossref/openalex + PDF.
+- W074-L11-F3 minor scope: MET via any_record_anchor vs literal REC-6 evidence_url for 2 rows.
+- W074-L11-F4 info: same-actor machine record.
+- W074-L11-F5 positive: machine record counts/per-row fully reproduced (0 diffs).
+
+Verdict on the target (adjudication): revise, score 3.5 (or 3.0). Two moderate findings and one minor on a gate-owner scope adjudication whose substantive counts reproduce. I'll say revise 3.5, hard_failures [] (none of these are rubric hard failures? A mis-citation could be a provenance defect, not HF-03; keep hard_failures empty, findings with severities).
+
+Also review the machine record separately: accept-level reproduction (0 diffs) but with the mis-attribution living in the adjudication, not the machine record. I'll have one review event targeting the adjudication (revise) and note the machine record reproduced.
+
+Now, the JSON outbox events. Let me model on worker-074's prior style:
+1. status (start → but I'll just emit a completion status; better to also emit start? Since I'm doing it in one go, I'll emit the final status; prior workers emitted status-start + status-complete. I'll emit a single status with summary.)
+2. artifact events for each deliverable (report.json, verify script, README, CHECKPOINT.json, SHA256SUMS, raw/run_log.txt).
+3. claim with class_id/class_ids, statement, assumptions, falsifier, evidence_refs, artifact_refs, conclusion_type "audit_measurement" or "open_problem"? Prior L1 worker used conclusion_type "open_problem"; worker-074 used "audit_measurement"/"formal_model". I'll use "audit_measurement" (not a gate verdict).
+4. review event targeting `reviews/L1-gate-adjudication-lead-literature-L11.json` with verdict revise, score 3.5, findings, hard_failures [], counts_as_gate_verdict false.
+
+event_ids: `w074-l11scope-20260912T<HHMM>-status`, `-claim`, `-review`, `-artifact-<name>`. I need a timestamp; I'll use the actual time when emitting.
+
+evidence_refs format: "path#sha256prefix" (12 hex? prior used 12). I'll use 12-char prefixes.
+
+Then checkpoint files:
+- `artifacts/worker-074/l11_scope_verify/CHECKPOINT.json` (structured like worker-074's prior checkpoint: artifacts map, assignment, at, authority_note, checkpoint, checkpoint_id, class_ids, gate, hours_spent_estimate, next_falsifier, node_id, result, snapshot, task_id, worker).
+- `runtime/state/w074_checkpoint_l11scope.json` identical bytes.
+
+Then SHA256SUMS over the deliverable files (excluding itself).
+
+Then report completion. Also maybe not mark the task done — I'm exiting anyway.
+
+Let me check that writing to artifacts/worker-074/l11_scope_verify is fine (workspace-write). Yes.
+
+One important detail: the report.json will contain per-row data; it should be reasonably sized. 97 rows × 2 columns — fine.
+
+Let me write the script now. I'll be careful with the classifier semantics to reproduce exactly:
+- ABSENT if empty
+- TRUNCATED if '...' in value (first check after empty)
+- DISCOVERY_QUERY if query markers: '[?&]q=', 'search_query=', '/search', 'query=' 
+- DOI if host doi.org or bare 10.x
+- RECORD_PAGE if arxiv abs/pdf
+- RECORD_ENDPOINT if inspirehep api/literature/<digits>, crossref api/works/, openalex api/works/, semanticscholar api
+- METADATA_ENDPOINT if api host/path or export.arxiv
+- else RECORD_PAGE
+
+Check ordering against L11: L11's classify does TRUNCATED first, then DISCOVERY, then RECORD_ENDPOINT, then ARXIV_ABS, then DOI, then METADATA_ENDPOINT, then default RECORD_PAGE. Note L11 checks RECORD_ENDPOINT before ARXIV_ABS/DOI; my ordering has DOI before RECORD_ENDPOINT — could matter for a URL like api.crossref.org/works/10.4007/... (contains "10.4007/..." but DOI regex requires doi.org or start-of-string, so no match). Bare DOI `10.x` check with `^` won't match URLs. Fine. But to be safe, I'll order: TRUNCATED → DISCOVERY → RECORD_ENDPOINT → ARXIV/RECORD_PAGE → DOI → METADATA → default. Semantically identical on this data.
+
+The per-row compare will tell me if I match; if a diff appears, I'll investigate rather than tune to match (important for honesty).
+
+Also: I should include a note that I did NOT execute the lead's scanner (it writes the machine record path) to preserve the freeze; the verification is read-only.
+
+Let me now write the file.
+dsh: reasoning:
+I put a placeholder PINS for worker-025 report.json — I need the real hash. Let me compute it and fix. Also note I used a fake hash "3f4d0c78..." which will fail. Let me get the real sha256 and update. Then run.
+
+Also check: `l11_rows[cid]["exact_locator_class"]` and machine row_detail — machine row_detail entries have "exact_locator_class" etc. Yes. The line `inspire_exact = [...]` uses r.get("value") which doesn't exist in machine row_detail — it will be empty, so inspire_exact = [] always; I then measure inspire_exact_values from the ledger (correct). The unused `inspire_exact` variable is harmless but sloppy; let me remove it.
+
+Also the residual check message builds a weird list. Fine but let me clean.
+
+Let me compute worker-025 hash first.
+dsh: reasoning:
+Now remove the dead `inspire_exact` variable to keep the code clean. Let me edit that block.
+dsh: reasoning:
+Two issues to investigate:
+1. `evidence_url_non_record: 2` — my classifier counts the 2 ABSENT as non_record, but the machine record's `evidence_url_non_record: 0`. The machine's declared predicate lists non_record = [DISCOVERY_QUERY, METADATA_ENDPOINT, TRUNCATED] — ABSENT is tracked separately (`evidence_url_absent: 2`). My NON_RECORD_CLASSES includes ABSENT, causing the count mismatch. Fix: define non_record classes per column as declared: NON_RECORD = {TRUNCATED, DISCOVERY_QUERY, METADATA_ENDPOINT}; ABSENT counted separately. For exact_locator, ABSENT doesn't occur. Fix measured_counts.evidence_url_non_record to exclude ABSENT.
+
+2. `residual_ids` = SRC-087, 089, 092 — missing SRC-090 because SRC-090's L11 class is RECORD_PAGE, not RECORD_ENDPOINT; my residual filter only selects L11 == RECORD_ENDPOINT. The residual vs worker-025 should be all 4 rows where worker-025's class is not DIRECT but L11 counts as record_shaped (RECORD_PAGE or RECORD_ENDPOINT or DOI). Fix: select rows where w025 class != DIRECT and L11 class in RECORD_CLASSES. Then SRC-090 is included.
+
+Let me fix both. Then checks_failed should become: PIN strict? Let's see which 4 failed. Probably: PIN::worker-025? No, that's fixed. Likely: COUNTS::machine_record_equality (due to evidence_url_non_record), RESIDUAL::four_rows..., plus REC6::cited_ref_resolves and RESIDUAL::none_is_inspirehep (PASS actually). Let me print the failures after fixing.
+
+Also, `checks_passed: 24, failed: 4`. Let's fix and re-run.
+dsh: reasoning:
+Interesting! The -07 decisions file's rulings have no `id`? Earlier my extraction printed ['REC-29', ..., 'REC-35'] from the -07 file using `d.get('recommendations') or d.get('decisions')`. So the -07 file uses a different key (recommendations/decisions), not `rulings`. My `ruling_ids` function looks at `rulings`. The -04 file uses 'rulings'. So I need a helper that looks at both 'rulings' and 'recommendations'/'decisions'.
+
+Let me fix the provenance check to look at all containers, reporting per-file REC ids. Then REC-35 should resolve in -07 (PASS), and REC-6 should not be in -07 (FAIL, the finding), and REC-6 should be in -04 (PASS).
+
+Also the report's `rulings` field should reflect the corrected extraction.
+
+Let me update `ruling_ids` and the checks.
+dsh: reasoning:
+Now the instrument is clean: 27 PASS, 1 FAIL (the provenance finding), exit 3 as designed. All independently reproduced counts match the machine record; residual correctly identified as the 4 rows; no inspirehep exact_locator; REC-6 not in the cited file (correct file is -04).
+
+Now write the README.md (human summary), then CHECKPOINT.json, SHA256SUMS, runtime checkpoint, and outbox events.
+
+Let me get the report.json hash after the final run first — but report.json created_at changes each run; I'll run once more at the end? Better: write README and CHECKPOINT referencing the report hash; the CHECKPOINT should list artifact hashes; SHA256SUMS covers files. Order:
+1. Write README.md (doesn't depend on report hash? It can cite the report by path; no need to embed its hash).
+2. Write a small `make_checkpoint.py`? No — the CHECKPOINT.json needs artifact hashes computed AFTER all files are final. But CHECKPOINT.json itself and SHA256SUMS can't include their own hashes. I'll compute hashes of report.json, verify script, README, raw/run_log.txt and write CHECKPOINT.json, then SHA256SUMS over all 5 (excluding SHA256SUMS). Then copy CHECKPOINT.json to runtime/state/w074_checkpoint_l11scope.json.
+3. Append outbox events with the final hashes.
+4. Final re-run of verify script? That would change report.json's created_at and hash, invalidating the committed hashes. So: either (a) accept the report as-is (hash it) and don't re-run; or (b) remove the volatile timestamp from report or make it deterministic. The falsifier says "re-run yields different... exit code" — the report includes created_at which changes, but the checks/findings must be deterministic. To be safe, I should make report.json byte-deterministic on re-run. Options: keep `created_at` but that breaks byte-stability. Prior workers handle this with "report->rerun normalized digest identical" (worker-078). Simplest: make created_at deterministic? No — better to preserve the timestamp but document that the *normalized* report (excluding created_at) is deterministic, and provide the normalized digest. Alternatively set created_at from an env var or a manifest? 
+
+Cleanest: change the script to write report.json with the timestamp, but ALSO write `report.normalized.json` (no created_at)? That adds complexity. Alternative: report.json records `created_at` as the run time, and my CHECKPOINT/SHA256SUMS hash that exact file. The falsifier then says "re-run yields different per-row classification/count/finding set" (not byte-identical report). That's acceptable and honest. But prior worker-078 emphasized "report->rerun normalized digest identical" — I can compute a normalized digest (sha256 of report JSON with created_at removed) and include it in the report + events, so re-runs can be compared. Let me add that: `report["normalized_sha256"]` = sha256 of json.dumps(report without created_at/normalized_sha256, sort_keys=True). Then re-running should reproduce the same normalized hash. That's strong and cheap.
+
+Let me add that to the script and re-run, then freeze.
+
+Also I should double check the `STABILITY::T0_equals_T1` check passes (it did, since report wasn't in inputs).
+
+Let me modify the script to add normalized_sha256.
+dsh: reasoning:
+Deterministic normalized digest confirmed across two runs; exit 3 both times. Now write the README, CHECKPOINT, SHA256SUMS, runtime checkpoint, and outbox events.
+
+Let me write README.md with:
+- Task, actor, scope, pins.
+- Method (independent classifier, no lead-scanner execution).
+- Results table (checks 27 PASS/1 FAIL; counts reproduced).
+- Findings F1..F5 with evidence.
+- Verdict on the adjudication: revise 3.5 (binding/attribution only), machine record reproduced.
+- Falsifier, reproduce command.
+- Authority note.
+
+Then CHECKPOINT.json with artifact hashes (report, script, README, run_log) and metadata. Then SHA256SUMS.
+
+I need to know the run_log hash and README hash before writing CHECKPOINT. Order: write README → compute hashes of report/script/README/run_log → write CHECKPOINT (embedding them) → compute CHECKPOINT hash → write SHA256SUMS including CHECKPOINT → copy CHECKPOINT to runtime/state. SHA256SUMS itself can't be in the manifest (standard practice).
+
+Note: run_log.txt is written by every script run; it's final now (same content each run). Good.
+
+Let me write the README.
+dsh: reasoning:
+Now compute hashes and write CHECKPOINT.json. Then SHA256SUMS. Then copy to runtime/state.
+
+Let me build CHECKPOINT.json with a python script to ensure valid JSON and embed artifact hashes.
+dsh: reasoning:
+Now emit the outbox events. I need to append valid JSON lines to `comms/outbox/worker-074.jsonl`. Let me build them with python, using sha256 prefixes and the established schema. Events:
+
+1. status — event_id `w074-l11scope-20260912T0130-status`, summary, next_falsifier, evidence_refs, gate G-LIT, node L1, class_ids (4), status "active", hours 0.5, task_id.
+2. artifact events for: report.json, verify script, README, CHECKPOINT.json, SHA256SUMS, raw/run_log.txt.
+3. claim — with statement, assumptions, falsifier, evidence_refs, artifact_refs, conclusion_type "audit_measurement", counts_as_gate_verdict false.
+4. review — target `reviews/L1-gate-adjudication-lead-literature-L11.json`, target_sha256 6d8e..., reviewer worker-074, verdict revise, score 3.5, hard_failures [], findings (text), counts_as_independent true, counts_as_gate_verdict false, gate G-LIT, node L1, class_ids.
+
+Event timestamps: use now.
+
+Then verify the appended lines parse as JSON and that IDs are unique vs existing file.
+
+Let me write them. Careful: the file already has many lines; appending via python is fine. I'll ensure the appended block is newline-terminated.
+
+Also, should I emit two review events — one for the machine record (accept/reproduced) and one for the adjudication (revise)? The claim already covers reproduction. One review on the adjudication is cleanest. I'll include in the review findings both the F1/F2/F3 issues and the F5 positive reproduction.
+
+Let me write the emitter script inline.
+dsh: reasoning:
+Hmm, the timestamp in the event_id says 20260912T0119 — but the current wall clock was ~01:29 when I wrote the checkpoint. The `now[:16]` slice of ISO format "2026-09-12T01:19:xx+08:00" gives "2026-09-12T01:19". Wait, why 01:19? Because `datetime.now()` gave 01:19? Earlier `date` showed 01:15:23, then events at 01:26 existed (created by other workers whose clocks/timestamps). The machine's actual time now may be 01:19 (the events stream has future-dated entries from other agents? No...). Let me check date again. Whatever — event IDs just need uniqueness. All 9 lines valid JSON.
+
+One event_id contains a slash: `w074-l11scope-20260912T0119-artifact-raw/run_log_txt` — a bit ugly but valid JSON and unique. Fine.
+
+Now, the instruction says "emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit." Done:
+- Valid JSON events in outbox with event_ids, class IDs, evidence refs with hashes, artifact sha256, falsifier.
+- Checkpoint written (artifacts + runtime/state).
+- Now I should verify the appended lines are valid (done), check event_id uniqueness against the whole file, and do a final consistency check: confirm the checkpoint's artifact hashes still match the files on disk (nothing changed after checkpoint). Also confirm the report still contains the normalized hash matching. Then exit.
+
+Let me run a final verification:
+1. `python3 -c` to parse all lines of worker-074.jsonl and check event_id uniqueness.
+2. Re-verify SHA256SUMS.
+3. Confirm runtime checkpoint identical to artifact checkpoint.
+4. Confirm the 8 pins still match (the verify script already checks T0==T1; but the script itself will rewrite report.json if re-run — don't re-run. Instead just hash the inputs directly to check no drift since the run.)
+
+Actually, careful: the verify script's report.json hash is committed; if I re-run I'd change it. I won't re-run. I'll do a lightweight pin check with sha256sum.
+
+Let me do the final checks.
+dsh: reasoning:
+Everything checks out. One thing to note: the instruction said "emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit". I've done that.
+
+Should I also run the controller's ingest? No — only the controller ingests outbox → events.jsonl ("accepted stream ... writer: research_map/comms.py ingest only"). As a worker I must not run ingest (that's the controller's). The protocol says report with events in outbox. Good.
+
+One question: my task said "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit." I took the L11 verification task. Everything is complete. Let me also double-check the outbox events' `created_at` = 01:19 vs checkpoint at... The checkpoint `at` used datetime.now() which was apparently 01:29? Wait, the earlier output showed checkpoint_id "w074-l11scope-20260912T0129" (I hardcoded T0129) and `at` from now(). But the outbox events show T0119. Let me check the actual `date` now and the events' created_at. If the system clock jumped backward or my slice was off... Let me verify quickly: `date`. Actually the outbox event_ids computed from now[:16] where now was 2026-09-12T01:19:xx; my checkpoint_id hardcoded T0129 was wrong (I guessed). Minor cosmetic inconsistency. Let me check current time and the created_at values, then optionally fix the checkpoint_id to match. The checkpoint is already hashed and referenced in the outbox artifact event... If I change the checkpoint file, its hash changes and the outbox event breaks. Better: leave the checkpoint as is (checkpoint_id is just a label; but it says T0129 while created at 01:19 — a small internal inconsistency).
+
+Hmm, accuracy matters in this swarm (they love hash-bound correctness). Options:
+- Re-generate checkpoint with corrected checkpoint_id, update SHA256SUMS, and update the two outbox artifact events (checkpoint + SHA256SUMS have new hashes). The outbox is append-only; editing appended lines is technically a rewrite of events already emitted. But they're not yet ingested (I'm the only writer, and ingest happens on controller cycle). Still, editing events after emission is bad practice in this protocol. Better to emit a small additive correction event? That's heavy for a cosmetic label.
+
+Let me look: the checkpoint's `at` field is the true now; the `checkpoint_id` label has my hardcoded wrong minute. Actually, wait: was the true time 01:19 or 01:29? The outbox event_id timestamp came from `now` in the second script (01:19), and the checkpoint `at` came from the first script (~01:19 too?), and my hardcoded checkpoint_id T0129 was a guess. Let me check `date` and the checkpoint's `at` field, plus the events' created_at.
+
+If `at` is ~01:19-01:20 and id says 0129, that's an 8-10 minute label mismatch. I could emit a tiny additive "erratum" status event noting the checkpoint_id label typo (consistent with how other workers emit erratum/addendum events). That's the protocol-clean fix: append-only correction. It's cheap and honest.
+
+Also, the events' created_at may be 01:19 while earlier files show 01:29... Let me check the clock now.
+dsh: reasoning:
+The real time is 01:19:41. My earlier assumption of 01:29 was wrong (checkpoint_id label typo). The checkpoint `at` 01:19:15 is correct; only the label "T0129" is wrong (should be T0119). I'll append one erratum status event (append-only, consistent with protocol practice) pointing out the label typo, so the record is self-consistent. The checkpoint bytes stay unchanged (hashes intact).
+
+Also note: the earlier event stream showed events with created_at up to 01:26 — those were future-dated relative to real time? At 01:15 the events showed 01:26 entries... That means other agents' clocks are ahead or they emit future timestamps. Not my problem.
+
+Let me append a short erratum event.
+dsh: reasoning:
+Done. Final state:
+- One bounded class-bound task taken and completed: W074-L1-L11-SCOPE-VERIFY-01.
+- Artifacts on disk with hashes: report.json, verify_l11_scope_074.py, README.md, raw/run_log.txt, CHECKPOINT.json, SHA256SUMS.
+- Checkpoints: artifacts/.../CHECKPOINT.json + runtime/state/w074_checkpoint_l11scope.json (identical, sha 459a3cdefb4b...).
+- Outbox: 10 valid JSON events (9 + erratum) with IDs, evidence refs (path#hash), artifact sha256, falsifier.
+- Exit: the worker exits now.
+
+I should give a concise final summary to the user. Include: what I read (handoff/map/comms), the task taken, result/findings, evidence paths+hashes, checkpoint, and that I exited. Keep it brief but complete, with the key hashes and falsifier. No need for more tool calls.

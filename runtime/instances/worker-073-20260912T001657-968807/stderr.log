@@ -1,0 +1,1271 @@
+dsh: reasoning:
+Let me start by understanding the runtime context. I'm worker=073, a bounded execution worker. I need to read handoff/map and comms, take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit.
+
+Let me explore the workspace first.
+dsh: reasoning:
+There's no `handoff` or `comms` dir in the workspace root. Let me look in likely places: workdir, ai4math-swarm.tar.gz, launch_swarm.sh. The task mentions "handoff/map and comms" — probably in a swarm directory. Let's check `workdir`, `.agents`, `tmp`, and the tarball. Also `launch_swarm.sh` and `supervise_swarm.sh` likely reference these paths.
+dsh: reasoning:
+The swarm root is /data3/guoshaoyang/workdir/ai4math-swarm. I'm worker 073. Let me look at the runtime state, comms, and research map. The task says: "Read handoff/map and comms. Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit. worker=073"
+
+So I need to:
+1. Read handoff and map (research_map/ASTRA_HANDOFF.md, research_map/research_map.json, ARCHITECTURE.md, HANDOFF.md)
+2. Read comms (inbox/outbox)
+3. Take one class-bound task
+4. Emit valid JSON with IDs, evidence, hash, falsifier into comms/outbox
+5. Checkpoint
+6. Exit
+
+Let me explore.
+dsh: reasoning:
+There is a lot of state. Note worker 073 — the swarm has workers 01..20 named deepseek-flash-NN. But I'm worker=073. So maybe worker id 073 maps to a numbering scheme used in this harness session. The task says "worker=073", take one class-bound task. Let me read HANDOFF.md and ASTRA_HANDOFF.md, plus ASTRA/architecture.
+
+Let me also check assignments dir in outbox, and my potential inbox (none for 073). Let me read the key docs first.
+dsh: reasoning:
+Now I understand the structure. I'm worker 073. The swarm worker naming is deepseek-flash-NN (01-20), but harness may have assigned worker=073 in a different numbering (maybe the supervisor_loop spawns with random ids). Let me check `supervise_loop.sh`, `independent_supervisor.sh`, `independent_supervisor_100.sh`, and check the current live processes. Also let me check the comms PROTOCOL.md and the assignments in map.assignments. And check if there is an inbox for worker-073 or deepseek-flash-073.
+
+Let me check what's running and how worker IDs are assigned.
+dsh: reasoning:
+I see: `independent_supervisor_100.sh` launches workers 01..100 with prompt exactly matching my task: "You are a bounded execution worker. Read handoff/map and comms. Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit." and `worker=$n`. I'm worker=073 (from slot seq 1..100 → 073). Good.
+
+The current supervisor loop running is `independent_supervisor_100.sh` (modified 00:11). Let me check `runtime/instances` for worker-073, and whether there's an inbox for worker-073. There's no comms/inbox/worker-073.jsonl. Let me check.
+
+Also read PROTOCOL.md, and check map.assignments for open assignments. Also check the artifacts dir and schemas to know required JSON fields.
+
+Let me check my instance dir.
+dsh: reasoning:
+Interesting: I'm worker-073 in the swarm, launched at 00:16:57, and tmux session `worker-073` is running. That's me. So my agent id in this swarm is `worker-073`, not `deepseek-flash-73`. The protocol only lists deepseek-flash-01..20, but independent_supervisor_100 launches worker-NN with 1..100. So my id is `worker-073`.
+
+I should:
+1. Read map/assignments to find a class-bound task.
+2. Since no inbox for worker-073, I likely need to take an available class-bound task from the map's assignment queue / immediate queue.
+3. Emit valid JSON event(s) in `comms/outbox/worker-073.jsonl` with IDs, evidence, hash, falsifier.
+4. Checkpoint in runtime/state (e.g. w73_checkpoint_1.json).
+5. Exit cleanly.
+
+Let me look at the map's assignments and gates, plus schemas. research_map.json is 826KB — let me query with python for keys structure and assignments.
+
+Also note: worker-073 is a tmux session. I'm running inside it presumably via dsh. Note there's an earlier worker-073 instance (00:12:30) which produced 50KB stderr but 0 stdout — likely failed. The current one at 00:16:57 has 3066 bytes stderr and 0 stdout. My session (DSH_SESSION_ID=session-63b28b74...) — hmm, but let me not worry.
+
+Let me inspect the map.
+dsh: reasoning:
+Now let me examine assignments in the map — open assignments especially. The ASTRA handoff says open assignments issued 00:09, deadline 01:30: astra-life01-publish-frozen (lead-formulation), astra-life01-a1-rebind (lead-audit), astra-life01-l0-revise (lead-literature), astra-life01-n0-proposal (lead-numerics). These are held by leads, not workers.
+
+As a bounded execution worker, I need one class-bound task assigned by a group lead; if no assignment exists, inspect the immediate queue and propose one artifact-backed task without claiming completion.
+
+Let me look for assignments targeted at workers, e.g., assignee matching worker-073 or deepseek-flash-*. Let me query assignments with statuses.
+dsh: reasoning:
+Interesting: assignments don't have a 'status' field at top level? They have event_id, node_id, assignee, artifact, gate, class_id, acceptance, budget_agent_hours, expected_information_gain, falsifier, stop_rule, deadline. The status is probably tracked elsewhere (events / controller_gate_audit). Let me look at the latest assignments (last ~15) to see the open ones, and also look at the `escalations`, `controller_findings`, and gates to understand what's pending.
+
+Also, assignments are recorded as messages; some may have been superseded. Let me print the last 20 assignments in a compact form, and check claims/reviews for worker-completable tasks.
+
+Key insight for worker task: I should look at `proposed/` and `proposals/` dirs, and the newest assignment events. Also check `research_map/events.jsonl` tail to see what's happening now.
+dsh: reasoning:
+Now I have a clear picture. There are many assignments. As bounded worker 073 with no inbox assignment, I must "inspect the immediate queue and propose one artifact-backed task without claiming completion" — but the task says "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit."
+
+The most directly useful class-bound task that a worker could pick up: among assignments to workers or the immediate queue. Let me check what tasks remain undone. Some options:
+
+1. `astra-indep-1-CF5-ledger-verify` — assigned to deepseek-flash-19: machine census of class tokens in ledger. Could be already done.
+2. `astra-life02-l1-spotcheck` — L1 spot checks by two reviewers distinct from deepseek-flash-07 (lead-literature assignment).
+3. `assign-FORM-HELDOUT-*` — held-out corpus class-binding tests (worker-06, worker-16).
+4. `astra-life01-a1-rebind` — lead-audit.
+5. `astra-life02-n0-c8` — lead-audit.
+
+For a worker, best is a bounded, machine-checkable, artifact-backed task in an open class. The G-LIT spotcheck needs a reviewer distinct from deepseek-flash-07 — a worker can do a re-fetch spot check (primary-source verification). But ESC-3 says worker-level web_search tool fails; direct HTTPS works. Let me test network access. Actually, this could be an excellent bounded task: L1 re-fetch spot check of ledger citations, binding L1 sha256 315c19145065..., recording fetched source hash and MATCH/MISMATCH verdict. That's class-bound (ledger classes are tagged), artifact-backed, has evidence (hash), falsifier (explicit).
+
+But wait — the spot checks are also potentially done by flash-16/17/18/19 already. Let me check the reviews and outbox to see which tasks are actually still open, and check the current state of things. Also let's read the newest events in events.jsonl (tail) to see recent lifecycle.
+
+Let me check what worker-073's earlier instance did — maybe it already did something. The first worker-073 instance (00:12:30) had 50KB stderr, 0 stdout, and its stderr may contain the tool transcript. Let me look. Actually stdout is where the final message goes; stderr may include harness logs. That earlier instance probably failed (maybe crashed with some error). Let me check both stderr logs, especially the 3066-byte one from my current instance? No, my own process's stderr may be that.
+
+Let me check the tail of events.jsonl and the last lifecycle report to know what's currently ingested and what's pending. And check what `astra_lifecycle.py` does (I saw it). Let's understand how workers are supposed to checkpoint and emit events: comms.py send, or writing JSONL directly to comms/outbox/worker-073.jsonl. The ingest accepts events. Let me read comms.py to know validation rules for events.
+
+Actually, careful: I should be a "bounded execution worker", not run the controller. I should:
+1. Take one class-bound task.
+2. Produce an artifact (real work, machine-checkable).
+3. Emit valid JSON event(s) to comms/outbox/worker-073.jsonl with event_id, event_type, created_at, actor, node_id, class_id, evidence_refs, sha256, next_falsifier.
+4. Write a checkpoint to runtime/state/w73_checkpoint_1.json (or similar).
+5. Exit.
+
+I should pick a task that is (a) genuinely useful, (b) bounded, (c) verifiable by me, (d) not duplicating existing work, (e) class-bound.
+
+The most valuable and tractable: L1 citation spot-check (G-LIT gate is pending; needs >=3 independent re-fetch spot checks; astra-life02-l1-spotcheck explicitly asks for "Two further independent re-fetch spot checks ... by reviewers distinct from deepseek-flash-07 and from each other"). That's exactly a bounded worker task. But does it require network? Let me test HTTPS quickly (e.g., arxiv). ESC-3 says direct HTTPS works. Spot checks require fetching primary sources (arXiv abstracts) and comparing against ledger rows.
+
+Alternative: class-token census of the ledger (astra-indep-1-CF5-ledger-verify assigned to flash-19) — but flash-19 may have already done it. Let me check.
+
+Another candidate: held-out corpus class-binding test (assign-FORM-HELDOUT-07/08) — run the class-separation checker on a held-out corpus. Worker-06 and worker-16 were assigned; maybe done. Let me check artifacts.
+
+Let me look at the recent events and the artifact tree to determine what's already covered. Also check `runtime/state/ingested_ids.json` to see which events were applied.
+
+Let me query map claims and reviews for L1 spotchecks and see the latest lifecycle report.
+dsh: reasoning:
+There's a live, active swarm. The L1 spotcheck: worker-07 did spotcheck (spotcheck-l1-07.json), and flash-19 did class token census. The astra-life02-l1-spotcheck assignment asks for "two further independent re-fetch spot checks binding L1 sha256 315c19145065a5f9c95d64461eae760b4c296b06d1f2f09bc5847ac1a7064ce9, by reviewers distinct from deepseek-flash-07 and from each other".
+
+A worker can do this: re-fetch primary sources (arXiv) for a few ledger rows, compare fetched metadata against ledger claims, compute artifact hash, emit review event with verdict MATCH/MISMATCH/etc. This is bounded and high-value for G-LIT gate. Since network direct HTTPS works, let me verify.
+
+But first, let me check whether two further spot checks already exist. Check artifacts/worker-07/l1_spotcheck and recent outbox events for spotcheck. Let me grep outbox for "spotcheck" newer. Also, check what the worker-19 census did (may already cover class tokens).
+
+Also let me check the instances for other workers launched in my batch (worker-0xx at 00:12 and 00:16) — many workers may already be working. Since this is a real swarm, duplication matters (audit gate includes duplication). I should pick something unique.
+
+Let me check:
+1. Which workers launched in the same batch and what they're doing (look at their instance trajectories/stderr for recent activity)
+2. Whether spotchecks exist beyond flash-07's.
+
+Let me grep the outbox for spotcheck events in the last 10 minutes.
+dsh: reasoning:
+Worker-07 did check #3 for rows 41-95 (flash-10 rows 1-20 = check 1, flash-11 rows 21-40 = check 2). So rows 1-95 are covered. The ledger has 97 data rows. Rows 96-97 remain uncovered! And astra-life02-l1-spotcheck asks for two further independent re-fetch spot checks by reviewers distinct from flash-07 and from each other.
+
+So a perfect bounded worker task: **L1 independent re-fetch spot check #4 on the remaining rows (96-97, and possibly a distinct sampling of rows to be independent)**, binding the L1 ledger sha256 315c19145065..., with fetched-source hashes and MATCH/MISMATCH verdicts, delivered as an artifact + review event. This is class-bound (L1/ledger), evidence = artifact sha256 + fetched hashes, falsifier explicit ("A spot check whose ledger hash is not 315c19145065, or two checks by the same reviewer, or a check without a fetched-source hash" — I must include fetched-source hashes).
+
+But also checking rows 96-97 only may be too thin. To be a meaningful independent spot check, I should sample a fresh set of rows — but independence from flash-10/11/07's frames is best ensured by sampling rows disjoint from theirs (41-95, 1-40). Rows 96-97 are the only clean disjoint remainder. Let me check the ledger row count and what the existing checks covered; maybe I can extend to a different dimension: e.g., re-fetch the *theorems.jsonl* theorem entries for a sample, or verify the ledger's `source_id` self-consistency. The assignment's acceptance: "each records the fetched source hash, the comparison verdict (MATCH...)" — Let me read the full assignment text from map for astra-life02-l1-spotcheck.
+
+Also, I need network access. Let me test arXiv API quickly.
+
+Let me first read the full assignment, and check ledger structure. Then test network.
+dsh: reasoning:
+The ledger has 97 rows. Coverage: flash-10 rows 1-20, flash-11 rows 21-40, flash-07 rows 41-95. Rows 96-97 uncovered. The assignment says "do not re-fetch sources outside the frozen 95-source scope." Hmm — "frozen 95-source scope" — the frozen scope is 95 sources. So spot check should probably sample within the 95 sources but be independent. Since the lead asked for two further checks by reviewers distinct from flash-07 and each other, I (worker-073) can be one reviewer and another worker (e.g., worker-074 or another) can be the second. Since I'm one bounded worker, I can deliver one spot check; another worker in the batch may deliver another. But I can only control my own work.
+
+Actually the deadline is 01:30; it's currently ~00:17. There are 100 workers launched. My job: one class-bound task, one JSON event, checkpoint, exit.
+
+Best approach: perform an independent re-fetch spot check on a fresh sample of rows within the frozen scope, disjoint from flash-10/11/07 frames if possible but also useful — actually independence is about the reviewer and fresh fetching, not necessarily disjointness of rows. But disjointness strengthens independence. Rows 96-97 are outside "frozen 95-source scope"? The assignment says don't re-fetch outside the frozen 95-source scope; the frozen scope is probably SRC-001..SRC-095 (the 95 sources). Rows 96-097 (SRC-096, SRC-097) are "assessed_no_binding" tag-only, outside scope. So I should sample within rows 1-95.
+
+But if rows 1-95 are entirely covered by prior checks, my check would duplicate. However, the assignment explicitly says two MORE independent checks bring the total to three at the current hash: flash-10, flash-11, flash-07 were at earlier hashes; after the re-pin to 315c19145065, only flash-07's check #3 binds that hash. So two more checks are needed at the current hash. Rows 96-97 aren't in scope; so a fresh check at current hash on some rows within 1-95 is requested even if a previous check at old hashes covered those rows. The key is: bind the current hash, re-fetch sources, record fetched-source hashes, verdict MATCH/PARTIAL/FAIL, re-hash ledger after fetch.
+
+Plan for my bounded task:
+1. Sample a specific frame of rows, e.g., a deterministic pseudorandom sample of ~10-15 rows within SRC-001..SRC-095 at the current ledger hash (315c1914...). To keep independence, use rows not in rows 41-95? Hmm, but rows 1-40 were checked by flash-10/11. Let me instead sample rows across the full 1-95 with a declared deterministic seed, excluding flash-07's contiguous 41-95 block? That leaves 1-40 only. Actually "independent" here mainly means reviewer-independent + fresh fetch. I'll define my frame as a deterministic stratified sample across rows 1-95 (e.g., every 8th row), explicitly noting overlap risk and that fresh fetch is the independence mechanism. Hmm, but if rows 41-95 already re-fetched at current hash by flash-07, duplicating them adds little. Better: focus on rows 1-40 (previously checked only at OLD ledger hash) — this is the part of the ledger for which no check binds the current hash. That's a stronger, non-duplicative contribution: check #4 at rows 1-40 (or a sample thereof) at the current hash. Wait, flash-10's L1-spotcheck-10.json and flash-11's L1-spotcheck-11.json were reviews at 23:37-23:42 (before the re-pin at 00:08). So an independent check on rows 1-40 at the current hash is exactly the high-value gap.
+
+Let me check the L1-spotcheck-10/11 JSONs to see their hashes and row frames. Then define my frame: rows 1-40 (data rows, SRC-001..SRC-040). That's 40 fetches; maybe too many for 1.5 agent-hours budget? A worker can do ~40 fetches with curl in parallel quickly. But careful about rate limits (arXiv API, publisher pages). Maybe sample 12 rows deterministically from rows 1-40: e.g., rows 1,4,7,...,34 plus 40 (every 3rd) = 14 rows. Or all 40 with cheap HEAD/GET and a modest delay. Let me check the ledger rows 1-40's locators and see feasibility.
+
+2. For each sampled row: fetch the locator (prefer arXiv abs page; else DOI/publisher), record HTTP status, final URL, response body sha256, extracted title/authors/year, compare to ledger fields -> MATCH/PARTIAL/FAIL. Also verify the `evidence_excerpt` is actually present in fetched content? That's stronger. Worker-07's run_spotcheck.py may do this; let me look to reuse methodology (not copy results).
+
+3. Re-hash ledger after fetch; assert unchanged; record.
+
+4. Write artifact `artifacts/worker-073/l1_spotcheck/spotcheck-l1-073.json` with schema fields including `check_number` 4, `independent_of` list, ledger sha before/after, sampled rows, fetch hashes, verdicts. Compute sha256 of artifact.
+
+5. Emit event(s) to `comms/outbox/worker-073.jsonl`: a `review` event (target_id L1, reviewer worker-073, verdict accept/revise/inconclusive, score, findings) + `artifact` event with path/sha256/validation_status; maybe `status` event. Must be valid JSON with event_id, event_type, created_at, actor, node_id, class_id, evidence_refs, next_falsifier, ids.
+
+6. Checkpoint: `runtime/state/w73_checkpoint_1.json` (or w073?) with node status, artifact hashes, evidence, next falsifier.
+
+7. Exit.
+
+Wait — but need to double check: is it OK for a worker to self-assign? The prompt says "Take one class-bound task" and swarm instructions say "if no assignment exists, inspect the immediate queue and propose one artifact-backed task without claiming completion." The astra-life02-l1-spotcheck assignment exists and is assigned to astra-lead-literature (who can delegate) — it needs reviewers distinct from flash-07. As worker-073 I can claim my spot check as a contribution, with reviewer=worker-073 and the lead can use it as evidence. I must not claim gate pass or status done. Fine.
+
+Also I should check the ingest validation rules to ensure my event passes `comms.py ingest` / validate_map. Let me read schemas.py / events.schema.json and comms.py quickly.
+
+Also check if the network works (arxiv). ESC-3 says direct HTTPS works. Let me test.
+
+Another consideration: multiple workers in this batch (01..100) may independently pick the same task → duplication. The audit gate penalizes duplication. Since the "block" reserved for L1 spotcheck is specific (reviewers distinct from flash-07 and each other), duplicates are likely. But my job is bounded: do one task well. I could reduce collision by choosing a *distinct* frame: rows 1-40 at current hash is likely what any other worker would also choose... Hmm. To reduce collision, I can use a distinctive deterministic sample (seeded by my worker id) across rows 1-40, and declare the exact frame. If another worker checks a different sample, both are still valid independent checks (distinct reviewers). Good.
+
+Actually, wait. Let me reconsider: maybe a better class-bound task exists that is less likely to be duplicated and more machine-verifiable, e.g., the class-token census (flash-19 already did it), or held-out class-separation corpus (worker-06/16 did), or verifying review hash bindings (worker-03 did), or the A0 rubric check. The L1 spot check is explicitly needed (needs 2 more, only 1 exists at current hash), network-dependent, clearly bounded, and evidence-based. I'll go with it.
+
+Let me first check network and the ingest schema.
+dsh: reasoning:
+Network works (arXiv 200, 40KB). Now let me read comms.py normalization to know exactly what fields an event needs, so ingestion doesn't reject. Let me read lines ~100-290.
+dsh: reasoning:
+Good. Now I know how to write valid events. A `review` event requires target_id, reviewer, verdict, score, hard_failures, findings (normalizer fills defaults but schema requires them; ingest probably uses normalize + schema validation?). Let me check lines 290-340 to see the schema validation.
+
+Actually the schema check may be done by validate_map.py. Let me just include all required fields explicitly.
+
+Now, plan the actual spot check. Let me write a Python script `artifacts/worker-073/l1_spotcheck/run_spotcheck_073.py` that:
+
+1. Reads `ledger/citation_audit.csv`, computes sha256 before.
+2. Selects a deterministic frame: rows 1..40 (SRC-001..SRC-040) — actually let me look at those rows' URLs first. Better: choose a deterministic stratified sample from rows 1-40, e.g., 12 rows: indices 0, 3, 6, ..., 33 (every 3rd starting 0) → 12 rows. Or all 40. The budget is 1.5 agent-hours; fetching 40 pages with curl sequentially at ~1-2s each = ~1-2 min. That's fine and gives a much stronger check. But publishers may rate-limit; and some rows are non-arXiv (DOI links). Let me inspect rows 1-40's locators and statuses.
+
+Actually, since previous checks 1 and 2 covered rows 1-40 at the OLD hash, the *new* information at current hash is: did the lead's revision alter rows 1-40's content/locators? Re-fetching all 40 and comparing to ledger is directly the requested check. But note "do not re-fetch sources outside the frozen 95-source scope" — rows 1-40 are inside scope (SRC-001..SRC-040). Good.
+
+Hmm, one concern: the assignment says "Two further independent re-fetch spot checks ... by reviewers distinct from deepseek-flash-07 and from each other". My check is one. I can't produce both (must be distinct reviewers). I'll do one and note the second is still needed. Actually — could I not do the second as a different "reviewer"? No, that would violate independence. I'll note in the event that one further check is still required.
+
+Alternatively, maybe another worker will do the second. Fine.
+
+Let me look at rows 1-40 to design fetch mechanics. Some may be non-arXiv (comptes-rendus for SRC-001). For fetching, follow `exact_locator` or `url`; prefer arXiv abs when arxiv_id present. Compare fetched title/authors/year against the ledger's fields. Also record `mirror_of`, `elided_quote` handling: when elided_quote is True, excerpt may not match verbatim — use title matching only.
+
+Fields to compare:
+- title: normalized (whitespace/punct) presence in fetched page text.
+- arxiv_id: presence in fetched page.
+- authors: first author surname presence.
+- year.
+- evidence_excerpt: for non-elided quote rows, check a distinctive fragment appears in fetched page (for arXiv abs page, abstract text is present).
+
+Verdict per row: MATCH (title+authors+year+fragment as applicable), PARTIAL (title matches but some metadata missing/mismatched), FAIL (title not found / HTTP != 200).
+
+Then artifact JSON: schema_version, artifact_type, node_id L1, gate G-LIT, class_ids (from assignment's class_id GLOBAL? hmm — the assignment has class_id "GLOBAL". For the artifact I'll use class_ids listing the frozen four as worker-07 did, plus declare `assignment_ref: astra-life02-l1-spotcheck`), actor worker-073, reviewer worker-073, created_at, check_number 4, independent_of [L1-spotcheck-10, L1-spotcheck-11, spotcheck-l1-07], ledger sha256 before/after, sample frame, per-row results with fetched_source_sha256, http_status, fetched_url, comparison verdict, plus summary counts. Then sha256 the artifact, write .sha256 file.
+
+Then events in comms/outbox/worker-073.jsonl:
+- review event: target_id "L1", reviewer "worker-073", verdict accept/revise (based on findings; if all sampled rows MATCH → accept with score; if mismatches → revise), score 0-5, hard_failures, findings, evidence_refs ["ledger/citation_audit.csv#315c19145065", "artifacts/worker-073/l1_spotcheck/spotcheck-l1-073.json#<sha>"], assignment_ref, class_id "GLOBAL"? The event schema doesn't require class_id but protocol says every message names node/class. I'll include class_id "GLOBAL" as the assignment did... Hmm, for class-bound requirement, better to include the frozen class ids touched. The review is about the ledger (L1) which is class-agnostic. I'll include class_id "GLOBAL" matching assignment and also class_ids list of the four.
+- artifact event: node_id L1, artifact_type "l1_spotcheck", path, sha256, validation_status "unverified" (worker cannot set passed).
+- status event: node_id L1, status "active", summary, hours, evidence_refs, next_falsifier.
+
+Also a checkpoint: runtime/state/w073_checkpoint_1.json with node status, artifact hash, evidence, next falsifier, hours. Worker-04/06/08 wrote checkpoints there; follow patterns. Let me look at one worker checkpoint for schema (w08_latest_checkpoint.json, w13_checkpoint_1.json).
+
+Also, importantly, I should not run `comms.py ingest` (controller only, single-writer). Actually PROTOCOL says accepted stream written by comms.py ingest only; controller runs it. I'll just write outbox events.
+
+Before starting, check rows 1-40 and whether any other worker is concurrently doing the same. Let me check instances launched around 00:12-00:16 and their trajectories for recent activity to gauge duplication. Also check outbox for any new files. But time is bounded; let me proceed efficiently.
+
+Let me view rows 1-40 quickly (locators, statuses, quotes), and worker checkpoint examples.
+dsh: reasoning:
+Rows 1-40 include many `export.arxiv.org/api/query` and `inspirehep.net/api` locators (search API URLs). Re-fetching those gives Atom/JSON results — I can compare the returned entry title/authors against the ledger. That's doable.
+
+However, note rows 24-30 have arXiv IDs but locators are search query URLs. For a spot check, fetching the `exact_locator` is the right thing (it's what the ledger claims as locator). And the arXiv ID gives an independent way to confirm (fetch arxiv.org/abs/<id>). I'll do both: primary = exact_locator (or evidence_url), and confirm arXiv id by fetching abs page when available.
+
+Practical concerns:
+- inspirehep API queries: URL query strings with `...` truncation in my printed output; the actual file has full URLs. Some may need quoting; curl handles.
+- Rate limits: 40+ fetches; add small delay 0.5-1s; arXiv API asks 3s delays for api. We have ~1.5 agent-hour budget; runtime fine (~2-3 min).
+
+Let me now design the sample. To be independent and non-duplicative in a meaningful way: rows 1-40 at current hash is the gap (checks 1-2 were at old hash). I'll check ALL 40 rows (SRC-001..SRC-040) — strong and bounded. That's the frame; distinct from flash-07's rows 41-95, and at the current hash so it upgrades the old checks 1-2.
+
+Wait — is that true that checks 1/2 don't bind current hash? Let me verify L1-spotcheck-10.json and L1-spotcheck-11.json hashes. Let me check quickly. If they bind current hash 315c..., then rows 1-40 already have two checks at current hash... Actually flash-07 notes hash_history: 0b72b... failed, then re-pinned 315c... flash-10/11 checked before re-pin (23:37-23:42), so they bind the older revision. Let me confirm.
+
+Then my check: rows 1-40, current hash. Plus I might include a couple of rows from 41-95 chosen deterministically for cross-check? No need — keep bounded.
+
+Additionally, to maximize value: verify that ledger rows' claimed `evidence_excerpt` appears in the fetched content for non-elided rows. For elided rows, verify title/authors/year only. Also record `fetched_source_sha256` (sha256 of response body) — required by the falsifier ("a check without a fetched-source hash").
+
+Potential complication: some sites (comptes-rendus.academie-sciences.fr) might block curl or require JS. We'll record HTTP status and verdict FAIL/PARTIAL if fetch fails; that's honest evidence (not a task failure).
+
+Let me check L1-spotcheck-10/11 hash bindings and also check whether any other worker-073... no.
+
+Let me also quickly check the current outbox for files created in the last few minutes (maybe another worker already did a spotcheck at current hash). I'll grep created_at > 00:14 for "spotcheck". Did earlier scan; latest spotcheck event is 00:12:30 (flash-07's). OK.
+
+One more thing: the task says "one class-bound task". L1 ledger is `GLOBAL` per assignment, but the review event should include class ids. I'll include class_id "GLOBAL" and class_ids list of four (as worker-07 did). Good enough: class-bound tokens present in every row.
+
+Let me now create the working artifact directory and write the fetch script. I'll make it deterministic, with per-row timeout, retry once on failure, record:
+- citation_id, row_index (1-based), locator_fetched, http_status, final_url, fetched_bytes, fetched_sha256, extracted title/authors, checks: title_in_page, author_in_page, year_in_page, excerpt_in_page (if not elided and excerpt non-empty), verdict.
+
+Title matching: normalize unicode/whitespace/case; arXiv pages title in `<title>` and `citation_title` meta. inspirehep API returns JSON with `metadata.titles[0].title`. arXiv API returns Atom `<title>`. PDFs? Some locators may lead to PDFs; avoid, use exact_locator.
+
+For comptes-rendus: HTML page with title meta.
+
+Let me implement with urllib (stdlib) or curl via subprocess. Use curl for robustness with -L and user agent. Python's urllib should work too. I'll use subprocess curl with `--max-time 30 -L -A ...`, capture body to bytes, and `-w` for status/final URL.
+
+Independent verification of extracted metadata: use regex for `<meta name="citation_title"`, `citation_author`, `citation_year`, or `<title>`, plus JSON parse for inspirehep (`metadata.titles`, `metadata.authors`, `metadata.publication_info`/`earliest_date`) and arXiv Atom (`<entry><title>`, `<name>`, `<published>`).
+
+Then compare:
+- title_norm(ledger.title) substring of page_norm OR page title token overlap >= 0.85 (Jaccard on normalized word sets). For JSON, exact normalized title match or high overlap.
+- first author surname in page.
+- year in page.
+- excerpt fragment: take longest 8-word window from excerpt (strip "Abstract:" prefix and quotes), check normalized substring in page text. For elided quotes, skip excerpt check and mark "elided".
+
+Verdict logic:
+- HTTP != 200 → FAIL (fetch failure) but that's a fetch outcome; record `fetch_ok: false`.
+- title match & author match & (excerpt match or elided) → MATCH
+- title match but author/year mismatch or excerpt missing → PARTIAL
+- title not found → FAIL
+
+Let me look at the exact format of a few ledger rows: SRC-001 excerpt and SRC-005/010/015 (inspirehep). Let me print fields for rows 1-40 compactly to see title/author/year/excerpt/mirror. Then write the script.
+
+Actually the script reads the CSV itself; I just need to know field semantics. `evidence_excerpt` may contain the abstract with quotes. `mirror_of` True means the source is a mirror. Let me quickly check a couple.
+dsh: reasoning:
+Let me check the hash binding fields in those two reviews to confirm they bind the old hash. Let me grep for "sha" in them.
+
+Also I need to decide: some `exact_locator` values are truncated with `...` in the CSV?! Row 15 shows `https://inspirehep.net/api/literature?q=...dust%20cloud...` — that literally contains "..." as elided text! That's a ledger hygiene issue: locator is not fully resolvable (it's an elided display string), while `evidence_url` points to the actual record `https://inspirehep.net/api/literature/211917`. Hmm interesting. In that case a fair spot check fetches `evidence_url` (resolvable) and records that `exact_locator` as stored is non-resolvable (a finding — perhaps non-blocking since evidence_url resolves). Worker-07's spotcheck may have similar handling. Let me look at worker-07's results structure to align methodology (and avoid duplicating frames). Let me check the summary/limitations of their artifact and flash-10/11's hash.
+
+Let me also check the ledger's full URL for rows 15-23 etc. — are they literally `...` elided? Let me print raw exact_locator lengths and whether '...' in it.
+dsh: reasoning:
+Confirmed:
+- L1-spotcheck-10 binds sha256 fe4b48bb... (old, 69 rows)
+- L1-spotcheck-11 binds fe4b48bb... (old)
+- spotcheck-l1-07 (check #3) binds 315c1914... (current) on rows 41-95.
+
+So the current-hash checks: only 1 (flash-07). Two more needed, by reviewers distinct from flash-07 and each other. Rows 1-40 have no current-hash check. My frame: rows 1-40 (SRC-001..SRC-040) at current hash — high value, distinct from flash-07's frame, and no overlap with check #3.
+
+However, checking all 40 rows is a lot; worker-07 checked 8 rows (sample), flash-10 6 rows, flash-11 4 rows. The assignment's acceptance only needs spot checks with fetched-source hashes. A deterministic sample of, say, 12-16 rows from rows 1-40 gives good coverage and stays within budget. But since 19 of rows 1-40 have *elided locators* (literal "..."), and those are the interesting hygiene issue, I should include several of them. But wait — an elided locator is a genuine finding: the `exact_locator` field is not a resolvable URL for 19 rows. The falsifier/acceptance for G-LIT says "Every row has a resolvable locator". Hmm — but `evidence_url` resolves. This may be a known ledger-hygiene gap (the lead's L0 revision is supposed to fix hygiene). Recording it as a finding is valuable, with the distinction: `exact_locator` elided vs `evidence_url` resolvable.
+
+Design decision: sample all 40 rows? At ~1-2 s/fetch with curl, 40 rows × up to 2 URLs (locator + evidence_url if locator elided) = ~60 fetches, maybe 2-4 minutes. That's acceptable and maximally useful. But 1.5 agent-hours budget: an agent-hour here is wall-clock? Worker hours are estimated. 4 minutes wall-clock is fine. However, network failures/retries could extend. Let me cap: check all 40 rows, but only fetch `evidence_url` when the exact_locator is elided or equals evidence_url; fetch arXiv abs as a cross-check only if arxiv_id present and fetch budget allows. Actually simpler and tighter: fetch `exact_locator` if it is a real URL (no '...'), else fetch `evidence_url`. Record both fields. That's 40 fetches (one per row). Add a second confirmation fetch for arXiv-id rows when time permits? Not necessary.
+
+For comparison, use metadata extraction:
+- arXiv abs HTML → meta citation_title, citation_author, citation_date; also `<title>`.
+- arXiv API Atom → parse XML.
+- inspirehep API JSON → metadata.titles, metadata.authors, metadata.earliest_date/publication_info.
+- comptes-rendus HTML → meta tags.
+- Other publisher pages (Springer etc.) → meta citation_* tags or title.
+
+Given rows 1-40's locators are mostly arxiv API / inspirehep API / arxiv abs / one comptes-rendus, this is tractable. Let me enumerate locator kinds for rows 1-40:
+- rows 1: comptes-rendus
+- 2,3,4,14: arxiv.org/abs/... (4)
+- 5-9, 24-30, 37, 39, 40: export.arxiv.org/api/query... (about 17)
+- 10-13, 15-23, 31-36, 38: inspirehep.net/api/literature?q=... (but elided; evidence_url resolves to /api/literature/<recid>)
+
+Wait: for rows 5-9 etc., the locator is an arXiv *search* query (e.g., `?search_query=ti:%22inextendibility%22+AND+all:Schwarzschild&start=0&max_results=10`) — fetching it returns an Atom feed with up to 10 entries; the target paper should be among them. The ledger has arxiv_id for most. So for verification, best: fetch `https://export.arxiv.org/api/query?id_list=<arxiv_id>` (a precise query) — but that doesn't verify the *stored locator* resolves. Hmm. The ledger's claim is that the locator resolves to the source. For the elided/query locators, I should fetch the stored locator and check that the target entry appears in the result set (title match among entries). That's precisely what the ledger claims. For elided inspirehep locators, the stored value is not a URL at all (contains '...'), so the honest verdict is PARTIAL with reason "exact_locator is an elided display string; evidence_url resolves and matches" (fetching evidence_url). That's a finding for ledger hygiene, not a source mismatch.
+
+Let me check: does `exact_locator` for rows 11-13, 15-23 contain '...' literally? Yes (19 rows in 1-40). Which rows exactly? Let me list. Also rows 31-36, 38 (inspirehep) had '...' in printed locator. Yes.
+
+Plan:
+- For each row: 
+  - stored_locator = exact_locator
+  - if '...' in stored_locator: locator_kind='elided', fetch_url=evidence_url or url; record finding "elided_locator" (hygiene).
+  - elif 'export.arxiv.org/api/query' in stored_locator: locator_kind='arxiv_search_api'; fetch stored locator; parse all entries; check target title among entries (via arxiv_id match preferentially).
+  - elif 'inspirehep.net/api/literature' in stored_locator: fetch stored locator; parse hits; match title.
+  - else: locator_kind='primary_page'; fetch stored locator; parse meta.
+- Additionally, when `arxiv_id` is present and fetch was a search API, cross-check with `https://export.arxiv.org/api/query?id_list=<arxiv_id>` (cheap, precise) if the search didn't contain the title; or always? To bound: only if primary check fails/partial.
+- Compare title (normalized), first author surname, year.
+- Quote grounding for non-elided excerpts: check a distinctive 6-8 word fragment of the excerpt in fetched content (for API results, the abstract). Since ledger quotes carry prefixes like "Abstract: '...'", strip prefix/quotes; handle LaTeX rough.
+
+Verdicts: MATCH / PARTIAL / FAIL per row; summary.
+
+Also compute ledger sha256 before and after (must be unchanged, else fail-closed abort and report a finding).
+
+Output artifact JSON with all details + sha256 file. Then events + checkpoint.
+
+Let me also verify `url` vs `evidence_url` fields: for arXiv rows, url = arxiv.org/abs/..., evidence_url same. Fine.
+
+Time to write the script. I'll write it to artifacts/worker-073/l1_spotcheck/run_spotcheck_073.py, run it, and inspect results. I'll use Python stdlib: subprocess curl, hashlib, re, html, unicodedata, json, csv, xml.etree.
+
+Robustness:
+- timeout 30s per fetch, one retry on non-200 with 1s backoff.
+- Delay 0.7s between fetches to be polite.
+- User-Agent with mailto.
+
+Matching helpers:
+- norm(s): NFKD? Keep simple: lower, replace non-alphanumeric with space, collapse whitespace, strip LaTeX-ish `$...$`/`{}`/`\\`.
+- title_match: normalized ledger title in normalized page text (substring) OR token-Jaccard ≥ 0.9.
+- author_match: first author's last name token present.
+- year_match: year string present near citation meta or anywhere in page (weak; mark separately).
+- excerpt_match: take the longest 8-gram of normalized words from excerpt that has ≥8 words; check in page norm.
+
+For arXiv API search results: parse `<entry>` elements: title, authors names, published year, id (arxiv id), summary. For id_list precise query: one entry.
+
+For inspirehep JSON: `hits.hits[].metadata`: titles[0].title, authors[].full_name, earliest_date or publication_info[].year, abstracts[].value, dois, arxiv eprint.
+
+For comptes-rendus HTML: meta citation_title, citation_author, citation_publication_date; the abstract is in the page.
+
+Let me now check exact locator kinds in rows 1-40 to make sure the parser handles all hosts. Let me print each row's host + whether '...'.
+dsh: reasoning:
+Clean classification. Now let me write the script.
+
+Key detail: for arXiv search-API rows, the stored locator query may not include `&max_results`; fetching returns default 10 entries. The target paper should be findable by arxiv_id in entries' `<id>`. If the target isn't in the result set, that's a FAIL of the locator (interesting finding!). Also cross-check precise id_list for the target to confirm title/author/year.
+
+For elided inspirehep rows, fetch evidence_url (resolves to the record) and compare. Mark `locator_resolvable: false` + `hygiene_finding: elided_locator`.
+
+For arxiv.org/abs pages and comptes-rendus: parse HTML meta.
+
+Let me write the script now. I'll be careful about:
+- deterministic frame: rows 1..40 inclusive (SRC-001..SRC-040).
+- ledger sha before/after; fail-closed if changed.
+- output JSON schema with all required evidence.
+- per-row raw body sha256 and byte length; store nothing huge (maybe store abstract head 300 chars).
+- polite delays.
+
+I'll also record timings and the exact command used.
+
+Network access from the sandbox: curl worked. Note "landlock-run: partial enforcement" messages are just stderr noise.
+
+Let me write the script. It'll be ~350 lines. Then run with a generous timeout in background maybe, since 40 fetches × (0.7s + latency) ≈ 1.5-3 min. I'll run it in background and meanwhile prepare checkpoint/event scaffolding. Actually sequential is fine; run in background to avoid tool timeout and continue reading other state (e.g., check the two `_ai4math-swarm` contexts, check L0 revision status). Let me write the script first.
+
+Output paths:
+- artifacts/worker-073/l1_spotcheck/run_spotcheck_073.py
+- artifacts/worker-073/l1_spotcheck/spotcheck-l1-073.json
+- artifacts/worker-073/l1_spotcheck/spotcheck-l1-073.json.sha256
+- artifacts/worker-073/l1_spotcheck/fetch_log.jsonl (raw per-fetch log)
+
+Event IDs: `w073-l1-spotcheck4-<ts>` style. Actor `worker-073`.
+
+Let me think about matching functions carefully:
+
+```python
+def norm_text(s):
+    s = html.unescape(s or "")
+    s = s.replace('\\', ' ')          # LaTeX commands
+    s = re.sub(r'\$[^$]*\$', ' ', s)  # math
+    s = re.sub(r'[^0-9A-Za-z]+', ' ', s)
+    return re.sub(r'\s+', ' ', s).strip().lower()
+
+def token_set(s): return set(norm_text(s).split())
+
+def title_in(title, text):
+    nt, nx = norm_text(title), norm_text(text)
+    if not nt: return False
+    if nt in nx: return True
+    a,b = token_set(title), token_set(text)
+    if not a: return False
+    return len(a & b)/len(a) >= 0.92   # coverage of title tokens
+```
+
+Careful: "title in text" across a 40KB page with lots of nav — fine.
+
+Author surname: `authors.split(';')[0].split()[-1]` (handle "Yakov Shlapentokh-Rothman" → "Shlapentokh-Rothman"), normalize and check in page norm.
+
+Year: check `year` string appears in metadata-ish text (for API, published date). Weak check: presence anywhere.
+
+Excerpt grounding: strip prefixes like "Abstract:", "Springer abstract:", "arXiv abstract:", "INSPIRE recid ...:"; then take words; find the longest contiguous 8-word window that appears in the fetched text norm; grounded if found.
+
+For inspirehep "evidence_excerpt" formats like "INSPIRE recid 9038: title 'Gravitational collapse and space-time singularities'; author Penrose, Roger (Birkbeck Coll.); Phys.Rev.Lett. 14 (1965) 57-59; DOI 10.1103/PhysRevLett.14.57." — that's a metadata record summary, not an abstract quote. The check: title, author, year present. The 8-gram will fail, but that's expected for metadata-record rows. In worker-07's artifact, they had `quote_grounding.metadata_record_consistent`. I'll classify excerpt kind:
+- if excerpt starts with "INSPIRE recid" → kind "metadata_record": check recid present in fetched JSON, DOI present, title/author/year.
+- if starts with "Springer abstract" / "arXiv abstract" / "Abstract" → kind "abstract_quote": 8-gram grounding.
+- else → "other": snippet grounding.
+
+Verdicts:
+- fetch_status != 200 → `FETCH_FAILED` (row verdict), not a source mismatch. But for ledger integrity purpose, "unresolvable locator" is a finding; if evidence_url fetch succeeds, use that and mark PARTIAL if stored locator elided.
+- For elided locator: `locator_resolvable=False` → verdict capped at PARTIAL unless metadata mismatch → FAIL.
+
+Wait, but if all 19 elided rows get PARTIAL just for format, the review verdict would be "revise" — which might be correct (ledger hygiene gap: exact_locator not resolvable). The G-LIT criterion says "Every row has a resolvable locator" — hmm, that suggests elided locators are indeed a hard problem. But maybe astra-lead-literature already fixed this for rows 41-95 and left 1-40 from an earlier revision... The current L1 file rows 1-40 are exactly the ones with elided locators. So my check provides evidence for a real, non-trivial finding: 19/40 rows in the sampled frame have non-resolvable `exact_locator` values (they are elided display strings), although `evidence_url` for them resolves and matches.
+
+Hmm, wait. Let me double check that the elided strings are literally in the CSV and not an artifact of my printing. Yes, the classification found '...' in exact_locator for those rows. Let me verify raw bytes of one row's exact_locator to be 100% sure. I'll do that in the script's preamble (record `has_ellipsis`).
+
+Also: rows 5-9 etc. have arxiv-search locators that may NOT contain the target paper (they're generic search queries). Let me test one quickly, e.g., SRC-005 locator. Actually the script will tell us.
+
+One more possible finding: arXiv IDs like `2606.25755` (SRC-009) are future-dated (2026-06) — plausible in this simulated 2026 timeline. Fine.
+
+Let me write the script now.
+
+Also, before spending effort, check that no other worker is doing the same: check instances launched at 00:12 for stderr showing spotcheck activity. Quick grep across instances' stdout/stderr for "spotcheck" modified recently. Actually workers write to outbox; latest spotcheck event is 00:12:30. I'll proceed — my contribution is distinct (rows 1-40 at current hash).
+
+Let me create the directory and script.
+dsh: reasoning:
+Confirmed. Now write the script. I'll write it carefully.
+
+Plan for script structure:
+
+```python
+#!/usr/bin/env python3
+"""Independent L1 re-fetch spot check #4 (worker-073) ..."""
+import csv, hashlib, html, json, os, re, subprocess, sys, time, unicodedata
+from datetime import datetime, timezone, timedelta
+from urllib.parse import urlparse, parse_qs
+import xml.etree.ElementTree as ET
+
+ROOT = '/data3/guoshaoyang/workdir/ai4math-swarm'
+LEDGER = ROOT + '/ledger/citation_audit.csv'
+OUTDIR = ROOT + '/artifacts/worker-073/l1_spotcheck'
+TZ = timezone(timedelta(hours=8))
+FRAME = list(range(1,41))  # data rows 1..40 = SRC-001..SRC-040
+UA = 'ai4math-swarm-worker073/0.1 (L1 spot-check; mailto:research@example.org)'
+
+def now(): return datetime.now(TZ).isoformat(timespec='seconds')
+def sha256_bytes(b): return hashlib.sha256(b).hexdigest()
+
+def fetch(url, tries=2):
+    for attempt in range(1, tries+1):
+        p = subprocess.run(['curl','-sS','-L','--max-time','40','-A',UA,'-w','\n__META__%{http_code} %{url_effective} %{size_download}', url], capture_output=True)
+        body, meta = p.stdout, p.stderr
+        text = body.decode('utf-8','replace')
+        marker = text.rfind('__META__')
+        if marker >= 0:
+            head, meta_line = text[:marker], text[marker+len('__META__'):].strip()
+            code = int(meta_line.split()[0]) if meta_line.split() else 0
+            final = meta_line.split()[1] if len(meta_line.split())>1 else url
+            raw = body  # note: meta appended; hash the content minus meta
+            # hash content without the meta suffix
+            raw_bytes = body[:marker] if marker>=0 and body[marker:marker+8]==b'__META__' else body
+        ...
+```
+
+Hmm — the `-w` output is appended to stdout after body, so body includes the meta line. Better: write body to a temp file with `-o` and capture meta via `-w` only. Use `curl -sS -L --max-time 40 -A UA -o tmpfile -w '%{http_code} %{url_effective} %{size_download}'`. Then read the tmpfile bytes. Cleaner.
+
+```python
+def fetch(url):
+    fd, path = tempfile.mkstemp(dir=OUTDIR, prefix='.fetch_'); os.close(fd)
+    try:
+        p = subprocess.run(['curl','-sS','-L','--max-time','45','-A',UA,'-o',path,'-w','%{http_code}\t%{url_effective}\t%{size_download}\t%{content_type}', url], capture_output=True, text=True)
+        parts = (p.stdout.strip().split('\t') + ['','','',''])[:4]
+        code = int(parts[0]) if parts[0].isdigit() else 0
+        final_url, size, ctype = parts[1], parts[2], parts[3]
+        data = open(path,'rb').read()
+        return {'ok': code==200 and len(data)>0, 'http_status': code, 'final_url': final_url, 'content_type': ctype, 'bytes': len(data), 'sha256': sha256_bytes(data), 'data': data, 'curl_rc': p.returncode, 'curl_err': p.stderr.strip()[:300]}
+    finally:
+        os.unlink(path)
+```
+
+Metadata extraction:
+
+```python
+def meta_tags(text):
+    out={}
+    for m in re.finditer(r'<meta\s+([^>]+)>', text, re.I):
+        attrs=dict(re.findall(r'([a-zA-Z:_-]+)\s*=\s*"([^"]*)"', m.group(1)))
+        name=(attrs.get('name') or attrs.get('property') or '').lower()
+        if name: out.setdefault(name, []).append(html.unescape(attrs.get('content','')))
+    return out
+```
+
+arXiv Atom parse:
+
+```python
+def parse_arxiv_atom(text):
+    ns={'a':'http://www.w3.org/2005/Atom','arxiv':'http://arxiv.org/schemas/atom'}
+    try: root=ET.fromstring(text)
+    except Exception: return None
+    entries=[]
+    for e in root.findall('a:entry',ns):
+        t=' '.join((e.findtext('a:title',default='',namespaces=ns) or '').split())
+        names=[n.findtext('a:name',default='',namespaces=ns) for n in e.findall('a:author',ns)]
+        idu=e.findtext('a:id',default='',namespaces=ns)
+        pub=e.findtext('a:published',default='',namespaces=ns)
+        summ=' '.join((e.findtext('a:summary',default='',namespaces=ns) or '').split())
+        entries.append({'title':t,'authors':names,'id':idu,'published':pub,'summary':summ})
+    return entries
+```
+
+inspirehep JSON parse:
+
+```python
+def parse_inspire(text):
+    try: d=json.loads(text)
+    except Exception: return []
+    hits=d.get('hits',{}).get('hits',[])
+    out=[]
+    for h in hits:
+        md=h.get('metadata',{})
+        titles=[t.get('title','') for t in md.get('titles',[])]
+        authors=[a.get('full_name','') for a in md.get('authors',[])]
+        year=None
+        if md.get('earliest_date'): year=md['earliest_date'][:4]
+        elif md.get('publication_info'): year=str(md['publication_info'][0].get('year','') or '')
+        abstracts=[a.get('value','') for a in md.get('abstracts',[])]
+        out.append({'title':titles[0] if titles else '','authors':authors,'year':year,
+                    'abstract':' '.join(abstracts),'recid':md.get('control_number'),
+                    'dois':[x.get('value') for x in md.get('dois',[])], 'arxiv':md.get('arxiv_eprints',[{}])[0].get('value') if md.get('arxiv_eprints') else None})
+    return out
+```
+
+HTML page: title from meta citation_title or <title>; authors meta citation_author; abstract from meta citation_abstract or <blockquote class="abstract"> for arXiv.
+
+For arXiv abs page, the abstract is in `<blockquote class="abstract mathjax">`. Meta tags include citation_title, citation_author (multiple), citation_date.
+
+Matching: `combined = title + authors + abstract + full text`.
+
+Per-row processing:
+
+```python
+for idx,row in enumerate(rows[:40], start=1):
+    stored=row['exact_locator']; evidence=row['evidence_url'] or row['url']
+    if '...' in stored: kind='elided_locator'; fetch_url=evidence; locator_resolvable=False
+    elif 'export.arxiv.org/api/query' in stored: kind='arxiv_search_api'; fetch_url=stored; locator_resolvable=True
+    elif 'inspirehep.net/api/literature' in stored: kind='inspire_search_api'; fetch_url=stored; locator_resolvable=True
+    else: kind='primary_page'; fetch_url=stored; locator_resolvable=True
+```
+
+Then fetch (retry). Parse according to content and host.
+
+For arxiv search: entries; find entry matching arxiv_id (`row['arxiv_id']` in entry id) or title match; `locator_hit = bool(match)`.
+For inspire search: hits; find by title match or recid in evidence url.
+For pages: parse meta.
+
+Comparison fields: title_match, author_match, year_match, excerpt_grounding (kind, grounded), doi_match (if doi present in ledger and page).
+Verdict:
+- if not fetch ok → 'FETCH_FAILED'
+- metadata_mismatch = title not matched OR (author present and not matched)
+- if metadata_mismatch → 'FAIL'
+- elif kind elided or excerpt not grounded (for abstract quotes) → 'PARTIAL'
+- else 'MATCH'
+
+Record findings separately:
+- `elided_locator` for 19 rows (hygiene).
+- `search_locator_target_absent` if search API result set lacks target.
+- `quote_not_grounded` rows.
+
+For elided rows: if evidence_url fetch matches title/author → PARTIAL with `reason: stored exact_locator is an elided display string (contains '...'), not a resolvable URL; evidence_url resolves and matches`.
+
+I also want the review verdict:
+- If any FAIL (metadata mismatch or fetch failed) → 'revise' with hard_failures.
+- Else if PARTIAL rows exist (elided locators) → 'revise' with finding (hygiene not blocking?) Hmm. The verdict is on L1. The ledger-hygiene issue is real: exact_locator not resolvable for 19/40 rows. The assignment's acceptance for G-LIT requires "Every row has a resolvable locator". Since `evidence_url` resolves, one could argue `exact_locator` is display-only. But criterion says locator resolvable. I'll deliver verdict `revise` with one non-blocking-vs-blocking classification left to the lead? A review verdict must be accept|revise|reject|inconclusive with score. I'll use `revise` (score 3) listing the elided-locator finding as the blocking item if the criterion is read literally, and note that all source metadata matched. Actually if all 40 rows' sources match but 19 have non-resolvable exact_locator strings, "revise" is honest.
+
+Hmm, but the acceptance for the assignment says "each records the fetched source hash, the comparison verdict (MATCH/PARTIAL/FAIL), the locator, and re-hashes the ledger after the fetch". My artifact does that. The review event verdict: I could set verdict "inconclusive" since a spot check isn't a full review of L1? Worker-07's event was a review with... let me check its verdict. It was `w07-review-L1-spotcheck3` — let me look at the actual event fields to mirror conventions. Let me grep it.
+
+Also, for the `review` event: target_id "L1", reviewer "worker-073", score, hard_failures, findings. I'll set verdict based on results: if any FAIL → revise; elif partial hygiene issues → revise (score 3) with findings; else accept.
+
+Let me check worker-07's review event as a template.
+dsh: reasoning:
+The event with that ID maybe in `comms/outbox/deepseek-flash-07/w07-artifact-L1-spotcheck3-...json`. Let me look at that dir.
+dsh: reasoning:
+This is an excellent template. Worker-07's spot check #3:
+- rows 41-95, 8 rows sampled: SRC-041, 049, 057, 065, 073, 080, 081, 089 (row indices 41, 49, ... every 8th).
+- Sampled every 8th row.
+- Artifact JSON + artifact event + review event + status events, checkpoint.
+
+I'll mirror this structure but sample rows 1-40 with a different deterministic rule — every 4th row to get 10 rows: indices 1,5,9,...,37 → SRC-001, 005, 009, 013, 017, 021, 025, 029, 033, 037. Hmm, that's 10 rows, covering both locator kinds nicely. Or sample all 40 — much stronger. The budget is 1.5 agent-hours and the stop rule says "do not re-fetch sources outside the frozen 95-source scope". 40 fetches is fine.
+
+Let me think about which gives most value per audit criteria. Earlier checks: flash-10 6 rows, flash-11 4 rows, flash-07 8 rows. A 40-row check at current hash is a substantial upgrade and will definitively cover rows 1-40 at the current hash. Risk: more fetch failures → more findings. That's fine — findings are progress. But there's a subtlety: G-LIT needs ">=3 independent re-fetch spot checks" — my check is #4. The assignment wants two more by distinct reviewers. Mine can be one; another worker may deliver the other. With 40 rows I'd be the strongest check.
+
+However, consider "spot check" semantics: sampling is expected, not exhaustive. Exhaustive rows 1-40 is *more* than a spot check; it's a frame audit. Cost: maybe 3-5 minutes wall clock. That's acceptable.
+
+I'll do all 40 rows. Deterministic frame: data rows 1-40 (SRC-001..SRC-040), rule: "exhaustive over the contiguous frame rows 1-40, chosen because prior checks #1/#2 sampled rows within 1-40 only at the superseded ledger sha fe4b48bb3dbd; no check currently on disk binds this frame to 315c1914".
+
+Now, quote grounding: worker-07 found year convention issues (SRC-057 2019 vs arXiv 2017). I should treat year as advisory, not a hard mismatch (record `year_match` but don't fail metadata on year). Their approach: title+first author+year, but PARTIAL when year is print-vs-preprint. I'll make verdict:
+- FAIL if title absent OR first-author absent from fetched metadata.
+- PARTIAL if title+author match but excerpt not grounded / year differs / locator elided.
+- MATCH otherwise.
+
+Let me also record DOI matches.
+
+Let me write the script now. I'll aim for clean, reproducible, deterministic code with a pinned frame, and fail-closed on ledger sha change.
+
+One question: should I fetch stored search locators (arxiv search query) or the precise id_list? Spot check meaning: the ledger's `exact_locator` should resolve to the source. For arxiv search URLs, fetching them returns a feed possibly containing the target; if the target isn't in the first 10 results, that's a locator-quality finding, but I can then confirm via id_list that the source exists. Record both:
+- `stored_locator_hit`: target present in stored locator's result set.
+- `precise_lookup_ok`: fetch `https://export.arxiv.org/api/query?id_list=<arxiv_id>` and match title/author.
+Verdict based on the precise lookup (the source identity) but `locator_hit` recorded and, if false, a finding — PARTIAL at most (since exact_locator is a search URL, not a per-source locator; same hygiene family as elided).
+
+Similarly, inspirehep search locators (only SRC-010 in rows 1-40; others elided).
+
+That means up to 2 fetches per row for arxiv search rows (~17 rows * 2 = 34) + 19 elided (fetch evidence_url) + 4 pages = ~57 fetches. At ~1s each + 0.6s delay = ~90s. Fine.
+
+Actually wait: for elided rows, evidence_url resolves to `/api/literature/<recid>`, giving full metadata — good.
+
+Let me now write the script. I'll include a `--dry-run`? No need.
+
+Output fields per row (mirroring worker-07 style):
+```
+{
+ "row": 1, "citation_id": "SRC-001", "bibkey":..., "class_mapping":..., "used_by_theorems":...,
+ "ledger": {"title":..., "authors":..., "year":..., "venue":..., "doi":..., "arxiv_id":..., "url":..., "exact_locator":..., "evidence_url":..., "status":..., "verdict":..., "reviewer":...},
+ "locator_kind": "primary_page|arxiv_search_api|inspire_search_api|elided_locator",
+ "locator_resolvable": bool,
+ "locator_used": url,
+ "precise_lookup": url or null,
+ "fetches": [{"role":"stored_locator","url":..., "http_status":..., "final_url":..., "bytes":..., "sha256":..., "content_type":...}, ...],
+ "fetched": {"title":..., "authors":[...], "year":..., "abstract_head":...},
+ "comparison": {"title_match":bool,"first_author_match":bool,"year_match":bool,"doi_match":bool|null,"excerpt_kind":...,"excerpt_grounded":bool|null,"stored_locator_hit":bool|null},
+ "verdict": "MATCH|PARTIAL|FAIL|FETCH_FAILED",
+ "reasons": [...]
+}
+```
+
+Summary: counts per verdict, hygiene findings.
+
+Findings list with IDs `SPOT4-B-01` etc.
+
+Then artifact sha256 file.
+
+Review verdict:
+- if any FAIL/FETCH_FAILED → revise (score 2.0)
+- elif partials due to elided/search locators only → "revise" with score 3? Since G-LIT acceptance wants resolvable locators; but sources verify. Worker-07 gave accept 4.0 with PARTIAL year. Hmm. My check likely finds 19 elided locators = a real hygiene gap. But is that within the *source verification* scope of the spot check, or a ledger-format issue already owned by the lead's L0 revision? The assignment asks for "the comparison verdict (MATCH/PARTIAL/FAIL), the locator, and re-hashes the ledger after the fetch" — so PARTIAL for elided locator is the honest per-row verdict. For the review verdict, I'd say `revise` if the criterion "every row has a resolvable locator" is read literally on `exact_locator`, otherwise sources all MATCH. To avoid overclaiming, I can set verdict `revise`, score 3, with finding: "19/40 rows have non-resolvable exact_locator strings (elided with '...'), although evidence_url resolves and metadata matches; G-LIT 'resolvable locator' criterion cannot be certified for this frame until exact_locator is repaired or its display-only role is codified." That is a legitimate A1-style independent finding.
+
+Hmm, but careful: is it possible that `exact_locator` elision is an artifact of a *previous* L0/L1 revision and the lead already fixed rows 41-95 only? Yes — that's exactly the finding: the frame rows 1-40 retains elided locators. This is useful evidence for the lead's L0 revision.
+
+Wait, but the G-LIT evidence_refs and acceptance focus on "locator" broadly. The lead may treat `evidence_url` as the locator. My finding explicitly distinguishes both, so the lead can adjudicate. Good.
+
+Now — one important consideration: duplication. If another worker in the 00:16 batch does the same rows 1-40 check with the same "every 4th row" idea, it's still an independent check by a distinct reviewer (required: "two further independent ... by reviewers distinct from flash-07 and from each other"). So duplication at the frame level is acceptable; the requirement explicitly wants two independent checks. I'll declare my exact frame and sample rule.
+
+Let me write the script now. I'll keep the whole thing in one file. Then run it in the background (it may take ~2-4 min), and while it runs, prepare the event JSON generation script? Actually the event needs the artifact hash, so I'll generate events after the run. I can write the checkpoint template meanwhile.
+
+Let me write the script.
+dsh: reasoning:
+Let me test the parsing helpers quickly on one arXiv page and one inspirehep record before the full run, to catch bugs. Actually, let me first do a quick syntax check (`python3 -m py_compile`), then run a small dry test with FRAME_ROWS = [1,2,10] via an env override? I didn't add an override. I can import the module and monkeypatch FRAME_ROWS in a test harness. Let me just run a tiny Python snippet importing the script and calling fetch/parse functions on rows 1,2,10 to validate.
+
+Note: importing run_spotcheck_073 won't run main (guarded). Good.
+dsh: reasoning:
+Problem: for arXiv abs HTML pages, parse_arxiv_atom returns 0 entries (it's HTML, not Atom). My code path checks `if kind == "arxiv_search_api" or "arxiv.org" in netloc` and then tries Atom parse — for abs pages this yields nothing, and fetched_title stays empty → FAIL. I need to distinguish: if content type is HTML or body starts with '<!DOCTYPE html' or '<html', use page_meta; if Atom XML, parse Atom. Let me fix: decide parser by content_type / body sniffing:
+
+```python
+txt = ...
+looks_atom = 'application/atom+xml' in ctype or txt.lstrip().startswith('<?xml') or '<feed' in txt[:2000]
+looks_json = 'json' in ctype
+if kind == 'arxiv_search_api' and looks_atom: parse_atom
+elif kind == 'arxiv_search_api' and not looks_atom: page_meta (fallback)
+elif 'arxiv.org' in host:
+    if looks_atom: atom else page_meta
+...
+```
+
+Let me restructure the branch:
+
+```python
+ctype = f1['content_type'].lower()
+host = urlparse(f1['final_url']).netloc
+if 'json' in ctype or kind == 'inspire_search_api':
+    hits = parse_inspire(text) ...
+elif 'atom' in ctype or kind == 'arxiv_search_api':
+    entries = parse_arxiv_atom(text)
+    if not entries and ('<html' in text[:3000].lower()):
+        pg=page_meta(text) ... # fallback
+    else: ...
+else:
+    pg = page_meta(text)  # HTML publisher/abs page
+```
+
+Also for the elided inspirehep rows, locator_used = evidence_url = `https://inspirehep.net/api/literature/<recid>` → JSON → parse_inspire works.
+
+Additionally, for arXiv abs pages, page_meta extracts citation_title etc. Let me verify page_meta on the arXiv abs page: it printed title correctly for SRC-001 (comptes-rendus). Let me check SRC-002 via page_meta.
+
+Another subtlety: when atom parse returns entries for a precise id_list lookup, entry title etc. Fine.
+
+Also the `stored_locator_hit` logic for arxiv search locators: after parsing entries, find by arxiv_id match or title match. Good.
+
+Let me patch the script. I'll edit the block.
+
+Also check: for arxiv search API, `content_type` may be `application/atom+xml`. Good.
+
+Another issue: `rec["stored_locator_hit"]` for HTML pages gets set to None explicitly. Fine.
+
+Let me patch.
+dsh: reasoning:
+Also the precise-lookup condition references `stored_locator_hit` and title match; fine.
+
+Wait, one more bug: for the precise lookup condition, `kind == "arxiv_search_api" and arxiv_id and not (rec.get("stored_locator_hit") and title_match(row["title"], fetched_title))` — if stored_locator_hit is True and fetched title matches, skip. If the stored locator is an arxiv abs page (`primary_page`, kind != search), no precise lookup needed. Good.
+
+But there's an issue with `fetched_text` construction after precise lookup: for non-arxiv paths, fetched_text includes text[:200000]. For precise lookup, I rebuild fetched_text with just metadata (no page text) — excerpt grounding for those rows then only has title/authors/year/abstract. That's fine (search API rows: grounding against abstract).
+
+Another issue: for arxiv search API rows where the target IS in the result set, `fetched_abstract` = summary of the hit; excerpt grounding against fetched_text includes the full page text (which includes all entries' metadata) — fine.
+
+Now re-test row 2 (arXiv abs HTML) with the patched logic. Let me run the smoke test again including row 5 (arxiv search) and row 11 (elided).
+dsh: reasoning:
+Interesting findings:
+
+1. Row 2 (SRC-002): ledger title "Naked Singularities for the Einstein Vacuum Equations: The Exterior Solution" — fetched arXiv title "Naked Singularities for the Einstein Vacuum Equations: The Exterior So..." — match True. Year fetched 2019 vs ledger 2023 (journal year) — year convention issue (partial).
+
+2. Row 5 (SRC-005): ledger title "The C^0-inextendibility of the Schwarzschild spacetime and the spacelike diameter in Lorentzian Geometry"; fetched first atom entry title is "On the proof of the $C^0$-inextendibility of the Schwarzschild spacetime..." — different paper (the proof paper by Sbierski? Actually the target paper is 1507.00601). The search query results include the target somewhere; my title_match on the first entry returned False in this quick test (I only checked the first entry). The script checks all entries for arxiv_id or title match, so it'll find the target — then precise lookup probably unnecessary. Fine.
+
+3. Row 11 (SRC-011): elided locator → evidence_url `https://inspirehep.net/api/literature/54979` returned JSON with 0 hits parsed! Why? Perhaps the single-record API returns `metadata` at top level, not `hits.hits`. Let me check the raw response. INSPIRE API `/api/literature/<recid>` returns `{"metadata": {...}, "id": ...}` — not a hits structure. My parse_inspire only handles search responses. Need to handle single-record JSON too.
+
+Let me inspect the response structure for 54979.
+
+4. Row 14 (SRC-014): arXiv abs page for math/9901147: fetched title "The instability of naked singularities in the gravitational collapse o..." vs ledger title? Let me check ledger title for SRC-014. It matched True, so fine. Note year 1999.
+
+Also the is_json branch: for elided locator with evidence_url JSON single record, handle. Also note `kind == "inspire_search_api"` forces is_json — fine.
+
+Let me inspect the single-record response.
+dsh: reasoning:
+Confirmed: single-record response has `metadata` at top level. I need to extend `parse_inspire` to handle both shapes:
+
+```python
+def parse_inspire(text):
+    d=json.loads(text)
+    def one(md): ...
+    if 'metadata' in d and isinstance(d['metadata'], dict) and 'hits' not in d:
+        return [one(d['metadata'])]
+    for h in (d.get('hits',{}) or {}).get('hits',[]) or []: out.append(one(h.get('metadata',{}) or {}))
+```
+
+Also `earliest_date` may be absent for old records; year fallback to publication_info year. For record 54979, publication_info presumably has year 1965. My `one()` handles that.
+
+But note the excerpt for SRC-011 is "INSPIRE recid 54979: title 'Gravitational collapse: The role of general relativity'; ..." — metadata_record grounding checks recid presence in fetched_text. With single-record parse, fetched_text will include title/authors/year + text[:200000] (the raw JSON text) which contains "54979"? The raw text includes `"control_number": 54979` and `"id": "54979"` probably. Yes.
+
+Let me fix parse_inspire. Also make `one()` shared.
+
+Additionally, for elided locators with evidence_url JSON, `stored_locator_hit` remains None (fine — no search result set).
+
+Let me patch.
+dsh: reasoning:
+Now re-test rows 11 and 5. Also check a tricky point: `title_match` for SRC-011's ledger title vs fetched. Ledger SRC-011 title? Let me print. And row 5's search results should contain the target by arxiv_id.
+
+Let me also test `excerpt_grounding` on a few rows.
+dsh: reasoning:
+Row 5 anomaly: I fetched row 5's locator (arXiv search API query `ti:"inextendibility" AND all:Schwarzschild`) and got... "page title_match False" — meaning the response was classified as HTML page (not atom). Wait, the earlier smoke test of row 5 returned atom entries 6 and worked. Now it says page? Because `is_atom` check: `'atom' in ctype or 'xml' in ctype or head.startswith('<?xml') or '<feed' in head`. Hmm — maybe curl got a 200 with HTML error page or rate-limited response this time. Or content_type was `application/atom+xml; charset=utf-8`? Earlier it parsed 6 entries. Let me debug row 5 again with status/content-type.
+
+Actually wait: in this quick test, for rows where is_json/is_atom are both False, I printed `page title_match` using page_meta; for row 5 that means neither JSON nor Atom. Possibly arXiv rate-limited (HTTP 200 but HTML "Rate exceeded" page?) or the request returned `application/atom+xml` but ctype key... Let me check. The earlier smoke test parsed atom entries 6 for row 5. Difference: this time the request may have hit a rate limit because of back-to-back requests. arXiv API rate limits: max 1 request per 3 seconds. My delay is 0.6s. The full run will hammer export.arxiv.org — need to respect arXiv API's 3-second delay! The API terms say no more than one request every 3 seconds. I should add a sleep of 3s before each export.arxiv.org API request. That will make the run longer: ~30 API fetches × 3s = 90s extra; plus others. Total maybe 4-6 min. Acceptable.
+
+Also the metadata_record grounding for row 11 returned False — because fetched_text was only built from the parsed hit fields for is_json branch? In my test I built ft from hit fields only (no raw text). In the real script, fetched_text includes `text[:200000]` so the recid digits will appear. Wait — in the real script:
+
+```python
+fetched_text = " ".join([fetched_title, " ".join(fetched_authors), fetched_year, fetched_abstract, text[:200000]])
+```
+
+Yes, includes raw JSON → recid present ("control_number": 54979). But note: the INSPIRE single-record for 54979 has `control_number` 54979? Let me check: `md.get('control_number')` — the print showed top-level 'id': '54979'. The metadata has control_number presumably 54979. The raw JSON contains "54979" many times. So grounding True.
+
+Now the arXiv rate limit. Let me implement a host-aware pacing:
+- Before fetching any `export.arxiv.org` or `arxiv.org` URL, ensure ≥3.0s since last arxiv request.
+- For inspirehep, be polite: 0.6-1.0s.
+
+Actually `arxiv.org/abs` HTML pages aren't the API; rate limit applies mostly to the API (export.arxiv.org). But to be safe, use 3s for export.arxiv.org/api and 1s for other hosts.
+
+Also handle arXiv API "rate exceeded" HTML: treat as fetch not ok? It returns HTTP 200 with HTML page "Rate exceeded." — my parser would classify as HTML page and title_match fails → false FAIL. Better: detect body containing "Rate exceeded" or "retry" and retry after 3s. Add a post-fetch check: if 'rate exceeded' in body.lower() → retry after 3.5s (up to 2 retries).
+
+Let me patch fetch to accept `min_interval` per host with a module-level `_last_fetch` dict. Since `fetch` is called per URL, implement pacing inside `fetch_retry`/`fetch`:
+
+```python
+_last_hit = {}
+def _pace(url):
+    host = urlparse(url).netloc
+    interval = 3.2 if 'export.arxiv.org' in host else 1.0 if 'arxiv.org' in host else 0.6
+    last = _last_hit.get(host, 0.0)
+    wait = interval - (time.time() - last)
+    if wait > 0: time.sleep(wait)
+    _last_hit[host] = time.time()
+```
+
+Call `_pace(url)` at start of fetch.
+
+And rate-exceeded detection in fetch_retry:
+```python
+def fetch_retry(url):
+    r = fetch(url)
+    low = r.get('_data',b'')[:2000].decode('utf-8','replace').lower()
+    if r['ok'] and 'rate exceeded' in low:
+        r['ok']=False; r['reason']='rate_exceeded'
+    if not r['ok'] and r.get('reason')=='rate_exceeded':
+        time.sleep(4); r2=fetch(url) ...
+    ...
+```
+
+Let me simplify: in `fetch_retry`, loop up to 3 attempts, with retry on not ok OR rate-exceeded, sleeping 4s between. Record `attempts`.
+
+Also, the earlier quick test row 5 returned page — let me verify what actually happened (could be rate limit). Let me check now with a single request after a pause.
+
+Let me patch the script's fetch functions.
+dsh: reasoning:
+Now, also the main loop's `time.sleep(0.6)` is redundant given pacing but harmless.
+
+Another important consideration: `_pace` uses host of the *requested* URL. For `export.arxiv.org`, interval 3.2s. Good.
+
+Let me re-run the smoke test on row 5 after a pause to confirm Atom parsing works with the new retry logic (note: importing the module resets `_last_hit`). Also verify the module compiles.
+
+Then run the full script in background.
+
+One more thought about row 9: arXiv ID 2606.25755 — fetching abs page might 404 in reality (2026 fictional). That would be recorded as FETCH_FAILED / FAIL. It's a genuine finding: a locator that doesn't resolve. The map timeline is 2026, and the current date per system seems Sep 2026 (file dates Sep 12 2026)? The system clock says Sep 12 (year unknown but files are 2026). arXiv listing for 2606.25755 would exist in that timeline. We'll see.
+
+Also possible issue: `arxiv.org/abs/...` returns HTML with `<title>` but maybe an interstitial "arXiv.org" page. We'll see.
+
+Let me compile and run a test for row 5 only.
+dsh: reasoning:
+Now export.arxiv.org returns HTTP 429 (rate limited) even with 3.2s pacing and 3 attempts. Earlier (first smoke test) it worked — so I've likely consumed the rate allowance with my test requests. arXiv API rate limit can be stricter after bursts. The 429 might persist for a while.
+
+Options:
+1. Use `https://arxiv.org/abs/<id>` HTML pages instead of the API for identity verification (arxiv.org HTML isn't the API and earlier worked: row 2, 14). For search-locator rows, the stored locator is an API query; the resolver check must fetch it, but if 429 we can record FETCH_FAILED reason "arxiv API 429 rate limit (not a locator defect)" — that's a fetch failure not a source mismatch. Hmm, but that weakens the check.
+2. Wait/back off longer (e.g., 30-60s) — could still fail.
+3. Use the precise abs page (`https://arxiv.org/abs/<arxiv_id>`) as the primary evidence fallback when the API returns 429, and record clearly that the stored API locator was rate-limited, so `stored_locator_hit` unknown; identity confirmed via abs page. This matches honesty: verdict based on the abs page, with a note.
+4. Use `export.arxiv.org/api/query?id_list=` — same API, same 429.
+5. Use alternative mirrors: `http://export.arxiv.org/api/query` (http?) no.
+
+Best: implement fallback chain for arxiv rows:
+- Try stored locator (API). If 429 or not ok → sleep 5, retry once (already 3 attempts).
+- If still not ok → fallback to `https://arxiv.org/abs/<arxiv_id>` HTML (primary publication page, not API) and mark `locator_fetch_rate_limited: true`, `identity_confirmed_via: "arxiv_abs_fallback"`.
+- For the fallback page, use page_meta to extract title/authors; `published` year metadata `citation_date` gives submission year.
+- Verdict: if identity matches → PARTIAL (because stored locator could not be re-resolved in this run), with reason `stored locator not re-fetched due to HTTP 429 rate limiting; identity confirmed via abs page`.
+- If 429 persists on abs too, then FETCH_FAILED with reason 429.
+
+Also for the arXiv API rows, if the API fetch works, keep MATCH/PARTIAL as designed.
+
+Additionally: 429 responses are HTTP 429 → `ok=False` (since http_status != 200). Good. But note `retry` with 4s over 3 attempts may not clear a shared-IP rate limit. Add a longer backoff: attempt sleeps 4s, 10s.
+
+Moreover, I already burned rate limit with tests; the full run will start soon and might hit 429 on many rows. The fallback makes results robust. But how many abs pages will I fetch? ~21 arxiv rows. arxiv.org HTML allows reasonable rates; I'll pace 1s.
+
+Wait, also the earlier 429 could be a *shared* rate limit because many swarm workers are hammering arXiv (other workers doing spot checks!). That's plausible — other worker-073-batch workers may be doing the same task. In that case 429 may persist for the whole run. The fallback is essential.
+
+Alternative fallback for search-locator rows: use `https://arxiv.org/abs/<arxiv_id>` and additionally confirm the search-locator semantics? We can't confirm the search query result without the API. Record `stored_locator_resolution: "not_rechecked_http_429"`. That's honest.
+
+Let me restructure the row processing:
+
+```python
+f1 = fetch_retry(locator_used)
+...
+if not f1['ok'] and kind == 'arxiv_search_api' and arxiv_id:
+    # fallback to abs page
+    fb = fetch_retry(f'https://arxiv.org/abs/{arxiv_id}')
+    rec['fetches'].append(...role=abs_fallback...)
+    if fb['ok']:
+        pg=page_meta(fb text); fetched_* = pg...
+        rec['identity_confirmed_via']='abs_fallback'
+        rec['locator_recheck_status']=f'stored search locator HTTP {f1["http_status"]} (not re-resolved this run)'
+        # verdict MIN at PARTIAL
+```
+
+Also for `primary_page` (arxiv.org/abs) fetch failure, no fallback (it IS the abs page); can try `https://arxiv.org/abs/<id>` if stored URL had a different form? For rows 2,3,4,14 the stored locator is already abs. Fine.
+
+Also consider: for `primary_page` non-arxiv (comptes-rendus) — if fetch fails, FETCH_FAILED.
+
+Implementation detail: reorganize the code so that after attempts, if `not f1['ok']`, we check fallback conditions before declaring FETCH_FAILED. Then parse from whichever source succeeded.
+
+Let me rewrite the per-row block more cleanly. I'll rewrite the whole `main()` row-processing section with a helper `interpret(fetch_rec, kind, row, arxiv_id)` returning (title, authors, year, abstract, text, hit, entries_count). That reduces duplication.
+
+Let me rewrite the file's main() processing part. Simpler: patch incrementally.
+
+Current structure after fetch:
+
+```
+if not f1["ok"]:
+    rec["verdict"]="FETCH_FAILED"; ...
+else:
+    text=...; parse...
+```
+
+I'll change to:
+
+```
+f_source = f1
+used_fallback = False
+if not f1["ok"] and kind=="arxiv_search_api" and arxiv_id:
+    fb = fetch_retry(f"https://arxiv.org/abs/{arxiv_id}")
+    fetch_log.append({...role abs_fallback...}); rec["fetches"].append(...)
+    if fb["ok"]:
+        f_source = fb; used_fallback=True
+        rec["stored_locator_recheck"] = {"attempted": True, "http_status": f1["http_status"], "outcome": "not_resolved_this_run"}
+if not f_source["ok"]:
+    rec["verdict"]="FETCH_FAILED"; reasons...
+else:
+    text=f_source["_data"].decode(...)
+    ... parse based on kind/ctype ...
+```
+
+Then in the parse, if used_fallback, the content is HTML → page_meta branch. Add reason/partial:
+```
+if used_fallback: partial.append(f"stored search-API locator not re-resolved this run (HTTP {f1['http_status']}); identity confirmed via arxiv.org/abs fallback")
+```
+
+Also the precise lookup path (`kind=='arxiv_search_api' and not hit`) would call the API again — under 429 it'll fail; guard: only attempt precise lookup if f1 was ok (API worked) OR... Actually if API is 429, precise lookup will also 429; skip it when `used_fallback` (identity already confirmed via abs). Or attempt precise only if not used_fallback. Add condition `and not used_fallback`.
+
+Wait: `stored_locator_hit` when API returns 429: not set. Keep None.
+
+Also `is_json`/`is_atom` detection for the abs fallback: HTML → page_meta. Good.
+
+Let me make the patch. I'll replace the block from `if not f1["ok"]:` through the parser chain. Let me view the current section to patch precisely.
+dsh: reasoning:
+Oops, I wrote a weird expression: `"http_status": fetch_retry.__name__ and rec["fetches"][0].get("http_status")`. That's a leftover hack that evaluates to the first fetch's http_status (since a non-empty string is truthy). It works but is ugly/confusing. Let me fix it to capture f1's original status before reassignment.
+
+Better: before the fallback block, store `orig_status = f1["http_status"]`, then use it.
+
+Let me fix. Also the partial-reason logic later references `kind in ("arxiv_search_api",...) and stored_locator_hit is False`; for fallback rows stored_locator_hit is None → need explicit partial reason when used_fallback. Let me check the partial block and add it.
+dsh: reasoning:
+Also add to the summary: `rate_limited_fallback` count, and a finding for it (info). And in the review verdict logic, fallbacks shouldn't force "revise" (it's a fetch-condition, not ledger defect) — PARTIAL rows from fallback are fine as info finding.
+
+Let me add summary field and finding SPOT4-B-05 (or -06). Also careful: finding IDs SPOT4-B-05 currently used for drift. I'll add fallback as SPOT4-B-06.
+
+Let me patch summary and findings.
+dsh: reasoning:
+Now compile and run the full script in the background. The run may take several minutes because of arXiv rate limits + retries (3 attempts with 4s sleeps + 3.2s pacing = potentially ~10-20s per rate-limited row; 21 arxiv rows → could be ~5 min, plus fallback abs fetches 1s each). Let me estimate worst case: each arxiv API row: 3 attempts × (3.2s pace + ~1s) + 2×4s sleeps ≈ 21s; ×21 = ~7.5 min; plus abs fallback ~21s; plus others ~19 rows × ~1.5s = 30s. Worst ~9 min. Acceptable. But the 429 might clear; fine.
+
+Actually, to reduce wasted time: if the first arxiv API request in the run gets 429, subsequent ones will too (shared limit). I could detect a global rate-limit and switch to abs fallback immediately for subsequent arxiv rows, saving ~7 min. Let me add a module-level `_arxiv_api_blocked_until` flag: when a fetch to export.arxiv.org returns 429, set a cooldown; in the row loop, skip the API attempt if blocked and go straight to fallback, recording http_status 429. But still attempt after cooldown has passed (e.g., 60s) to allow recovery.
+
+Implement: global `_arxiv_api_429_at = 0.0`; in fetch(), if http_status==429 and host contains export.arxiv.org → record time. Then in main, before fetching locator for arxiv_search_api: if `time.time() - _arxiv_api_429_at < 90` and we've seen a 429 → skip primary and use fallback directly with a synthetic fetch record.
+
+Hmm, this adds complexity; but it materially shortens the run. Let me implement simply:
+
+```python
+_arxiv_api_429_at = {"t": 0.0}
+```
+
+In fetch(): after computing http_status: `if rec["http_status"] == 429 and "export.arxiv.org" in urlparse(url).netloc: _arxiv_api_429_at["t"]=time.time()`.
+
+In main loop for kind == "arxiv_search_api":
+```python
+if time.time() - _arxiv_api_429_at["t"] < 90:
+    f1 = {"url": locator_used, "fetched_at": now(), "http_status": 429, "final_url": locator_used,
+          "content_type": "", "bytes": 0, "sha256": "", "ok": False, "skipped": "cooldown_after_429", "attempts": 0}
+else:
+    f1 = fetch_retry(locator_used)
+```
+
+This is honest: we record the 429 status and that we skipped due to cooldown. The artifact mentions the cooldown. Falsifier unaffected.
+
+Let me add it. Also define `_arxiv_api_429_at` before fetch.
+dsh: reasoning:
+Now compile and kick off the run in the background. I'll set a generous timeout. Note the job will run for maybe 3-8 minutes.
+
+Let me also double check `fetch_log` write: it includes `rate_limited`, `attempts`, `skipped` etc. Fine.
+
+One more possible bug: in the fallback branch, after setting `f1 = fb`, the `rec["fetches"][0]` remains the failed locator record. Good. `rec["stored_locator_recheck"]` set. Good.
+
+Another: in `excerpt_grounding` for the `metadata_record` kind, `fetched_text` includes raw JSON, so recid will be found. Good.
+
+Also in `fetch`, if curl fails (rc != 0), `rec["http_status"]` will be 0 and `data` may be empty. Fine.
+
+Let me run: `cd ... && timeout 1500 python3 run_spotcheck_073.py`. Run in background.
+dsh: reasoning:
+While that runs, let me prepare the event-emission script and checkpoint. I'll wait for the artifact hash first, but I can write a small emitter that reads the artifact JSON, computes sha256, and writes the three events + checkpoint.
+
+Event design (following worker-07 template):
+
+1. `status` event (active) — actually I can emit a single `artifact` + `review` + `status` (final). Keep three events:
+   - `w073-artifact-L1-spotcheck4-<ts>`: artifact event with path, sha256, validation_status unverified, evidence_refs, falsifier, summary, reproduce.
+   - `w073-review-L1-spotcheck4-<ts>`: review event with target_id L1, reviewer worker-073, reviewed_sha256 pinned, reviewed_path ledger/citation_audit.csv, verdict (from artifact review_verdict), score, hard_failures, findings (artifact findings + summary findings), artifact_refs, evidence_refs, falsifier, scope_note.
+   - `w073-status-L1-spotcheck4-final-<ts>`: status done with hours, summary, evidence_refs, next_falsifier, completion_scope.
+
+Checkpoint: `runtime/state/w073_checkpoint_1.json` with worker, checkpoint 1, at, task_id/assignment_ref, artifact hashes (spotcheck json + script), events emitted, summary, verdict, next_falsifier, hours_spent_estimate, numerics_lock note, class coverage checked.
+
+Also maybe `comms/outbox/worker-073.jsonl` as single file per line vs individual JSON files in a dir. Worker-07 used individual files in `comms/outbox/deepseek-flash-07/` (dir). The ingest scans OUTBOX.rglob("*"), so both work. I'll write `comms/outbox/worker-073.jsonl` (one JSON object per line) — protocol says `comms/outbox/<agent>.jsonl`. But some agents used directories. A jsonl file is the documented form; use that. Hmm, one risk: if the file is being appended by another worker-073 instance concurrently... The previous worker-073 instance died at 00:12 (0 stdout, 50KB stderr, no outbox). The current one is me. There might have been a *third* worker-073 launched after me (supervisor launches every 20s; it skips `tmux has-session -t worker-073` which exists while I run). So only me. I'll append to `comms/outbox/worker-073.jsonl` (create if needed).
+
+Also should I write per-event files to be safe with the ingest's per-file parsing? A jsonl file with multiple objects per line is standard here (deepseek-flash-*.jsonl). Fine.
+
+Now, about the review verdict: likely "revise" because of 19 elided locators. Score: 3.0. hard_failures: those revise-severity findings. Findings should include the per-frame stats. Let me wait for results to see actual numbers.
+
+Let me check on the job progress in a bit. Meanwhile, let me look at the supervisor's counts.tsv to confirm the swarm is still running and check whether other workers are competing for arXiv (the 429). Not necessary.
+
+Let me also prepare the `hours` estimate: run wall time ~ a few minutes ≈ 0.1-0.3 agent-hours; plus analysis. Worker-07 used 0.4. I'll use ~0.4.
+
+I'll wait for the job. Use job_output with wait. Meanwhile nothing else critical. Let me poll after a bit — but instructions say don't busy-poll; I can do useful work: verify the artifact-hash registry format so I can add my hashes? Only the controller writes artifact_hashes.json. I shouldn't. My checkpoint includes hashes.
+
+Actually, there is value in checking `runtime/bin/classsep_regression`? Not needed.
+
+Let me check job output now with a wait (it's my blocking dependency).
+dsh: reasoning:
+The run completed with exit 0. Let me look at run_stdout.txt for the summary.
+dsh: reasoning:
+Results: 40 rows, 3 MATCH, 28 PARTIAL, 9 FAIL, 0 FETCH_FAILED. 19 unresolvable stored locators, 12 arXiv API rate-limit fallbacks.
+
+9 FAILs need scrutiny — could be real ledger defects or my comparison being too strict. Let me examine the FAIL rows and the PARTIAL reasons to ensure the check is honest and not producing false failures. Vet each FAIL:
+
+- FAIL if title not found OR first-author surname not found.
+
+Potential false-failure sources:
+1. HTML pages where meta tags absent and title includes journal branding → title_match against page_text should still work since I include text[:200000].
+2. For `primary_page` with arXiv abs pages of old papers (math/9901147), title matched.
+3. Elided rows using inspirehep single-record: author may be stored as "Penrose, R." while ledger authors "Roger Penrose" → surname "Penrose" present in fetched_text (raw JSON) → a_ok true. Good.
+4. Possibly title mismatch due to ledger title vs fetched title differences (e.g., arXiv v1 title vs journal title). That's a real finding (PARTIAL expected though, not FAIL) — my logic says FAIL if title tokens coverage < 0.92. Maybe some titles have significant differences where the fetched record is genuinely the same paper (e.g., ledger uses journal title, arXiv uses different title). Then FAIL might be too harsh → but that's exactly a reviewable finding, and the artifact records fetched title so reviewer can adjudicate.
+
+Let me inspect the 9 FAIL rows and 28 PARTIAL reasons. Also check fetch_log for 429s.
+dsh: reasoning:
+False FAILs! The failure cause: ledger titles use `C^0` while fetched arXiv titles use `$C^0$` (LaTeX `$...$`). My `norm_text` strips `$...$` math entirely — good — but the ledger title has `C^0` without dollar signs; norm_text turns `C^0` into `c 0` (since `^` is non-alphanumeric → space) while fetched title `$C^0$-inextendibility` → after removing `$...$` becomes ` -inextendibility` (the math content is dropped!). That breaks the match: fetched loses "C^0" while ledger keeps "c 0".
+
+Two fixes:
+1. In norm_text, don't drop math content entirely: replace `$...$` delimiters with spaces but keep inner content. Currently `re.sub(r"\$[^$]*\$", " ", s)` removes content. Change to `s = s.replace('$',' ')` (strip only the delimiters).
+2. Handle `^` and `_` and braces: `C^{0,1}_{\mathrm{loc}}` → remove LaTeX commands `\mathrm{loc}` → "loc"; braces removed. Current norm removes backslashes only (`\` → space), so `\mathrm{loc}` → " mathrm loc" — noise but tolerable if we drop `\mathrm` command names. Better: replace `\mathrm`, `\text`, `\rm` etc. with space first, then strip `{}`, `^`, `_` to spaces.
+
+A cleaner normalization for titles:
+```python
+def norm_text(s):
+    s = html.unescape(s or "")
+    s = s.replace("$", " ")
+    s = re.sub(r"\\(?:mathrm|text|rm|bf|it|mathcal|mathbb|operatorname)\s*", " ", s)
+    s = s.replace("\\", " ")
+    s = re.sub(r"[^0-9A-Za-z]+", " ", s)
+    return re.sub(r"\s+", " ", s).strip().lower()
+```
+So `C^0` → `c 0`; `$C^0$` → `c 0`; `C^{0,1}_{\mathrm{loc}}` → `c 0 1 loc`; ledger `C^{0,1}_loc` → `c 0 1 loc`. 
+
+That should fix rows 4-9, 24, 25 → title_match true.
+
+Row 23 (SRC-023): elided locator with evidence_url `https://inspirehep.net/api/literature/1340082` — fetched 18611 bytes, but fetched title empty → parse_inspire returned no hits or metadata missing. Let me inspect that response: possibly the record's JSON has `metadata` but `titles` empty? or HTTP 200 returned an error object like `{"message": ...}`? Let me check.
+
+Also 6 rows with DOI not present: likely arXiv abs pages don't show DOI (fine, advisory PARTIAL). Not hard failures.
+
+3 rows year differs: convention. Fine.
+
+Now note: my verdict logic marks FAIL on title mismatch. With the norm_text fix, most FAILs become MATCH or PARTIAL (due to fallback/DOI/year). I need to re-run after fixing — important for honest results. Re-running costs another ~3 min (with 429 cooldown maybe faster: 12 fallbacks...). Fine.
+
+Let me inspect SRC-023's response first.
+
+Also `fetch statuses` role shows '?' because my print used f.get('role') but role is only in fetch_log, not rec['fetches']. Fine.
+
+Let me check SRC-023 raw response.
+dsh: reasoning:
+SRC-023's INSPIRE response DOES have metadata with titles. So why did parse_inspire return no hit or empty title in my run? 
+
+Possibility: my `is_json` detection. `ctype` for inspirehep is `application/json` → is_json True. Then `parse_inspire(text)` — but wait: the `kind == "elided_locator"` path fetched evidence_url = `https://inspirehep.net/api/literature/1340082`. Should parse fine. Unless... the run-time response differed (e.g., a redirect/HTML error). 18611 bytes matches this JSON size, so parse should work.
+
+Hmm — maybe the issue is `title_match`: ledger title "Proof of linear instability of the Reissner-Nordstrom Cauchy horizon under scalar perturbations" vs fetched "Reissner–Nordström" (en dash/umlaut). norm_text strips diacritics? `Nordström` → `nordstr m` (ö → non-alphanumeric). Ledger "Nordstrom" → "nordstrom". Token coverage: ledger title tokens {proof, of, linear, instability, the, reissner, nordstrom, cauchy, horizon, under, scalar, perturbations}. Fetched has "reissner nordstr m cauchy..." → intersection excludes "nordstrom" only → 11/12 = 0.9167 < 0.92 threshold! So title_match returned False at the 0.92 cutoff, and since `hit` was None, fetched_title stayed "" → FAIL with empty fetched title. 
+
+That means the 0.92 token-coverage threshold is too strict for diacritics/small variants. Fixes:
+1. Unicode NFKD normalization to strip diacritics: `unicodedata.normalize('NFKD', s)` then drop combining marks → "nordstrom". This fixes ö→o and é→e. 
+2. Lower threshold to ~0.85 for robustness, and record a distinction between exact (substring) and fuzzy match (`title_match_mode`).
+
+Let me implement:
+- `norm_text`: NFKD + remove combining marks.
+- `title_match` returns True if substring, else coverage ≥ 0.85. Record coverage value for transparency: make a function `title_similarity(title, text) -> float` returning 1.0 for substring else coverage; use threshold 0.85. And store per-row `title_coverage` in comparison.
+
+But careful: for the *hit selection* among multiple search results, a 0.85 threshold might select a similar-but-different paper. That's acceptable given it also prefers arxiv_id match. But if the wrong paper is selected, title_match would then be True. Hmm — for arxiv search rows, `hit` selection uses arxiv_id first, which is exact and reliable. When arxiv_id is absent (none in rows 1-40 for search rows? rows 24-30 have arxiv IDs; rows 5-9 too). Actually all arxiv_search_api rows in 1-40 have arxiv_id. For inspire_search rows: row 10 has no arxiv_id, title-based hit selection; 0.85 coverage is fine.
+
+Also for the comparison after selection, I check `title_match(row title, fetched_title)` — with diacritics fix, coverage will be 1.0.
+
+Let me apply the normalization fix, add coverage reporting, and rerun. Rerun time: the 429 cooldown will apply (first arxiv API row attempts → 429 → sets cooldown; subsequent 20 arxiv API rows skip API and go straight to abs fallback, 1s each). Actually the cooldown is 90s and resets on each attempted API call. The first arxiv row will attempt 3 times (~20s) then fallback; rows after that skip for 90s; after 90s another row attempts API again → 429... So total run maybe 3-5 min.
+
+Before rerunning, let me also reconsider the DOI partial: for arXiv abs pages, citation_doi meta may be absent; ledger `doi` often points to journal DOI. Marking PARTIAL for "declared DOI not present in fetched text" is defensible advisory. But if the fetched page is an abs page without DOI, it produces noisy partials. Keep as advisory partial (info).
+
+Now, is `$...$` stripping fix going to affect excerpt grounding? Excerpts may contain LaTeX like `C^{0,1}_{loc}`; norm_text now keeps content → better grounding.
+
+Let me patch run_spotcheck_073.py:
+1. Import unicodedata.
+2. New norm_text with NFKD and math-delimiter stripping.
+3. title_match → uses similarity ≥ 0.85, and I'll add `title_coverage` to comparison.
+
+Then rerun.
+
+Also, I realize the `title_match` inside hit selection for atom entries: with 0.85 threshold, fine.
+
+Let me edit.
+dsh: reasoning:
+Now add title_coverage to comparison. Find the comparison dict construction:
+
+```python
+t_ok = title_match(row["title"], fetched_title or fetched_text)
+...
+comp = {"title_match": t_ok, ...}
+```
+
+Add `"title_coverage": round(title_similarity(row["title"], fetched_title or fetched_text), 4)`. Also distinguish substring vs fuzzy: `title_exact_substring: title_similarity(...)==1.0`. Let me patch.
+
+Also improve: if title_match fails, should I treat as FAIL? With the fixed normalization, remaining failures will be genuine metadata mismatches → FAIL is right.
+
+Let me quickly unit-test normalization on the problem titles before rerunning.
+dsh: reasoning:
+Normalization fixed. Now re-run the full check. This will overwrite the artifact; the old fetched bodies are not cached, so it re-fetches everything (~3-5 min). Let me run in background again.
+
+Also, I want to preserve the first run's artifact for the record? The final artifact is what matters; the first run was a false-failure draft. I'll keep a copy of the old artifact as `spotcheck-l1-073.draft1.json`? The duplication could confuse the audit. Better: overwrite, and note in the artifact that v1 had a normalization defect? That's unnecessary detail. But the fetch_log from run 1 gets overwritten too. Fine — final artifact is what binds.
+
+Hmm, one consideration: the run just did 12 rate-limited fallbacks; rerunning may hit more 429s. The fallback design handles it.
+
+Let me remove __pycache__? Not needed.
+
+Run it.
+dsh: reasoning:
+While that runs, let me draft the event emitter script. I'll write `artifacts/worker-073/l1_spotcheck/emit_events_073.py` that:
+1. Reads the artifact, verifies sha256 file.
+2. Re-verifies the ledger sha256 still equals the artifact's input sha (else abort — fail closed).
+3. Writes events to `comms/outbox/worker-073.jsonl` (append, checking for duplicate event_ids).
+4. Writes checkpoint `runtime/state/w073_checkpoint_1.json`.
+
+Event details should come from the artifact summary. Let me write it after I see the final numbers... but I can write it generically now: it reads summary/findings/verdict from the artifact.
+
+Template:
+
+```python
+import json, hashlib, os
+from datetime import datetime, timedelta, timezone
+
+ROOT=...
+ART=.../spotcheck-l1-073.json
+OUTBOX=ROOT/comms/outbox/worker-073.jsonl
+CHECKPOINT=ROOT/runtime/state/w073_checkpoint_1.json
+TZ=...
+now=...
+
+art_sha=sha256_file(ART)
+declared=open(ART+'.sha256').read().split()[0]
+assert declared==art_sha
+led=sha256_file(ROOT/'ledger/citation_audit.csv')
+assert led==art['inputs']['ledger/citation_audit.csv']['sha256'] (fail closed)
+
+events=[]
+status event: node L1, class ids, status active, hours 0.4, summary, evidence_refs, next_falsifier
+artifact event: node L1, artifact_type l1_spotcheck, path relative, sha256, validation_status unverified, evidence_refs, falsifier, summary, reproduce
+review event: target_id L1, reviewer worker-073, reviewed_sha256, reviewed_path, verdict, score, hard_failures, findings, artifact_refs, evidence_refs, falsifier, scope_note
+final status event: status done, completion_scope, evidence_refs
+
+Then append to OUTBOX (dedupe by event_id).
+Checkpoint JSON.
+```
+
+The checkpoint should include: worker, at, checkpoint 1, assignment_ref, task, artifact hashes (json, script, fetch_log), ledger sha, events, summary, verdict, findings, next_falsifier, hours, lock respected, read_only claim, class coverage.
+
+Let me write it now so it's ready. I'll make the summary text dynamically include the counts.
+
+Note: the event `class_id` for L1 review: assignment used "GLOBAL". Worker-07 used the four classes joined by ';'. I'll use the four frozen classes (since the frame rows map to those classes) plus note L1 is class-agnostic. Actually to be safe with class-binding audit, I'll set `class_id` to the four frozen ids and add `"class_mapping_note": "ledger is class-agnostic; per-row class_mapping recorded in the artifact"`.
+
+Also include `class_coverage_checked` mapping class->citation_ids from rows.
+
+Let me write the emitter.
+dsh: reasoning:
+Now let me check the background job status. Also note a potential issue in emit script: `rel_art.split('/')[-1]` gives filename. Fine.
+
+`hours`: 0.4/0.5 estimate.
+
+Let me check the run.
+dsh: reasoning:
+Now: 40 checked, 4 MATCH, 36 PARTIAL, 0 FAIL, 0 FETCH_FAILED. Verdict revise due to SPOT4-B-01 (19 elided locators) — and interestingly no SPOT4-B-02 (search locators not containing the record) nor B-03/B-04. Good.
+
+Let me verify the PARTIAL reasons distribution and sanity-check a sample of rows, especially:
+- Are the 36 PARTIALs mostly DOI/year/fallback advisories? If some are elided locator only, fine.
+- Confirm no FAILs are hidden by wrong matching.
+- Ensure the 15 fallback rows were checked via abs page and matched.
+
+Let me examine the details. Also spot-verify a couple of rows manually (e.g., SRC-023 now matched, SRC-005/6/7 title matches with C^0).
+
+I should also double check the "declared DOI not present" partials: 6-9 rows. Fine as advisory.
+
+Then decide if verdict "revise" is right. The 19 elided locators is a hard criterion issue ("Every row has a resolvable locator"). But is it maybe the case that `exact_locator` is meant to be an elided *display* string? Looking at the CSV header, there's `exact_locator` and `evidence_url`. For rows 41-95 (flash-07's frame), are exact_locators full URLs? Let me check to confirm the frame asymmetry. If rows 41-95 have full URLs while 1-40 have elided ones, then this is a genuine, specific hygiene defect in rows 1-40 — great finding.
+
+Let me check.
+dsh: reasoning:
+Wait — an important anomaly: for the 15 arxiv_search_api rows, the only reason listed is "stored search-API locator not re-resolved this run (HTTP 429...)" — but did the abs fallback actually confirm identity? All 15 are PARTIAL, none FAIL, meaning title+author matched via the abs page (otherwise FAIL). Good.
+
+But there's a subtlety: `year differs` appears 5 times and `declared DOI not present` 4 times. Fine.
+
+However, rows 41-95 also have 8 elided locators! So the elision issue is not exclusive to rows 1-40, but rows 1-40 have a much higher concentration (48% vs 15%). My finding can note the frame-specific rate; the lead already has L0 revision work for hygiene. Also, my finding says "19/40 rows in the frozen frame" — accurate.
+
+Hmm, but wait: is my check's `stored_locator_unresolvable` = 19. Plus 15 fallback rows = 34 PARTIALs; the other 2 PARTIALs (primary_page) are DOI/year advisories. Total 36 PARTIAL. MATCH=4 (3 primary pages + 1 inspire search). Good.
+
+Now: the verdict "revise" is driven solely by SPOT4-B-01 (elided locators severity=revise since len>3). Everything else — source identity — is clean: 40/40 titles+authors matched, 0 FAIL, 0 FETCH_FAILED. That's a strong positive result. The review score 3.0 might understate; but the elided-locator gap is real per the G-LIT criterion. I'll keep revise/3.0 but clearly state that source identity is clean on the whole frame: the revise is about locator hygiene, not about source truth.
+
+Actually, let me reconsider the severity classification. Is an elided `exact_locator` genuinely a blocking (revise) issue for G-LIT? The G-LIT criterion: "ledger rows have resolvable locators". If `evidence_url` counts as the locator, then there is no issue. But `exact_locator` is the field named for the exact locator. The rows have `evidence_url` resolvable. A reasonable independent reviewer would flag it as a finding for the lead to adjudicate, not necessarily a hard failure. But my role includes "reject your own output before sending: ... does the falsifier actually falsify?" I'll keep severity=revise only if ≥4 rows (which is arbitrary). Hmm. Perhaps better: severity "info" and let verdict be "accept"? No — the elided locator is a documented hygiene defect that the map's own acceptance condition ("Every row has a resolvable locator") would fail on literal reading. I'll keep revise with score 3.0 and explicitly say: source identity 40/40; the revise is a locator-hygiene finding only (19 rows), no source-level failure. That's honest and actionable.
+
+But wait — maybe I should reconsider whether the artifact's automated verdict should be "revise" while the lead asked for a spot check with MATCH/PARTIAL/FAIL verdicts. The per-row verdicts are there; the aggregate verdict is my reviewer opinion. Fine.
+
+One more improvement for evidence quality: the 15 fallback rows didn't re-resolve the stored search locator (429). Could I try again now for a few, or check whether the arXiv API recovered, to reduce the fallback count? The fetch_log records the 429s. The key evidence (identity) is from abs pages which is primary. It's acceptable; the finding SPOT4-B-06 discloses it as info. I could attempt one more pass later, but the rate limit is shared with other swarm workers; not worth extending. The run is honest.
+
+Actually — hold on. There's a subtle issue with the fallback rows: `stored_locator_hit` stays None, so my finding SPOT4-B-02 (search result set missing record) doesn't trigger. Fine.
+
+But one thing to double check: for the 15 fallback rows, the fetched abs page's *authors* matched; the title matched. So identity confirmed. 
+
+Let me now also sanity check one fallback row's fetch records to confirm the abs fallback page was actually fetched and hashed (not the 429). And verify the artifact contains per-fetch sha256 for each used source. The falsifier requires "a check without a fetched-source hash" — must ensure every row that got a verdict has at least one fetch with a sha256. Let me verify programmatically: all 40 rows have ≥1 fetch with http_status 200 and a 64-hex sha256; and that the sha256 in the artifact matches re-hashing? We can't re-fetch to verify, but we can confirm internal consistency: the fetch log entries correspond.
+
+Let me verify:
+1. Every row has a successful fetch record with sha256 length 64.
+2. The artifact's input ledger sha equals current file sha (already checked by emitter).
+3. Check the 3 MATCH primary_page rows (SRC-001, 002, 014?) plus inspire (SRC-010).
+
+Then run the emitter.
+
+Also, I should double-check the claim in the review that 40/40 titles+authors matched. Let me count comparison.title_match and first_author_match.
+dsh: reasoning:
+Excellent: All 40 rows have:
+- title_match True
+- first_author_match True
+- ≥1 hashed successful fetch
+
+4 MATCH (rows 1,3,4,10): SRC-001, SRC-003, SRC-004, SRC-010. Note SRC-002 is PARTIAL due to year convention (2019 arXiv vs 2023 journal) — reasonable.
+
+Wait: SRC-003 and SRC-004 are arXiv abs pages: MATCH with no DOI issue. SRC-002 PARTIAL due to year. Fine.
+
+One concern: the empty-body 429 response has sha256 = e3b0c442... (sha256 of empty string) — that's fine, it's recorded.
+
+Now run the emitter. But before that, one more check on the artifact JSON validity (it's valid since we loaded it). Also confirm the artifact includes `review_verdict`, `hard_failures`, `falsifiers`, `non_claims`, `reproduce`, etc. Yes.
+
+Also: the draft1 artifact files are still in the directory. Should I remove them to avoid audit confusion (duplication/divergence)? The audit gate checks canonical/authoring divergences and duplication. A stray `spotcheck-l1-073.draft1.json` could be mistaken for a second artifact. I'll delete the draft files (they were a false-failure draft superseded by the final run) — or keep them but reference clearly? Better to remove to keep the evidence tree clean; the final artifact is the deliverable. Actually, for provenance honesty, maybe keep it as `.draft1` — but it might get ingested as JSON artifact? The ingest scans `comms/outbox` only, not artifacts. `audit_evidence.py` scans artifact paths referenced by events, so draft1 won't be referenced. Still, safest to remove to avoid confusion.
+
+I'll delete draft1 json + sha256. Also remove `__pycache__`? Harmless, but let me clean it.
+
+Then run emitter, verify events written, run a JSON validation of the outbox lines (schema-ish) and maybe run `python3 research_map/comms.py ingest --dry-run`? Hmm — ingest is controller's job; running it (even dry-run) could be considered an action but dry-run doesn't mutate. Actually `comms.py ingest` reads outbox, normalizes, validates, and if not dry-run writes events.jsonl and rejected.jsonl. A dry-run would validate my events without side effects. That's a sensible self-check. But does comms.py ingest dry-run exist? `ingest(dry_run=False)`. CLI: let me check the argparse section. Running `python3 research_map/comms.py ingest --dry-run` would scan the whole outbox and print accepts/rejects; it might be heavy but fine. Risk: it could be run concurrently with the controller's lifecycle → read-only for dry-run, no conflict. Actually the controller may run `comms.py ingest` (non-dry) concurrently; my dry-run is read-only. Fine.
+
+But wait: the controller's lifecycle ingest is locked via `runtime/state/map.lock`. A dry-run doesn't take the lock. It only reads. Safe.
+
+Let me check the CLI supports --dry-run. Let me read lines 370-393.
+
+After emitting, I'll verify:
+- outbox file lines parse as JSON with required fields (event_id, event_type, created_at, actor; review has target_id/reviewer/verdict/score/hard_failures/findings; artifact has node_id/artifact_type/path/sha256/validation_status).
+- checkpoint JSON parses and artifact hash matches.
+
+Then exit. Let me proceed.
+dsh: reasoning:
+Events emitted. Now validate:
+1. Outbox lines parse and have required schema fields.
+2. Run `comms.py ingest --dry-run` to confirm my events would be accepted (read-only).
+3. Verify checkpoint JSON and artifact hash.
+
+Note: dry-run ingest scans all outbox files and may print a lot; capture tail/grep for worker-073. Let me run it and grep. Careful: the controller may be running ingest concurrently; dry-run is read-only except... let me double check `ingest(dry_run=True)` doesn't write rejected.jsonl. Looking at the earlier code reading lines 290-340: `if rejected or duplicates:` then something — let me check whether that block respects dry_run. Lines 325-331:
+
+```
+if rejected or duplicates:
+    ...
+    for r in rejected: ...
+```
+Need to see if it writes when dry_run. Let me read lines 318-345 quickly before running.
+dsh: reasoning:
+dry_run is safe (no writes). Let me run it and check for my events being accepted, and no rejects with source `comms/outbox/worker-073.jsonl`.
+
+Also note: `validate_event` uses the JSON schema, which for `status` requires only base fields (status is not in the oneOf schema! Actually status isn't in the schema's oneOf list — only direction_update, claim, artifact, review, resource_request). Hmm: `validate_event` presumably handles status/blocker etc. specially (they're ingested by workers all the time). Let me just run dry-run and see if my 4 events are accepted.
+
+One risk: another worker might have appended to `worker-073.jsonl`? No.
+
+Let me run dry-run, grep worker-073.
+dsh: reasoning:
+My 4 events are accepted by dry-run ingest (`+ status/artifact/review/status L1 w073-...`). No rejects for worker-073.
+
+Other workers (w032, w064, w081, w093, w094b) are actively producing events — the swarm is busy. Good; my contribution is distinct (worker-073 review).
+
+Now verify the checkpoint file and its internal consistency. Also verify the outbox file contents (4 lines). Then I'm done: I should exit cleanly. The tmux session `worker-073` was launched with a single lifecycle: `dsh_fixed.sh --profile headless '<prompt>' > stdout.log; rc... exit_code`. When my turn ends, the harness exits, the tmux session ends, and the supervisor will relaunch worker-073 in 20s (skip if exists). That's the supervisor's business.
+
+Wait — an important consideration: the supervisor loop relaunches worker-073 after I exit, and the new instance will see `comms/outbox/worker-073.jsonl` already has my events and may take another task. That's expected behavior ("One independent lifecycle then exit", loop relaunches). My trajectory.log will record exit. Fine.
+
+Let me finalize by:
+1. Verifying checkpoint JSON.
+2. Quick validation of outbox lines against required fields.
+3. Optional: update ASTRA_HANDOFF? No — that's the controller's file; workers shouldn't write map/handoff.
+4. Verify I didn't modify the ledger or others' files: sha256 of ledger still pinned (emitter asserted). Good.
+
+Also, should I emit a `blocker` or resource request? No. One task delivered.
+
+Let me do final verification and then produce the final summary answer. Also double-check the artifact's `hard_failures` and findings text to make sure the review event reads correctly.
+
+Let me also confirm the 19 elided rows are all reported with severity revise (SPOT4-B-01), and that the review's hard_failures contain exactly that one finding.
+dsh: reasoning:
+Oops, I wrote a broken line. Let me rewrite cleanly.
+dsh: reasoning:
+Everything validates:
+- 4 events, all required fields present, accepted by dry-run ingest.
+- Artifact hash consistent across file, sha256 file, event, checkpoint.
+- Ledger untouched (still pinned hash).
+- Checkpoint written.
+
+One last thing: the tmux session is `worker-073`, and my job as this lifecycle is done. The prompt says "checkpoint, then exit". I should end my turn now — the harness process exits and the supervisor relaunches. I should also kill background jobs? Both bash-1 and bash-2 completed. Let me confirm with job_list and clean up if any running.
+
+Also, cleanup: remove run_stderr.txt (empty) — harmless. Leave it.
+
+Let me do a final job_list check and then give the final answer summarizing: task taken, artifact, hash, evidence, falsifier, checkpoint, verdict. Keep it concise but complete.
+dsh: reasoning:
+Both background jobs completed; nothing to kill. The bounded worker lifecycle is complete. Final answer with the required summary: task, IDs, evidence, hash, falsifier, checkpoint, and exit.
+
+Let me write the final response.

@@ -1,0 +1,384 @@
+dsh: reasoning:
+Let me start by understanding the environment. I'm worker=056, need to read handoff/map and comms, take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit.
+
+Let me explore the workspace.
+dsh: reasoning:
+The task mentions "handoff/map and comms". Let me look for handoff directory and comms. Likely in workdir/ai4math-swarm or somewhere. Let me search for "handoff" and "comms" directories.
+dsh: reasoning:
+This is an AI4Math swarm. I'm worker=056. Let me read the comms PROTOCOL.md, ASTRA_HANDOFF.md, and the runtime control/instances. Also look at inbox for task assignments to worker 056.
+dsh: reasoning:
+I'm worker=056. The agents listed are astra, leads, deepseek-flash-01..20, worker-01, worker-06, worker-16. There's no worker-056 inbox. Hmm. Maybe there's a different assignment mechanism. Let me look at launch_swarm.sh and supervise scripts to see worker numbering, and check the runtime/instances directory for worker 056.
+
+Let me search for "056" in the tree.
+dsh: reasoning:
+There are worker-001 through worker-056+ instances. Let me look for worker-056 instance directory, and see how assignments are written for workers. Let me check the launch_swarm.sh and supervise_swarm.sh.
+dsh: reasoning:
+Now I see. There's a second swarm launch (supervise_swarm.sh / supervise_loop.sh) that launches workers 001-0xx. Let me read one of these and the worker-056 meta/prompt.
+dsh: reasoning:
+So worker-056 is launched by independent_supervisor scripts. Let me read independent_supervisor_100.sh to see how workers 001-100 are launched and what prompt they get.
+dsh: reasoning:
+Now I understand: I'm worker-056 (slot 056) of a 100-worker independent swarm in the ai4math-swarm repo. My task: "Read handoff/map and comms. Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit."
+
+Note: the tmux session for worker-056 has been killed probably because when I finish, exit. Actually I'm running inside the tmux session - the dsh agent. My output goes to stdout.log.
+
+I need to:
+1. Read handoff/map and comms (done partially, need class-bound tasks).
+2. Take one class-bound task — need to find an available class-bound task. There are class IDs like AF-WCC-VAC-GEN, AF-SCC-C2-VAC-GEN, AF-SCC-C0-VAC-GEN, AF-WCC-SCALAR-SPH.
+3. Emit valid JSON event(s) in comms/outbox/worker-056.jsonl with event_id, event_type, created_at, actor, node_id, class_id, evidence refs, sha256 hashes, falsifier.
+4. Checkpoint.
+5. Exit.
+
+Let me look at the map, the proposal/assignment structure, and identify an available class-bound task for a worker. Let me read the research_map.json summary, particularly assignments and classes. It's 737KB, so let me query it with python.
+
+Also check the inbox files to see what assignment formats look like for workers (e.g., worker-01, worker-06, worker-16 inbox) and outbox for how other workers responded. Those seem to be a different naming convention (older swarm, worker-01 = maybe a different id). Let me look at a couple.
+
+Let me first inspect research_map.json structure.
+dsh: reasoning:
+Now I understand the assignment format. I'm worker-056 in the 100-worker swarm launched by independent_supervisor_100.sh, using agent id "worker-056". My inbox would be comms/inbox/worker-056.jsonl but that doesn't exist (the leads only know about worker-01...worker-20, plus worker-06 etc.).
+
+So per the prompt: "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit." If no assignment exists, inspect the immediate queue and propose one artifact-backed task. Let me check the map's assignments for any open assignment that's not claimed — specifically ones for "worker-..." that are unassigned or ones whose assignee is a worker slot I can legitimately take. Given I'm worker-056, likely no assignment targeted at me. The right move: find an available class-bound task from the map (open assignments / immediate queue), do some bounded, real work producing an artifact, emit an artifact/status/claim event with hashes and falsifier, checkpoint, exit.
+
+Let's inspect map.assignments, gates, claims, and the immediate queue. Also check the artifacts tree to see what exists (avoid duplicating).
+
+Let me dump assignments with assignee/status.
+dsh: reasoning:
+There are many assignments, all status None (meaning the field may not be set). I need to find an available class-bound task I can take as worker-056. Since I'm a worker, the cleanest is to find a class-bound task that isn't yet claimed/done, ideally one that supports existing gate criteria, and produce an artifact.
+
+But careful: the swarm has 100 workers running right now; many may be doing the same thing. Duplication is a risk. Let me check what the current state is — specifically what's missing for G-FORM, G-AUDIT, G-NUM, G-LIT. And check `controller_findings` for explicit open needs.
+
+Also check the "immediate queue" in map (maybe run or groups). Let me look at controller_findings and controller_gate_audit, plus publication_status divergent.
+dsh: reasoning:
+Now, what would be a good class-bound task for me as worker-056? The gate audit shows the main blockers:
+- G-FORM needs two independent accepts at current canonical hashes for F1/F2a/F2b. Reviews 16/17/18 verdicts are "revise". So maybe review the current canonical schemas against review requirements and produce a review verdict? But worker events cannot set gate verdicts... but a worker can produce an independent review artifact (A1 review). Actually the protocol allows `review` events upward from any agent? Per protocol, upward message types include `review` — target_id, reviewer, verdict, score, hard_failures, findings. However, Astra said only controller/leads can move gates. But an independent worker-produced review artifact can serve as evidence for A1's "2 independent verdicts per target".
+
+- G-AUDIT needs A1 independent verdicts binding to current canonical hashes. That's a bottleneck and is well-suited to a bounded worker task: independently review one class-bound artifact against its canonical schema and record a review with hash.
+
+Given "Take one class-bound task", I could do a bounded, independent, class-bound review: verify that the canonical schema `schemas/af_scc_c0_vacuum.yaml` (AF-SCC-C0-VAC-GEN) satisfies the review criteria that earlier reviewers said were missing (the review verdicts were "revise"). But the actual revise reasons matter. Let me look at the reviews for F2b and what issues were raised. If those issues are already fixed in the current canonical hash, an independent verdict with cited sha256 could unblock G-FORM/G-AUDIT.
+
+However, there might be a risk of duplicating what other workers are doing. Let me check the newest outbox traffic (00:12-00:13) to see what other workers are doing. Also check reviews directory contents.
+
+Actually, let me be careful about time/effort. As a "bounded execution worker" I should: pick one class-bound task, do genuine verification work, write artifact + hashes, emit JSON event, checkpoint, exit. The most useful and tractable: independent hash-pinned review of one canonical schema, checking specific hard-failure criteria. Let me first see the review files and the canonical schemas.
+
+Let me check reviews/ dir and the F2b review (18) to know the "revise" reasons.
+dsh: reasoning:
+The swarm is very active and the situation is fluid. As worker-056 with a bounded budget, I should find a task that is genuinely useful, non-duplicative, class-bound, and produces an artifact with hash + falsifier.
+
+The current critical bottleneck per the gate audit: A1 independent verdicts binding to current canonical hashes (G-AUDIT) and G-FORM accepts. Also the audit lead's "freeze-first WITH enforcement" direction: author declares one frozen sha256 and stops writing; two blind reviewers dispatched in parallel against that exact hash. The canonical schemas just moved at 00:10:15, FROZEN.json bumped to rev20 at 00:11:04. Note it's now ~00:15+. The schemas may move again.
+
+A bounded, useful contribution from an independent worker: an independent, hash-pinned review of one canonical schema against the published review criteria — but reviews already exist (revise verdicts). The gate blockers say "no two independent accepts at any current hash". Reviews at current hash: F1 16/17 revise, F2a 17/18 revise, F2b 18 revise. Actually those are verdicts at b65fcc0f etc. — "recorded verdicts at these hashes are revise". So the canonical schemas still have open revise items. What are the revise reasons? If a worker can independently verify whether the specific revise conditions are now satisfied (at the frozen hash), that's valuable. But making up a review verdict as worker-056 may conflict with "worker events cannot set gate verdicts", but a review is not a gate verdict; it's evidence.
+
+Alternatively, a more clearly bounded and non-overlapping task: audit_evidence.py-style verification of declared vs measured hashes for the current canonical artifacts — but the controller already does that (CF-11).
+
+Another angle: the "canonical/authoring divergence" — publication policy. deepseek-flash-13 says schemas/ and artifacts/formulation/schemas/ are now byte-identical. That's measured. The remaining divergence may be FROZEN.json etc.
+
+Let me look at the latest A1-rebind-coverage.json (audit lead's own coverage matrix) to find the exact gaps: which (target, hash) pairs lack 2 independent verdicts. Then I can pick one target and do a genuine independent review at the current measured hash, and — if warranted — record accept/revise with specific hard failures. That directly serves G-AUDIT/G-FORM.
+
+Let me read reviews/A1-rebind-coverage.json and A1-rebind-coverage-addendum.json.
+dsh: reasoning:
+Important: F1 at measured hash b65fcc0f has ZERO verdicts at that hash. F0 has 1 (lead-audit accept). So the biggest gap: F1/F2a/F2b need 2 independent verdicts at the current hash. The canonical schemas moved at 00:10:15, so all old verdicts are void.
+
+So as worker-056, a genuinely useful class-bound task: perform an independent review of ONE canonical schema at its current measured hash, checking the published review criteria / hard-failure rules, and emit:
+- an artifact (review JSON + evidence of checks run)
+- an upward `review` event with target_id, reviewer=worker-056, verdict, score, hard_failures, findings, cited sha256
+- a `status`/`artifact` event
+- checkpoint
+
+This is class-bound (the class is AF-WCC-VAC-GEN for F1, or one of the SCC classes). Since the assignment mechanism doesn't know worker-056, I should record it as an unassigned/self-selected task derived from the map's open need, and clearly state it's a proposal/independent review, not a gate verdict.
+
+But wait — I must be careful: independent review requires the artifacts and enough time. The schema files are 27-33 KB YAML. A proper review of the whole schema is a big job. But the published review criteria could be checked with tools: there are already checkers (artifacts/formulation/tools/check_class_schema.py, research_map/class_separation.py, etc.). An independent review should not merely re-run the author's own checker; but it can (a) re-run the published gate at the frozen hash, (b) manually inspect key hard-failure criteria (C0/C2 merge, conclusion_type, quantifiers, etc.), and (c) verify the canonical path hash equals the frozen pin and that no forbidden cross-class content is present.
+
+However — I should be mindful of duplicate work: the swarm has 100 workers and many are likely doing reviews. But F1 currently has 0 verdicts at the live hash. Actually F1's latest status shows deepseek-flash-13 ran gate checks at b65fcc0f and passed; and the audit lead's freeze-first enforcement means reviewers must bind to a frozen hash. There's a real need: hash-pinned independent accept/revise verdicts for F1, F2a, F2b.
+
+Alternatively, a much smaller, sharper, and genuinely additive class-bound task: verify the canonical/authoring publication convergence and the FROZEN manifest, since worker-18 flagged residual evidence drifts and verify_frozen.py exits 1. But that's more of an audit task already assigned to lead-formulation (astra-life01-publish-frozen), duplicate risk high.
+
+Let me think about what's feasible within my bounded budget. My budget: I should aim for maybe 30-60 minutes of work? Actually as a bounded worker I should take one task and finish. Let's aim for a focused review of ONE schema (F2b, AF-SCC-C0-VAC-GEN) at the frozen hash, checking a specific set of hard-failure criteria that I can genuinely verify from the file, then emit a review verdict with per-criterion findings, each backed by line references. And also check that the canonical hash matches the frozen pin.
+
+But which schema? The gate blockers for G-FORM: "no two independent accepts at any current hash" for F1/F2a/F2b. The audit already has "revise" verdicts from previous hashes. If the revision reasons were addressed in rev19/20, an accept may be justified. Let me look at the most recent F2b review (F2b-review-18.json, at hash 18?) and F2b-review-lead-audit to see the revise items and whether they're fixed.
+
+Actually, wait. Let me reconsider: review verdicts from a "worker-056" that no lead knows about may not count as "independent reviewer" in the controller's coverage matrix, which requires reviewers with IDs. It could still be recorded as evidence. Hmm.
+
+Another option, more clearly within worker scope and less stepping on leads' toes: a class-bound **falsification/numerical verification** task that produces a concrete, checkable artifact. For example, for N0 (AF-WCC-SCALAR-SPH), the numerics lead needs a hash-pinned gate proposal. But numerics is locked and N0 is active/unverified; workers 12/13/14 are on it. Duplicate risk.
+
+Let me check what's in the "proposed" directory — maybe there are pending proposals for unassigned tasks, and `proposals/`. Also the assignment mechanism may have a pool of tasks for workers. Let me look at workdir/ai4math-swarm/proposed and proposals, and grep for "available" or "queue".
+
+Actually, the prompt says: "Take one class-bound task". With 100 workers launched with identical prompts, there's likely an intent that each worker picks something useful. My best contribution given the state: an independent hash-pinned review of one canonical schema. Since F1 has zero verdicts at the live hash and is on the critical path for G-FORM, F1 (AF-WCC-VAC-GEN) is the highest-value target.
+
+But careful: F1's prior reviews were "revise" and there's an open item F-GATE-4 (rule_spec published spec_version 1.2 vs canonical tool enforcing R17-R31). Is F1 schema itself ready to accept? Let me examine the review objections from reviews/F1-review-16.json and F1-review-lead-audit.json, and check whether the current schema addresses them. If they do, an "accept" is defensible; if not, I report "revise" with specifics — which is also progress (documents remaining gaps at current hash).
+
+Also, importantly: I need to double check whether the file changed since the coverage matrix (measured at 00:13:10, file mtime 00:10:15). Let me measure now. If the hash moved, I bind to the current measured hash and note it.
+
+Plan:
+1. Measure hashes of the three canonical schemas + F0 taxonomy + FROZEN.json now.
+2. Read F1 schema (af_wcc_vacuum.yaml) and run the published checker (rule_spec/check_class_schema) if available at frozen hash; check the prior revise items against the current text.
+3. Produce artifact: artifacts/worker-056/f1_review_at_<hash12>/review.json + evidence files (check outputs).
+4. Emit JSONL event(s) in comms/outbox/worker-056.jsonl: declaration/status/artifact/review with event_id, node_id F1, class_ids [AF-WCC-VAC-GEN], evidence_refs with hash prefixes, falsifier, artifact sha256.
+5. Checkpoint via research_map/checkpoint.py? Careful — running controller tools might conflict with the live controller/other workers. `checkpoint.py` does a full 15-min checkpoint snapshot; other workers (flash-20) run it. It may be safe (writes runtime/state/...). But my prompt says "checkpoint, then exit". I could write a worker-local checkpoint JSON to runtime/state/ and also try the official checkpoint. Let me check checkpoint.py first to see if it's safe and what it does.
+
+Let me first do the hash measurements and inspect the checkers. Also check the git status to know the repo (maybe commits are expected?). Let's keep it simple.
+
+Let me measure hashes and look at tools.
+dsh: reasoning:
+Important: FROZEN.json hash is now bbbaa136... (was 855e7cba per flash-13/18 a moment ago; it has been rewritten). The canonical schemas are still at b65fcc0f/8dae50da/a8d899d2. Good — F1 hash b65fcc0f stable since 00:10:15, and the coverage matrix says 0 verdicts at this hash for F1.
+
+Given FROZEN.json changed again, the freeze is moving. Still, schemas are stable for ~5+ minutes.
+
+Let me now examine the F1 schema and prior review objections. First, let me check the coverage matrix entries for F1 all_recorded_verdicts and the F1 review files' hard failures, so my review can address them.
+
+Approach for a genuinely independent review: 
+- Build my own minimal checker (not the author's) for the specific hard-failure criteria: (1) exactly one class id declared and it equals AF-WCC-VAC-GEN; (2) conclusion_type ∈ {theorem,...} with required fields; (3) no C0/C2 SCC tokens merged in; (4) quantifiers explicit; (5) topology/regularity/genericity/I+/visibility fields present; (6) no forbidden leakage patterns (the class separation tool). Independent means I should implement/run my own checks with evidence output, not just trust the author's tools. But re-running the frozen gate checkers is also part of evidence (and worker-13 did that).
+
+Let me look at F1 schema structure first (it's 33KB YAML). Let me extract top-level keys and key fields. And read the F1 review files.
+dsh: reasoning:
+Interesting: `revised_at = '2026-09-12T00:15:00+08:00'` in the schema file contents (but the file mtime is 00:10:15). That's the future-dated timestamp issue CF-6. Wait, the file mtime is 00:10:15 but contains revised_at 00:15:00 — actually current wall clock is ~00:16 now, so maybe it's not future. Let me check current time.
+
+Actually the schema contents claim revised_at 00:15:00 while mtime 00:10:15 — inconsistent (contents ahead of mtime by ~5 min). Hmm, the hash is b65fcc0f since 00:10:15. But if the content says revised_at 00:15:00, then the content was written at 00:10:15 claiming future time. That's CF-6 territory. Wait, could the file have been modified after 00:10:15 without mtime change? No. Let me check the current wall time.
+
+Hold on — this is important for my review: if `revised_at` says 00:15:00 and the file's mtime is 00:10:15, then revised_at > mtime, i.e., the content is future-dated relative to its own write time unless a revision at 00:15 wrote identical content... no, a rewrite would update mtime. So this is an internal inconsistency: a declared revision timestamp (00:15:00) that cannot be true given the measured mtime (00:10:15), unless the clock is off. The audit lead's direction says "created_at must not exceed wall clock". Current wall clock? Let me measure. It's probably ~00:16-00:17 now, so 00:15 <= now, no violation by the ingest rule, but content claims revision at 00:15:00 while mtime is 00:10:15 — file was never modified at 00:15:00. That's a provenance defect worth flagging (evidence drift: declared revision time vs measured mtime).
+
+Wait, but maybe the file was written at 00:10:15 with a planned timestamp of 00:15:00 (pre-dated/future-dated). The coverage matrix measured at 00:13:10 lists mtime 00:10:15 and hash b65fcc0f. So yes: schema declares `revised_at: 00:15:00` but its measured mtime is 00:10:15. That's a concrete finding: the declared revision time is not backed by the filesystem; any reviewer citing "rev19/rev20 at 00:15" is citing a timestamp that postdates the frozen bytes. Actually FROZEN.json revision 20 frozen_at 00:15:00 too.
+
+Hmm, but careful: there might be a timezone/clock thing where the authoring lead's clock runs ahead (CF-6 says "Agent-written created_at timestamps run ahead of wall clock"). The controller mitigated by using _received_at. So this is a known class of issue, but the specific instance `revised_at=00:15:00` vs mtime=00:10:15 on the canonical schema is a fresh measurement that I can document as a finding (minor) with a falsifier: a write at 00:15:00 with identical bytes would require... hmm, actually a write with identical bytes would still bump mtime. So the finding holds: either the mtime is wrong or the declared revision timestamp is not a write time.
+
+Let me check current time and look at the schema's review_status, unresolved_items, and the prior F1 review revise reasons. Let me read F1-review-lead-audit.json (4KB) and F1-review-16-r2.json (3.5KB) fully-ish, plus the schema's conclusion/quantifiers fields.
+dsh: reasoning:
+Now I have concrete prior revise findings for F1 (at 7a3e1f93, F1 revision ~3). Current F1 is revision 9 at b65fcc0f. I can independently check whether each prior finding is addressed in the current revision, and produce a hash-pinned review artifact. This is exactly the kind of "delta recheck against the current frozen hash" that G-FORM needs, executed by an independent worker.
+
+Since my verdict must be honest, I'll check each of the prior findings:
+- F1-16-01 (major): conclusion.statement and i_plus.completeness_definition assert an equivalence that equivalence_claim/equivalence_status mark unverified.
+- F1-16-03 (medium): non_vacuity.condition still requires non-empty black-hole region.
+- F1-16-04 (medium): falsifier.tier_1 demands open/residual set while statement is universal over D_gen.
+- F1-16-05 (medium): falsifier.machine_checkable_steps include proof obligations.
+- F1-16-06 (minor): quantifier_order_status pinned while D_GEN depends on pending genericity.
+- F1-16-07 (minor): self-check records ambiguity runner run on revision 2.
+- lead-audit HF-06: F0 conclusion divergence — (a) geodesic completeness reading relegated to f0_equivalent_form, (b) BH region non-empty interior clause absent; f0_consistency claims axes_match=true.
+- lead-audit HF-06: file records linter-shaped wording.
+- lead-audit HF-06: topology.initial_slice_topology asserts Sigma complete while unresolved asks whether completeness assumed.
+- lead-audit HF-04: equivalent_forms[0] "every future-directed causal curve that reaches I+ is complete to the past".
+- lead-audit HF-04: logical_form type-mixing.
+
+Also I found a fresh candidate defect: `revised_at: 2026-09-12T00:15:00` while mtime is 00:10:15. Wait — now date is 00:14:44, so revised_at=00:15:00 is IN THE FUTURE relative to wall clock (00:14:44)! That's a direct violation of the audit lead's direction ("created_at must not exceed wall clock"). Actually, let me re-verify: `date -Is` printed 2026-09-12T00:14:44+08:00. And revised_at says 00:15:00+08:00 — 16 seconds in the future. And filed mtime 00:10:15. So the schema content declares a revision time 4m45s after its last write. This is a concrete, machine-checkable provenance defect at the frozen hash. Note CF-6 already documented this class of issue and the controller mitigated at ingest with _received_at; but this is a declared timestamp inside a canonical artifact that reviewers/coverage cite ("rev19/rev20 at 00:15"), so it matters for binding.
+
+Hmm wait, actually, let me double check my reading: maybe the file did get rewritten at 00:10:15 with revised_at set to a planned round number. Yes. Either way, the statement "revised_at is a measured write time" is falsified.
+
+Also check FROZEN.json revision 20 frozen_at 00:15:00 — same future-dating. And FROZEN.json measured hash bbbaa136 now (changed from 855e7cba cited by flash-13/18 minutes ago) — meaning the freeze manifest moved again. I should measure and pin.
+
+Careful about scope creep. Let me define my one class-bound task:
+
+**Task (self-selected, class-bound): F1/AF-WCC-VAC-GEN — independent hash-pinned delta review of canonical `schemas/af_wcc_vacuum.yaml` at measured sha256 b65fcc0f…, checking the six prior F1 revise findings + four lead-audit findings against the current revision, by direct text/line inspection and my own scripted checks; no gate verdict, no node completion.**
+
+Deliverables:
+1. Artifact: `artifacts/worker-056/F1_review_b65fcc0f/review.json` (structured, per-finding disposition with line refs and quotes)
+2. `artifacts/worker-056/F1_review_b65fcc0f/checks.py` (my own checker: class id uniqueness, forbidden tokens, declared-vs-measured mtime check, required field presence, etc.) and `checks_output.txt`
+3. Emit `review` + `artifact` + `status` events into `comms/outbox/worker-056.jsonl` with event_id, node_id F1, class_ids, evidence_refs with hashes, falsifier.
+4. Checkpoint: worker-local checkpoint JSON + run `python3 research_map/checkpoint.py --label worker-056`? That runs ingest etc. Risk: the controller may be running it concurrently; it writes runtime/state/checkpoints/... with timestamp names, and appends checkpoint_log.jsonl. Concurrent runs might interleave writes to current_checkpoint.json but that's acceptable-ish. Other workers did run checkpoint.py (flash-20 did, "official 15-min checkpoint"). Since my prompt explicitly says checkpoint, I'll do: (a) run checkpoint.py (official), and (b) write a worker-local checkpoint to runtime/state/w056_checkpoint_1.json documenting my task/artifact hash. Actually, before running checkpoint.py I should ingest? No — ingest is the controller's job; checkpoint.py internally calls comms.ingest? Let me check checkpoint.py's main to see if it ingests outbox (which would pull my event in). Let me read the rest of checkpoint.py.
+
+Also note: my outbox file may be ingested by the live controller; my events must be schema-valid. Let me check the events schema (research_map/events.schema.json) and comms.py validation requirements.
+
+Let me read the schema file for event validation and the rest of checkpoint.py.
+dsh: reasoning:
+checkpoint.py runs `comms.ingest` (pulls all outboxes into events.jsonl) and writes current_checkpoint etc. Running it concurrently with the live controller could race (events.jsonl appends, current_checkpoint overwrite). But it's designed for this swarm; flash-20 ran it. It doesn't mutate research_map.json. It's acceptable but there's duplicate-append risk on events.jsonl (ingest is presumably idempotent via applied/ingested ids). Let me check comms.ingest for locking. There's runtime/state/map.lock (0 bytes) — maybe used by apply_events, not ingest. Let me check quickly.
+
+Also, I need to be careful: if I run checkpoint.py, it ingests my outbox events into events.jsonl, which is the "accepted stream" — but only if valid. That's fine, that's the designed path.
+
+Given the swarm is at 00:14 and my worker started at 00:12:30, I have maybe... dsh runs up to 4 hours for others; I should just be bounded and complete within reasonable steps.
+
+Plan for the review work. Let me pull the relevant sections of the F1 schema and check the prior findings. Let me dump the full F1 schema to inspect; 33KB YAML, maybe ~500 lines. Let me read it with line numbers in chunks, focusing on: class_components, conclusion, i_plus, non_vacuity, falsifier, quantifiers, genericity, f0_binding, unresolved_items, review_status, provenance, topology.
+
+Let me convert to a readable listing with line numbers via grep -n or read the raw YAML file. I'll read the raw file in chunks. First, count lines and get an outline with line numbers.
+dsh: reasoning:
+Interesting! The file is only 332 lines and has duplicate `revised_at:` keys at lines 8, 10, 12, 14, 16, 20 — YAML duplicate keys! That's why yaml.safe_load showed revised_at = 00:15:00 (last wins) and revised_at_unused = 23:30:35 (last wins). Duplicate keys in YAML: many parsers take the last, some error. This is a real schema hygiene defect: 8 revision-history lines with duplicate key `revised_at` and one `revised_at_unused`. The line 20 value 2026-09-12T00:15:00 is in the future relative to the file mtime (00:10:15) and was ~16s in the future relative to wall clock when I measured (00:14:44). Let me recheck now.
+
+This is a genuine, specific, machine-checkable defect at the frozen hash b65fcc0f: revision timestamps are duplicated keys, one of which is future-dated relative to the measured mtime, and all reviewer tooling that uses yaml.safe_load will silently see only the last value (00:15:00) while the true write time is 00:10:15. That's exactly the kind of "prose/declared vs measured" divergence the audit gate cares about, and it exemplifies CF-6.
+
+Let me now read the whole F1 schema to do the substantive delta check. Read lines 1-332 in two chunks.
+dsh: reasoning:
+Now I have the full F1 schema (revision 9, b65fcc0f). Let me check the prior findings:
+
+**F1-16-01 (major): conclusion.statement and i_plus.completeness_definition assert an equivalence that equivalence_claim/equivalence_status mark unverified.**
+Current: `i_plus.completeness_definition_status` (l.199) explicitly says "It is NOT the unverified equivalence recorded in conclusion.equivalent_standard_formulation, and it asserts no theorem (worker-16 F1-16-01 clarification)." conclusion.equivalent_standard_formulation.status (l.251) = "claimed equivalence, UNVERIFIED". So this appears addressed. Need to verify wording: completeness_definition says "every null geodesic generator of I+ is future-complete: it is defined for all values of the affine parameter induced by gtilde; equivalently every future-directed null geodesic reaching I+ has infinite affine length with respect to g". Hmm — "equivalently every future-directed null geodesic reaching I+ has infinite affine length with respect to g" — this is the standard geometric fact (generator completeness = infinite affine length of null geodesics reaching I+), not the future-asymptotic-predictability equivalence. That's a definitional equivalence, standard. Fine.
+
+**F1-16-03 (medium): non_vacuity.condition requires non-empty black-hole region.**
+Current l.188: explicitly says "The stronger requirement that the black-hole region B be non-empty belongs to the separate black-hole-formation statement and is NOT assumed here (worker-16 F1-16-03 accepted)." Addressed.
+
+**F1-16-04 (medium): falsifier.tier_1 demands open/residual set of counterexample data while the statement is universal over D_gen.**
+Current tier_1 (l.266-272): requires "an argument that the failure set is non-meager", genericity_requirement explains non-meagerness; and distinguishes route R1 (general) vs R2 (instantiated G*). This addresses the objection. Actually the objection said "while the statement is a universal over D_gen, so one D_gen member would refute it logically". But the schema uses existentially quantified G (forall D0 exists G...), so non-meagerness is required. The current text explicitly reasons about this. Addressed.
+
+**F1-16-05 (medium): falsifier.machine_checkable_steps still include 'check membership in D_gen' and 'verify that the maximal development is future-incomplete', which are proof obligations, not finite computations.**
+Current machine_checkable_steps (l.270): ["constraint residuals below tolerance", "AF decay rates at declared orders", "finite affine parameter while future-inextendible in M", "causal relation to an exhibited point of I+"]. Membership in D_gen and future-incompleteness are now in proof_obligations (l.271): ["non-meagerness of the not-P set (general route R1)", "future-inextendibility of gamma in M", "D in G* (membership), needed only for the instantiated route R2"]. And non_machine_checkable_step (l.272). Addressed. Though "finite affine parameter while future-inextendible in M" is a mix — future-inextendibility is a proof obligation but is listed in machine_checkable_steps. Minor nuance: the step list says "finite affine parameter while future-inextendible in M" which conflates a checkable bit (finite affine parameter, if gamma is given numerically) with a non-checkable bit (future-inextendibility). But proof_obligations also lists future-inextendibility. This is a residual minor overlap; could flag as minor.
+
+**F1-16-06 (minor): quantifier_order_status and acceptance_map.exact_quantifiers are 'pinned' while D_GEN depends on genericity.generic_set (proposed_pending_A1) and the (s,delta) proposal.**
+Current: there's no `quantifier_order_status` or `acceptance_map` keys anymore. quantifiers has order_matters/order_note; genericity.generic_set is defined. So fields removed/changed. Addressed-by-revision.
+
+**F1-16-07 (minor): self-check records ambiguity runner run on revision 2 and expects re-run before any gate claim.**
+Current: adjudication_queue.provenance says worker_sha256 7a3e1f93 (revision 3-era draft) status "input to the canonical revision, not authority". Not a self-check claim. Hmm, need to check whether the ambiguity runner was re-run on rev9. There's artifacts/formulation/evidence/... maybe. The adjudication_queue provenance explicitly labels it as input, not authority. Partially addressed; the re-run on rev9 may still be outstanding. Actually let me check the FROZEN manifest/rule_spec for evidence of re-run. This is minor.
+
+**lead-audit HF-06 (critical): F1 revision 2 drops two clauses of the F0 class conclusion: (a) 'every future-inextendible causal geodesic contained in J-(I+) is complete' reading relegated to f0_equivalent_form; (b) F0 clause 'the black-hole region B has non-empty interior whenever the development is future-incomplete' absent; f0_consistency claims axes_match=true while conclusion text differs; divergences DIV-1/DIV-2 do not cover this.**
+Current: (a) In rev9, the canonical visibility is single-q tail (l.216-218) and the set-based reading is a variant (l.232-240). The F0 taxonomy's declared wording was set-based (per why_separate l.238: "the declared F0 taxonomy used this set-based wording before the 2026-09-12 adjudication"). So there is now an explicit divergence between F1 canonical single-q tail and F0's set-based wording — recorded as variant SET, pending Human PI. Is the divergence mapped in F0? The astra-classscope-02 direction seems to have changed F0 (research_map/formulation_taxonomy.yaml 565a6e505188 at 00:07) — the class-scope direction. Need to check what F0 currently says about AF-WCC-VAC-GEN's visibility predicate and whether F1's f0_binding hash is stale (declared_f0_sha256 = 66bf917bd368... but measured F0 = 565a6e505188!). THIS is a concrete defect: `f0_binding.declared_f0_sha256: 66bf917bd368...` while the measured canonical F0 taxonomy sha256 is `565a6e505188...`. The binding's own rule says "if the declared F0 artifact changes hash, this binding must be refreshed and the consistency check re-run before any gate verdict". So F1 at b65fcc0f carries a STALE F0 binding (declared 66bf917b vs measured 565a6e50). That is a hard, machine-checkable finding at the frozen hash, and it directly impacts G-FORM (F1 conclusion must bind to F0's class contract).
+
+Also (b) black-hole region non-empty interior clause: current non_vacuity.condition explicitly excludes it (l.188) and conclusion.forbidden_strengthenings includes "black-hole region non-empty" (l.253). So the F0 clause dropping is now a documented, adjudicated divergence (assuming F0 also revised). Need to check F0's current text for AF-WCC-VAC-GEN conclusion to confirm consistency or divergence.
+
+**lead-audit HF-06: file records linter-shaped wording.** Current l.129 excluded_data says "[R1 minor: this field previously conflicted...]" and genericity l.155-156 has acceptance_alignment noting "A gate matching only the literal words 'open dense' would accept a stronger class than this one - recorded as a vocabulary risk." That's an honest disclosure rather than linter-shaped wording. But note the linter-shaping issue may persist in other forms. Also F1's `scope_statement` l.37-41 uses "no future-incomplete causal geodesic is visible from I+" vs formal l.50 "forall future-inextendible causal geodesics gamma with finite affine length: not exists q in I+ with gamma subset J^-(q) intersect M". Wait! The formal quantifier (l.50-51) says "not exists q in I+ with gamma subset J^-(q) intersect M" — that's the WHOLE-geodesic containment, not the tail! But visibility.definition (l.216) explicitly uses the TAIL gamma([t0,T)). So there's an internal inconsistency at the current hash: the `quantifiers.formal` statement and `conclusion.statement_formal` (l.247: `not exists visible_singularity_from_I_plus(M_D)`) use the whole-geodesic containment phrasing, while `visibility.definition` (the canonical predicate) uses the tail. The formal quantifier block (i)-(ii) at l.47-51 is the mathematical statement; it says "forall future-inextendible causal geodesics gamma of (M,g) with finite affine length: not exists q in I+ with gamma subset J^-(q) intersect M." That's the old set/whole-geodesic reading, i.e., the variant SET reading, NOT the canonical single-q tail predicate. The astra-classscope-02 rev9 delta claims "ONE canonical visibility predicate (single-q tail) made explicit as the class's only predicate" but the formal quantifier block was not updated to the tail form.
+
+Hold on, let me double-check. The variant SET statement (l.236) is "gamma([0,T)) is contained in the union of J^-(q) over all q in I+" i.e. gamma ⊂ J^-(I+). The formal quantifier block says "not exists q in I+ with gamma ⊂ J^-(q) intersect M" — single q, whole geodesic. The canonical predicate is "exists q, exists t0: gamma([t0,T)) ⊂ J^-(q)". The negation is "for all q, for all t0: tail not ⊂ J^-(q)". The formal block gives "for all gamma: not exists q: gamma ⊂ J^-(q)" — single-q whole-geodesic, which is a THIRD reading (single-q whole-geodesic), neither the canonical tail predicate nor the set-based union variant. Hmm.
+
+Actually let me re-read l.50-51:
+```
+    forall future-inextendible causal geodesics gamma of (M,g) with finite affine length:
+    not exists q in I+ with gamma subset J^-(q) intersect M.
+```
+And visibility.definition l.216: "a future-inextendible causal geodesic gamma... is visible from I+ iff there exists q in I+ AND t0 in [0,T) such that the TAIL gamma([t0,T)) is contained in J^-(q) intersect M."
+
+So yes: `quantifiers.formal` uses whole-geodesic containment without t0; `visibility.definition` uses the tail. These differ: a geodesic that starts in J^-(I+) (visible early) but ends in the black-hole region is visible under... hmm wait. Whole geodesic ⊂ J^-(q) is stronger than tail ⊂ J^-(q). So "not exists q: whole gamma ⊂ J^-(q)" is weaker (easier to satisfy) than "not exists q,t0: tail ⊂ J^-(q)". I.e., the formal quantifier statement's non-visibility conclusion is strictly WEAKER than the conclusion defined via visibility.definition. The visibility.negation_conclusion (l.218) gives the correct tail-negation: "for every ... q in I+ and every t0 in [0,T), the tail ... is NOT contained ...". But quantifiers.formal (the machine-readable statement of the class) wasn't aligned to the tail. And conclusion.statement_formal is a shorthand using the predicate name, so it's fine; but quantifiers.formal is the "formal" statement and the negation (l.80-84) also says "some future-inextendible causal geodesic of finite affine length is visible from I+" which defers to the predicate — fine.
+
+So a fresh, sharp finding: **the canonical schema's `quantifiers.formal` block (lines 50-51) still expresses visibility via whole-geodesic single-q containment, contradicting the canonical tail predicate per the rev9 delta and `visibility.definition`/`visibility.negation_conclusion` lines 216-218.** Under the classscope-02 direction, this is exactly the class-scope defect the lead was supposed to fix: the machine-readable formal statement encodes a non-canonical reading. The variant SET (l.236) is the union version; l.50-51 is single-q whole-geodesic, which is not even variant SET — it's a third reading. Hmm, wait: is single-q-whole-geodesic equivalent to tail-single-q? No: tail-single-q visibility requires only the tail inside J^-(q); whole-geodesic requires the entire geodesic. A geodesic starting to the past of q outside J^-(q) and ending inside: tail-visible but not whole-visible. The schema itself (l.216) says "requiring the whole geodesic to lie in J^-(q) would misclassify a geodesic that starts in the exterior and ends inside the black-hole region" — precisely describing why tail is used. So l.50-51's "gamma subset J^-(q)" is exactly the misclassification the schema text disavows. That's a genuine internal contradiction at the frozen hash.
+
+Wait, is the `formal` field actually the class statement, or just a rendering? It's under `quantifiers.formal`, the formal statement with ordered quantifier list. The ordered list matches: forall gamma, not_exists q. There is no t0 binder. So yes, it omits the tail binder t0. This is a real defect.
+
+Hmm, but careful. Note the negation_normal_form l.85 uses P_WCC(D). And the ordered quantifiers list (l.52-58) also lacks t0. The rev9 comment (l.17-19) says single-q tail predicate "made explicit as the class's only predicate", but it appears only in visibility/conclusion sections, not in the formal quantifier block. This is a strong "revise" item for F1 at hash b65fcc0f.
+
+This is excellent material for an independent review verdict "revise" with hard/critical findings, plus the stale F0 binding (declared 66bf917b vs measured 565a6e50), plus the future-dated duplicate `revised_at` keys contradicting mtime.
+
+I should be careful and rigorous since the review must be defensible. Let me verify each claim by direct text extraction (grep -n) and encode them in a checker script that emits machine-checkable evidence.
+
+Now also check F0 taxonomy's current text for AF-WCC-VAC-GEN to confirm the F1↔F0 divergence direction and the F0 hash. Let me grep formulation_taxonomy.yaml for the WCC class contract and visibility.
+
+Then write:
+- artifacts/worker-056/f1_delta_review_b65fcc0f/review.json
+- artifacts/worker-056/f1_delta_review_b65fcc0f/checks.py
+- artifacts/worker-056/f1_delta_review_b65fcc0f/checks_output.txt
+- maybe a README.md with findings.
+- outbox events.
+
+Let me check F0 taxonomy for WCC class contract and visibility wording.
+dsh: reasoning:
+F0 taxonomy (565a6e50) at line 63 says: "F0 WCC conclusion text amended to the single-q tail predicate; the set-based reading is variant SET". And line 179-181 states the single-q TAIL predicate as the conclusion definition.
+
+So F0 now canonically uses the single-q TAIL predicate; F1's `quantifiers.formal` (l.50-51) omits the tail (whole-geodesic containment). That's a genuine F1↔F0 divergence at the frozen hashes — exactly what G-FORM's criteria require ("all three schemas ... no C0/C2 merge"; class binding to F0). This strengthens my finding: not just internal inconsistency, but divergence from the canonical F0 conclusion text at measured F0 hash 565a6e50, AND F1's declared_f0_sha256 is stale (66bf917b).
+
+Now let me also verify the F0 hash claim: research_map/formulation_taxonomy.yaml = 565a6e505188... (measured earlier). F1 f0_binding declared 66bf917bd368... Different. The binding rule says must refresh if F0 changes. So finding: stale F0 binding + the consistency check evidence (artifacts/formulation/evidence/taxonomy_consistency.json) — let me check whether it refers to old hashes and whether it claims consistency with the tail predicate.
+
+Let me look at that consistency evidence file and the F0 line 144-215 region for the WCC contract.
+dsh: reasoning:
+Confirmed: F0 canonical taxonomy (565a6e50) states the single-q TAIL predicate as the class conclusion, and marks the set-based reading as variant SET, and says "the two readings must never be interchanged".
+
+F1 (b65fcc0f) `quantifiers.formal` (l.50-51) says: "forall future-inextendible causal geodesics gamma of (M,g) with finite affine length: not exists q in I+ with gamma subset J^-(q) intersect M." This uses whole-geodesic containment (no tail/t0), which is the reading that F1's own visibility.definition (l.216) and F0 both reject — indeed F1's visibility.must_not_conflate l.223 says "single-q non-containment (the formal negation) must not be replaced by B-containment". Hmm, that's about B-containment, not whole-geodesic. But l.216 explicitly says "requiring the whole geodesic to lie in J^-(q) would misclassify...". And l.218 gives the correct negation with tail.
+
+Wait — I need to be very careful about the direction. F1's `quantifiers.formal` says the conclusion requires: for all incomplete gamma, NOT exists q such that gamma ⊆ J^-(q). The visibility.definition says gamma is visible iff exists q,t0: tail ⊆ J^-(q). So the class conclusion (no visible singularity) is: for all gamma, not exists q,t0: tail ⊆ J^-(q). The `formal` block drops the t0, i.e., it only forbids whole-geodesic containment. Since tail ⊆ J^-(q) is implied by whole ⊆ J^-(q) (for t0=0 it's the same; whole ⊆ implies tail ⊆), "no whole-geodesic containment" is a WEAKER statement than "no tail containment" — the formal block understates the class conclusion. So the machine-readable formal statement is strictly weaker than the canonical predicate it claims to express. That's conclusion weakening (a "forbidden_weakening" issues? forbidden_weakenings includes "using a weaker visibility notion or a different definition of singular point" l.262 — yes! This is exactly that). So finding: `quantifiers.formal` and `quantifiers.ordered`/`negation` implement a weaker visibility notion than the canonical single-q tail predicate; it contradicts F1's own visibility.definition and F0's class conclusion. Severity: critical/major — the schema's formal statement (the thing Lean/manual reviewers would use) does not match the adjudicated canonical reading and would let a tail-visible/whole-hidden geodesic pass.
+
+Also the `ordered` list has no t0 binder (l.52-58), consistent with the formal block — so the defect is in the formal quantifier layer.
+
+Good. Now let me check the remaining prior lead-audit findings:
+
+- HF-06 completeness contradiction: topology.initial_slice_topology asserts "Sigma connected, oriented, complete Riemannian 3-manifold diffeomorphic to R^3"; completeness_of_slice: true; while unresolved? Current unresolved_items (l.322-326) doesn't include slice completeness. So that's resolved by making it an assumption (topology.completeness_of_slice: true). But is it flagged as an assumption or an assertion? It's a declared class assumption (slice topology). The prior review said it "asserts Sigma is complete, while unresolved[data_class.topology] asks whether completeness of the slice is assumed". Now it's consistently assumed (l.90, l.92). Addressed.
+
+- HF-04 equivalent_forms[0] past-completeness wording: current l.250 defines equivalent formulation as future asymptotic predictability. The old "complete to the past" phrase is gone. Addressed.
+
+- HF-04 logical_form type-mixing: `logical_form` no longer exists; replaced by quantifiers.formal/ordered. The old issue may be gone but a new typing issue exists in my finding above (t0 missing). Partially addressed by revision.
+
+- HF-06 linter-shaped wording: current schema retains explicit disclosures (l.155-156, l.129). The audit's stop rule said "remove the linter-shaped wording". The wording is now a documented vocabulary risk rather than shaping — arguably addressed-at-disclosure, but the schema still records that the gate's lexical matching would accept a stronger class (acceptance_alignment). I'd mark "partially addressed / disclosed", not a hard failure by itself.
+
+- F1-16-06: no quantifier_order_status/acceptance_map fields anymore; genericity.generic_set defined at l.148; D0 defined at l.60. Addressed-by-revision. But D0/D1 domains are defined inside this schema, independent of F0; F0 H4 says topology and spaces "owned by F1 and unresolved here" — consistent.
+
+- F1-16-07: ambiguity runner re-run on rev9: adjudication_queue.provenance labels the harvested worker draft (7a3e1f93) as input, not authority. There is no evidence of a re-run on rev9 in the file. The prior finding expected a re-run before any gate claim. Since no gate claim is being made, this is a residual minor open item, not a hard failure. But note: F1's review_status.independent_reviewers=[] and verdict=pending — so a gate claim isn't claimed.
+
+Additional fresh findings:
+1. **F0 binding stale**: f0_binding.declared_f0_sha256 = 66bf917bd368… while measured research_map/formulation_taxonomy.yaml = 565a6e505188…; the binding's own rule (l.307) says refresh + re-run consistency check before any gate verdict. Also consistency_evidence artifacts/formulation/evidence/taxonomy_consistency.json — check whether it binds to old hashes and whether it's stale. Let me measure that file and inspect.
+2. **Duplicate `revised_at` YAML keys** (l.8,10,12,14,16,20) and duplicate `revised_at_unused` (l.22,24): YAML duplicate mapping keys. yaml.safe_load silently keeps the last value (00:15:00), so programmatic readers see a revision timestamp that is not the write time; the top-level `revised_at` value (00:15:00) is ahead of the measured file mtime (00:10:15) and ahead of wall clock at the time of measurement (00:14:44). This matters because reviewers gate on declared revision times; also many parsers (yaml.v3 strict, duplicate-key error) will fail. It's a machine-checkable defect at the frozen hash.
+3. Possibly: `class_contract_pointer` points to `artifacts/formulation/formulation_taxonomy.yaml#class_contracts.AF-WCC-VAC-GEN` — the AUTHORING tree, while canonical policy says canonical path is authoritative (`research_map/formulation_taxonomy.yaml`). Under the canonical-path policy (ASTRA_HANDOFF line 18-20), the pointer should reference the canonical path; artifacts/ is authoring. Compare: F1's f0_binding.declared_f0_artifact = research_map/formulation_taxonomy.yaml (canonical) but class_contract_pointer → artifacts/formulation/formulation_taxonomy.yaml. Also f0_binding.class_contract_supplement = artifacts/formulation/formulation_taxonomy.yaml. And the authoring taxonomy hash (01e7f841 per coverage matrix, and now "mirror_equal": false). So the class_contract_pointer may point to a divergent authoring tree. Let me measure artifacts/formulation/formulation_taxonomy.yaml vs canonical now. If they differ (mirror_equal false at 00:13:10), that's a policy divergence worth flagging (the pointer is not to the authoritative artifact). But wait — the handoff says "artifacts/formulation/** is the authoring tree and must be published byte-identically before review verdicts bind". So divergence is a known issue (CF-7) assigned to lead-formulation. For F1, the coverage matrix shows F1 canonical == authoring (mirror_equal true) for the schema itself, but F0 taxonomy mirror_equal false. My finding can note that F1's class_contract_pointer targets the authoring tree whose hash differs from canonical, so the pointer target is not the authoritative contract text at review time.
+
+Let me measure now the authoring taxonomy and evidence files, and inspect taxonomy_consistency.json.
+
+Also verify whether `research_map/formulation_taxonomy.yaml` has `class_contracts` key: F1's pointer references `#class_contracts.AF-WCC-VAC-GEN`, but the canonical taxonomy has a top-level `classes:` mapping (I saw `classes:` then "AF-WCC-VAC-GEN"). Does canonical have `class_contracts`? Let me grep. If the anchor doesn't exist, that's another machine-checkable binding defect! Let me check.
+
+Let me run these checks.
+dsh: reasoning:
+Findings confirmed:
+
+1. **`class_contract_pointer` anchor is dangling at the canonical path**: F1 line 34 points to `artifacts/formulation/formulation_taxonomy.yaml#class_contracts.AF-WCC-VAC-GEN` (authoring tree has `class_contracts:` at l.38). The canonical taxonomy `research_map/formulation_taxonomy.yaml` has NO `class_contracts:` key (it uses `classes:` at l.142). So under the canonical-path policy, the pointer's canonical resolution is dangling. Also `f0_binding.class_contract_supplement` points to the authoring tree. Note F1's f0_binding.declared_f0_artifact points to the canonical path but with a stale hash.
+
+Wait — is the pointer intended to reference the authoring tree as "class_contract_supplement"? Under canonical-path policy (ASTRA_HANDOFF: "the canonical path is authoritative (schemas/*.yaml, research_map/formulation_taxonomy.yaml); artifacts/formulation/** is the authoring tree and must be published byte-identically before review verdicts bind"), any schema pointer to the authoring tree is at best a supplement, but the anchor `#class_contracts...` exists only in the authoring copy. The canonical taxonomy expresses the same contract under `classes.AF-WCC-VAC-GEN`. So the pointer is not resolvable against the authoritative artifact. That's a concrete, machine-checkable binding defect. Severity: major (class contract binding cannot be resolved from the canonical artifact).
+
+2. **Stale F0 binding**: declared 66bf917bd368 vs measured canonical 565a6e505188; authoring 01e7f841. The taxonomy_consistency.json exists but is bound to previous revisions (need to check whether it pins hashes; head shows no hashes). Let me grep for sha256 in it.
+
+3. **Duplicate YAML keys for revised_at** (6 occurrences) + 2 for revised_at_unused; declared `revised_at` 2026-09-12T00:15:00 is 4m45s after measured mtime (00:10:15). Actually wait: is 00:15:00 maybe exactly what the author intended as "revision 9 timestamp" written when they saved at 00:10:15? The content includes l.17 comment "rev9 delta (astra-classscope-02)" which happened near 00:10-00:12. So yes, the declared timestamp is not the write time.
+
+Let me also verify that PyYAML safe_load keeps the last duplicate (it does; it silently overwrites). My checker can demonstrate: parse with yaml.safe_load → revised_at=00:15:00; parse with yaml.compose or a duplicate-key detector → list of 6 values. That's a strong machine-checkable evidence artifact.
+
+4. **Formal quantifier block lacks tail/t0** (the big one).
+
+5. Maybe check `visibility.definition` says "exists q AND t0" — but quantifiers.ordered lacks t0 binder. Confirmed.
+
+Now, is there any chance that `quantifiers.formal` line 50-51's "gamma subset J^-(q) intersect M" is meant to be read as the tail? No — gamma is the whole geodesic; the definition explicitly introduces tails. And F1's own `visibility.negation_conclusion` (l.218) says the negation is "for every ... q and every t0 ... tail NOT contained", while `quantifiers.negation` (l.80-84) says "some future-inextendible causal geodesic of finite affine length is visible from I+" (deferring to the predicate — actually it's fine because it names "visible"). The `negation_normal_form` uses P_WCC. So the defect is specifically in `quantifiers.formal` (l.50-51) and `quantifiers.ordered` (l.52-58) missing the t0/tail structure.
+
+Hmm, actually let me reconsider the severity and correctness once more. In the `formal` block:
+
+```
+forall (s,delta) in D0: exists G_{s,delta} subset X... comeager:
+forall (Sigma,h,K) in G_{s,delta}, letting (M,g) be the MGHD:
+exists a conformal completion ... such that (i)... (ii)...
+and
+forall future-inextendible causal geodesics gamma of (M,g) with finite affine length:
+not exists q in I+ with gamma subset J^-(q) intersect M.
+```
+
+The final clause: for all future-inextendible finite-affine-length gamma, no q with gamma ⊆ J^-(q)∩M. Per visibility.definition, gamma is visible iff ∃q ∃t0: gamma([t0,T)) ⊆ J^-(q)∩M. So "no visible singularity" should be: ∀gamma ∀q ∀t0: gamma([t0,T)) ⊄ J^-(q). The formal block instead asserts ∀gamma ¬∃q: gamma ⊄ ... — i.e., it allows gamma([t0,T)) ⊆ J^-(q) as long as gamma([0,t0)) ⊄ J^-(q). Since the schema explicitly says a geodesic may start in J^-(I+) and end in the black-hole region (l.218: "a geodesic may begin in J^-(I+) and end in the black-hole region"), the formal block would classify such a geodesic as NOT visible, while the canonical predicate classifies its tail as visible. So the formal statement is strictly weaker. Confirmed defect. Good.
+
+Also note the `ordered` list l.57-58: `{kind: forall, binder: gamma, domain_id: D4}` then `{kind: not_exists, binder: q, domain_id: D5}` — missing the tail-selection binder t0 (and the tail cut). This is a formal-layer defect.
+
+6. Another check: `visibility.witness_protocol` step (4) says "causal relation gamma subset J^-(q) for an exhibited q in I+" — again whole-geodesic, not tail, contradicting the definition. Another instance of the same defect (line 224). Good: two machine-checkable instances.
+
+Now let me also check `conclusion.statement_formal` (l.247) — it uses `not exists visible_singularity_from_I_plus(M_D)` (predicate name), so it's fine.
+
+OK. I have a strong, defensible set of findings. Verdict: **revise** (not accept) with hard failures? The distinction: `hard_failures` in the review schema is a list. The audit's HF-04/HF-06 were codes. I'll use descriptive codes: HF-F1-01 etc. Let me use codes consistent with the findings:
+- HF-01 (critical): formal quantifier layer drops the tail/t0 binder → weaker visibility notion than the canonical single-q tail predicate; contradicts visibility.definition and F0 canonical conclusion. Lines 50-51, 57-58, 224.
+- HF-02 (major): class_contract_pointer + f0_binding.class_contract_supplement target the authoring taxonomy; the anchor `class_contracts` does not exist in the canonical taxonomy (canonical uses `classes`), so the class-contract binding is not resolvable against the authoritative path.
+- HF-03 (major): f0_binding.declared_f0_sha256 (66bf917b) ≠ measured canonical F0 (565a6e50); binding's own rule requires refresh + re-run of the consistency check before any gate verdict. Evidence file taxonomy_consistency.json (9e335e9b) has no hash pins.
+- HF-04 (minor/moderate): duplicate YAML mapping keys `revised_at` ×6 and `revised_at_unused` ×2; last-wins parsing reports revised_at=2026-09-12T00:15:00 which postdates the measured file mtime (00:10:15) by 4m45s and was future relative to wall clock at review time (00:14:44); declared revision time is not the write time.
+
+And prior-finding dispositions:
+- F1-16-01: addressed (i_plus.completeness_definition_status, equivalent_standard_formulation.status).
+- F1-16-03: addressed (non_vacuity.condition rewritten, black-hole clause removed; conclusion.forbidden_strengthenings includes it).
+- F1-16-04: addressed (tier_1 non-meagerness + routes R1/R2).
+- F1-16-05: addressed (machine_checkable vs proof_obligations split); residual overlap minor: l.270 still lists "finite affine parameter while future-inextendible in M" in machine_checkable_steps while l.271 lists future-inextendibility as a proof obligation — duplicated across categories.
+- F1-16-06: addressed-by-revision (fields removed; D0/generic_set defined).
+- F1-16-07: partially addressed (adjudication provenance explicitly marked "input, not authority"), but no evidence of an ambiguity-suite re-run at rev9; carried as an open minor item, not a hard failure.
+- lead-audit HF-06 (F0 conclusion divergence, BH clause): partially addressed — BH clause divergence now documented in non_vacuity.condition and F0's candidate_consequences (status unresolved_pending_L0_L1), but the WCC visibility clause divergence has flipped: F0 adopted the single-q tail predicate while F1's formal quantifier block still encodes the whole-geodesic reading (HF-01). So the F0↔F1 conclusion alignment requested by the audit is NOT satisfied at the two measured hashes.
+- lead-audit HF-06 (linter-shaped wording): addressed-at-disclosure (acceptance_alignment records the vocabulary risk; no field claims the formulation was shaped to pass a linter).
+- lead-audit HF-06 (slice-completeness contradiction): addressed (completeness_of_slice: true, consistent assumptions).
+- lead-audit HF-04 (past-completeness equivalent form): addressed (removed; equivalent_standard_formulation is future asymptotic predictability, unverified).
+- lead-audit HF-04 (logical_form type-mixing): addressed-by-revision (logical_form removed), but the replacement quantifier layer carries HF-01.
+
+That's a thorough review. Now the artifacts. Let me create:
+
+`artifacts/worker-056/f1_delta_review_b65fcc0f/`
+- `checks.py` — my own independent checker that:
+  - measures sha256 of the F1 file and the F0 taxonomy; asserts F1 == declared review hash b65fcc0f...
+  - detects duplicate YAML mapping keys without trusting safe_load (custom compose-based scan)
+  - parses with safe_load and compares revised_at vs mtime
+  - extracts quantifiers.formal lines and visibility.definition, prints them for the missing-tail check (with a regex check for t0 binder in quantifiers.ordered)
+  - checks class_contract_pointer path+anchor existence: path exists, anchor key exists in parsed doc
+  - checks f0_binding declared hash vs measured
+  - checks class_id uniqueness and no foreign class tokens in F1 (basic)
+  - prints a JSON result and exit code (nonzero if hard failures found — but careful: I want the checker's output to record findings; exit code can be 1 meaning defects found, which is fine and documented).
+- `checks_output.txt` — captured output.
+- `review.json` — the structured review (target, reviewed_sha256, reviewer worker-056, verdict revise, score, hard_failures, findings with line refs/quotes, prior_finding_dispositions, evidence_refs, falsifier).
+- `README.md` — short summary.
+- maybe `findings.json` embedded in review.json.
+
+Then outbox events: 
+1. `review` event (required fields: target_id, reviewer, verdict, score, hard_failures, findings + event_id, event_type, created_at, actor). I'll add class_ids, evidence_refs, reviewed_sha256, gate, task_id, falsifier, artifact path.
+2. `artifact` event (node_id, artifact_type, path, sha256, validation_status) for review.json.
+3. `status` event (node_id, status active, summary, evidence_refs, next_falsifier, hours).
+Maybe also `blocker`? The findings are blockers for G-FORM. I could emit one blocker event: description, needed_to_unblock, evidence_refs. That's within the upward types. But the prompt says "emit valid JSON with IDs evidence hash falsifier". A review + artifact + status is enough; adding blocker is defensible since F1's gate can't pass with HF-01. Let me include a blocker event (node F1, needed_to_unblock: lead-formulation aligns quantifiers.formal/ordered to the tail predicate, refreshes f0 binding, fixes contract pointer; then re-freeze and re-review at the new hash).
+
+Note: created_at must not exceed wall clock (per audit lead direction). I'll generate timestamps with `date -Is` at write time.
+
+Checkpoint: 
+- Write worker-local checkpoint `runtime/state/w056_checkpoint_1.json` with task, artifact hashes, gate relevance, falsifier.
+- Run `python3 research_map/checkpoint.py --label worker-056-f1-review` (official checkpoint). This ingests outboxes including mine. Risk of concurrent run: acceptable; other workers do it. Actually, wait: should I run checkpoint before or after writing outbox events? To have the official checkpoint include my events (flash-20 did exactly this: "Official 15-min checkpoint after ingesting this increment"), I should write outbox first, then run checkpoint.py, which ingests. Good.
+
+But caution: checkpoint.py `comms.ingest` may reject my events if schema validation is strict (e.g., review event requires exact required fields; artifact requires path/sha256/validation_status). I'll ensure compliance. `status` isn't in the oneOf schema list! Look at events.schema.json oneOf: directionUpdate, claim, artifact, review, resource_request. Interestingly `status` and `blocker` are NOT in the schema's oneOf — but many existing events use event_type status and blocker, and validate_events apparently accepts them? The schema has oneOf with no "status" or "blocker" or "assignment" definitions, so a status event would fail oneOf... unless comms.ingest only validates some types. Let me check comms.py ingest validation to be safe. Many status events exist in events.jsonl (e.g., flash-02 status), so they must be accepted. Let me look at comms.py quickly for the validation logic.
+
+Let me read the key parts of comms.py: ingest() and validate usage.
+dsh: reasoning:
+Good. Ingest handles status/blocker/artifact/review. Validation is via schemas.validate_event. Let me check schemas.py validate_event to know exactly what's required (probably per

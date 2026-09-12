@@ -1,0 +1,903 @@
+dsh: reasoning:
+I'm a bounded execution worker (worker=084). I need to read handoff/map and comms, take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit.
+
+Let me start by exploring the workspace to find the handoff/map and comms files.
+dsh: reasoning:
+No handoff directory found at top-level with that glob. Let me search for "handoff" and "comms" in the workspace. Also, the swarm tarball and launch_swarm.sh might describe the structure. Let me look at .agents, workdir, anm_scratch (recently modified Sep 12 01:07).
+
+Recent modification times: anm_scratch (Sep 12 01:07), tmp (01:20), .agents. Let's inspect.
+dsh: reasoning:
+The swarm is at /data3/guoshaoyang/workdir/ai4math-swarm. Let me look at the structure: research_map, handoff, comms, tasks. Let me read the launch_swarm.sh and the swarm dir.
+dsh: reasoning:
+I'm worker 084 in the ai4math-swarm. Let me read the HANDOFF.md, ASTRA_HANDOFF.md, and the comms (inbox/outbox). Also look at worker-084 artifacts already existing, and the schemas for events.
+
+Let me read HANDOFF.md first and check comms dir.
+dsh: reasoning:
+I'm worker 084. Let me read my inbox (worker-084.jsonl), the PROTOCOL.md, and check for assignments in comms/outbox/assignments. Also check my artifacts dir.
+
+Let me read:
+1. /data3/guoshaoyang/workdir/ai4math-swarm/comms/PROTOCOL.md
+2. /data3/guoshaoyang/workdir/ai4math-swarm/comms/inbox/worker-084.jsonl
+3. ls comms/outbox/assignments
+4. ls artifacts/worker-084
+dsh: reasoning:
+The inbox line is truncated at 2000 chars. I need to see the full assignment. Let me use python or jq to dump the full JSON. Also, check if there's a newer assignment in inbox (line 1 only?). The file has 1 line and it was modified Sep 12 00:38. So this is my assignment: FORM-HELDOUT-09.
+
+Let me dump the full JSON with python (read-only).
+dsh: reasoning:
+I have the assignment. It's a big task: build a fresh corpus (>=20 mutants across >=10 leak families, >=7 controls) against frozen rev28 bytes, run two-stage pipeline (check_class_schema.py + a second independent stage), aggregate escape rates.
+
+I'm a bounded execution worker with 3 agent-hours budget. I need to:
+1. Read handoff/map and comms ✓ (partially)
+2. Take one class-bound task ✓ (FORM-HELDOUT-09)
+3. Emit valid JSON with IDs, evidence, hash, falsifier
+4. Checkpoint
+5. Exit
+
+I must produce artifacts: artifacts/heldout/heldout-09/manifest.json and report.json, plus raw per-fixture verdicts under artifacts/heldout/heldout-09/.
+
+Let me explore the relevant paths: artifacts/formulation/FROZEN.json, artifacts/formulation/tools/check_class_schema.py, schemas/*.yaml, artifacts/worker-16/heldout2/ (superseded but useful as template), artifacts/formulation/evidence/heldout_rebased.json, gate_probe_blindspot_measurement.json. Also the "second independent stage" — likely a semantic checker. Let me look at what stages exist.
+
+Let me start with a recon in parallel:
+- read FROZEN.json
+- list artifacts/formulation/tools/
+- read worker-16 heldout2 report
+- read event schema for upward messages (events.schema.json) and schemas.py
+
+Let me do a few bash calls.
+dsh: reasoning:
+Interesting. Note: the assignment pins `frozen_revision: 28` and `artifacts/formulation/rule_spec.json` hash 40f9bb... and canonical schemas hashes cce9c601... for af_wcc_vacuum.yaml. But the actual FROZEN.json on disk is rev29, and the actual schema hashes are d9cebb94... (artifacts) / presumably cce9... for schemas/af_wcc_vacuum.yaml? Let me check: FROZEN.json lists "schemas/af_wcc_vacuum.yaml": sha256 d9cebb9404b2e79ef9dab7df7b13113dd3fbd9900848a810eb8d78bd357c5d3d — but that's rev29 with F1 rev13. The assignment pins cce9c60146d6a907082ade91c67c8ac658bd796d1241f9bb8965c3d2aa69daa3 which is presumably the rev12 (rev28 freeze) hash of schemas/af_wcc_vacuum.yaml.
+
+And the assignment's frozen_manifest_sha256 = 2f358f6722d920621a66c0259cb48d35a5e3c1b706f28adf37ed467325fcedf1 — presumably FROZEN rev28's file hash. Current FROZEN.json is rev29 → changed. So the "moving target" condition applies! The falsifier says: "or a mid-run change to any pinned canonical hash (stop and report a moving-target blocker instead)."
+
+Hmm. Wait — this is exactly the trap: the assignment pins rev28 bytes, but the FROZEN.json on disk is now rev29 (modified 00:57, after the assignment at 00:38). The canonical schemas were updated to rev13 (F1) at rev29, so their current sha256 differ from the pinned values. Let me verify hashes on disk.
+
+Also there's already artifacts/heldout/heldout-09/ (modified Sep 12 00:56) and heldout-10 (01:07), heldout-10-mechanism (01:19). So other workers (perhaps worker-084 earlier runs? or another agent) already did this task. Wait: heldout-09 exists with 8 subdirs. Let me inspect. It might be an earlier run by me (worker-084) at 00:38-00:56, before this session. The instruction says "take one class-bound task, emit valid JSON... checkpoint, then exit". Perhaps I already did part of the work in a prior session and need to finish/emit. But the assignment says the artifact must be built under artifacts/heldout/heldout-09/. It exists.
+
+Let me inspect what's in artifacts/heldout/heldout-09/ and whether report.json exists and is complete/correct. Also check the git log for recent activity and events.jsonl tail for worker-084 events.
+
+The critical thing: is there a moving target? The pins in the assignment correspond to rev28 frozen bytes:
+- frozen_manifest_sha256 2f358f... (FROZEN.json rev28's hash)
+- schemas/af_wcc_vacuum.yaml cce9c601...
+- schemas/af_scc_c2_vacuum.yaml 5476a3f2...
+- schemas/af_scc_c0_vacuum.yaml 55d0a1ea...
+
+Let me compute current hashes. If the current canonical files differ, then the task's H1 requires recording the five pins in the manifest and building fixtures against the FROZEN rev28 bytes. But the frozen bytes for rev28 may still be recoverable from git (the swarm dir is a git repo!). FROZEN rev28 = schemas rev12. Since .git exists (Sep 12 01:21), we could recover rev28 bytes from git history. But wait, if we build the corpus against rev28 bytes while current on-disk canonical is rev29, we must check out rev28 versions into a sandbox for building.
+
+The assignment says "build a FRESH corpus against the rev12/FROZEN rev28 frozen bytes" and "the five pins are listed above so the corpus cannot bind superseded bytes". And H6: independent executor who did not build R26-R31 rules and not worker-16.
+
+The falsifier includes "or a mid-run change to any pinned canonical hash (stop and report a moving-target blocker instead)". So first order of business: verify the five pins were/are available and unchanged from the moment the assignment was dispatched to the run. If rev29 changed the canonical schemas after dispatch, the pinned bytes are no longer on disk at the canonical path — but the assignment says explicitly to build against rev28 frozen bytes. Since FROZEN rev29 changed the schemas (F1 rev13 visibility strictness corrections, f0_binding refresh), the on-disk canonical paths do NOT match the pins. The instruction says: a mid-run change to any pinned canonical hash → stop and report moving-target blocker.
+
+But "mid-run" means during my run. The change happened at 00:57 (rev29), before my run presumably started (my session now, ~01:20). Hmm, but my assignment was created at 00:38, before rev29. So the pinned bytes existed at assignment time and then changed at 00:57 while the task was outstanding. Is that a mid-run change? The task was dispatched before the change. The H1 acceptance test says manifest must record the five pins and hash every fixture. The pinned hashes don't match current canonical paths. But they may match git history.
+
+Let me check what heldout-09 already contains — maybe an earlier executor already dealt with this. There are heldout-10 and heldout-10-mechanism too, created by other workers (worker-006? etc). Let me inspect the artifacts and the events/comms around heldout-09.
+
+Plan:
+1. Check current hashes of the five pinned files → detect drift.
+2. Inspect artifacts/heldout/heldout-09/* (existing partial/full work) and git status/log.
+3. Check events.jsonl tail / outbox for heldout-09 events.
+4. Decide: if drift is detected and unrecoverable at canonical path, either (a) build against rev28 bytes recovered from git (recorded as pinned) and note moving-target, or (b) report blocker.
+
+Actually, the falsifier wording: "or a mid-run change to any pinned canonical hash (stop and report a moving-target blocker instead)". A careful reading: if during the run, a pinned canonical hash changes, stop and report moving-target blocker. The pins were resolved at dispatch. The change to rev29 happened at 00:57, ~19 min after dispatch. Was there a run in between (heldout-09 dir at 00:56)? The dir modification 00:56 suggests an executor started building and then rev29 landed at 00:57. That would be precisely a moving target.
+
+Hmm, wait. Let me check the timeline more carefully:
+- heldout-09 dir: Sep 12 00:56
+- FROZEN.json rev29: 00:57 (file mtime 00:57)
+- heldout-10: 01:07
+- heldout-10-mechanism: 01:19
+
+Let me look at what's inside heldout-09 and read its manifest/report (if any). If a previous worker-084 run produced report.json but didn't emit comms, maybe I need to validate and emit. If the run is incomplete, I need to complete it.
+
+Let me inspect.
+dsh: reasoning:
+Key observations:
+
+1. **Pin drift exists**: the three canonical schemas on disk now have rev13/rev29 hashes (d9cebb94, e9a27996, b2ab6acb) while the assignment pins rev12/rev28 hashes (cce9c601, 5476a3f2, 55d0a1ea). FROZEN.json is rev29 (815e0807) not the pinned 2f358f67. Only the taxonomy (0abb9ed8) and rule_spec (40f9bb9e) still match.
+
+2. **heldout-09 directory already has a complete-looking corpus built**: mutants (29), controls (4), manifest.json, report.json, raw/raw_verdicts.json, checkpoint.json, findings.json, verify/ (verification.json, adjudication.json, INDEPENDENT_REVIEW.md, live_canonical/...). Also build/run/finalize scripts. Created at 00:56 — this looks like it was built by an earlier worker (maybe worker-084 in a prior session, or worker-096/whatever) before the rev29 change.
+
+So a previous executor built heldout-09. Wait — but was it me (worker-084)? The task was assigned to worker-084 at 00:38. The dir was created at 00:56. Possibly the previous worker-084 session built it. My current session is a fresh continuation. I need to determine status: is report.json valid, complete, and does it meet the acceptance tests? Does the manifest record the five pins and fixture hashes hashed BEFORE any stage run? Are the fixtures built against rev28 bytes? Are there >=20 mutants across >=10 families, >=7 controls (H2 says >=7 controls but H5 says controls = 3 frozen canonical + 2 conforming + 2 negated-phrase = 7; the dir has only 4 controls: c01, c02, c03, c04)? That's a potential gap! H5 requires exactly: 3 frozen canonical schemas + 2 conforming controls + 2 negated-phrase controls. The controls dir has c01_conforming_c2, c02_conforming_c0, c03_quoted_wcc_phrase, c04_quoted_composite — only 2 conforming + 2 quoted (negated-phrase?) = missing the 3 frozen canonical controls (unless bases/ serves as those). manifest.json may reference them.
+
+Let me read the manifest.json, report.json, checkpoint.json, findings.json, and the verify outputs. Also check the report's raw verdicts and whether the pinned hashes are recorded.
+
+Also critical question: did rev29 (00:57) modify the canonical schemas while heldout-09 was being built (00:56)? If so, this is the moving-target condition. But the assignment explicitly pins rev28 bytes, and the corpus should have been built against those bytes. The dir has bases/ with three yaml files — let me hash them: if bases = rev28 bytes (cce9c601 etc.), then the corpus was built against the frozen rev28 bytes correctly. The verify/live_canonical/ copies would then be the live rev29 bytes used for the second stage.
+
+Let me inspect.
+dsh: reasoning:
+A previous worker-084 session did indeed build the corpus at 00:50 (manifest generated_at 00:50:20) against the correct rev28 bytes. The bases match the pins. The live_canonical copies are rev29 bytes — used presumably for after-run pin re-measurement showing drift.
+
+Now let me inspect the rest of the manifest, report.json, checkpoint.json, verify/verification.json, adjudication.json, INDEPENDENT_REVIEW.md, findings.json, and raw verdicts. Determine:
+- H2: >=20 mutants across >=10 families, >=7 controls. There are 29 mutants; controls: 4 in controls/ + 3 frozen_canonical_controls maybe referenced → manifest has "frozen_canonical_controls" key. Let's check.
+- H3: two stages run, raw verdicts retained.
+- H4 aggregates present.
+- H5 controls pass both stages.
+- H7 escape rate even if unfavorable.
+
+Then the key question: what remains for me to do in this bounded session? The task says: "Read handoff/map and comms. Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit."
+
+So the deliverable now is likely: verify the existing heldout-09 report is complete and valid, then emit the upward comms JSON (status/artifact/claim?) to comms/outbox/worker-084.jsonl, checkpoint, and exit. But careful: if the existing report has gaps (e.g. missing controls, or was affected by the moving-target), I must address that. Also possible: the previous worker-084 session already emitted events; let me check comms/outbox/worker-084.jsonl (does it exist?) and events.jsonl for worker-084.
+
+Wait, the outbox listing earlier showed no worker-084.jsonl in the head-limited listing (it was truncated). Let me check specifically. Also check runtime/state/artifact_hashes.json for heldout-09.
+
+Note: the earlier `ls` of artifacts/worker-084 showed dirs coverage_recon, f2b_classbind_verdict*, etc. — that's from earlier tasks. But heldout-09 lives under artifacts/heldout/heldout-09.
+
+Let me examine the outputs comprehensively.
+dsh: reasoning:
+Now I have a much clearer picture. The previous worker-084 sessions (this same durable worker id) did a lot:
+
+1. Built heldout-09 against rev28 bytes (29 mutants, 17 families, 7 controls). Result: INVALID because stage B (spec_conformance_audit.py, c79d8ab8440a) rejects the frozen AF-WCC canonical on rule R03 (literal-substring binder match). That's an H5 control failure → corpus format-dominated → run INVALID per the card.
+2. Independently adjudicated heldout-09 as terminally INVALID.
+3. Built heldout-10 against live FROZEN rev29 bytes — also strictly invalid because H5 fails on the same R03/WCC issue (stage B rejects the frozen canonical WCC) — but reported C2/C0 escape 1.0 (13/13 accepted by both stages each arm).
+4. Built heldout-10-mechanism exploring the escape mechanism: SILENT-BLINDNESS; strict class-contract surface union escape 1.0 with 20/20 silent.
+
+The current instruction (this session): "You are a bounded execution worker. Read handoff/map and comms. Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit. worker=084"
+
+So this is a fresh bounded round for worker-084. The prior rounds exhausted heldout-09/10/mechanism. What's the right "one class-bound task" now?
+
+Key considerations:
+- My live inbox card assign-FORM-HELDOUT-09-worker-084 exists (worker-084.jsonl). But it was declared void by the lead at rev29? Let me verify: the last outbox entry (01:19) says "FORM-HELDOUT-09 card void, FORM-HELDOUT-10 is the preserved successor cor..." Let me read the full entry and check inbox for any newer cards.
+- The card's falsifier includes "mid-run change to any pinned canonical hash → stop and report moving-target blocker". Rev29 landed at 00:57 during the heldout-09/10 work. Previous round reported blocker-moving-target.
+- Is there a new task from the lead? Let me check new inbox entries and comms. worker-084.jsonl has only one line (the assignment). Let me check astra-lead-formulation outbox tail for cards dispatched after 01:10 to any worker, and check the research_map for open nodes / the current lifecycle (astra-life05?). Also check reviews/ for recent review of worker-084's heldout work.
+
+Before choosing, let me look at the current time and the state of the swarm. Also whether there are pending assignments for worker-084 anywhere (e.g. comms/inbox/*.jsonl mentions worker-084, or comms/outbox/assignments/).
+
+The task statement for this session says: "Take one class-bound task". The natural continuation: holdout-09 is void/invalid; heldout-10 measured live rev29 with a pre-registered H5 failure. What new class-bound task could add value in a bounded session?
+
+Possibility A: The lead dispatched new cards after the rev29 freeze. Let me search comms for the newest events mentioning worker-084 or heldout.
+
+Possibility B: The right move is to verify/consolidate: since the existing heldout-09 report is terminally invalid, and heldout-10 supersedes it, the task card's artifact paths (artifacts/heldout/heldout-09/{manifest,report}.json) must be reported as INVALID with evidence. The previous session already emitted that (w084-heldout09-07-complete, w084-ind-... claim). But my instruction says to "emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit" — perhaps the current round is expected to do the 09 card properly: the card's H5 failure means INVALID; but the card also says H7 report the escape rate even if unfavorable. The previous run did report.
+
+Hmm. Given that prior worker-084 rounds already completed the full card and successors, and the instruction is to take "one class-bound task", I should look for the latest unmet need. Let me check the map's open nodes/assignments and the lead's latest outbox. If there's an explicit new assignment to worker-084 (maybe in a different file name like worker-084.jsonl I already read — only one line), then follow it.
+
+Let me grep comms/outbox/*.jsonl for "worker-084" in the last events (after 01:10), and also check research_map.json nodes state (A1 etc.). Also read the ASTRA_HANDOFF.md which may have current priorities.
+
+Let me be efficient. I'll:
+1. Tail the lead outboxes (formulation, audit) for recent assignment/priority events.
+2. Read ASTRA_HANDOFF.md (11KB) — current state and queue.
+3. Check tmp/ dirs for recent worker activity.
+
+Actually, since a lot of prior work exists, maybe the highest-value bounded task now is to *close the loop on heldout-09 card*: the card explicitly requires manifest+report at heldout-09 (exists, INVALID). Wait — but the previous session already did exactly this and emitted. And the "checkpoint then exit" instruction suggests this is a harness-driven recurring worker turn: each session reads state, takes a task, emits, checkpoints, exits. The prior sessions did multiple. My job now is to take the next one.
+
+Let me look at the most recent state: what's the latest lifecycle (astra-life05-evidence-binding-repair), what nodes are open in research_map, and any queued assignments. Let me check tmp dirs (24 items) and the lead comms tails.
+dsh: reasoning:
+The swarm is very active; many workers. The lead (life08/09) already consumed the queue and flagged the substantive G-CLASSBIND blocker: union escape 1.0 on both heldout-09 and heldout-10 for C2+C0 arms; R03 instrument defect.
+
+What is the highest-value bounded class-bound task for worker-084 now? Let me check whether there's a new assignment card for worker-084 in inbox — no, only the heldout-09 card. But maybe the lead dispatched new cards at ~01:21 (lead-form-life09). Let me check the newest inbox entries for worker-084 and the newest lead outbox in detail (lead-form-life09 tmp dir + maybe not yet emitted). Also check `comms/outbox/astra-lead-formulation.jsonl` tail for a life09 status.
+
+But per the harness instruction: "Take one class-bound task". Given no new card, the protocol says: "if no assignment exists, inspect the immediate queue and propose one artifact-backed task without claiming completion" (from launch_swarm.sh worker prompt). The prior worker-084 sessions took self-proposed bounded tasks with pre-registration.
+
+Given the state, what's genuinely useful and not duplicated?
+
+Key open substantive issue: **the C2/C0 union escape is 1.0** — the gate G-CLASSBIND would fail. Stage A accepts 13/13 and stage B accepts 13/13 for both C2 and C0 arms. The mechanism task found SILENT-BLINDNESS: mutants whose changed paths lie on the class-contract surface escape both stages. This is the critical finding.
+
+What's missing to close: the lead's blocker at 01:15 says "on two independently built corpora at two different frozen revisions ... union escape 1.0 (0/24 and 0/26 caught). The rev13 prose repair did not close the leak."
+
+A useful next bounded task: **determine whether a specific checker-level repair (a candidate new rule) would catch the escape families, using a pre-registered falsifiable test, without editing canonical rules.** That is, build an *instrument probe*: a minimal rule implementation (candidate detector) that catches the leak families, and measure its sensitivity/specificity on the preserved corpora including the 7 controls and the frozen canonicals, so that the escape is demonstrably closable and the repair proposal is evidence-backed. But prior leads did cand_E3 probe for R03. The workerd-084 mechanism task already did differential analysis. Hmm.
+
+Alternatively, a genuinely different high-value task: **a blind spot coverage check**: verify that the 17 leak families in heldout-09/19 families in heldout-10 are semantically real leaks (not fixture malformations) — i.e., adjudicate each mutant as a true class-contract violation per the frozen class schemas, with an independent classifier, and compute the "true leak rate" among accepted mutants. If some mutants are not actually leaks (e.g. just malformed YAML or cosmetic), then escape 1.0 might be overstated. That's an important measurement: precision of the mutant corpus. Previous work: leak_validity_review.json in worker-16/heldout2 and heldout-09 findings. Let me check if heldout-09 already has leak validity reviewed (findings.json). The mechanism task may have done it.
+
+Let me read the mechanism report/findings/adjudication (artifacts/heldout/heldout-10-mechanism) and heldout-10 reports to know exactly what's measured and what remains open. That informs the next bounded task without duplicating.
+
+Also check reviews/heldout10-thirdparty-repl-worker-092.json (a third-party replication of heldout-10, at 01:20) — someone else already replicated.
+
+Let me read:
+- artifacts/heldout/heldout-10/report.json (summary)
+- artifacts/heldout/heldout-10-mechanism/report.json + findings.json + adjudication.json
+- reviews/heldout10-thirdparty-repl-worker-092.json
+
+Then decide.
+dsh: reasoning:
+I now understand the state comprehensively:
+
+- FORM-HELDOUT-10: 33 mutants / 19 families / 7 controls, live rev29, valid=false solely because stage B rejects frozen WCC canonical on R03 (instrument defect, pre-registered). Informative C2+C0 arms: union escape 1.0 (26/26 escaped; stage A accepts all; stage B accepts all C2/C0 informative-arm mutants? Actually informative arms mutants 26, stage B caught 0 → semantic escape 1.0).
+- Mechanism task: SILENT-BLINDNESS; 20/20 mutants on strict class-contract surface silent in both stages.
+- Third-party replication by worker-092 exists in reviews.
+- The lead's blocker (01:15) records union escape 1.0 on two corpora, and R03 instrument governance gap (stage-2 tool unpinned in FROZEN).
+
+So the substantive open problem: **the union escape 1.0 means G-CLASSBIND cannot pass**. The formulation lead flagged it as a blocker, not something a bounded worker can "fix" by editing canonical rules (frozen; and card says NO rule edits after seeing results).
+
+What can a bounded worker-084 do that is genuinely additive and class-bound right now?
+
+Candidate task A: **Independent verification/attack of the escape measurement itself** — a falsification attempt on the claim "C2/C0 union escape = 1.0". E.g., adversarially test whether the 26 "informative" mutants are *true* violations of the frozen class contracts (the class-binding criterion) using a completely independent, human-readable semantic adjudication. If some are false positives (i.e., not actually class-contract violations), then the escape rate would be lower. This is a high-value measurement: it tests the corpus validity, not the checker. The mechanism report did differential analysis (changed paths on contract surface), but did it adjudicate each mutant against the class contract text independently? The mutant family rationales state "Neither stage compares X", which is about checkers, not about whether the mutant actually breaks the class contract... Actually if a mutant changes the conclusion statement so it no longer asserts future inextendibility, it IS a genuine class violation. The family rationales each name a real semantic leak.
+
+Candidate task B: **Test the escape against the frozen class contract's *own* falsifier/acceptance criteria** by building a *minimal independent third-stage checker* (not editing canonical rules; a sandboxed probe) and measuring how much of the 26-mutant escape it catches, plus false positives on the 7 controls. This would produce evidence about whether a class-contract-level check is closable. But that's arguably rule design, and the card for heldout says "NO rule edits after seeing results" — a probe tool is not a rule edit, and the lead explicitly ran a probe (cand_E3). Still, designing a repair is the lead's job ("Assign class-bound tasks with artifacts, gates, evidence refs, falsifiers"), not a bounded worker's.
+
+Candidate task C: **Verify the third-party replication (worker-092) of heldout-10** — independently re-run the preserved corpus and adjudicate whether worker-092's replication is correct. But that's duplication of an existing review; also worker-084 is author-adjacent, which the mechanism task already declared.
+
+Candidate task D: **A fresh, cross-revision differential**: heldout-09 (rev28) vs heldout-10 (rev29) corpus comparison to determine whether rev13's F1 repair changed escape behavior — already implicitly done (both 1.0).
+
+Candidate task E: **Close the moving-target/void-card loop**: The live inbox card is FORM-HELDOUT-09 whose five pins are stale (4/6 paths changed at rev29). The card's falsifier explicitly says: "or a mid-run change to any pinned canonical hash (stop and report a moving-target blocker instead)". Worker-084 already reported that blocker (w084-ind-...-blocker-moving-target) and built heldout-10 as the preserved successor. The lead's life08 queue said no card newer than astra-life05. So the most faithful "take one class-bound task" for THIS round might be to verify the *binding* of heldout-09 card status: manifest+report at the card paths exist and are INVALID (H5). That is already emitted.
+
+Hmm. Let me consider what the harness expects: "emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit". Likely the evaluation checks that the worker emits a well-formed upward event (probably one of the event types with required fields), with evidence refs as path#sha256, a falsifier, and a checkpoint, then stops. The "task" itself should be class-bound (class_ids present). It doesn't necessarily require new heavy computation; but a bounded worker should produce artifact-backed evidence.
+
+Given the huge amount of prior work by worker-084 (the same durable id), the most valuable *bounded* addition now would be a genuine independent **falsification probe of the 1.0 escape claim**: specifically, test whether the "informative arm" classification is right, i.e., whether any of the 26 "escaped" mutants might be caught by a *different invocation mode* of the two stages (e.g., stage A with --json vs default, different schema path resolution, or the live canonical bytes rather than fixture bytes). Hmm, not obviously.
+
+Alternative: **re-run the heldout-10 preserved corpus from a read-only snapshot in a sandbox with all pinned hashes re-verified** and confirm the exact raw verdicts — but the mechanism task and worker-092 replication did that.
+
+Wait — let me check what the C2C0 escape mechanism found in detail and whether there's an explicit unresolved question. Let me read its findings.json and REPORT.md briefly, plus worker-092's replication review. Then look at whether the lead has dispatched a *new* assignment after 01:15 for anyone on this (e.g., "instrument governance" / "R03 repair" / "stage-2 pinning"). If the lead dispatched e.g. an assignment to a specific worker, I shouldn't duplicate; but worker-084 has no new card.
+
+Actually, I should check the tmp/lead-form-life09 dir (created 01:21) — the lead is running lifecycle 09 right now. Maybe it will dispatch a card for worker-084 shortly. But I can't wait indefinitely. The bounded worker should take a task now.
+
+Let me check the newest events in the accepted stream (events.jsonl tail) to see the latest state, and grep for assignments to worker-084. Also check research_map.json nodes for A1 status and open obligations. Let me do that.
+dsh: reasoning:
+Let me fix the map inspection. The nodes structure may be a list. Let me inspect gates as a list, and controller_findings (REC-36 items) — the current queue seems to be about REC-36 repair package. worker-097 just did CF-32(i) for REC-36 item (7). Perhaps there's a REC-36 item relevant to my class-bound expertise (class-binding / heldout escape).
+
+Let me look at controller_findings and escalations for REC-36, and check the latest lead lifecycle 09 queue. Also the formulation lead's blocker on union escape 1.0 is the substantive one; maybe the controller has an open REC item about it.
+
+Let me query the map more carefully.
+dsh: reasoning:
+Controller findings CF-31 (adjudication-required) and CF-32 (repair-authorized) are the current queue. CF-31 is likely the stage-2 instrument governance/R03 issue; CF-32 is the acceptance corpus repair. Let me read those findings in full, plus the assignments in the map. Also the `assignments` list in the map may have a task for worker-084 or a relevant open task.
+
+Let me print CF-31, CF-32 details and map assignments with status open.
+dsh: reasoning:
+Now the state is crystal clear. The controller's CF-32 says:
+- (ii) stage-B R03 binder defect → FORM-HELDOUT-10 terminally invalid, escape numbers certify nothing.
+- Action (REC-36/REC-41): "the stage-B R03 binder is repaired by its owner with a mutation control and the held-out corpora re-run before any escape number is cited as gate evidence."
+
+So a natural bounded class-bound task for worker-084: **build the mutation-control probe for the R03 binder repair** — but "repaired by its owner" (worker-06 owns spec_conformance_audit.py). As an independent worker, I can provide a *mutation control* for the R03 binder repair — i.e., a pre-registered control set that any R03 fix must satisfy (correct F1 variants accepted, scope-error variants rejected, grouped-tuple forms accepted, negated binders etc.). The lead already did a scope-sensitivity probe with cand_E3 (3 variants × 2 tools). The gap: the lead's probe showed cand_E3 not scope-safe; but there's no *mutation control* that the owner's eventual repair must pass, and CF-32 explicitly requires "repaired by its owner with a mutation control".
+
+Providing a mutation control for R03 is a bounded, artifact-backed, class-bound task: class AF-WCC-VAC-GEN (F1). It would produce:
+1. A pre-registered control corpus: N mutation variants of the frozen F1 formal sentence + quantifier block, each labeled by truth (correct ≡ frozen semantics; incorrect = scope/negation/binder errors), each as a full fixture derivable from the frozen bytes.
+2. Run the *current* stage B (baseline c79d8ab8440a) and a *candidate* repair (if an owner's repair exists — none yet, so maybe the lead's cand_E3 3f69bc1eb27a) against the control set to measure sensitivity/specificity.
+3. Report a control matrix that any repair must satisfy, with a falsifier: if the proposed repair accepts a labeled-wrong variant or rejects a labeled-correct variant, it fails the mutation control.
+
+But wait: worker-084 is not the owner and shouldn't edit the tool. Running a control against the frozen baseline + an available candidate (cand_E3 at artifacts/... 3f69bc1eb27a) is measurement evidence, fine. The lead's earlier probe used only 3 variants; a proper mutation control with 10+ labeled variants would be genuinely additive and directly serves CF-32's requirement.
+
+Alternatively: **independent re-verification of the R03 defect and candidate repairs** — but that's partly done.
+
+Another candidate: the controller's CF-32(i) is about the acceptance corpus rebind; worker-097 already did CF-32(i) reproduction and REC-36 item (7). What about CF-32(ii)'s "held-out corpora re-run before any escape number is cited"? Since the R03 repair doesn't exist yet, a re-run is premature. But there's a subtlety: the R03 defect only affects the WCC arm (F1 canonical rejected). The informative C2/C0 arms' escape 1.0 is *independent of* the R03 defect — the lead said so explicitly ("SUBSTANTIVE G-CLASSBIND BLOCKER, independent of R03"). So the crucial open measurement gap remains: **are the C2/C0 escapes genuine class-binding failures?** The mechanism task says all 20 contract-surface mutants are SILENT in both stages. That's the core result.
+
+Hmm, what is actually the most useful bounded task given "take one class-bound task"?
+
+Option 1: **R03 mutation-control suite** (F1/AF-WCC-VAC-GEN). Concrete, bounded, directly requested by CF-32 ("with a mutation control"), serves the eventual owner repair, independent of the owner. Deliverables: a labeled control corpus built against frozen rev29 bytes, per-variant verdicts from baseline stage B and from the lead's candidate cand_E3, sensitivity/specificity table, falsifier.
+
+Option 2: **Independent falsification audit of the C2/C0 silent-escape claim**: pick the 26 informative mutants, and for each, construct the *minimal semantic adjudication* against the frozen class contract: does the mutant actually violate the class contract, and does the stage-B rule surface that *should* catch it exist? The mechanism task already classified CONTRACT vs META. A stronger test: for each family, run a *targeted probe* that shows the mutant's changed value is semantically non-equivalent to the frozen value (e.g. polarity inversion). But again, the family rationales already assert this. An independent semantic adjudication by a *different method* could raise confidence, but it's judgment-heavy and not machine-checkable — conflicts with the swarm's principle.
+
+Option 3: **Cover the uninstrumented blind spot in the escape measurement**: the mechanism found SILENT field-blindness. A measurable follow-up: derive, from the frozen class contracts/taxonomy, the *set of contract slots* (keys) that carry class-binding force, then measure stage A + stage B *coverage of those slots* — i.e., which contract slots are validated at all by either stage. That would produce a "blind-slot census": K key slots × 2 stages, with the count of slots asserted-only vs validated. This generalizes the escape families (each family maps to unvalidated slots) and quantifies the gate's coverage denominator. This is genuinely additive measurement: it tells the lead which slots need new rules, and it's independent of specific mutants. It is bounded (read frozen schema keys, map to rule assertions in both tools, produce table + falsifier).
+
+Hmm. But time budget: 3 agent-hours, though my session should be efficient. The harness expects a bounded task with artifact(s), emit JSON, checkpoint, exit. Given the previous rounds already did a LOT, and CF-32's action explicitly names "mutation control" as the missing piece for the R03 repair, Option 1 is the most direct, concrete, class-bound, bounded deliverable. It's an F1/AF-WCC-VAC-GEN task (one of the three class ids), fulfills "one class-bound task", produces machine-checkable evidence, and directly unblocks the owner's repair (worker-06) per CF-32.
+
+Wait, but "the lead does not build fixtures for it" (H6 in the 09 card) and worker-084 is independent of worker-16/R26-R31 rules. Worker-084 also didn't build the R03 rule. Good independence.
+
+Let me check what candidate R03 repairs exist. The lead's probe referenced cand_E3 3f69bc1eb27a. Let me find it. Also check worker-16's W16-R03-ADJ-01 review (mentioned). Let me search for cand_E3 and R03 repair artifacts.
+
+Also, is there perhaps a newer card in the lead's life09 that assigns the R03 mutation control to someone? The lead's life09 dir exists at 01:21 — let me check its contents to avoid duplication. And grep the lead's latest outbox for "mutation control".
+
+Let me look.
+dsh: reasoning:
+A lot of R03 work already exists: worker-064 r03_cause audit, worker-080 semct_rebase r03_probe_report, flash-13 r03 readings audit and fixtures. So a "R03 mutation control" may already exist in some form. Let me check worker-064's r03_cause report and worker-080's r03_probe_report, and flash-13's r03_readings_audit. If a mutation control suite already exists, building another one duplicates.
+
+Given the density of the swarm, I should pick a genuine gap. Let me check the most recent controller finding CF-32 action items and what remains unassigned:
+- CF-32(i): acceptance corpus rebind — worker-097 did reproduction/materiality (REC-36 item 7). Maybe the actual rebind is assigned to the lead (rev14).
+- CF-32(ii): R03 repair by owner + reopen corpora.
+
+The lead is working on rev14 right now (tmp/lead-form-life09/rev14_repair.py). Note: "Bytes move after rev14: all current verdicts are then void and r3 re-runs at the new pins" (CF-31). So rev14 is in flight: F2b crosswalk repair, SET strength repair, etc.
+
+Given a moving freeze (rev14 about to land), a durable corpus measurement now would be invalidated. A bounded worker should avoid building anything bound to bytes that are about to change. Better: a measurement that is *byte-independent* or an instrument-level contribution.
+
+Let me reconsider: what did the controller ask for that is still unowned and bounded?
+
+From CF-32 action: "the stage-B R03 binder is repaired by its owner with a mutation control and the held-out corpora re-run before any escape number is cited as gate evidence."
+
+The "mutation control" is a control that the repair must pass. worker-064 (r03_cause) did a cause audit and probably proposed controls. Let me read worker-064's report and worker-080's r03_probe_report to see if a mutation control exists and whether it covers *scope* (the lead's probe showed cand_E3 is not scope-safe). The specific gap the lead identified: "the W16-R03-ADJ-01 option table tested only the coarse V4 control (clause binds neither variable), not scope." So a **scope-discriminating mutation control** is the gap. The lead's own probe tested 3 variants (frozen variable-wise, grouped tuple, negation-scope-error) against baseline and E3 and found E3 accepts the scope error. That IS a scope mutation control, albeit small (3 variants, 1 error class).
+
+What's missing: a *broader* labeled mutation suite for the R03 binder rule with pre-registered expected verdicts per variant, covering:
+- correct renderings that MUST be accepted (frozen variable-wise; grouped tuple; ∀-form; binder spelled in alternate but equivalent notation)
+- scope errors that MUST be rejected (negation binding only one variable; existential scope; binder absent)
+- unrelated-rule controls (mutations to other fields that must not affect R03 verdict)
+- the 29 heldout-09 mutants? No.
+
+And measure baseline + candidates (E3 and any owner fix) to give a sensitivity/specificity matrix. That serves the owner repair and is bounded. Since rev14 will change F1 bytes (maybe? rev14 is about the SET direction / F2b crosswalk / acceptance rebind — let me check whether F1 canonical will change; the lead's rev14_repair.py lists staged files: f2b.yaml, schemas__af_scc_c0_vacuum.yaml, f2a.yaml, variant SET delta, VARIANT_REGISTRY. So rev14 touches F2a/F2b/C0 and the variant registry, not F1/WCC. The R03 control suite is on F1 (WCC), which stays at d9cebb9404b2. Good — low risk of invalidation.)
+
+Alternatively, an even more valuable and clearly-unowned task: **CF-32(ii) requires the held-out corpora re-run after the R03 repair**. The R03 repair doesn't exist yet. But there's a question: is the R03 defect *material* to the C2/C0 escape numbers? The lead says the blocker is independent of R03 (C2/C0 union escape 1.0 with or without R03). A bounded worker could *measure that independence directly and pre-register it*: run the heldout-10 C2/C0 arms against a stage-B variant with R03 *neutralized* (e.g., via a wrapper that ignores only the R03 failure) and show the per-fixture verdicts are identical for the informative arms — i.e., the escape number does not depend on the R03 defect. That's a sensitivity ablation that anticipates CF-32(ii) and tells the controller whether the escape evidence survives after the R03 repair. That is genuinely additive: nobody has measured "escape conditional on R03 being fixed". 
+
+Actually wait: for the informative C2/C0 arms, stage B accepted all 26 mutants with zero failed rules. If R03 were repaired, those verdicts couldn't get *worse* for the checker (R03 relates to the quantifier binder; a repair could in principle change other outcomes?). A neutralization ablation gives a measured answer rather than a reasoning answer. Hmm, but the R03 repair might add checks that catch some C2/C0 mutants. Neutralizing R03 wouldn't be the same as a repaired R03. So the measurement would only show that the current escape doesn't *depend* on the R03 false positive — which is somewhat trivially true (stage B accepted them with no failed rules; if it had failed them on R03 they wouldn't be escapes). Actually, let me check: for the 26 informative mutants, does stage B report R03 failures? aggregates_informative_arms_only semantic_caught=0 → stage B accepted all 26. So the R03 defect only affects WCC fixtures. The independence is already measured. No gap.
+
+OK so my best option remains a proper R03 mutation-control suite that goes beyond the lead's 3-variant probe and worker-064's cause audit — *if* it doesn't duplicate. Let me quickly check the existing R03 artifacts:
+1. artifacts/worker-064/r03_cause/ (report.json etc.)
+2. artifacts/worker-080/semct_rebase/r03_probe_report.json
+3. artifacts/flash-13/form_gate/r03_readings_audit.py + fixtures_r03/
+4. artifacts/worker-16/r03_adjudication/ (W16-R03-ADJ-01)
+
+Then decide precisely. Let me read summaries.
+dsh: reasoning:
+There's a lot of existing R03 work:
+- worker-16: adjudication with V1/V2/V4 variants (V1 literal binder accepted; V4 unbound negative control).
+- worker-080: lexical probe with rewrite/mutant-token controls.
+- worker-064: cause audit with 3 schema-side one-clause candidates + binder-list alternative + tool-relaxation with mutant-loss measurement, regression provenance.
+- flash-13: fixtures_r03 with 10 controls (c01..c10) — a mutation control suite already exists! Including c07_wcc_canonical_tuple_render, c03_wcc_tuple_variable_unused, c05/c06 alpha rename consistent/inconsistent, c10 unbound variable.
+
+So a new R03 mutation suite would duplicate flash-13/worker-064. Hmm.
+
+Let me step back and think about what the *right* bounded class-bound task is, given the swarm's current queue and the instruction. Perhaps the cleanest: **take CF-32's action item that no one owns yet: independently re-run the held-out corpora after the R03 repair** — can't, repair not landed.
+
+OR: The instruction may be simpler than I think. It says: "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit." This is the recurring worker protocol. The worker's own card (FORM-HELDOUT-09) was taken, completed (terminally INVALID), successor built (heldout-10), mechanism audit done. The most recent worker-084 round (mechanism, 01:19) already did "checkpoint + exit".
+
+Given the amount of prior work, maybe the intended behavior now is: recognize that the card is consumed/void and that the measurement evidence exists; take the next natural bounded task with real information gain.
+
+Let me look for what's genuinely missing. The controller's CF-32(ii) states the held-out corpora are invalid by construction and their escape numbers certify nothing *until* R03 is repaired and corpora re-run. Meanwhile the substantive finding (escape 1.0 on C2/C0, independent of R03) was recorded by the lead as a blocker. But is the *substantive* claim itself verified to the swarm's standard? The mechanism task was author-adjacent (worker-084 built heldout-10). A third-party replication exists (worker-092, reviews/heldout10-thirdparty-repl-worker-092.json). Let me read that to see if it confirms.
+
+Alternatively, perhaps the highest-value bounded task: **pre-registered conditional re-run harness**: create a read-only "re-run kit" that, given the owner's repaired stage-B tool (any future hash), re-runs the preserved heldout-10 corpus and the 7 controls and emits per-fixture verdict deltas against the frozen baseline — with the acceptance criterion "controls all accepted AND WCC arm becomes informative AND per-fixture escape families re-measured". This directly implements CF-32(ii)'s "held-out corpora re-run before any escape number is cited as gate evidence" and is exactly the kind of artifact that unblocks the owner. But is it a "class-bound task"? Yes: it binds to the three class ids and the F1/WCC R03 rule.
+
+Hmm, but a harness with no repaired tool to run is speculative work; the swarm dislikes unverifiable artifacts. It would be a "pre-registered re-run protocol + a working harness validated by running it against the baseline (must reproduce the frozen report byte-for-byte)". That last part is a solid verification: the re-run kit is validated by reproducing the baseline verdicts exactly, and then it's ready for the repaired tool. That's concrete, bounded, testable.
+
+But wait — is there something even more valuable: the C2/C0 escape 1.0 is the substantive blocker for G-CLASSBIND. The lead said the union escape is 1.0 and the rev13 prose repair didn't close it. The controller CF-32 says the numbers certify nothing because of R03 invalidity. There's a tension: the substantive blocker is real, but per CF-32 the evidence is not gate-usable. What would make it gate-usable? (a) R03 repaired; (b) corpora re-run with valid controls; (c) escape re-measured.
+
+Since the owner repair is pending, a worker can contribute the **re-run kit + baseline reproduction**, which de-risks and shortens the owner's loop. That seems genuinely useful and unowned.
+
+Actually, hold on. Let me reconsider the possibility that a simpler, more protocol-faithful task exists: the heldout-09 card's artifacts are still there and the card is void. Should worker-084 *formally withdraw/void* the heldout-09 card with the moving-target evidence? Already done.
+
+Let me look at the lead's newest lifecycle 09 (rev14 repair) — how long will it take? Might land soon, changing F2a/F2b/C0 and registry but not F1/WCC. The R03 issue is stage-B tool-level (owned by worker-06), not frozen bytes. The re-run kit depends on heldout-10 preserved corpus + live F1 hash (unchanged by rev14) + tool hash parameterized. So rev14 doesn't invalidate it (I should parameterize hashes and re-verify at run time).
+
+Alternatively, maybe I'm overcomplicating. Perhaps the expected bounded task is to **independently reproduce and adjudicate the third-party replication of heldout-10** or to **verify worker-092's review**. Let me read worker-092's review first; if it's shallow/incorrect, a proper verification adds value. Let me also check reviews/G-FORM-final-verify-r3.json and F1-rev13-strictness-direction-worker-004.json — maybe the R03 subject is now covered by r3.
+
+Let me read the third-party replication review and see its verdict.
+dsh: reasoning:
+The heldout-10 measurement is now independently replicated (worker-092, accept 4.0, 40/40 agreement). So the escape measurement is solid. The open item is the repair path.
+
+Given all this, what is the single most useful bounded class-bound task I can do now, with an artifact, evidence hash, falsifier, and checkpoint?
+
+Let me think about the actual mathematical/engineering gap the swarm faces:
+
+G-CLASSBIND gate is blocked because the class-binding checker (stage A structural + stage B semantic) does not catch 26/26 genuine contract violations on C2/C0. The controller's CF-32 says the R03 defect makes heldout corpora invalid; fix R03 + re-run. But even with R03 fixed, the substantive issue remains: the pipeline has zero sensitivity on C2/C0. The lead's blocker records that. The next step in the swarm's logic is rule repair (new rules R32+), which is the formulation lead's job, not a bounded worker's.
+
+However: a bounded worker *can* produce the decisive artifact that makes the repair tractable: a **contract-slot coverage map** — for each of the ~N class-binding slots in the frozen schemas, which slots are (a) asserted in the schema, (b) validated by stage A rules, (c) validated by stage B rules, (d) tied to an escape family. This turns "26 escape families" into "K unvalidated slots, with M rules needed". It's independent measurement, machine-checkable, uses the frozen bytes and the two tools' rule texts, and directly informs the lead's R32+ design. Is it duplicated? The mechanism task already mapped each mutant's changed paths to CONTRACT/META. The coverage map generalizes from mutants to the full slot inventory. Let me check whether some worker already did a "slot coverage" or "rule coverage census". Let me grep for "coverage" artifacts. There was artifacts/worker-084/coverage_recon (mine). Others: worker-056 a1_metrics_census, worker-073 l0_gate_union_census, worker-050 gform_pipeline_closure. Let me check worker-050 gform_pipeline_closure and worker-056 a1_metrics_census quickly.
+
+Actually, wait. Let me reconsider the instruction once more: "You are a bounded execution worker. Read handoff/map and comms. Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit."
+
+This looks like a generic recurring prompt from the swarm harness, not a specific new assignment. Other workers (e.g. worker-097 in the events tail) did exactly: "One bounded class-bound task taken (no inbox card for worker-097): W097-CF32-ACCEPTANCE-REPRO-01, independent reproduction and materiality check of CF-32(i) for REC-36 item (7). Result: ... CHECKPOINT + EXIT."
+
+So worker-084 should do the analogous: take ONE bounded, class-bound task tied to the current controller queue (CF-31/CF-32/REC-36/REC-41) that is not yet owned. Candidate: **CF-32(ii) R03 repair path**: "the stage-B R03 binder is repaired by its owner with a mutation control and the held-out corpora re-run before any escape number is cited as gate evidence."
+
+The unowned pieces:
+(a) mutation control for the R03 repair — partially covered by flash-13 fixtures_r03 (10 controls) and worker-064 candidates. Let me check if flash-13's suite is *pre-registered with expected verdicts* and whether it includes *scope* mutations (the gap the lead identified: cand_E3 accepts negation-scope error). flash-13's fixtures include alpha-rename consistent/inconsistent, unbound variable, tuple variable unused, clause deleted... but I don't see a negation-scope variant. worker-016's V4 is unbound negative (coarse). The lead's r03_scope_probe tested 3 variants including negation-scope error. So a *scope-focused R03 mutation control* might still be the gap: a pre-registered, labeled suite of scope/quantifier-structure variants with expected verdicts, run against baseline and any candidate repairs.
+
+Hmm, but the lead already measured cand_E3 accepting a negation-scope error. What would my artifact add? A *comprehensive, labeled, pre-registered* control suite that the owner's repair must satisfy — i.e., the "mutation control" CF-32 requires. worker-064's report has "tool-relaxation with mutant-loss measurement" — that's a sensitivity check. flash-13's fixtures_r03 (10 controls) might be exactly that. Let me read flash-13's manifest.json and r03_readings_rev29.json to see what's already covered and whether expected verdicts are pre-registered.
+
+Let me look. If there's already a competent mutation suite with scope coverage, then my task should be (b): the **re-run kit / conditional re-measurement protocol** for the held-out corpora after the R03 repair — the other half of CF-32(ii), which nobody owns yet and which worker-092's review also flags (F-092-H10-03/04).
+
+Let me quickly check flash-13's r03 suite and any existing "re-run" kit.
+dsh: reasoning:
+Interesting: flash-13 built a control matrix with expected verdicts for the *semantic* (S, their strict semantic reading) vs *literal* (L) rules. But they measured their own semantic reading, not stage B? Let me see: r03_readings_rev29 asserts "A2_semantic_passes_all_three_canonicals": true. Their "semantic" is a proposed fix reading; the actual stage B remains literal. Note c03_wcc_tuple_variable_unused: expected L fail, S fail → t0 declared never used. And the frozen WCC has "(q,t0)" in literal_unused but t0 IS used (per their semantic reading) — so literal fails as false positive.
+
+There's already substantial R03 control work. So building another R03 suite is duplicative.
+
+Let me now decide pragmatically. Time is passing; the swarm is very active. The best bounded contribution seems to be the second half of CF-32(ii): **a pre-registered re-measurement kit for the held-out corpora that activates when the R03 repair lands, and which can be validated now by reproducing the frozen baseline exactly.**
+
+Actually, wait. Let me think about what would be *most useful for the controller to decide G-CLASSBIND*. The substantive question: after R03 repair, will the heldout corpora be valid AND what is the escape rate? We know: WCC arm will become informative (3 WCC-family mutants in heldout-10 are caught by semantic only because of R03? Actually aggregates_uninformative_arms_only shows 7 WCC-arm mutants, all semantically caught by R03 — with R03 fixed, they'd likely escape too, so union escape could rise to 33/33). The C2/C0 arms are already 26/26 escape. So a repaired-R03 projection: union escape ≈ 1.0 across all 33 (pending measurement). We cannot measure without the repair, but we CAN pre-register the prediction and build the kit.
+
+Alternatively, a task with more direct information gain right now: **quantify the C2/C0 escape against the class contract using an independent, non-tool-based adjudication** — i.e., take the 26 mutants and for each, extract the changed YAML path + old/new values, then check whether the mutant violates the *frozen class contract* as stated in the schema (not merely changes a key), using a deterministic, pre-registered equivalence criterion per slot type. The mechanism task classified CONTRACT vs META by path prefix; it did not verify *violation* semantics per mutant. If some mutants changed a slot that carries no class-binding force (e.g., a redundant duplicate field), the "escape" claim overstates. This is the kind of adversarial check the swarm values ("run the null first").
+
+Hmm, but the family rationales each state why the change breaks binding. Still, an independent slot-semantics adjudication could find that some of the 26 are actually not class-binding violations (false-positive mutants), lowering the true escape rate. That's a falsification test of the headline claim. It's bounded (26 fixtures, mechanical), class-bound, and produces a valuable number: **mutant validity rate** (precision of the corpus).
+
+Actually, worker-16's heldout2 had a leak_validity_review.json, and heldout-09 probably had findings about leak validity. The mechanism task's CONTRACT/META classification is close but path-based. A per-mutant semantic adjudication is genuinely different.
+
+Yet, how do I adjudicate "violates the class contract" mechanically without human judgment? I can define a pre-registered criterion: a mutant is a *class-binding violation* iff at least one changed path is (i) within a contract block (pre-registered list) AND (ii) the mutated value is not equivalent to the frozen value under the class contract's own semantics (e.g., different conclusion polarity, different topology, different regularity, different visibility predicate, erased obstruction, swapped genericity kind...). Criterion (ii) requires semantic judgments per family — but those judgments can be encoded as pre-registered per-family rules (e.g., polarity inversion → non-equivalent; content erasure → non-equivalent). That's basically re-asserting the family rationale. Not much new.
+
+Alternatively I could **measure the inverse**: do the mutants still satisfy *all other* class contracts (not accidentally breaking a different class)? Not needed.
+
+OK. Let me look at this from the swarm's own queue: There's REC-36 with items; worker-097 handled item (7). Let me read REC-36 and REC-41 in the map (controller_repairs or similar), to find unowned items that fit a bounded independent worker. The map has 'controller_repairs' and 'controller_repairs_log'. Let me inspect those and also `assignments` list for open items. This is the most direct way to find "one class-bound task" that the controller actually wants.
+
+Let me query.
+dsh: reasoning:
+The assignments list is truncated summaries. Let me get the full assignment entries (they may include task text/status). Also check controller_repairs entries fully (they printed as empty dicts with my key filter — need full dump).
+
+Let me dump the last assignments fully and controller_repairs fully.
+dsh: reasoning:
+Now I see the authoritative assignment: `astra-life08-stageb-r03` assigned to **worker-006** (owner) with explicit acceptance criteria: bounded stage-B binder fix + mutation control + re-run FORM-HELDOUT-10 and FORM-HELDOUT-07, publishing manifest + report hashes. Budget 1.0 agent-hours, deadline presumably soon.
+
+So the R03 fix + mutation control + re-run is assigned to worker-006, not worker-084. I should not duplicate that.
+
+What's left unowned? Let me look at the full list of recent assignments and their assignees to see if any is assigned to worker-084 or unassigned/open. The map assignments list is short (12 entries shown, last 6 full). Let me dump all assignments with event_id/assignee/acceptance briefly, and find those without a done status. Also check if there's an assignment for the heldout re-run after repair beyond worker-006's (worker-006 does the re-run themselves).
+
+Given worker-006 owns the repair + re-run, and worker-092 replicated heldout-10, the remaining gap I identified earlier — an *independent verification of the repaired pipeline's re-run* — will need doing after worker-006 finishes. That's a perfect bounded independent task: "W084-R03-REPAIR-INDEP-01: independently reproduce and adjudicate worker-006's repaired-binder mutation control and re-run reports at their published hashes." But it can only run after worker-006's artifact lands. Not yet.
+
+Alternatively, RIGHT NOW the useful independent task: **pre-register and build the independent verification harness for the stage-B repair** (before it lands), so it can be executed the moment worker-006 publishes. Pre-registration before seeing the repair is exactly the swarm's methodology ("NO rule edits after seeing results", "pre-register"). This is bounded, class-bound (AF-WCC-VAC-GEN + C2/C0), and produces:
+- A pre-registered verification protocol with fixed acceptance tests: (V1) repaired tool accepts frozen F1 d9cebb9404b2; (V2) repaired tool still rejects a pre-registered mangled-F1 mutation (the mutation control must be *independent*: I can build my own mangled variants, pre-registered before seeing the repair); (V3) no other stage-B rule degrades on the 7 controls and the 40 heldout-10 fixtures relative to the baseline verdict table, with any delta listed per fixture (expected: WCC arm becomes informative); (V4) re-run reports bind the pinned manifest hash and the repaired tool hash.
+- A ready-to-run harness validated against the *current* baseline (must reproduce the frozen baseline verdicts 40/40 exactly — proving the harness is faithful).
+
+This gives immediate value: (a) the re-run kit validated by baseline reproduction; (b) a pre-registered falsifier for the owner's repair; (c) independent verification evidence the controller needs for REC-41 ("repaired ... with a mutation control and the held-out corpora re-run before any escape number is cited as gate evidence").
+
+Is it "one class-bound task"? Yes. Is it duplicative? Let me check whether any worker already built a "re-run kit" or pre-registered an independent verification of the R03 repair. Let me grep for "re-run kit", "rerun", "R03-INDEP", etc., and check worker-006's current work (artifacts/worker-006). Also check reviews/G-FORM-r3-bindings-worker-063.json (recent 01:21) — maybe worker-063 is verifying bindings, not the repair.
+
+Let me check worker-006's recent outbox and artifacts.
+dsh: reasoning:
+worker-006 just completed W006-R03-SCOPE-01 at 01:21:50: a pre-registered scope-safety measurement with 19 fixtures across candidates, and proposes cand_r03v2 as the repair. So the R03 repair candidate now exists with a proper scope-safety measurement by the owner. The next step per `astra-life08-stageb-r03` is: repair + mutation control + re-run FORM-HELDOUT-10 and FORM-HELDOUT-07, publishing hashes.
+
+What remains unowned and valuable for worker-084:
+1. Independent verification of worker-006's scope measurement and cand_r03v2 (they claimed 0/76 deviations). An independent non-author review of the scope-safety evidence at pinned hashes would be valuable — but is it assigned? Let me check if a review task exists. Map assignments may include a review for worker-006's submission. The last assignments I dumped didn't show it. Let me search events/comms for "cand_r03v2" and see if anyone has taken/been assigned the verification.
+2. The re-run of heldout-10 with the fixed binder is worker-006's per the card.
+3. Independent verification of that eventual re-run would be a follow-up.
+
+Given the instruction to take ONE bounded class-bound task and the principle of no duplication, the best move is: **independent reproduction and adjudication of W006-R03-SCOPE-01 / cand_r03v2 at the published hashes** (an independent executor, not worker-006, re-runs the 19-fixture scope corpus in a sandbox with the candidate tool, checks the 76 declared cells, verifies the control, and reports accept/revise/reject). That directly serves the "mutation control" requirement in the standing card and pre-empts gate adoption. But I must first check whether cand_r03v2's artifacts exist and whether an independent verification is already underway (e.g. worker-064 or others may be reviewing).
+
+Let me look at worker-006's latest submission details: find the paths (artifacts/worker-006/r03_scope/...) and the claim text. And grep recent outboxes for "cand_r03v2".
+dsh: reasoning:
+Excellent — now I have a precise, unowned, high-value bounded task:
+
+**Independent reproduction/adjudication of W006-R03-SCOPE-01 (cand_r03v2) at pinned hashes.**
+
+worker-006 just published it at 01:21:50, claiming measurement VALID, 0/76 deviations, cand_r03v2 FP 0/FN 0 and accepting all three canonicals. No independent verification exists yet (only worker-022's sandbox copy of the bytes, which is not a verdict). This is exactly the kind of independent verification the swarm requires before any adoption ("no self-pass", "independent executor", "reviewer verdict"). And it's class-bound (AF-WCC-VAC-GEN etc.), artifact-backed, deterministic, and can be executed right now.
+
+Also, this independent verification is a prerequisite for adopting cand_r03v2 and re-running held-out corpora per CF-32/REC-41 — so it's on the critical path.
+
+My task (self-proposed, no card): **W084-R03V2-SCOPE-INDEP-01** — independent, pre-registered (before running) reproduction of:
+1. Pin all published hashes (report, raw_verdicts, fixture_manifest, preregistration, blindspot_report, tools cand_r03v2 e41a4b23a840, baseline c79d8ab8440a, canonicals) before and after.
+2. Re-run the published corpus from the frozen fixtures in a sandbox using an *independent driver* that does not import worker-006's runner: for each of the 19 fixtures, run all candidates and baseline; compare per-fixture verdicts/rules to published raw_verdicts.json.
+3. Verify the declared cell matrix 76/76 (6 positives must be accepted, 8 negatives rejected, 4 edge probes unscored, 1 control accepted) → check 0 deviations.
+4. Independently confirm or falsify: baseline FP4/FN2; cand_004 FP0/FN7; cand_E3 FP0/FN8; cand_r03v2 FP0/FN0; all three live canonicals accepted by cand_r03v2; baseline rejects WCC with R03.
+5. Check the claim "every mutant alters exactly quantifiers.formal" by diffing fixtures vs canonical base (independent check).
+6. Report verdict accept/revise/reject with a falsifier, emit upward JSON (artifact/claim/review/status/checkpoint) with hashes, checkpoint, exit.
+
+One caution: the fixtures/candidates may be large; but 19 fixtures is small. The candidates are tool copies (Python files) under artifacts/worker-06/r03scope/ maybe. Let me inspect the directory structure to see what's published and the exact paths/hashes.
+
+Also check the report.json to know the expected verdict structure, and confirm the published hashes exist. Let me look at artifacts/worker-06/r03scope/.
+
+Also note: worker-006 also had r03headtohead (earlier). The scope card is the relevant one.
+
+Budget: this is doable within the session. Let me plan:
+1. Recon the published artifacts (hashes, paths, structure).
+2. Write my verification artifact dir: artifacts/worker-084/r03v2_scope_indep/ with:
+   - pre_registration.json (hashes + method + expected verdicts + falsifiers) — written BEFORE running.
+   - independent driver (run_independent.py) that shells out to each candidate tool as a subprocess, parses output, and compares to published raw.
+   - raw/ per-fixture outputs.
+   - report.json, findings, REVIEW.md.
+   - checkpoint.json.
+3. Emit events to comms/outbox/worker-084.jsonl (artifact/claim/review/status) with valid schema fields (check schemas.py for enums!).
+4. Run checkpoint (research_map/checkpoint.py? That's for the controller; but worker checkpoint = writing my checkpoint.json + status event). The instruction says "checkpoint, then exit" — I'll write checkpoint.json in my task dir and emit a status checkpoint event.
+
+Before writing, I must check the event schema requirements: `research_map/schemas.py` for allowed event types and required fields, and `research_map/comms.py send` usage. Since the accepted stream is written by comms.py ingest, I should write to comms/outbox/worker-084.jsonl (append; the file exists with prior events). Then optionally run `python3 research_map/comms.py ingest`? That's the controller's command; PROTOCOL says "Controller commands: python3 research_map/comms.py ingest # pull outbox -> events.jsonl". Workers write to outbox only. The prior worker-084 sessions just appended to outbox (and the controller/auto-cycle ingests). I'll append to outbox and not run ingest (avoid controller-owned writer surface). Wait, but does the auto-cycle run? run_cycle.py applies traffic. Fine.
+
+Let me first inspect worker-006's artifacts and the schemas.py enum requirements. Also verify that candidate tools are runnable (need python + yaml).
+
+Let me look.
+dsh: reasoning:
+Good. Now let me look at the raw_verdicts.json structure and report.json, plus where the candidate tools live. Then I'll build the pre-registration and independent driver.
+
+Let me dump report.json (6.8KB), check candidate tool paths/hashes, and the fixture list summary (19 fixtures with categories and expected).
+dsh: reasoning:
+The corpus and report are well-structured. Now I can do a genuine independent verification.
+
+Plan for my task: **W084-R03V2-SCOPE-INDEP-01 — independent reproduction and adjudication of W006-R03-SCOPE-01** at the published hashes.
+
+Independence obligations:
+- Do not import or re-use worker-006's runner (`run_scope.py`), preregistration expectations, or raw verdicts as inputs to my classification. I will:
+  - Read only the fixtures (byte-verify their sha256 against the published fixture_manifest.json — the manifest is the object under test; using it to bind bytes is fine, but expectations must be *independently* derived from the canonical base semantics, not copied from worker-006's declared expectations).
+  - Pre-register MY OWN expectations for each fixture before running: derive them from the frozen class contract's binder semantics. Hmm — the fixture names are labeled (pos/neg), and the manifest's "mutation" text describes each change. For a truly independent expectation, I should derive from first principles: the binder in the frozen canonical is "(q,t0)" bound via `not exists (q,t0) in D5 ...`; a rendering is correct iff the same co-binding scope is expressed (both q and t0 bound by the same quantifier, in the final clause). Positive = correct rendering; negative = binding-scope error.
+  - I can pre-register expected verdicts per candidate based on the *rule semantics* I read from each candidate's source code (independent reading), then compare measured vs my expectations — that's an independent cell matrix. But careful: reading the rule source and predicting outcomes is exactly what worker-006 did. Still, my predictions are derived independently, and the key deliverable is per-fixture measured verdicts and their agreement with the *published* raw verdicts (reproduction), plus an independent judgment on whether the *classification* (pos/neg) is right.
+
+Simpler and more robust independence approach:
+1. **Byte-binding**: verify all published paths and hashes; verify fixture bytes match manifest hashes; verify candidate tool hashes match pin list.
+2. **Re-execution**: run each of the 19 fixtures × 4 candidates myself via subprocess, parse JSON output myself, and compare to published raw_verdicts.json per fixture per candidate (verdict, failed_rules, returncode). This is mechanical reproduction — strong and independent of their runner.
+3. **Independent expectation check**: For each fixture, I pre-register my own expected verdict per candidate (based on my own reading of the fixture diff vs the canonical base and the four rule implementations — I can describe the rule semantics I extract). Then compute FP/FN with MY labels. Compare my counts with theirs. If they match, the headline is independently confirmed.
+4. **Mutation-target check**: verify each fixture differs from its base exactly at `quantifiers.formal` (and only there) using a YAML-aware diff — an independent check of the claim "every mutant alters exactly quantifiers.formal".
+5. **Canonical control**: run all 4 candidates on the three live canonicals, verify baseline rejects WCC on R03 and the three candidates accept; verify no other rule failures.
+6. **Over-reject probes**: check the 2 declared over-rejects of cand_r03v2 (edge_comma_coordinated, edge_long_span) — verify they are indeed rejected by cand_r03v2 and accepted by others, i.e., the declared residue is real.
+7. **Runner-bug disclosure check**: run1 was voided; verify raw_verdicts.run1.json is byte-different only in expected ways? Not needed. But I can check that the published raw_verdicts.json (post-repair) is reproducible now (step 2 covers it).
+8. **Falsifiers**: fixed in preregistration.
+
+Deliverables in `artifacts/worker-084/r03v2_scope_indep/`:
+- `PREREGISTRATION.json` (hashed before runs)
+- `run_independent.py` (my own driver, no worker-006 imports)
+- `raw/` per fixture×candidate JSON outputs (captured stdout JSON + my parsed table)
+- `reproduction.json` (per-cell measured vs published)
+- `expectations.json` (my independent labels & predictions)
+- `report.json` (counts, deltas, verdict)
+- `findings.json`, `REVIEW.md`
+- `CHECKPOINT.json`
+- emit to comms/outbox/worker-084.jsonl: artifacts, claim, review (verdict accept/revise/reject, score), blocker if any, status with checkpoint.
+
+Timebox: keep it tight.
+
+One important check: can I predict candidate verdicts independently? The candidates are Python files. Rather than predict by reading code (error-prone), the more defensible pre-registration is: my expectations are derived from the *fixture construction semantics* (pos = correct binding, should be accepted by any scope-correct rule; neg = binding-scope error, should be rejected), plus the control. Then the measured matrix tells me which candidates are scope-safe. This is an independent re-derivation of FP/FN counts against labels derived from fixture semantics. But to derive "pos/neg" independently I must inspect each fixture's mutation text — which is in the manifest (published). Hmm, circular? The labels pos/neg are the corpus author's; the verification question is whether a candidate is scope-safe *given* those labels. A truly independent verification should also check the labels are right. I can check labels myself by diffing fixture vs base at quantifiers.formal and reading the resulting sentence against the canonical binder semantics. That's a semantic judgment I can make: each pos variant expresses `not exists (q,t0) in D5 ...` with q and t0 co-bound in the same quantifier; each neg variant breaks that co-binding. Given only 19 fixtures, I can read each mutation string and classify. I'll do that and record my label decision with a one-line reason, flagging any disagreement.
+
+Actually, to keep the independence honest and reviewer-friendly, I'll structure the preregistration as:
+- Labels: independently re-derived from the mutation diff; if my label differs from the manifest category, I flag it (this is a finding, not silently adopted).
+- Predictions per (fixture, candidate) for the *frozen* baseline: frozen literal R03 fails iff the literal bracket-grouped token "(q,t0)" is absent from quantifiers.formal → I can compute this independently by string search over the fixture's formal sentence (simple, deterministic, independent of the tool!). That's a genuinely independent oracle for the baseline.
+- For candidates, my preregistered prediction rule: cand_004 checks whole-word presence of `q` and `t0` components? I'd rather not predict repairs without reading code. Alternative: pre-register the *acceptance criterion* (a candidate is scope-safe iff it accepts all 6 pos + rejects all 8 neg + accepts control; edge probes unscored) and measure. The measured matrix then determines scope-safety. That's the core verification of the headline claim, independent of whether I predicted it.
+
+So preregistration content:
+- P1: reproduction criterion: my re-run must match published raw verdicts on all 76 cells (19×4) for verdict+failed_rules; any mismatch → report revise/inconclusive.
+- P2: baseline oracle: frozen verdict on each fixture predicted by a literal `(q,t0)` search in quantifiers.formal; expect agreement with measured frozen verdicts on all 19 (this validates my reading of the R03 literal rule against the real tool).
+- P3: scope-safety counts recomputed from MY re-run + manifest labels; expect frozen FP4/FN2, v2 0/0, 004 0/7, E3 0/8 (I can put expected values as the claim to test — this is fine: preregistration of what I expect to reproduce).
+- P4: mutation-target check: every fixture differs from base exactly at quantifiers.formal (recursive YAML diff) — expect 18/18 (control identical).
+- P5: canonical control: frozen rejects WCC on exactly R03; v2/004/E3 accept all 3 canonicals; no other rule failures.
+- P6: over-reject residue: v2 rejects edge_comma_coordinated and edge_long_span; check declared.
+- Falsifiers: any published hash mismatch/drift; any 76-cell mismatch; any label disagreement; any non-R03 failure; any extra changed path.
+
+Note on independence of the second stage: I'm the same worker id that built heldout-10, but I did not build the R03 rules or the scope corpus, and I'm not worker-006 or worker-016, so I'm independent w.r.t. W006-R03-SCOPE-01. Good.
+
+Let me now check:
+- fixture dir listing + candidates exist and hashes match.
+- How the tools are invoked (raw_verdicts cmd shows: python3 <tool> <fixture> --spec .../rule_spec.json --json <out>). I'll use my own invocation (same CLI, no runner import). Need to understand the tool's stdout JSON format. Let me inspect one raw output file and the tool's argparse quickly.
+- Check the fixture YAML structure/diff approach.
+
+Then write preregistration + driver and run.
+
+Let me first verify hashes and look at the raw per-fixture output format.
+dsh: reasoning:
+All published hashes match the claim's evidence refs:
+- report.json e81f7818d026 ✓ (claim says #e81f7818d026)
+- raw_verdicts 33ab1e03e690 ✓
+- fixture_manifest 40a457905eee ✓
+- preregistration f376d7124cfb ✓
+- blindspot 0afa42d62a09 ✓
+- cand_r03v2 e41a4b23a840 ✓
+- frozen c79d8ab8440a ✓
+- cand_004 645eb16a0060 ✓
+- cand_E3 3f69bc1eb27a ✓
+
+Note: cap_E3 claim sentence said "cand_E3 (3f69bc1eb27a ... ) has FP 0 / FN 8" ✓.
+
+Now check the CLI invocation and output format. The tools accept `<fixture> --spec <rule_spec> --json <out>`. I'll run my own subprocess and capture stdout JSON too — but the tool writes JSON to --json path and maybe prints human text. Let me check with a quick run of the frozen tool on one fixture (in a temp dir under my artifact dir).
+
+Also I need to inspect the fixtures' quantifiers.formal and do the diff. Let me write the driver now.
+
+Design of `run_independent.py`:
+- Constants: SWARM root, artifact dir (mine), published paths + expected sha256 for 10 files.
+- Stage 0: verify all pins (abort on mismatch).
+- Stage 1: load fixture_manifest.json; verify each fixture sha256; load fixtures via yaml.safe_load; load canonical bases; for each fixture compute recursive diff vs base using a flatten function; assert changed paths ⊆ {quantifiers.formal} and control has no diff.
+  - Independent baseline oracle: predict frozen verdict by checking literal "(q,t0)" in quantifiers.formal string? Careful: frozen rule detail says "binder '(q,t0)' absent from formal sentence". The canonical's formal probably contains "(q, t0)" with a space? Wait the frozen canonical is rejected because literal '(q,t0)' absent. The canonical uses variable-wise rendering "(q , t0)"? Let me check. The oracle: predicted_accept_frozen = ('(q,t0)' in formal). I'll test this against measured frozen verdicts; if it matches 19/19, my reading of the literal rule is confirmed; else report.
+- Stage 2: for each candidate (4) × fixture (19) + candidate × 3 canonicals: run `python3 <tool> <fixture> --spec artifacts/formulation/rule_spec.json --json <mydir>/raw/<cand>__<fixture>.json`, capture stdout/stderr/returncode with timeout (say 60s), parse the --json output file (and require it exists), record verdict/failed_rules/checks; compute sha256 of the output doc? The tool embeds audited_at timestamp → not byte-stable. Compare verdict + failed_rules + per-rule verdicts.
+- Stage 3: compare with published raw_verdicts.json per cell: verdict + failed_rules + returncode. Record mismatches.
+- Stage 4: labels: use manifest category as the corpus labels BUT also compute my own label from my reading? I'll record the manifest label and, separately, my independent label derived from the mutation text diff — I'll read each fixture's quantifiers.formal change and classify. To be efficient and honest, I'll encode my own expectation table for all 19 fixtures in the preregistration file (manually derived now, before running) with a one-line reason each. Then the driver compares measured against BOTH the manifest labels and my labels.
+
+Let me look at the actual formal sentence mutations for all 19 fixtures so I can derive my own labels. Let me print base formal + each fixture formal + diff.
+dsh: reasoning:
+Now I can independently derive labels. Reading the canonical semantics:
+
+Base final clause: `not exists q in I+ and t0 in [0,T) with gamma([t0,T)) subset J^-(q) intersect M` — this is a co-binding: q ∈ I+, t0 ∈ [0,T), both variables bound by the same `not exists` quantifier whose scope is the "with" body.
+
+Legal renderings (pos):
+- `not exists (q,t0) in D5 with ...` — grouped tuple where D5 is presumably the product domain I+ × [0,T). Legal.
+- pos_grouped_tuple_space: `(q, t0) in D5` — same, whitespace-only. Legal.
+- pos_variablewise_double_space: `q in I+  and  t0 in [0,T)` — same co-binding, extra spaces. Legal.
+- pos_such_that_grouped: `(q,t0) in D5 such that ...` — same. Legal.
+- pos_filler_also: `q in I+ and also t0 in [0,T)` — same. Legal.
+- pos_wide_whitespace: same as variable-wise with wide whitespace. Legal.
+
+Illegal (neg):
+- neg_scope_after_body_and: `not exists q in I+ with (...), and t0 in [0,T)` — t0 bound outside the not-exists scope (conjunction outside). Illegal: t0 free / different scope.
+- neg_scope_after_body_paren: same with parenthetical. Illegal.
+- neg_literal_tuple_elsewhere: `not exists q in I+ with ..., and (q,t0) in D5` — the tuple token appears but t0 isn't bound to the quantifier scope; literal-only matcher is fooled. Illegal.
+- neg_reversed_binding: `not exists t0 in [0,T) with ..., and q in I+` — q outside. Illegal.
+- neg_ids_in_consequent: `not exists q in I+ with (... implies t0 in [0,T))` — t0 in consequent, not a binding restriction. Illegal.
+- neg_ids_in_earlier_quantifier: `forall t0 in [0,T): not exists q in I+ with ...` — t0 bound by an earlier, outer quantifier; not co-bound with q. Illegal (scope error).
+- neg_ids_in_body_letting: `not exists q in I+ with letting (q,t0) in D5: ...` — the tuple token is in a letting inside the body; t0 not bound in the quantifier. Illegal.
+- neg_substring_only: `not exists q_0 in I+ and t0_0 in [0,T) with ... J^-(q_0)` — actually this looks legal semantically (q_0, t0_0 consistently renamed!). Hmm. The manifest calls it neg "substring only". Wait: the substring '(q,t0)' appears inside... `q_0` contains substring `q` and `t0_0` contains `t0`? The claim says cand_E3 accepts "the substring-only negative". Why is it a negative? Reading: the mutation renames q→q_0 and t0→t0_0 consistently in the body, but the canonical binder is `(q,t0)`. If the class contract required those exact variable names (the frozen variable-wise rendering uses q and t0), then renaming is an alpha-renaming and should be legal — indeed the frozen canonical itself uses `q in I+ and t0 in [0,T)` variable-wise. Hmm, but this fixture is labeled neg. Why? Let me think: `not exists q_0 in I+ and t0_0 in [0,T) with gamma([t0,T)) subset ...` — wait, look carefully: the body says `gamma([t0,T)) subset J^-(q_0)` — it uses `t0` (not t0_0!) in the body while declaring `t0_0`. So t0 is unbound in the body! That's a genuine scope error: declared t0_0 but body uses t0 → free variable. So neg is correct. Good catch — the fixture is legal as a negative.
+  Actually let me re-read: `not exists q_0 in I+ and t0_0 in [0,T) with gamma([t0,T)) subset J^-(q_0)`. Yes: body has `[t0,T)` with undeclared `t0`, and `q_0` in J^-(q_0). So t0 free. Genuine binding error. ✓.
+  And cand_E3 (literal-or-substring) accepts because "(q,t0)" appears as substring? Hmm, `(q,t0)` is not literally present... the sentence contains `(q_0`... Let me check: "J^-(q_0) intersect" — for the substring "(q,t0)" to be found... no. Maybe cand_E3 checks presence of `q` and `t0` as substrings anywhere (component presence), and `t0_0` contains `t0`, `q_0` contains `q`. Yes, cand_E3 "literal-or-substring" accepts it because both components appear as substrings. So neg is correct and E3 FN. ✓
+- edge_comma_coordinated: `not exists q in I+, t0 in [0,T) with ...` — legal-ish (comma coordination); the fixture is an unscored edge probe because it's interpretation-dependent. cand_r03v2 rejects it (declared over-reject).
+- edge_long_span: legal-ish with many fillers; v2's span=80 rejects (declared over-reject).
+- edge_split_quantifiers: `not exists q in I+ such that not exists t0 in [0,T) with ...` — semantically equivalent to co-binding (nested quantifiers); interpretation-dependent; v2 rejects.
+- edge_braces_group: `not exists {q,t0} in D5 with ...` — alternative grouping notation; interpretation-dependent; v2 rejects.
+
+My independent labels agree with the manifest: 6 pos legal, 8 neg genuine binding errors, 4 edge interpretation-dependent, 1 control identical.
+
+Now my independent frozen oracle: frozen accepts iff literal substring `(q,t0)` present. Check:
+- ctrl: base has no "(q,t0)" → reject ✓ (measured reject R03)
+- pos_grouped_tuple: has `(q,t0)` → accept ✓
+- pos_grouped_tuple_space: `(q, t0)` → no literal `(q,t0)` → reject ✓ (declared FP)
+- pos_variablewise_double_space: no → reject ✓
+- pos_such_that_grouped: `(q,t0)` → accept ✓
+- pos_filler_also: no → reject ✓
+- pos_wide_whitespace: no → reject ✓
+- neg_scope_after_body_and: no → but measured/declared reject? Frozen expected "reject" and measured? manifest expects frozen:reject. Oracle says reject. The negative should ideally be rejected — but for the WRONG reason possibly (literal absence). Frozen rejects it, which coincidentally is correct behavior but by literal matching, not scope. Fine — label-wise it's rejected, so not an FN.
+- neg_scope_after_body_paren: no → reject ✓
+- neg_literal_tuple_elsewhere: has `(q,t0)` → accept → FN ✓ (declared FN)
+- neg_reversed_binding: no → reject ✓
+- neg_ids_in_consequent: no → reject ✓
+- neg_ids_in_earlier_quantifier: no → reject ✓
+- neg_ids_in_body_letting: has `(q,t0)` → accept → FN ✓ (declared FN)
+- neg_substring_only: does it contain literal `(q,t0)`? The text: `(q_0` ... no. Wait, cand_E3 accepts via substring components. Frozen literal `(q,t0)` → not present → reject ✓.
+- edges: comma_coordinated no → reject; long_span no → reject; split no → reject; braces `{q,t0}` no → reject. All match declared frozen:reject.
+
+So my independent oracle predicts frozen matrix exactly: FP fixtures = pos_grouped_tuple_space, pos_variablewise_double_space, pos_filler_also, pos_wide_whitespace (4); FN = neg_literal_tuple_elsewhere, neg_ids_in_body_letting (2). This matches worker-006's headline. Excellent — I can preregister this oracle and test it.
+
+Now for the candidates, I won't predict from code; I'll measure and evaluate against my labels. But I can preregister expected scope-safety per published claim (to test reproduction): v2 0/0, 004 0/7, E3 0/8. Wait, cand_004's FN list includes 7 of the 8 negs (not neg_substring_only); E3's 8 (all negs). Under my labels, cand_004 accepted 7 genuine binding errors → FN 7 ✓; E3 accepted all 8 → FN 8 ✓.
+
+Also verify: do the positives get accepted by all candidates? Claim yes (FP 0 for all three). Let me measure.
+
+One more independent check worth including: **R03-only check** — for every fixture×candidate, verify that any non-accept is due to R03 (or at least R03 is the only failed rule), i.e., no collateral rule degradation. Worker-006's G4 gate claims non-R03 parity. I'll recompute.
+
+Now write the artifacts. Directory: artifacts/worker-084/r03v2_scope_indep/.
+
+Files:
+1. `PREREGISTRATION.json` — my pins, method, predictions, independent labels, baseline oracle, acceptance criteria, validity gates, falsifiers. Write and hash BEFORE running anything. Include created_at.
+2. `run_independent.py` — driver.
+3. Raw outputs + `reproduction.json` + `report.json` + `findings.json` + `REVIEW.md` + `CHECKPOINT.json`.
+
+Let me check Python env: python3 has yaml. The tools invoke `/usr/bin/python3`. Fine. I'll use `sys.executable` or `/usr/bin/python3`. The raw cmd used `/usr/bin/python3`. Let me use the same to be safe, but check the tool runs with default python3 too. The tool likely imports yaml — available in /usr/bin/python3? The published raw outputs show it worked with /usr/bin/python3. I'll use /usr/bin/python3.
+
+Timeout per run: 30s. 4 candidates × 22 docs = 88 subprocess runs. Each ~0.1s. Fine.
+
+Important: run fixtures from their published path (read-only). Output --json to my raw dir. The tool's output includes `audited_at` timestamp; I'll compare verdict/failed_rules/checks (rule verdicts), not bytes.
+
+Comparison to published: published raw_verdicts.json has per candidate per fixture: verdict, failed_rules, returncode, doc_sha256, cmd. I'll compare verdict, failed_rules, returncode, doc_sha256 (fixture hash) — 4 fields × 76 cells. For canonicals: published raw includes `canonical__<name>.yaml` entries under each candidate? Let me check the key names. From the report, G2 observed keys `canonical__af_wcc_vacuum.yaml`. Let me verify the raw_verdicts structure contains canonical entries for all candidates, then include them in reproduction (4 candidates × 3 canonicals = 12 cells).
+
+Let me check raw_verdicts keys per candidate.
+dsh: reasoning:
+22 cells per candidate (19 fixtures + 3 canonicals). Total 88 cells to reproduce.
+
+Now write the preregistration with my independent labels and oracle, hash it, then write the driver and run.
+
+Let me create the todo list first, then write files.
+
+Regarding "checkpoint" — the instruction says "checkpoint, then exit". I'll write CHECKPOINT.json in my task dir and emit a status event with checkpoint summary. Also maybe run `python3 research_map/checkpoint.py`? That's the controller's 15-min full snapshot — PROTOCOL lists it under controller commands. Workers shouldn't. Prior worker-084 rounds wrote their own checkpoint.json. I'll do that.
+
+Let me now create the preregistration JSON. Include:
+- task_id W084-R03V2-SCOPE-INDEP-01
+- actor worker-084, independence declaration (not author worker-006, not owner, did not build R03 rules or scope corpus)
+- subject: W006-R03-SCOPE-01 at pinned hashes (list all)
+- method: independent driver, subprocess-only, no imports of worker-006 runner/prereg expectations; my own label re-derivation; frozen oracle by literal-token search; per-cell reproduction of 88 cells; mutation-target diff; canonical control; over-reject residue.
+- independent_labels: per fixture my label + reason (19 entries).
+- frozen_literal_oracle: prediction per fixture.
+- expected reproduction from published claim: counts table.
+- acceptance criteria: C1 pins stable; C2 88/88 cell reproduction on verdict+failed_rules+returncode+doc hash; C3 my labels == manifest labels (else finding); C4 frozen oracle matches measured 19/19; C5 mutation target confined to quantifiers.formal; C6 canonical control: frozen rejects WCC on exactly R03, three candidates accept all 3, no non-R03 failures; C7 scope-safety counts recomputed equal published; C8 v2 over-reject residue confirmed on the two edge probes.
+- falsifiers: any pin drift; any cell mismatch; label disagreement; oracle mismatch; changed path outside quantifiers.formal; candidate rejecting a canonical; non-R03 failure anywhere; inability to reproduce.
+- decision rule: accept if C1-C8 pass; revise if cell mismatches but headline holds? Let's define: accept if all C1-C8; revise if any hard check fails but measurement still reproducible with documented deltas; reject if reproduction fails materially (≥5% cells or headline counts differ); inconclusive if pins drift.
+
+Now write it. Use python to write JSON with sorted keys? I'll write with the write tool for clarity, then hash. Must be careful: hash recorded in the driver after; the prereg file's own hash will be in report.json. That's fine.
+
+Let me create the directory and files.
+dsh: reasoning:
+Now write the preregistration. I'll write it via python to guarantee valid JSON, or the write tool. The write tool is fine. Let me construct it carefully.
+
+Actually, to keep the JSON valid and complete, I'll use a python heredoc to create it (still a file write in workspace). The instructions prefer the write tool for creating files. I'll use write with full content.
+
+Let me draft the preregistration JSON compactly but completely.
+dsh: reasoning:
+Now write the driver. It should:
+1. Verify pins before run; fail closed on mismatch.
+2. Verify fixture hashes vs manifest.
+3. Load my prereg labels and oracle, compare with manifest categories.
+4. YAML diff for mutation target.
+5. Run 88 cells via subprocess, capture stdout/stderr, parse output JSON from my --json path.
+6. Compare to published raw.
+7. Compute counts with my labels.
+8. Write reproduction.json, report.json, findings.json.
+9. Verify pins after run.
+
+Careful details:
+- The tool invocation: `/usr/bin/python3 <tool> <doc> --spec <rule_spec> --json <out>`. Need to make sure out dir exists.
+- The tool may exit nonzero and still write json. Capture returncode.
+- Parse json output; extract verdict, failed_rules, checks (rule→verdict), doc_sha256.
+- Published raw cells use keys: for fixtures, filename; for canonicals, `canonical__<name>.yaml`. My mapping: canonical docs → key `canonical__af_wcc_vacuum.yaml` etc.
+- Compare fields.
+- The `raw_verdicts.json` published also has `undecided_rules`; include in compare maybe. Keep to the four declared fields.
+- Counts: pos = my label pos (6), neg = 8. FP = candidate rejects a pos. FN = candidate accepts a neg. Control: candidate must accept ctrl (v2/004/E3) / frozen rejects. Edge unscored.
+- Also verify no non-R03 failed rules for any cell: frozen candidates may fail only R03; repair candidates must have no failed rules on fixtures? Hmm: if cand rejects a neg, is it R03 failing? Likely yes. Check failed_rules ⊆ {R03} for all cells; record any other.
+- Write raw stdout/stderr files for evidence.
+
+Let me write the driver.
+dsh: reasoning:
+The independent reproduction passes completely:
+- 0/88 cell mismatches
+- 0 label disagreements
+- 0 oracle disagreements (frozen literal oracle matches 19/19)
+- mutation targets all exactly quantifiers.formal
+- counts match published: frozen FP4/FN2, v2 0/0, 004 0/7, E3 0/8
+- no non-R03 failed rules anywhere
+- pins stable after run
+
+Now let me examine a couple of details for the report:
+1. Canonical check details (frozen rejects WCC on R03; all candidates accept all 3).
+2. Over-reject residue confirmed.
+3. cand_r03v2 edge verdicts.
+4. My independent label table vs manifest categories.
+5. Also independently verify the "0 expectation deviations across 76 declared cells" — the manifest declares expected per candidate per fixture; I can compute the declared-expectation deviations from my measured run against the *manifest's declared expectations* (not just my labels). Worker-006 claims 0 deviations. Let me compute that too as an additional check (C-extra). The manifest has expected dict per fixture with frozen/cand_r03v2/cand_004/cand_E3. I'll compute deviations.
+
+Wait, the report says "0 deviations across 76 declared cells" — 19 fixtures × 4 candidates = 76. Let me verify this. It's a good independent check of their declared matrix.
+
+Also I want to check the blindspot_report's claims? Not necessary.
+
+Let me also inspect reproduction.json key sections quickly for the report data, then write report.json, findings.json, REVIEW.md, CHECKPOINT.json, and a MANIFEST.json with hashes.
+
+Let me compute the declared-expectation deviations and gather the exact details.
+dsh: reasoning:
+Everything checks out:
+- Canonical control: frozen rejects WCC on R03 exactly; all three candidates accept all 3 canonicals with no failed rules.
+- Over-reject residue confirmed: v2 rejects both edge fixtures; 004/E3 accept.
+- Declared-expectation matrix: 76/76 cells, 0 deviations (independently confirmed).
+- Labels consistent.
+
+One more consideration for a rigorous independent adjudication: cand_r03v2's scope-safety depends on the corpus labels being genuine. I re-derived them. Also the edges: v2 rejects all 4 edges (the report declared 2 over-rejects: comma_coordinated and long_span). What about edge_split_quantifiers (nested quantifiers — arguably semantically equivalent) and edge_braces_group ({q,t0} — arguably notation)? v2 rejects both. The manifest declared for those: frozen:reject, v2:reject, 004:accept, E3:accept. So v2's over-rejection on the interpretation-dependent edges is broader than the 2 "declared over-rejects" named in the claim: the claim says "Its two pre-declared over-rejects (comma-coordinated binder, ~140-char span) remain as unscored edge probes." But v2 rejects all four edge probes, including split quantifiers (semantically equivalent under standard reading) and brace grouping (notation variant). The manifest's declared expectations label v2:reject for all four edges, so this is not an undeclared deviation (0/76 deviations). But the claim's phrasing names only two — the other two are also over-rejections *if* one reads nested quantifiers/braces as legal renderings. This is a legitimate nuance to report as an adjudication finding: the unscored edge residue is 4/4 rejected by v2, not 2/4; the corpus author declared variance on all four (expected v2:reject), so it is a *labeled residue*, but the claim sentence understates it as "two". Since edges are explicitly unscored and interpretation-dependent, this does not change the scope-safety verdict on the scored corpus, but it should be recorded so the owner/adopter knows the full edge behavior.
+
+Let me double check the declared expectations for the 4 edges in the manifest: from the earlier table:
+- edge_comma_coordinated: frozen:reject, v2:reject, 004:accept, E3:accept ✓
+- edge_long_span: same ✓
+- edge_split_quantifiers: frozen:reject, v2:reject, 004:accept, E3:accept (from table: exp=frozen:reject,cand_r03v2:reject,cand_004:accept,cand_E3:accept) ✓
+- edge_braces_group: same ✓
+So v2 rejects all 4; author declared all 4 as v2:reject; the claim names "two pre-declared over-rejects". Minor wording finding (F-084-IND-03): the over-reject residue is 4/4 edge probes, of which two were named; no scored cell is affected; declared-expectation matrix still 0 deviations.
+
+Another nuance worth reporting: cand_r03v2's scope safety is on a 14-cell scored corpus (6 pos / 8 neg) derived from a single class (AF-WCC-VAC-GEN) and a single rule (R03) and a single slot (quantifiers.formal). The reproduction confirms the measurement; generalization to held-out scope corpora remains the stated next falsifier (worker-006's own next_falsifier). I should note that as a scope limit, not a defect.
+
+Another check I can do cheaply and that adds independent value: **adversarial negative-control construction of my own** — a fresh mutation not in the corpus, to test v2's generalization. But the instruction says bounded; the preregistration didn't declare new fixtures (and adding post-hoc fixtures after seeing results would violate pre-registration discipline). However, I pre-registered only checks C1-C8; adding a new adversarial probe now would be post-hoc. The swarm values pre-registration; a post-hoc probe is exploratory. I could still run one clearly labeled *exploratory* probe, but better to keep discipline: my task is verification, not new corpus construction. The next_falsifier covers it.
+
+Hmm, but there IS one pre-registered-ish falsification I can do that isn't post-hoc: the fatal falsifier "a genuine binding error accepted, or a correct rendering rejected, under the verifier's independent labels beyond the published counts" — already covered by C7 (counts equal). Good.
+
+Also worth verifying: the claim says cand_r03v2 "accepts all three live canonicals" — confirmed. And the claim "frozen literal ... FP 4 / FN 2" — confirmed.
+
+One more independent check: **reproducibility of raw JSON across a second run** — the falsifier mentions non-reproducible raw JSON. I ran each cell once. I could re-run all 88 cells a second time and compare verdicts (determinism), which strengthens C2. The tool embeds audited_at, so byte-compare isn't possible, but verdict-level determinism is testable. My driver already re-derives; a second pass would double runtime (~2 min?). Each run was fast (the whole thing took seconds). Let me add a quick second-pass determinism check for the 22 cells of cand_r03v2 + frozen (or all 88) and record it. Actually, I can just re-run the driver a second time and compare reproduction.json counts/mismatches; but the driver overwrites raw files. Better: run a small determinism script that re-executes all 88 cells into a second raw dir and compares verdict+failed_rules to the first pass. This is a genuine additional check and cheap.
+
+Let me add it as `determinism.json` evidence. I'll write a small script `check_determinism.py` and run it. It re-runs all 88 cells and compares verdict+failed_rules+doc_sha256 to my first-pass raw files. Then finalize.
+
+Actually, to keep provenance clean: the artifact manifest will list all files. Let me do it.
+dsh: reasoning:
+Determinism confirmed: 88/88 cells identical across two passes.
+
+Now finalize:
+1. `report.json` — full adjudication with verdict accept, all check results, findings, falsifier outcome, limits.
+2. `findings.json` — the 3 findings (F-084-R03V2-01: reproduction exact; F-02: declared matrix independently confirmed 76/76; F-03: edge over-reject residue is 4/4 not 2 named, minor wording; F-04 perhaps: scope limits).
+3. `REVIEW.md` — human-readable.
+4. `CHECKPOINT.json` — checkpoint summary.
+5. `MANIFEST.json` — file hashes (except itself).
+6. Emit events to comms/outbox/worker-084.jsonl: 
+   - artifact events for the key deliverables (report, reproduction, preregistration, review)
+   - claim with class_id AF-WCC-VAC-GEN, conclusion_type "formal_model", statement, assumptions, falsifier, evidence_refs
+   - review event (target_id = W006-R03-SCOPE-01 report hash; reviewer worker-084; verdict accept; score; hard_failures []; findings)
+   - status event (checkpoint+exit) with node_id A1, status done? Careful: status enum {queued, active, blocked, done, rejected, killed}. Prior worker-084 used status "done"? The prior round used status-complete with status probably "done". Let me check what prior events used — the mechanism round used "status":"done"? Let me grep one. Actually earlier I saw `w084-mech...-14-status-complete` — let me check its status value to be consistent. Also `next_falsifier` required.
+   - Maybe a blocker? No blocker — all checks pass. One nuance (edge residue) is a finding, not a blocker.
+7. Also update runtime/state/artifact_hashes.json? That's controller-owned (audit_evidence registry). Prior worker-084 rounds emitted artifact events; the controller registers. PROTOCOL rule 2: done node requires artifact sha256 in runtime/state/artifact_hashes.json + reviewer verdict. I'm not claiming node completion, so no need; and I shouldn't hand-edit controller state.
+
+Let me check a prior worker-084 status event's exact structure to match conventions (status value, fields like checkpoint path, hours).
+
+Then write files and append events with a small emitter script that validates each event against research_map/schemas.py validate_event before appending (per PROTOCOL rule 5: reject your own output before sending). I'll import research_map/schemas.py (read-only) to validate. That's allowed and good practice.
+
+Time to check the prior event structure.
+dsh: reasoning:
+Good. Now write the final artifacts. Let me compute the hashes of the files first, then create report.json referencing them, then MANIFEST.json (hash of everything including report), then the emitter.
+
+Plan for files:
+- report.json: task_id, worker, actor, created_at, preregistration sha, subject pins, method, results per check C1-C8 + determinism, counts, canonical control, over-reject, declared-matrix check, findings, verdict accept, score? (review score in review event), falsifier outcome, limits, do_not_claim.
+- findings.json: list of findings with ids.
+- REVIEW.md: human readable.
+- CHECKPOINT.json: summary + file hashes.
+- MANIFEST.json: file → sha256, bytes; excludes MANIFEST.json itself (self-reference note).
+- events emitter script: emit to comms/outbox/worker-084.jsonl, validated with schemas.validate_event.
+
+Let me write report.json via python for accuracy (so I can embed measured hashes). Actually writing via the write tool is fine, but I need exact hashes of preregistration and reproduction/determinism. Let me compute those first.
+
+Hashes needed:
+- PREREGISTRATION.json (computed at run time: stored in reproduction.json as preregistration_sha256)
+- reproduction.json
+- determinism.json
+- run_independent.py
+- check_determinism.py
+
+Let me get them.
+dsh: reasoning:
+Now write report.json, findings.json, REVIEW.md, CHECKPOINT.json. I'll use the write tool for the JSON content. Let me compose report.json carefully with all measured results.
+
+Then I'll emit events. Timestamps: current time ~01:35. Let me check date. I'll use `date -Is` when emitting.
+
+Report content:
+
+verdict: "accept". Checks:
+- C1 true (pins before/after)
+- C2 true (88/88, 0 mismatches)
+- C3 true (labels 19/19 agree)
+- C4 true (oracle 19/19)
+- C5 true (all mutants only quantifiers.formal; control zero diff)
+- C6 true
+- C7 true (counts equal)
+- C8 true (residue confirmed)
+- plus determinism 88/88
+- plus declared-expectation matrix 76/76, 0 deviations (independent confirmation of worker-006's claim)
+
+Findings:
+- F-084-R03V2-01 (info): exact reproduction; 88/88 cells, two passes; no non-R03 failures; headline counts independently recomputed.
+- F-084-R03V2-02 (info): labels independently re-derived and agree 19/19; frozen literal oracle agrees 19/19, confirming the FP/FN mechanics of the frozen rule.
+- F-084-R03V2-03 (minor, wording): the claim names "two pre-declared over-rejects" of cand_r03v2, but the measured and manifest-declared residue is 4/4 edge probes (comma_coordinated, long_span, split_quantifiers, braces_group). All four were declared in the manifest with v2:reject, so there is no expectation deviation; but the natural-language summary understates the edge residue and an adopter should not read v2 as accepting nested-quantifier or brace-group renderings. No scored cell is affected.
+- F-084-R03V2-04 (scope limit): scope-safety holds on this corpus only (single class AF-WCC-VAC-GEN, single slot quantifiers.formal, 14 scored cells); worker-006's own next falsifier (a later held-out scope corpus) remains open.
+- F-084-R03V2-05 (governance): stage-B is unpinned in FROZEN rev29; any adoption of cand_r03v2 must pin the adopted tool hash and the rule module hash in the same revision, else gate evidence moves without a pinned byte. (consistency with lead/worker-092)
+
+Falsifier outcome: none of the pre-registered falsifiers triggered.
+
+Limits: same durable worker id built FORM-HELDOUT-10 but no held-out byte read; did not re-implement stage-A/stage-B rules; corpus labels checked only against my semantic reading; no adoption recommendation.
+
+Also record independence: non-author, non-owner; worker-084 vs worker-006.
+
+Let me write it.
+dsh: reasoning:
+Now findings.json, REVIEW.md, CHECKPOINT.json, MANIFEST.json. Then emit events.
+
+findings.json: include the findings plus reproducibility facts. REVIEW.md: concise human-readable.
+
+Let me write findings.json (compact) and REVIEW.md.
+dsh: reasoning:
+Now CHECKPOINT.json and MANIFEST.json. MANIFEST.json should hash every file in the task dir (excluding itself and __pycache__). Then emit events.
+
+Let me write a small script to generate MANIFEST.json + CHECKPOINT.json programmatically (so hashes are exact). This is a write in my own artifact dir; fine.
+
+CHECKPOINT.json content: task_id, worker, created_at, status "complete", checkpoint summary (what was done, results, no-vote), artifact hashes, next falsifier, do_not_claim.
+
+Then the emitter: build events and validate with research_map.schemas.validate_event, then append to comms/outbox/worker-084.jsonl. Events:
+1. status (task-claim) — optional; prior rounds emitted one. I'll emit a task-taken status (status active).
+2. artifact events: report.json, reproduction.json, determinism.json, PREREGISTRATION.json (4 events). Required fields: node_id, artifact_type, path, sha256, validation_status. Add task_id etc.
+3. claim: class_id AF-WCC-VAC-GEN, conclusion_type "formal_model" (or "numerical_evidence"). This is a reproduction measurement → "numerical_evidence" is apt. Required: class_id, statement, conclusion_type, assumptions, falsifier, evidence_refs.
+4. review: target_id = "W006-R03-SCOPE-01", reviewer worker-084, verdict accept, score (I'll give 4.5: exact reproduction, well-structured; minor wording finding; stage-B unpinned governance note). hard_failures: []. findings: list of strings.
+5. status (checkpoint+exit): status "active" per prior convention (worker exits for recycling; not a node completion) — prior used "active". Use status "active", hours ~0.6, summary, evidence_refs, next_falsifier.
+6. No gate event (only downward/controller issues gates; I shouldn't set a gate verdict). Prior worker-006 emitted a "gate" proposal with verdict pending; I won't — my card says no gate verdict. Actually a gate event from a worker might be invalid authority; skip.
+
+PROTOCOL rule 5: validate before sending. I'll import schemas.validate_event for each.
+
+Also the artifact validation_status: "unverified" (no reviewer yet) or "passed"? Use "unverified" — my own artifacts haven't been reviewed. Prior worker-084 events used what? Let me check one artifact event quickly... The mechanism artifact event probably used validation_status "unverified". I'll use "unverified" to avoid self-passing.
+
+Let me generate MANIFEST/CHECKPOINT then emit.
+dsh: reasoning:
+184 files (mostly raw/ and raw_pass2/ JSONs). Fine.
+
+Now write the emitter script and run it. It will append to comms/outbox/worker-084.jsonl after validating each event with research_map/schemas.py. I'll put the emitter in my task dir.
+
+Event list:
+1. status task-taken: event_id w084-r03v2indep-20260912T0140-01-status-task, status "active", hours 0.1, summary "one bounded class-bound task taken: ...", evidence_refs [preregistration], next_falsifier.
+2. artifact x4: prereg, report, reproduction, determinism (maybe also REVIEW.md and CHECKPOINT). Let me emit: PREREGISTRATION.json, report.json, reproduction.json, determinism.json, REVIEW.md, CHECKPOINT.json → 6 artifacts. Keep it reasonable: 5 (prereg, report, reproduction, determinism, checkpoint).
+3. claim: statement summarizing reproduction result; conclusion_type numerical_evidence; assumptions; artifact_refs; evidence_refs; falsifier.
+4. review: target_id "W006-R03-SCOPE-01", reviewed_sha256 = report sha e81f...; verdict accept; score 4.5; hard_failures []; findings strings.
+5. status checkpoint+exit.
+
+Hashes:
+- PREREGISTRATION a9a4061e24e278ecbede008e961fc92e271f240a11f9a04f0684fc62d0bd1721
+- report.json: need current hash (written after the earlier list) — compute.
+- reproduction bf779d809eaf6bc37e38db580e2e47c1ffed87561b7f8d1573211e9d45a97ef9
+- determinism b07ef7bedc4fdadb032abececb9f10cb6e5ed0cc4678d01ac2a245a158b1a8ae
+- MANIFEST 0318cc55a893...
+- CHECKPOINT a30a2e150ca0...
+
+Let me compute report.json/findings/REVIEW hashes and emit. Evidence refs format: "path#sha256:<prefix>" per prior convention.
+
+I'll write the emitter with the hashes computed at runtime by the script itself (read files, hash them, build events, validate, append). That's cleanest and avoids transcription errors.
+dsh: reasoning:
+Before running the emitter, verify pins one last time (the subject could have moved — worker-006 or controller could be writing). The run_independent.py already checked after. But time has passed (~5 min); the FROZEN rev14 might land. My verification binds to the pins at run time; if a pinned byte moved since, my report would be stale. Let me re-check the 14 pins now; if a subject byte moved after my run, I must report that as a post-run observation (the reproduction remains valid for the bytes as run, but a moving target invalidates currency). Let me check and then emit; include the check in the checkpoint/report if there's drift.
+
+Actually the emitter's report.json doesn't include a post-emit pin re-check. Let me quickly re-verify pins now before emitting. If drift occurred, I need to add a note. Let me run a quick pin check comparing against PREREGISTRATION pins.
+dsh: reasoning:
+Important development: the F2a (C2) and F2b (C0) canonical schemas have just moved (rev14 landed!). The WCC schema and the R03 subject files are unchanged.
+
+Wait — the wall clock says 01:26:27, while I assumed ~01:36. My timestamps in report/checkpoint were 01:36/01:40 — that's ahead of wall clock. Hmm, the `date -Is` says 01:26:27. Earlier files were at 01:19-01:22. My created_at values (01:32, 01:36) are in the future relative to wall clock? That's a clock discipline issue the lead flagged before (rev25 declared 00:42 ahead of its 00:19 write). Hmm, wait: the session start was around 01:20-01:22. My writes took some minutes. It's plausible the actual time is 01:26 now. I wrote report.json with created_at 2026-09-12T01:36:00 — 10 minutes in the future. That's bad (CF-14 clock discipline). I should fix report.json/findings timestamps to actual wall clock, or better: use the actual current time at write. Let me correct created_at in report.json and findings.json to 01:26 (or just the real time when rewriting).
+
+More importantly: the C2/C0 canonical schemas moved DURING/AFTER my run (rev14). My verification subject pins included C2/C0 canonicals e9a27996/b2ab6acb. The run_independent.py checked pins after its run — at that time they were stable (pins_after_ok true). The determinism pass also ran before the move? Let me check: determinism ran at ~01:24-01:25? The move happened when? Let me check mtimes of the schemas. The rev14 repair (lead's tmp/lead-form-life09/rev14_repair.py) was being staged at 01:21-01:22; the write likely landed ~01:25-01:26.
+
+This matters:
+1. My reproduction remains a valid measurement of the subject at the pinned bytes — the cells I executed included the C2/C0 canonicals at their then-live hashes, and my pins were verified before and after the run. All 88 cells executed against stable bytes.
+2. But the *live* canonical control (C6) is now stale for C2/C0: the current live C2/C0 are new bytes (c1013e48, c4d17fe6). cand_r03v2's acceptance of the *new* F2a/F2b canonicals is unmeasured. That's a material post-run drift that I must report: a currency caveat, and a next falsifier.
+3. The falsifier in my preregistration says "Any pinned byte moves during the run" → they didn't move during the run (verified after). They moved after. So the pre-registered falsifiers did not trigger, but the *currency* of the canonical control part is now stale. My verdict (reproduction of the subject as published) stands; the review should note the post-run canonical move and narrow the claim: cand_r03v2 accepted the three canonicals *at the verified pin set*; whether it accepts the rev14 C2/C0 bytes is not measured here. Actually, I could easily measure it now: run cand_r03v2 (and frozen/004/E3) against the new live C2/C0 bytes as a *post-hoc addendum* — that's a new measurement against new bytes, clearly labeled as post-run currency check, not part of the pre-registered test. That would be genuinely useful: it tells whether the edge/scope repair still accepts the rev14 canonicals.
+
+Should I? The task says bounded; this is cheap (2 files × 4 candidates = 8 runs). But it's post-registration. The discipline is: report it as an explicitly post-hoc "currency check", never mixed into the pre-registered results, with its own hashes. That's honest and useful. Alternatively, simply report the drift as a blocker/caveat and leave the check for the next round.
+
+Given the swarm's emphasis on not overclaiming and on re-pinning after rev14 ("Bytes move after rev14: all current verdicts are then void and r3 re-runs at the new pins" — CF-31), the right move is:
+- Keep the pre-registered verdict for the pinned subject bytes (accept).
+- Add an explicit post-run drift observation + post-hoc currency probe result (labeled as such), because it materially affects whether cand_r03v2 can be adopted now.
+- The claim/review must state: the R03 candidate was validated against rev13-era C2/C0 canonicals; rev14 has replaced those bytes; a same-revision re-validation is required before adoption (my F-05 becomes stronger).
+
+Let me check the mtimes and whether FROZEN.json is now rev30, plus whether the WCC schema (the one R03 actually reads for the binder) is unchanged. The R03 binder rule is about quantifiers.formal; the F1/WCC canonical d9cebb94 is unchanged. The C2/C0 canonicals' quantifiers.formal — did rev14 change those? Probably not (rev14 was F2b must_not_conflate + F2a category pin + crosswalk). The R03 rule checks quantifiers.formal binder for WCC. Why does the subject corpus include C2/C0 canonicals? As controls that repairs must accept. If rev14 changed other keys, the R03-relevant binder may still pass. The currency probe will show.
+
+Let me first check current state: FROZEN.json revision, hashes, mtimes, and what changed in C2/C0 (diff relevant fields). Then run the post-hoc currency probe, then finalize report with corrected clock times and the drift addendum.
+
+Note also: my earlier pin count printed 13, but prereg pins has 14 entries? Let me count: report, raw, manifest, prereg, blindspot, frozen tool, v2 tool, v2 rule, 004 tool, E3 tool, 3 schemas = 13. Yes 13, not 14. My report says "14 pinned files" and "pins_checked: 14" — that's wrong! Let me recount: the pins dict has 13 entries. run_independent printed pins_checked? It didn't print count; report.json says 14 (I wrote that manually). Need to correct to 13. Good catch from the pin check output ("pins checked: 13").
+
+Let me now:
+1. Check FROZEN rev and mtimes + diff C2/C0 old vs new on quantifiers.formal and other contract slots.
+2. Run post-hoc currency probe on new C2/C0 (8 cells), record in currency_check.json.
+3. Correct report.json: created_at actual, pins 13, canonical control note + currency addendum; add finding F-06 (post-run rev14 move; adoption requires same-revision re-validation).
+4. Update findings.json, REVIEW.md, CHECKPOINT.json, MANIFEST.json accordingly.
+5. Emit events with the corrected hashes and additional artifact.
+
+Careful with the timeline: the report's claim "pins stable before and after the run" remains true (13/13). The currency observation timestamp ~01:26.
+
+Let me inspect the new C2/C0 vs old. I have old bytes: my raw canonical outputs store doc_sha256 only, not bytes. But git has the old bytes (rev13 versions were committed? The repo has commits; rev14 may not be committed). Actually, old C2/C0 bytes = e9a27996/b2ab6acb; workflow artifacts may have copies (e.g., verify/live_canonical in heldout-09 is e9a27996/b2ab6acb — yes! heldout-09/verify/live_canonical has those exact bytes: c0 b2ab6acb, c2 e9a27996, wcc d9cebb94). So I can diff old vs new using those copies.
+
+Let me check.
+dsh: reasoning:
+Confirmed:
+- C2/C0 canonical schemas were rewritten at 01:25:42 (after my run completed ~01:24-01:25).
+- FROZEN.json is still rev29 (not yet updated to rev30) — the lead is mid-revision; rev30 is staged, not yet in FROZEN.
+- The quantifiers.formal (R03-relevant) is unchanged in both.
+
+So the currency probe can run all 4 candidates on the new C2/C0 bytes: expected all accept (since R03-relevant binder unchanged, but other rules might be affected — e.g., new f0_binding hash → R-rule checks might fail if schema f0_binding points to old manifest? Let me just measure).
+
+Let me run the currency probe with a small dedicated script, storing outputs in currency/ and currency_check.json. Label it clearly: post-hoc, not part of the pre-registered 88-cell test, executed at the observed post-run bytes (C2 new c1013e48, C0 new c4d17fe6; FROZEN still rev29 at probe time; WCC unchanged d9cebb94). Also record mtimes.
+
+Then update artifacts. Let me write and run the probe.
+dsh: RATE_LIMIT: Too many requests. Your current concurrency is 23, which exceeds your concurrency limit of 20 based on your remaining balance. Please top up your balance to restore your concurrency.

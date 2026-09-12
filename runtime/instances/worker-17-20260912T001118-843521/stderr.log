@@ -1,0 +1,572 @@
+dsh: reasoning:
+Let me start by exploring the workspace to understand the handoff/map and comms structure.
+dsh: reasoning:
+No handoff directory at top level of glob. Let me look for "handoff" and "comms" directories more specifically. The glob pattern `**/handoff/**` returned no files — maybe the directory exists but is empty, or maybe names differ. Let me search for directories.
+dsh: reasoning:
+Found the swarm directory: /data3/guoshaoyang/workdir/ai4math-swarm with HANDOFF.md, comms, research_map. Let me read these.
+dsh: reasoning:
+Now let me read the ASTRA_HANDOFF.md (likely the "map" referred to), the PROTOCOL.md, and the comms inbox/outbox. Also worker=17 suggests I need to find the task assignment for worker 17.
+dsh: reasoning:
+I'm worker=17. My assignment is in `comms/inbox/deepseek-flash-17.jsonl` (or possibly `worker-17`). Let me read the latest inbox files for deepseek-flash-17 and flash-17, plus the runtime instance for worker-17 to see the prompt.
+
+Let me read:
+- /data3/guoshaoyang/workdir/ai4math-swarm/comms/inbox/deepseek-flash-17.jsonl
+- /data3/guoshaoyang/workdir/ai4math-swarm/comms/inbox/flash-17.jsonl
+- runtime instances worker-17 latest (worker-17-20260912T001118-843521): prompt.txt, meta.json, stdout.log
+- runtime/state/current_checkpoint.json
+- schemas/ dir listing
+
+The task says: "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit." So I need to find a class-bound assignment in my inbox, do the work (produce an artifact), emit valid JSON (status/claim events with IDs, evidence, hash, falsifier) to my outbox, checkpoint, and exit.
+
+Let me look at the inbox and runtime instance prompt.
+dsh: reasoning:
+I'm worker 17 (deepseek-flash-17 / flash-17). The latest assignments (00:07:42) are:
+
+1. `audit-a1-20260912T0008-l0-w17`: re-review CURRENT ledger at sha 7d78d2850b55 → write `reviews/L0-review-17-current.json` (G-LIT, node L0)
+2. `audit-a1-20260912T0008-f2b-w17`: second independent verdict on F2b schema hash e6b1af2bd692 → write `reviews/F2b-review-17-current.json` (G-FORM, node F2b)
+
+Also there's the FORM-QNF-06 task (flash-17) about quantifier normal form — that's from 23:31, may be superseded. Let me check the runtime state and current checkpoint to understand ordering and what's already been done by worker 17. The instance worker-17-20260912T001118-843521 was started at 00:11:18, after the 00:07 assignments. So "one class-bound task" — I should pick one of the class-bound assignments. The F2b one is class-bound (class_id AF-SCC-C0-VAC-GEN); the L0 one is GLOBAL class. Hmm — "Take one class-bound task". The F2b review is explicitly class-bound: AF-SCC-C0-VAC-GEN.
+
+Let me check the current state:
+- research_map/research_map.json — assignments, gates
+- runtime/state/current_checkpoint.json
+- schemas/af_scc_c0_vacuum.yaml (canonical? note the handoff says canonical path is authoritative: `schemas/*.yaml`; but lead-formulation said frozen canonical artifacts are `artifacts/formulation/schemas/*.yaml`. The controller decision (ASTRA_HANDOFF.md line 18-23) says: "the canonical path is authoritative (`schemas/*.yaml`, `research_map/formulation_taxonomy.yaml`); `artifacts/formulation/**` is the authoring tree and must be published byte-identically before review verdicts bind. FORM-MAP-PATCH-002 is superseded — do not repoint the map at the authoring tree."
+
+So the canonical path is `schemas/af_scc_c0_vacuum.yaml`. The assignment from lead-audit references `schemas/af_scc_c0_vacuum.yaml#e6b1af2bd692`.
+
+Let me verify existence and hash. Also check reviews/ dir for existing reviews (worker-18's F2b review), and reviews/INDEX.md.
+
+The task says: "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit."
+
+So the deliverables:
+1. One class-bound task: F2b review (independent verdict on schemas/af_scc_c0_vacuum.yaml @ e6b1af2bd692) → write `reviews/F2b-review-17-current.json`.
+2. Emit valid JSON with IDs, evidence, hash, falsifier: write review event to `comms/outbox/deepseek-flash-17.jsonl` (or flash-17?) with event_id, event_type, created_at, actor, target_id, artifact, artifact_sha256, verdict, score, hard_failures, findings, falsifier, evidence_refs.
+3. Checkpoint: run `python3 research_map/checkpoint.py` or write a checkpoint? The runtime may have checkpoint machinery. Let's look at checkpoint.py and runtime/state.
+
+Let me now read the current map state, the target schema, and existing reviews. Also check whether worker-17 already produced something (outbox files deepseek-flash-17-qnf.jsonl at 00:10 — that's from a previous instance).
+
+Let me set up a todo list and proceed. First, gather state:
+
+1. Read `schemas/af_scc_c0_vacuum.yaml` and hash it.
+2. Read `reviews/` dir and worker-18's F2b review (reviews/F2b-review-18.json).
+3. Read `research_map.json` relevant parts (assignments for these IDs, gates, numerics_lock).
+4. Check `runtime/state/current_checkpoint.json`.
+5. Read comms.py to know how to emit valid events (and whether there's a send command).
+6. Read evaluation_rubric.yaml for hard-failure ids.
+
+Let me be careful about the budget: "bounded execution worker", stop rule: one verdict per target on frozen hash.
+
+Let me look at these files.
+dsh: reasoning:
+Important: my assigned F2b hash was e6b1af2bd692, but the current file `schemas/af_scc_c0_vacuum.yaml` hashes to a8d899d2941f... — the file changed at 00:10 (after the 00:07 assignment). There's a `.sha256` sidecar at 00:11. Let me read that sidecar and check FROZEN.json for the canonical hash, plus the current research_map.json assignments. Also the ledger changed again (ce42d2... vs assigned 7d78d285).
+
+The stop rule says "One verdict per target on the frozen hash." The current hash differs from assignment hash. Important consideration: The assignments were issued at 00:07:42 against hash e6b1af2bd692. The file was modified at 00:10. The instruction from lead-audit says "F2b (AF-SCC-C0-VAC-GEN) currently has exactly ONE independent verdict on its current hash e6b1af2b (worker 18). Supply the second independent verdict on e6b1af2b."
+
+Hmm. But if the file changed at 00:10, and I'm started at 00:11:18, I need to determine what the current canonical frozen hash is. Let me check:
+- `schemas/af_scc_c0_vacuum.yaml.sha256`
+- FROZEN.json entries for schemas/af_scc_c0_vacuum.yaml
+- research_map.json: artifact_sha256_measured for F2b nodes; assignments; gates
+
+Let me look. Also check whether the file was actually modified (maybe byte-identical content but written by a tool, with hash changing? obviously hash changed if content changed).
+
+Let me check git status / git log to understand. Also check the review by worker-18 (F2b-review-18.json) which hash it cites, and lead-audit's F2b-review-lead-audit.json.
+
+Plan:
+1. Read `.sha256` sidecar, FROZEN.json tail (schemas entries).
+2. Read research_map.json targeted with python (gates, assignments for F2b, node info, artifact hashes).
+3. Read schemas/af_scc_c0_vacuum.yaml fully.
+4. Read reviews/F2b-review-18.json, F2b-review-lead-audit.json, and REVISION_LOG.md / INDEX.md.
+5. Check evaluation_rubric.yaml hard failure ids.
+6. Determine which hash to review: if the schema changed after assignment, review the current file and report delta; or follow "frozen hash" policy. The controller canonical policy says review verdicts bind to canonical path + hash. The latest frozen revision in FROZEN.json at 00:15 (revision 20) — wait, FROZEN.json frozen_at 2026-09-12T00:15:00+08:00, revision 20. That's later than assignment (00:07) and later than file mtime 00:10. So maybe FROZEN.json revision 20 pins the current hash a8d899...? Let me check.
+
+Actually wait — current time might be ~00:12-00:15. The FROZEN.json says frozen_at 00:15:00, which is in the future relative to instance start 00:11:18... hmm, maybe clock differences or the file was written by another agent with a forward timestamp. Let me just read it.
+
+Let me also check the current time.
+dsh: reasoning:
+Key facts:
+- Current canonical `schemas/af_scc_c0_vacuum.yaml` hash = a8d899d2941f... (matches FROZEN rev20 and `artifacts/formulation/schemas/` mirror).
+- The assignment hash e6b1af2b is now stale (rev20 republished the schema, and F1's visibility predicate was unified, C0/C2 candidate tokens → variant references, etc.).
+- The gate G-FORM criteria: "reviewers 17,18 accept with cited sha256". So they need reviewer 17 and 18 accept verdicts at the current hash.
+- Worker 18's review at F2b-review-18.json — check which hash it cites. It may cite the older hash.
+
+Given the stop rule "One verdict per target on the frozen hash", I should review the CURRENT frozen canonical hash a8d899d2941f (the one the map and FROZEN rev20 bind), and report the delta from the stale assignment hash e6b1af2b — i.e., note that the assigned target moved. That's the right approach: reviewer binds to canonical path + sha256, never path alone; review current hash.
+
+Let me check the map's assignments for the F2b-w17 assignment (its current status), the F2b node state, artifact_sha256_measured, and worker-18's review hash. Also read schemas/af_scc_c0_vacuum.yaml (32KB, 32754 bytes) carefully. And the evaluation rubric hard-failure ids. And comms.py to understand event schema validation.
+
+Let me query the map with python for F2b-related entries.
+dsh: reasoning:
+Now I understand the state:
+- Worker-18's F2b review is at stale hash e6b1af2b, verdict revise (score 3).
+- lead-audit's F2b review accept at e6b1af2b.
+- F2b-softflag-disposition-review.json: let me read it; it reviewed the current hash a8d899d2 perhaps (it was created at 00:12).
+
+The canonical schema was republished (rev20) with a new hash a8d899d2 at 00:10. The A1-rebind assignment (astra-life01-a1-rebind) requires two verdicts per target at the measured canonical sha256. So my job: independent review of F2b at a8d899d2 (current canonical), writing `reviews/F2b-review-17-current.json`, then emit a review event in my outbox.
+
+Note: I previously authored F2a-review-17.json and F0-F1-review-17.json, but not F2b — so I'm independent w.r.t. F2b. Good. But careful: I have a "class-binding gate" conflict? The assignment asg-a1-f2a-17 said "you authored a class-binding gate, not this schema; declare the gate as a conflict if you rely on it" — that was for F2a. For F2b the assignment from lead-audit says nothing about conflict; but my prior work may have touched class stuff. Let me check what F2b review 17 previously existed — is there an F2b-review-17.json? No, only F2b-review-16, 18, lead-audit, softflag-disposition. So I'm a fresh reviewer on F2b.
+
+Let me now:
+1. Read the softflag disposition review (it likely already reviewed a8d899d2 and disposed of the flags).
+2. Read the whole schema schemas/af_scc_c0_vacuum.yaml carefully (32KB, ~500-700 lines).
+3. Read evaluation_rubric.yaml for hard failure IDs.
+4. Read F2b-review-18.json for context (what worker-18 found; but I must not reuse its text — independent).
+5. Check reviews/INDEX.md and REVISION_LOG.md.
+6. Read comms.py event validation to emit valid JSON.
+7. Maybe read the F2a schema for class-leakage comparison, and the F1 schema.
+
+Then write the review JSON, outbox event, checkpoint, exit.
+
+Let me set up a todo list first since this is multi-step. Then proceed.
+
+Budget: 1.0 agent-hour. Be focused but thorough.
+
+Let me read the softflag disposition and the schema.
+dsh: reasoning:
+The lead-audit already disposed of the soft flags on the current hash, but explicitly says a full-schema independent verdict on F2b is still required. That's exactly my task now.
+
+Now read the schema. 32KB, let me read it fully — probably ~600 lines. Let me check line count first and read in chunks. Also read rubric.
+dsh: reasoning:
+I've read the schema. Now let me check the evaluation rubric for hard-failure IDs and the review format requirements, plus INDEX.md and REVISION_LOG.md. Also, I should independently check a few substantive things:
+
+1. Class leakage/clarity: Does the schema use any class tokens outside the frozen four? The frozen four are AF-WCC-VAC-GEN, AF-SCC-C2-VAC-GEN, AF-SCC-C0-VAC-GEN, AF-WCC-SCALAR-SPH. In anti_scope, "AF-WCC-SCALAR-SPH" appears — that's one of the frozen four, fine. Variants are referenced via parent_class + variant_id, fine.
+
+2. Conclusion inflation: conclusion_type = scc_c0_future_inextendibility; the statement is the C0 inextendibility. The forbidden strengthenings/weakenings are explicit. Does the "known_status_signals" claim (line 324-325) that "the literal AF-SCC-C0-VAC-GEN class is expected FALSE conditional on Kerr exterior stability ... effect_if_verified: the C0 class as stated would be refuted rather than open" constitute conclusion inflation or a status inconsistency? Hmm. The schema's own known_status says open_problem_with_scoped_conditional_refutation, and quarantines T-301 to variant CH. But provenance.known_status_signals says the literal class is expected FALSE conditional on Kerr exterior stability, with Dafermos-Luk arXiv:1710.01722. That's a potential internal tension: known_status says "the frozen broader class stays open until a non-meagerness argument for AF Cauchy data is supplied", while known_status_signals says the literal class "would be refuted rather than open" if verified. Is this a hard failure? The note says "NOT asserted by this schema" and citation unresolved. It's a status signal, appropriately flagged. But is it a genuine field where two readers would disagree? Possibly a soft finding: the class's own epistemic status fields are in tension (known_status.status = open_problem vs known_status_signals "expected FALSE"), but both are carefully qualified and the ledger quarantines. I'd call it a non-blocking (N) finding.
+
+3. The "requested_reviewers": ["deepseek-flash-19", "astra-lead-audit"] — the schema asks for reviewers 19 and lead-audit, but the lead-audit assignment to me says supply second independent verdict (worker-18 has one). Two reviewers required for the gate: reviewers 17,18 accept per gate criteria. The schema's review_status is stale relative to map but that's not a schema defect per se.
+
+4. Falsifier witness-shaped: tier_1 refutes class by showing extendible set non-meager, with explicit extension data; tier_2 refutes only the "forall" strengthening and is labelled. It's witness-shaped and decidable in principle, though machine-checkability has a non-machine step (non-meagerness). That is honestly declared.
+
+5. Quantifiers: ordered list: forall (s,delta) in D0; exists G comeager; forall (Sigma,h,K) in G; not_exists extension. Formal matches. Negation given. order_matters true. Good.
+
+6. Class-specific conclusion vs R11 rule_spec: Let me check artifacts/formulation/rule_spec.json R11 and the class contract to ensure conclusion_type is class-specific. Also check taxonomy_consistency.json.
+
+7. Data class matching F1/F2b field-for-field: compare data_class in the three schemas. The assignment (from lead-audit at 00:07) said "does data_class match F1 and F2b field-for-field?" — that was for F2a. For F2b my task list: single frozen class, exact quantifiers, topology/weighted data class/genericity/I+/visibility, C0 conclusion type not inflated, falsifier witness-shaped, no C0/C2 merge or disjunction.
+
+8. Check for "C0 or C2" string anywhere.
+
+9. Check the current hash vs FROZEN and map artifact_sha256_measured.
+
+10. Potential real defect hunting. Let me look carefully at internal consistency:
+- Line 241: "E_C0 contains E_H2loc contains E_{C^1,1} contains E_C2" — containment direction: E_C0 (set of C0 extensions) contains E_H2loc, etc. Fine.
+- Line 243-245: entailments correct.
+- Line 165: excluded_set must contain Kerr data — with status unresolved. Fine.
+- Line 179: dense_escape variant: "implied by residual_comeager in a Baire space (a comeager set is dense)" — correct.
+- Line 59: D1 definition "comeager (residual) subsets of X^{s,delta}_vac(AF) in the named topology; complement meager" — fine.
+- Line 56: D0: "Sobolev variant s > 5/2 and delta in (1/2,1), or the smooth-with-decay default" — a forall over a disjunctive domain; fine.
+- Line 142: adm_mass: sign m_ADM >= 0 "by positive mass theorem" used only to exclude negative mass; hypotheses_reconciliation says i_plus k>=3; not resolved.
+- Line 149: i_plus_regularity k >= 3 part of assumption; visibility says not in conclusion; i_plus role assumption. Good.
+- Line 40: "Lambda = 0", data_class cosmological_constant 0. Good.
+- The "known_status_signals" at 324-325 might be the biggest soft spot. Also line 325 "the literal AF-SCC-C0-VAC-GEN class is expected FALSE conditional on Kerr exterior stability" — if the class is expected false, then the schema's epistemic_status open_problem may be a status honesty question, but it's explicitly "not asserted" and effect_if_verified routes to L1. This is a legitimate N finding.
+
+- Line 33: class_contract_pointer: artifacts/formulation/formulation_taxonomy.yaml#class_contracts.AF-SCC-C0-VAC-GEN — canonical policy says canonical path is research_map/formulation_taxonomy.yaml; artifacts/formulation/** is the authoring tree. FROZEN path_policy says artifacts/formulation/ entries are the authoring mirror byte-identical at publish time and "Reviewers, gates and the ledger bind to the canonical path + sha256". The class_contract_pointer points to the authoring path, not research_map/. Is that a divergence? Hmm. The canonical policy from ASTRA_HANDOFF: "the canonical path is authoritative (`schemas/*.yaml`, `research_map/formulation_taxonomy.yaml`); `artifacts/formulation/**` is the authoring tree and must be published byte-identically before review verdicts bind." The f0_binding uses declared_f0_artifact: research_map/formulation_taxonomy.yaml — good. But class_contract_pointer points at the authoring tree. FROZEN rev20 says "aggregator re-pinned (P1-P5 pass)" and path_policy says byte-identical. Since they're byte-identical at publish time, the pointer resolves, but per canonical path policy the pointer should arguably target the canonical path. This is a B or N finding? The A1-rebind acceptance says "Any verdict whose cited sha256 does not equal the measured canonical sha256..." — this is about verdicts, not the schema's pointer. Given lead-formulation declared the mirror byte-identical and the FROZEN manifest lists both paths, I'd call it a non-blocking (N) finding: pointer uses the authoring mirror path with drift risk; recommend pointing to research_map/formulation_taxonomy.yaml. Not blocking because byte-identity is validated by verify_frozen.py per rev14 and FROZEN rev20 records both hashes equal.
+
+Let me verify byte-identity of artifacts/formulation/formulation_taxonomy.yaml vs research_map/formulation_taxonomy.yaml, and the schemas too. That's an easy check.
+
+- Line 23: `revised_at_unused` is a nonstandard key; could be flagged by a strict key manifest (KEY_MANIFEST.json implements R22 with extensions escape hatch). Minor N finding; unknown keys may be flagged by gate R22. Let me check whether the gate tests pass on the current hash (artifacts/formulation/evidence/gate_test_report.json). If the gate's R22 key check passes, then revised_at_unused is allowed or not scanned for schemas. Actually the rev20 delta says "aggregator re-pinned (P1-P5 pass)". Let me check gate_test_report.json for the current hash.
+
+- Multiple duplicate `revised_at` keys (lines 8, 10, 12, 14, 16, 18, 21) — YAML duplicate keys! In YAML, duplicate keys in the same mapping are technically invalid (and PyYAML takes the last one). This is a real structural defect: the file has `revised_at` repeated 7 times, and `revised_at_unused` at 23. The effective value is the last one (2026-09-12T00:15:00+08:00). Whether this is a hard failure depends on the rubric. For a machine-readable schema, duplicate keys are a defect: a strict YAML parser (e.g., with duplicate key detection) would reject the file; different parsers may resolve differently. Let me check whether the gate's YAML loader passes. If the gate report says pass, the gate probably uses yaml.safe_load (last-wins). I should report it as a finding. Is it blocking (B) or non-blocking (N)? It's an artifact hygiene issue: the revision history should be a list, not duplicate mapping keys. It doesn't change the semantics of the frozen class (the last value matches rev20 publication). I'd make it a B finding? Let me think about the review rubric: hard failures are things like class leakage, conclusion inflation, unresolved falsifier. The triage from astra-conv-02: "verdict revise only with >=1 B finding; list N findings as backlog."
+
+I need to read evaluation_rubric.yaml to see hard failure categories (HF-xx?). The acceptance says the review should list hard_failures from evaluation_rubric.yaml. Let me read it.
+
+Also note the assignment says "New file reviews/F2b-review-17-current.json only" — write only that file. Then emit review event. Don't modify the schema.
+
+Let me read the rubric and INDEX/REVISION_LOG, and also check the gate test report + class_separation. Then run a few probes:
+- grep for "C0 or C2"
+- YAML parse with duplicate-key detection
+- byte-identity of mirrors
+- data_class comparison across F1/F2a/F2b
+- verify hash matches FROZEN and map measured hash
+
+Let me read the rubric first.
+dsh: reasoning:
+Very important: rubric line 100-104 `status_risk` for AF-SCC-C0-VAC-GEN:
+
+"Known C0-extendibility results for perturbations of subextremal Kerr (Dafermos-Luk line of work) are an open-set counterexample candidate for this class as literally stated. Until L1 binds the exact hypotheses, this class' status MUST be recorded as `conditional` or `refuted_candidate`, never `open_conjecture` and never `theorem`."
+
+Now the schema:
+- Line 35: `epistemic_status: open_problem`
+- Line 214: `conclusion.epistemic_status: open_problem`
+- Line 305: `known_status.status: open_problem_with_scoped_conditional_refutation`
+- Line 324-325: known_status_signals noting the class expected FALSE conditional on Kerr stability; "NOT asserted by this schema"
+
+The rubric's hard failure taxonomy: HF-02 class_leakage includes "evidence metadata violates the class forbidden_evidence list without transfer_argument | conclusion_type not allowed for class". Is `open_problem` vs required `conditional`/`refuted_candidate` an HF? The rubric G-FORM criteria don't explicitly include status honesty, but the status_risk requirement is a rubric-level requirement for this class. Hmm — is it a hard failure? The hard_failures list has HF-03 unsupported_citation: "claim cites a citation whose resolution_status in {unresolved, contradicted}". The schema does cite unresolved citations but marks them unresolved... A claim would be the issue; a schema with known_status_signals marked unresolved is transparent.
+
+But wait — there's a real tension. The rubric says for this class the status MUST be `conditional` or `refuted_candidate`, never `open_conjecture`. The schema has `open_problem` (in two places) and `open_problem_with_scoped_conditional_refutation`. Note the rubric says never `open_conjecture`; `open_problem` is not literally `open_conjecture`. Hmm, the schema is more careful: it labels the broad class open with a scoped conditional refutation (T-301 quarantined to variant CH). The rubric's status_risk says the Dafermos-Luk results are an open-set counterexample candidate "for this class as literally stated" — that's the same as the schema's known_status_signals. The schema does record `refutation_candidate` + `antecedent_status` + `why_this_class_is_not_recorded_as_refuted`. Arguably this satisfies the spirit (status recorded as conditional/refuted_candidate), but the top-level `epistemic_status: open_problem` could be read as `open_conjecture`-equivalent. The rubric's exact words: "this class' status MUST be recorded as `conditional` or `refuted_candidate`, never `open_conjecture`". The schema records it as `open_problem_with_scoped_conditional_refutation`, which contains "conditional". Two readers could disagree whether that satisfies the MUST. This is a legitimate finding — likely non-blocking (N) or blocking (B)?
+
+The lead-formulation and lead-audit have gone many revision rounds. If I mark a B finding, the verdict becomes "revise" per the convergence triage rule ("verdict revise only with >=1 B finding"). Gate G-FORM wants "reviewers 17,18 accept with cited sha256". Worker-18's review at the older hash was revise? Let me check what worker-18's hard failures were (at e6b1af2b). If worker-18's findings were addressed in rev9/rev20, then at the current hash maybe accept.
+
+Let me read F2b-review-18.json to see its findings (for context, not reuse), and F2b-review-lead-audit.json. Also check the A1-rebind-coverage.json for what remains.
+
+Also, I need to consider the "class-bound task" — the F2b review. The review should be independent and honest. Let me do genuine checks:
+
+Check list:
+1. Hash the file myself: a8d899d2... (verify with sha256sum; also cross-check FROZEN rev20, map artifact_sha256_measured, artifacts mirror).
+2. Single frozen class id: class_id: AF-SCC-C0-VAC-GEN at line 3. Check no other class-id tokens outside frozen four. anti_scope references AF-SCC-C2-VAC-GEN, AF-WCC-VAC-GEN, AF-WCC-SCALAR-SPH — all frozen. Variants referenced by parent_class + variant_id — no new ids. Also check l1_ledger_refs / known_status: T-301 etc. are theorem ids, not class ids.
+3. Conclusion type allowed: rubric conclusion_primary for AF-SCC-C0-VAC-GEN = C0_inextendibility_of_maximal_development. Schema: scc_c0_future_inextendibility. Are these "allowed"? Token differs. The rule_spec R11 presumably maps. Check artifacts/formulation/rule_spec.json R11 and KEY_MANIFEST. The gate passed on this. Let me check.
+4. Exact quantifier order: ordered list present, negation present, order_matters true.
+5. Topology/weighted data class/genericity/I+/visibility — present. Data class consistency with F1/F2a: compare fields.
+6. C0 conclusion not inflated; no C0/C2 merge or disjunction: grep "C0 or C2".
+7. Falsifier witness-shaped: tier_1/tier_2 present, labelled.
+8. Non-vacuity: present with status.
+9. Structural: duplicate YAML keys (`revised_at` x7, `revised_at_unused`). Check parse with strict duplicate detection.
+10. Status honesty vs rubric status_risk.
+11. class_contract_pointer uses authoring path artifacts/formulation/... vs canonical policy.
+12. Check whether the claimed refutation candidate is appropriately scoped.
+13. check `i_plus` role, visibility forbidden_falsifier.
+
+Let me run these machine checks now. Also read rule_spec.json R11 and the gate test report for this hash.
+
+Let me also check REVIEW protocol: my review JSON should have target_id, artifact, artifact_sha256, verdict, score 0-5, hard_failures[], findings[] with line refs. I'll follow the structure similar to lead-audit's but independent text.
+
+Let me run the probes.
+dsh: reasoning:
+Findings so far:
+
+1. **Duplicate YAML keys** (`revised_at` appears at lines 8,10,12,14,16,18,21) — strict YAML parsers reject; effective value is last occurrence. This is a real structural defect. How severe? The gate's YAML loader likely uses yaml.safe_load (last wins). It doesn't change class semantics but makes the revision history machine-ambiguous. I'd classify this as B (blocking) or N? The convention: B finding = blocks acceptance; N = backlog. A duplicate-key YAML file is not valid YAML per spec (YAML 1.1/1.2 say keys must be unique) and any compliant/strict parser (e.g., `yaml.safe_load` with duplicate detection, go-yaml, ruamel strict, JS yaml with `uniqueKeys`) fails. That's a genuine machine-readability defect for a machine-checked artifact. I'd say B finding (blocking for accept) — the artifact is not valid YAML. But hmm, would that force a "revise" verdict and block G-FORM? The gate criteria: "artifact exists and sha256 recorded" etc. The evidence gate test report presumably parsed it with PyYAML leniently and passed. Two readers could disagree. But per the triage rule, "verdict revise only with >=1 B finding; list N findings as backlog." A strict-parse failure is defensible as blocking for a machine-readable canonical artifact. However, I should be careful: the whole swarm has iterated many rounds; if I mark B, it forces another revision round. The instruction "bounded worker: emit valid JSON with IDs evidence hash falsifier" — I should be honest.
+
+Let me weigh: Is duplicate keys actually semantically harmful here? The `revised_at` series records revision history in comments+keys; the effective value is 2026-09-12T00:15:00+08:00 which matches rev20 publication. Every lenient parser (PyYAML safe_load, used by their tooling) takes the last. The class semantics are unaffected. But for a canonical artifact whose gate requires machine-checkability, a file that strict YAML rejects is a defect — a future strict parser or an independent replication harness would fail to load it. I'll call it a **B (blocking) structural finding** with a precise, cheap fix: collapse the repeated `revised_at` keys into a single `revised_at` + a `revision_history` list. Hmm, but then verdict=revise, which conflicts with gate wanting reviewer 17 accept.
+
+Hmm, let me think about my role: I'm an independent reviewer; my job is to report hard failures with evidence. The convergence triage rule says revise only with ≥1 B finding. If I find a genuine B, verdict must be revise even if inconvenient. But is the duplicate key a "hard failure" per the rubric's hard_failures taxonomy? The rubric's HF list doesn't include malformed YAML directly. HF-02 class_leakage/etc. don't apply. The A1 review criteria: (a) class leakage, (b) conclusion inflation, (c) assumption completeness, (d) decidable falsifier, (e) any field two readers would disagree on. Duplicate keys fall under a machine-readability defect — arguably (e) "any field two readers would disagree on": the revision history fields. Not a hard failure per se.
+
+I could report:
+- hard_failures: [] (no HF-01..HF-14 from the taxonomy)
+- findings: B/N labeled. If I label the duplicate-key as B (blocking for a schema artifact), verdict = revise.
+
+Let me look at how prior reviewers classified similar issues. Worker-18's F2b review at the older hash — let me read it for calibration (not to copy text, but to understand what they found and whether rev20 addressed it). Also the A1-rebind-coverage.json which may have a B/N triage of outstanding findings.
+
+Also finding 2: taxonomy mirror is NOT byte-identical: research_map/formulation_taxonomy.yaml (565a6e505188) vs artifacts/formulation/formulation_taxonomy.yaml (01e7f841643c). FROZEN rev20 says "canonical publication of the 3 schemas + declared F0 taxonomy" and path_policy says "the artifacts/formulation/ entries are the authoring mirror and are byte-identical at publish time". But they're not identical! Let me check FROZEN.json files map for both taxonomies to see what's declared, and check `artifacts/formulation/evidence/` verify results. This is a serious finding: the policy claims byte-identity at publish; measured divergence. Which one is canonical? `declared_f0_artifact: research_map/formulation_taxonomy.yaml` with sha 66bf917bd368 (in f0_binding) — but measured canonical hash is 565a6e505188! Wait: f0_binding.declared_f0_sha256 = 66bf917bd368... but I measured research_map/formulation_taxonomy.yaml = 565a6e505188. That means the declared F0 hash in F2b's f0_binding does NOT match the current research_map/formulation_taxonomy.yaml. Hmm! But wait — maybe FROZEN.json records the published hash for the taxonomy as 66bf...? Let me check. The gate G-F0 says "no accept verdict exists at the current hash 66bf917bd368" (as of 00:09). And my measurement of research_map/formulation_taxonomy.yaml is 565a6e505188, updated at 00:10 maybe. So the taxonomy changed at 00:10 as well (rev20 "canonical publication of the 3 schemas + declared F0 taxonomy" bumped the taxonomy to a new hash 565a6e...), and F2b's f0_binding still points to 66bf917b... which is now stale!
+
+That's potentially a real B finding: the f0_binding in the current canonical F2b schema (a8d899d2, published 00:15) declares declared_f0_sha256 66bf917bd368, but the canonical F0 artifact on disk now hashes 565a6e505188. The f0_binding's own rule says "if the declared F0 artifact changes hash, refresh this binding and re-run the consistency check before any gate verdict". So by its own rule, the binding is stale → gate verdict may not be taken against this hash. And the A1-rebind falsifier says "Any verdict whose cited sha256 does not equal the measured canonical sha256 ... invalidates". Hmm, but that's about the reviewed artifact hash.
+
+Wait, let me be careful: maybe research_map/formulation_taxonomy.yaml's canonical hash at publication is recorded in FROZEN.json files map (artifacts path) and maybe the research_map path isn't in FROZEN. Let me check FROZEN.json for taxonomy entries and the gate evidence. Also the earlier `schemas/...sha256` sidecar. Let me measure precisely:
+- research_map/formulation_taxonomy.yaml: 565a6e505188 (mtime?)
+- artifacts/formulation/formulation_taxonomy.yaml: 01e7f841643c
+- FROZEN.json declared hashes for both.
+- taxonomy_consistency.json evidence.
+- mtimes.
+
+The `f0_binding` declares `declared_f0_artifact: research_map/formulation_taxonomy.yaml` + `declared_f0_sha256: 66bf917bd368...` + `class_contract_supplement: artifacts/formulation/formulation_taxonomy.yaml` + consistency evidence + `checked_at: 2026-09-11T23:52:21+08:00`.
+
+If the canonical taxonomy was republished at rev20 (00:10-00:15), the binding needs refresh. Let me verify what FROZEN rev20's files map says about taxonomies and check `research_map/validate_map.py` or the consistency evidence. Also check if there's a newer taxonomy hash recorded anywhere (map.frozen_artifacts, artifact_hashes.json).
+
+Let me gather this evidence carefully — this looks like the substantive find of this review. Let me check:
+1. `runtime/state/artifact_hashes.json` for taxonomy entries.
+2. `research_map/research_map.json` frozen_artifacts / artifact_sha256_measured for F0 node.
+3. FROZEN.json files entries for taxonomy paths.
+4. mtime of both taxonomy files and F2b schema.
+5. artifacts/formulation/evidence/taxonomy_consistency.json content.
+6. The F0 review hash references (gate says current hash 66bf917bd368).
+
+Let me run this.
+dsh: reasoning:
+Now the crucial fact: the F2b schema's `f0_binding` declares:
+- declared_f0_artifact: research_map/formulation_taxonomy.yaml
+- declared_f0_sha256: 66bf917bd368ebd96ee46baa31fb435df106cb4e10152fa0baee8bdd51dfc232
+- checked_at: 2026-09-11T23:52:21+08:00
+
+But the measured current canonical taxonomy hash is 565a6e505188... (mtime 00:07:07). And FROZEN rev20 files map records research_map/formulation_taxonomy.yaml = 565a6e505188 (published at rev20 00:15). So the binding is STALE against the published F0 artifact.
+
+But wait — the discrepancy is not new in rev20; the taxonomy changed at 00:07 already, and the schema's f0_binding was written at 23:52. The F2b schema was revised at 00:15 (rev9 per its header: "revised_at: 2026-09-12T00:15:00+08:00", # rev9 delta...) but the f0_binding.checked_at is 23:52:21 and the declared hash is the old one 66bf917b.
+
+Hmm, is 66bf917b the hash at 23:52? It was the "current hash" mentioned in G-F0 gate as of 00:09 (map gate G-F0 unmet: "no accept verdict exists at the current hash 66bf917bd368"). So the taxonomy changed after 00:09 (to 565a6e50 at... mtime 00:07? Wait, mtime 00:07:07 is BEFORE 00:09. Hmm, mtime 00:07:07, but the gate said current hash 66bf917b at 00:09:01. That's contradictory unless the gate's "current hash" text was written earlier or the hash 66bf917b corresponds to a file mtime 00:07 that was then... no wait, mtime 00:07:07 for the current file with hash 565a6e50. The gate's unmet text was updated at 00:09:01 and says "current hash 66bf917bd368". So at 00:09 the map believed the current taxonomy hash was 66bf917b. But measured now (00:12+) the file is 565a6e50 with mtime 00:07:07. Possibly the file was reverted/re-written with preserved mtime? Or the map's recorded value came from a prior measurement (artifact_hashes.json).
+
+Let me check what the map records as measured hash for the taxonomy: `artifact_sha256_measured` per node or controller_findings. Also check `runtime/state/artifact_hashes.json` — the command printed nothing for taxonomy/c0/FROZEN entries, meaning the state file uses different key names. Let me inspect it.
+
+Also check `research_map/research_map.json` nodes for F0/F2b with artifact_sha256_measured + declared_hash_matches_measured. The ASTRA_HANDOFF mentioned per-node artifact_sha256_measured + declared_hash_matches_measured.
+
+Also, importantly: is 66bf917b possibly the hash of an older taxonomy that still has a copy somewhere? Let me compute: maybe artifacts/formulation/formulation_taxonomy.yaml has hash 01e7f841 not 66bf. Where does 66bf917b come from? Possibly the "lead taxonomy rev6/rev7" at 23:52. The map's earlier gate evidence refs mention research_map/formulation_taxonomy.yaml (a82f249c was frozen at 23:25). Then rev3 → 66bf... at ~23:52 (f0_binding), then rev? → 565a6e50 at 00:07 (rev7/rev20 publication).
+
+So the F2b schema (published 00:15, rev9) still carries the 23:52 f0_binding with declared_f0_sha256 = 66bf917b, while the canonical F0 taxonomy now hashes 565a6e50. The binding's own rule: "if the declared F0 artifact changes hash, refresh this binding and re-run the consistency check before any gate verdict". So G-FORM cannot be verdicted on this hash without refreshing F0 binding — a derived blocker. That's a legitimate B finding with line refs (line 311) and measured evidence.
+
+Hold on — is it possible that 66bf917b IS the current hash of research_map/formulation_taxonomy.yaml at the time the schema was published, and the file changed at 00:15 after? mtime says 00:07:07. FROZEN.json mtime 00:11:04 and it records 565a6e50 as the research_map taxonomy hash. The F2b schema mtime 00:10:15 with hash a8d899d2 (recorded in FROZEN rev20). So at publication time (00:10-00:11), research_map taxonomy was already 565a6e50. The f0_binding (checked_at 23:52) is stale by publication time. So this is a genuine defect in the published rev9 schema: the declared F0 binding hash does not match the published F0 artifact hash.
+
+Let me double check by searching for 66bf917b across the repo to see where it's recorded and whether any file with that hash exists.
+
+Also check the map's node/artifact_sha256_measured for F2b and F0.
+
+Let me also consider whether the review should be against the current hash a8d899d2 (yes) and whether this B finding makes verdict "revise". Given the A1-rebind acceptance explicitly says: "Re-check A0 conformance at the rubric hash" and "Any verdict whose cited sha256 does not equal the measured canonical sha256 ... invalidates". The F2b schema's f0_binding staleness is exactly the kind of drift the gate's own rule forbids.
+
+But wait — maybe I should check the map: does the map record F2b's declared hash matches measured? Let me look at the node entries. Maybe the controller already flagged this as a controller finding and there's a pending repair. If the controller already knows and has an open assignment for it, my review should still report it (independent evidence) but note it's known.
+
+Let me query the map for F0/F2b node records + controller_findings + controller_gate_audit + recent events about f0_binding. Also check research_map/events.jsonl for "f0_binding".
+dsh: reasoning:
+Now I have a rich picture. The `66bf917bd368` hash appears in many places, including the current canonical schemas. The current canonical taxonomy hash is 565a6e50. But note: the F2b schema's `f0_binding.declared_f0_sha256` = 66bf917b. Since the map's node F0 says evidence_gap resolved 00:11:50 "declared artifact now present on disk; awaiting review/gate" and FROZEN rev20 records 565a6e50 for the canonical taxonomy.
+
+But wait — is 66bf917b the hash of an intermediate revision that has since been superseded? The events and F0 review (lead-audit at 00:07) may say "F0 current hash 66bf917b". The G-F0 gate unmet says "no accept verdict exists at the current hash 66bf917bd368" updated at 00:09:01. So as of 00:09 the map considered 66bf917b the current taxonomy hash. But measured now, the canonical taxonomy is 565a6e50 with mtime 00:07:07. That's weird: mtime earlier than 00:09. So the map's claim may be based on an older measurement snapshot (artifact_hashes.json). Let me check runtime/state/artifact_hashes.json structure — earlier grep printed nothing, so let me inspect its keys.
+
+Actually, maybe the map's gate evidence was written by a process that measured a file at a moment when it was 66bf917b, and then the file was rewritten earlier? No — mtime 00:07:07 < 00:09:01. Unless the file was restored from a backup with preserved mtime, or the writing process set mtime. Hmm.
+
+Alternatively, maybe I'm misreading: perhaps `research_map/formulation_taxonomy.yaml` at 00:07:07 was 66bf917b at that time... no, hash is of current bytes.
+
+Hmm wait — maybe FROZEN rev20's publication at 00:15 rewrote research_map/formulation_taxonomy.yaml with a new revision (565a6e50) and set its mtime to... no, mtime is 00:07:07, before 00:10. Let me check whether there's another copy: `artifacts/formulation/formulation_taxonomy.yaml` = 01e7f841 (mtime 00:09:09). Its declared_f0 hash 66bf doesn't match either.
+
+Let me look for a file with hash 66bf917b — maybe `research_map/.formulation_taxonomy.yaml.swp` no. Let me check `schemas/` — no. Let me search git: the repo has .git; maybe the file was committed and could be recovered. Also check `runtime/state/artifact_hashes.json` for the recorded measured hash of the taxonomy.
+
+Also important: maybe the map has a controller_findings entry about this exact issue (stale f0_binding). Let me check controller_findings and the class_separation soft flags & A1-rebind coverage.
+
+Let me inspect artifact_hashes.json keys and grep the map for "565a6e50" and "f0_binding".
+dsh: reasoning:
+Let me check the map's measured hash for research_map/formulation_taxonomy.yaml in artifact_hashes.json `hashes` key. And whether the map records `declared_hash_matches_measured` false for F2b's f0_binding. Let me query.
+dsh: reasoning:
+Odd — earlier print showed sample keys ['checked_at', 'hashes', 'registry', 'soft'], but now KeyError 'checked_at'. Because earlier I printed `list(d.keys())[:10]` and it showed those keys. Hmm, KeyError means the file changed between the two calls? The file is updated every checkpoint (mtime 00:12). Maybe structure changed: now top-level keys differ (e.g. wrapped). Let me re-read.
+dsh: reasoning:
+Confirmed: `runtime/state/artifact_hashes.json` measures `research_map/formulation_taxonomy.yaml` = 565a6e505188... (node F0). The current canonical F2b schema declares declared_f0_sha256 = 66bf917b... → **does not equal the measured canonical F0 artifact hash**. This is a genuine, machine-verifiable drift.
+
+Let me be extra careful about whether 66bf917b is maybe a prefix of a different revision that is still "declared" (e.g. the lead's taxonomy revision 6 vs canonical revision 7). The F2b schema's f0_binding says:
+```
+f0_binding: {declared_f0_artifact: research_map/formulation_taxonomy.yaml, declared_f0_sha256: "66bf917b...", class_contract_supplement: artifacts/formulation/formulation_taxonomy.yaml, consistency_evidence: artifacts/formulation/evidence/taxonomy_consistency.json, checked_at: "2026-09-11T23:52:21+08:00", rule: "if the declared F0 artifact changes hash, refresh this binding and re-run the consistency check before any gate verdict"}
+```
+
+Measured:
+- research_map/formulation_taxonomy.yaml = 565a6e50... (mtime 00:07:07)
+- artifacts/formulation/formulation_taxonomy.yaml = 01e7f841... (mtime 00:09:09)
+- Both are recorded in FROZEN.json rev20 (565a6e50 / 01e7f841) — frozen_at 00:15.
+- The binding's rule requires refresh before any gate verdict; checked_at 23:52 predates both current hashes.
+
+So the F2b artifact's own f0_binding is stale against the published canonical F0 artifact. Whether this is a defect of the F2b artifact or a publication-ordering artifact: the F2b schema was republished at 00:15 (rev9 header) without refreshing f0_binding (checked_at 23:52). The change_protocol in FROZEN says any change bumps revision and re-emits; f0_binding wasn't refreshed. This is exactly the kind of thing an independent reviewer must flag. Severity: blocking? The binding has a rule that says refresh before any gate verdict; G-FORM verdicts bind to the schema hash. If reviewer 17 and 18 accept, the gate could pass but with a stale F0 binding, meaning the class contract pointer might reference an outdated taxonomy — and the taxonomy hash changed at 00:07 (possibly with contract changes: rev7 "contract_divergences D1/D3 open, D2 cleared" then rev20 "consistency D1/D3 resolved"). So a gate verdict taken now would be against a schema whose F0 binding points to a superseded taxonomy revision. I'd classify this as **B (blocking)** — the artifact's own gate-readiness rule is violated; fix is cheap (refresh the hash + checked_at + re-run check_taxonomy_consistency.py). That makes verdict = revise.
+
+Hmm, wait. Let me consider the alternative view: the f0_binding is *informational*, and the taxonomy-consistency evidence (9e335e9b, mtime 00:10:12) says consistent:true for the current pair (map_taxonomy + lead_contract) — i.e., the consistency check was actually re-run at 00:10 against the current files, but the F2b schema's declared hash field was not updated. The evidence file 9e335e9ba1bf... is listed in FROZEN rev20. So the consistency was re-established, only the hash literal in the schema is stale. Still: the schema's own rule says "refresh this binding" — the declared_f0_sha256 field is factually wrong vs the artifact it names. A canonical artifact containing a false hash reference is a real defect, though small. Blocking or not? For a machine-checked class binding whose whole point is hash-bound provenance, a wrong declared hash is exactly what the audit checks catch (worker-03's review_hash_binding). I'll classify it as B1 (blocking) with evidence, and recommend the one-line refresh.
+
+Hmm, but hold on. Let me check whether the f0_binding was perhaps updated by the "PUBLISH-FROZEN-01" process after my assignment... The F2b mtime is 00:10:15, hash a8d899d2. Let me grep the schema at line 311 for its exact declared hash — yes it says 66bf917b. And FROZEN rev20 published the file at 00:15? Wait, FROZEN.json mtime is 00:11:04, frozen_at says 00:15:00 (a forward-looking timestamp). The map updated_at 00:12:11. My measurement now is ~00:13-00:14. So no further revision happened.
+
+Also note the map's artifact_hashes.json recorded the taxonomy at 565a6e50 — and f0_binding says 66bf917b. So `audit_evidence.py` dual-tree/hash drift check should flag it... maybe not because audit_evidence checks declared hashes of *nodes*, not f0_binding fields.
+
+Now, second candidate finding: **duplicate `revised_at` keys** (lines 8–21). Some prior review may have flagged it; worker-18's N findings didn't mention it. This is a genuine structural defect. Blocking? I'd classify as B2? Hmm, let me think about what "B" means per their triage: "B blocks accept; N is backlog; revise only with >=1 B." A YAML document with duplicate mapping keys is invalid per YAML spec; `yaml.safe_load` tolerates it (last wins), but strict parsers (and the class schema checker could) reject. The canonical artifact is supposed to be machine-checkable. Two readers would disagree whether it blocks. I think it's honest to call it **B2 (blocking)**: for a machine-checkable gate artifact, non-conforming YAML is a defect with a trivial fix (keep one `revised_at`; move history to `revision_history` list). But would that be over-strict? Prior gate tools parsed it fine with PyYAML. The gate criteria don't require strict YAML. Hmm.
+
+Let me check what the formulation gate tooling does: `artifacts/formulation/tools/check_class_schema.py` (cited by flash-19) — does it use yaml.safe_load? And the gate_test_report for R11/R22. If their checker uses safe_load, duplicate keys pass silently. The issue remains latent but real.
+
+Also, the duplicate keys create a subtle audit problem: the `revised_at` revision history that reviewers are told to read ("rev4 delta", etc. are comments) is not machine-readable; more importantly, the effective `revised_at` is the LAST one (00:15), which was written to match the publication. So semantics work out, but the revision history is malformed.
+
+Decision: I'll report:
+- hard_failures: [] at the rubric-taxonomy level (no HF-01..HF-14 with critical severity) — wait, is the stale f0_binding an HF? Let me map: HF-02 class_leakage: "unknown class_id | disjunction | evidence metadata violates class forbidden_evidence | conclusion_type not allowed" — no. HF-03 unsupported_citation: "claim cites a citation whose resolution_status in {unresolved, contradicted} or whose class metadata mismatches the claim's class" — the schema's f0_binding cites an artifact by a wrong hash, not a citation. HF-06 assumption_smuggling — no. Not in the HF taxonomy. So hard_failures[] could be empty while findings carry B labels. But the A1 review acceptance says "hard_failures as a list" — the rubric defines HF ids; I can list "HF: none from evaluation_rubric.yaml taxonomy" plus blocking findings B1/B2 (structural). Hmm, but the acceptance for the assignment ("Verdict cites sha256 e6b1af2b; per-item findings with line refs") suggests findings with B/N labels. The convergence triage says "verdict revise only with >=1 B finding". So I can have B findings that aren't rubric HF ids.
+
+Wait, I need to re-read my specific assignment: "audit-a1-20260912T0008-f2b-w17": acceptance "Verdict cites sha256 e6b1af2bd692; per-item findings with line refs; text independent from worker-18's review." The target hash in the assignment is e6b1af2b (stale). The controller policy says verdicts bind to the measured canonical sha256. What do I do: cite both — assignment hash e6b1af2b (superseded) and reviewed hash a8d899d2 (current canonical, measured by me). The review is on a8d899d2; the delta note explains the reassignment. That satisfies "cites sha256" honestly.
+
+Hmm, but there's a risk the controller maps my review by target hash e6b1af2b and counts it as a verdict on a stale hash (invalid). I'll make the review JSON have both `artifact_sha256` (a8d899d2) and `assignment_target_sha256` (e6b1af2b) with `supersedes_note`, plus `hash_history`. And the outbox event's evidence_refs will cite the current hash. Good.
+
+Now, should the verdict be revise (B findings) or accept (only N findings)? Let me carefully weigh:
+
+1. Stale f0_binding hash — blocking? The artifact's own `rule` explicitly gates: "if the declared F0 artifact changes hash, refresh this binding and re-run the consistency check before any gate verdict". The declared F0 artifact DID change hash (66bf917b → 565a6e50). The binding was not refreshed (checked_at 23:52 < 00:07). Therefore, by the artifact's own text, no gate verdict may be taken on it. That's a self-declared blocker → B1. Strong.
+
+2. Duplicate YAML keys — B2 or N? I'll call it B2 (structural/machine-readability; strict YAML parsers reject). Actually let me test what `artifacts/formulation/tools/check_class_schema.py` and `verify_frozen.py` do; if their own gate tooling uses a strict loader or duplicate-detecting loader, then the gate itself would fail → definitely B. Let me check quickly. If it uses plain safe_load, I'll label it B (with rationale: canonical artifact is not valid YAML; invalid input passed only because the checker is lenient) — hmm, that's arguable. Alternatively label it N (non-blocking backlog: hygiene fix; semantics unaffected under the lenient loader all tooling uses). The triage philosophy in this project: B = blocks acceptance. Does malformed YAML block acceptance of a machine-checked schema? I think yes for a canonical artifact — but the impact is low and fix trivial.
+
+Let me look at how the gate's schema checker loads YAML to ground the severity. Also check KEY_MANIFEST R22 and whether `revised_at_unused` is flagged.
+
+3. Status honesty vs rubric status_risk (line 100-104): rubric says class status MUST be recorded as `conditional` or `refuted_candidate`, never `open_conjecture`. Schema: `epistemic_status: open_problem` (lines 35, 214) and `known_status.status: open_problem_with_scoped_conditional_refutation` (line 305), with `known_status_signals` noting expected FALSE conditional on Kerr stability (lines 324-325), `refutation_candidate` (line 306), `antecedent_status` preprint (307), `why_this_class_is_not_recorded_as_refuted` (308), consequence (309). Does `open_problem` violate the rubric's MUST? The rubric's exact forbidden word is `open_conjecture`; `open_problem` is used, not `open_conjecture`. But the semantic is the same ("never `open_conjecture`" intends: don't present the class as an open conjecture because an open-set counterexample candidate exists). Hmm, the rubric was authored by lead-audit; the G-AUDIT gate scope includes A0 conformance. The schema does record `refutation_candidate` and a `conditional` status signal — arguably it satisfies "recorded as conditional or refuted_candidate" because `known_status` explicitly records a refutation candidate attributed to variant CH + a status signal for the literal class. But top-level `epistemic_status: open_problem` contradicts the rubric letter.
+
+This is a legitimate B or N finding. The class is the literal frozen class; the rubric says its status MUST be `conditional` or `refuted_candidate`. The schema's top-level `epistemic_status` is `open_problem`. Two readers could disagree, so it's exactly criterion (e). I'd call it **B3 (blocking)**: status-field mismatch with the A0 rubric's mandatory status_risk rule; cheap fix: set `epistemic_status: conditional` (or add `status_vocabulary` and map). Hmm, but wait — the rubric status_risk says "Known C0-extendibility results ... are an open-set counterexample candidate for this class as literally stated. Until L1 binds the exact hypotheses, this class' status MUST be recorded as `conditional` or `refuted_candidate`". The schema's own known_status_signals does exactly that ("expected FALSE conditional on Kerr exterior stability... effect_if_verified: would be refuted"). The schema also explicitly says why it is NOT recorded as refuted (T-301 is interior/horizon-localized). So one could argue the schema's status handling is more accurate than the rubric's blanket rule, and it records `conditional` inside known_status. But the canonical status fields (`epistemic_status`, `conclusion.epistemic_status`) say open_problem. The map's node status is "active". G-FORM criteria include "conclusion_primary chosen from the class' allowed set" — the rubric's allowed set has no epistemic_status enum beyond status_risk wording.
+
+Given the reviewer instruction "check ... conclusion inflation" and "any field two readers would disagree on", I'll report this as a finding with B severity? Hmm. Let me think about which is more defensible.
+
+Actually, let me re-read the rubric line 100-104 once more:
+
+```
+    status_risk: >-
+      Known C0-extendibility results for perturbations of subextremal Kerr (Dafermos-Luk
+      line of work) are an open-set counterexample candidate for this class as literally
+      stated. Until L1 binds the exact hypotheses, this class' status MUST be recorded as
+      `conditional` or `refuted_candidate`, never `open_conjecture` and never `theorem`.
+```
+
+The schema records `epistemic_status: open_problem`. Is `open_problem` == `open_conjecture`? Not literally. The schema's `known_status.status` = `open_problem_with_scoped_conditional_refutation` — contains "conditional". And the L1 ledger integration (line 297-310) binds T-301 to variant CH with a clear scope quarantine. A reasonable reader could say the schema's status handling is conformant in substance: it records the refutation candidate and the conditional nature, and refuses `theorem`. Another reader could say the top-level `epistemic_status: open_problem` violates the MUST. This is a genuine ambiguity — precisely an "any field two readers would disagree on" finding. Severity: I'd label it **B3** because a gate (G-AUDIT/A0 conformance) depends on it and the rubric author is the gate owner; but the fix is small. Hmm, but if I make three B findings, the verdict is revise with 3 blockers, forcing another revision round on a file that has been through 9 revisions. Is that the right call? The task says be honest, bounded, independent.
+
+Wait — maybe I should check whether the *current* F2b revision's known_status was already adjudicated by lead-audit at the current hash (F2b-review-lead-audit.json was at e6b1af2b, but content). Let me read lead-audit's F2b review findings and worker-18's review to see if these specific items were already adjudicated (avoid duplicate/contradictory findings). But my independence requires my own judgment; still, context helps avoid raising already-rejected points.
+
+Also, I should check the F2b-review-18.json's hard failures at older hash and how the lead-formulation responded; the rev4/rev5/rev6 etc. addressed many. The stale f0_binding was reported by flash-17 (me!) earlier: leadform-reply-flash17-binding at 23:52 says "Your F1/F0 binding blocker is ACCEPTED and repaired on the canonical set: all three class schemas now carry a top-level f0_binding with the declared F0 artifact hash (research_map/formulation_taxonomy.yaml#66bf917bd368)". So at 23:52, 66bf917b WAS the current taxonomy hash. Then the taxonomy was revised at 00:07 to 565a6e50 (rev7 by lead taxonomy? FROZEN rev20 records it) and the schemas were republished at 00:10 but their f0_binding was not refreshed. So my finding is a genuine *new* drift, not a repeat. And the f0_binding rule itself demands refresh. Good — B1 is solid and exactly the class of defect the audit is supposed to catch ("hash-bound provenance").
+
+Let me now verify the duplicate-key issue's impact by checking the gate tooling. Also check the current gate test report for the schema (artifacts/formulation/evidence/gate_test_report.json) — does it pass on a8d899d2? And check `artifacts/formulation/tools/` for check_class_schema.py.
+
+Also for completeness, verify data_class consistency across F1/F2a/F2b at current hashes (the assignment says check data class). All three are byte-frozen from the same author revision; compare data_class blocks. Let me run a quick diff of data_class/regularity/genericity keys.
+
+Also check the "C0 or C2" occurrence: 1 occurrence — where? It's line 280 in phrases_that_are_not_this_class ("any 'C0 or C2' composite regularity") — a prohibition context. Fine, not leakage.
+
+Let me also check the anti_scope class tokens: all frozen four. Variant references via parent_class+variant_id (lines 277-278, 295, 309). Good.
+
+Let me check `extension_predicate` vs F2a's and the rule_spec R11: conclusion_type scc_c0_future_inextendibility vs vocabularies.class_conclusion_type[AF-SCC-C0-VAC-GEN]. Let me check rule_spec vocab.
+dsh: reasoning:
+Findings summary:
+
+- R11 check: conclusion_type `scc_c0_future_inextendibility` == vocab for AF-SCC-C0-VAC-GEN. ✓
+- epistemic_status `open_problem` is in the R11 vocab list ✓ (so schema-rule-conformant), but rubric A0 status_risk says the class status MUST be `conditional` or `refuted_candidate`, never `open_conjecture`. R11 vocab has no `conditional` token except `conditional_theorem`. So there's a genuine vocabulary conflict between A0 rubric (status_risk) and rule_spec R11 epistemic vocabulary for the C0 class. That's a substantive cross-artifact finding. Which one governs? A0 is the audit rubric; R11 is the formulation rule spec. This is exactly an inter-artifact inconsistency (assumption/status). I'll report it as a finding — B or N? Since rule_spec's vocabulary doesn't even contain `conditional` (only `conditional_theorem`), the schema can't literally comply with the rubric's MUST without a vocabulary extension. The schema does record `known_status.status: open_problem_with_scoped_conditional_refutation` and `refutation_candidate`. I'd call it a **B finding on the governance side**? Hmm, careful: my review is of the F2b schema. If the rule_spec vocabulary and A0 rubric conflict, the schema author can't satisfy both. The correct disposition: report as blocking for gate promotion because G-AUDIT must adjudicate A0 conformance; recommend the schema record a status token that satisfies the rubric (e.g., `conditional` via known_status + a rubric-conformant top-level status), or the rubric owner amends the rubric. This is a real conflict two reviewers could disagree on.
+
+Hmm, but is it *new*? Let me check whether other reviewers (lead-audit's F2b review, worker-18's) already raised status. Let me read lead-audit's F2b review findings and worker-18's F2b-review-18.json hard_failures to calibrate and avoid duplicating their reasoning (independence means my text is mine, but I shouldn't ignore prior dispositions).
+
+- data_class: not identical across 3 — F1 has an extra `excluded_data` key. The rev20 delta said F1 got "one canonical visibility predicate + SET variant pointer". G-FORM criterion: "all three schemas exist with exact quantifiers/topology/regularity/genericity/I+/visibility/conclusion_type; no C0/C2 merge". The A1-rebind acceptance says "the three schemas share one declared data class (s,delta,norm) or record the divergence explicitly". Let me check whether F1's extra key is a real divergence or explicitly recorded. Compare the values of common keys. F1's data_class has `excluded_data` — perhaps the SET variant pointer. Let me diff the three data_class blocks field by field (excluding the extra key) and see if any values differ. If they're equal except the extra explicit variant pointer, fine.
+
+Let me do that now, then read the existing reviews' findings. Then decide B/N labels and write my review.
+
+Also check: my assignment's specific checks: "single frozen class ✓; exact quantifiers ✓; topology/weighted data class/genericity/I+/visibility ✓; C0 conclusion type not inflated ✓ (scc_c0...); falsifier witness-shaped ✓; no C0/C2 merge or disjunction ✓". The two structural issues (f0 binding stale; duplicate YAML keys) and the status-vocabulary conflict are the substantive findings.
+
+Let me diff data_class and read prior findings.
+dsh: reasoning:
+Very useful context. Prior reviews at the older hash flagged:
+- HF-B1: "C0 or C2" comment at line 5 (worker-18 at e6b1af2b; current rev doesn't have that line-5 comment? Current file line 5 is "owner: lead-formulation"). The current schema's only "C0 or C2" is line 280 (prohibition phrase list). So HF-B1 resolved in rev9. Let me double check there's no exemption claim or composite_regularity_lint in the current file... The current file has no composite_regularity_lint key (39 keys). So HF-B1 resolved.
+- HF-B2: node_id F2b vs map F2 → downgraded to N (map patch pending). Current map: node F2b exists (created by controller DAG repair), so this may now be consistent. Map has nodes F1, F2a, F2b. The schema node_id F2b matches map node F2b. Fine.
+- Lead-audit's HF-06 MAJOR about disjunctive D0: "The class quantifies over a disjunctive domain D0 = '(i) smooth-with-decay default, or (ii) s>5/2 and delta in (1/2,1)' and over comeager sets G_{s,delta} that depend on the regularity pair. This makes the artifact a family of class statements rather than one class". Then rev20 says "the data-class freeze is RESOLVED as smooth-with-decay default with a registered Sobolev variant (rule_spec v1.3, identical across F1/F2a/F2b), so the H^4_{1/2+eps} divergence belongs to the drafts" (from leadform-reply at 23:51). But look at the CURRENT canonical data_class.regularity_class in all three schemas:
+
+```
+regularity_class:
+    default: "smooth-with-decay: h and K of class C^infinity with the numeric rates below"
+    sobolev_variant: {s: "s > 5/2", delta: "delta in (1/2, 1)", spaces: ..., status: "standard_choice; UNVERIFIED citation"}
+```
+
+And quantifiers.domains.D0.definition (line 56): "admissible regularity pairs: Sobolev variant s > 5/2 and delta in (1/2,1), or the smooth-with-decay default". And the formal: "forall (s,delta) in D0: exists G_{s,delta} ...". The statement_formal (line 217): "forall (s,delta) in D0 exists G_{s,delta} comeager forall D in G_{s,delta}: not exists proper_future_extension_in_class(MGHD(D))".
+
+So D0 still contains the Sobolev variant as an option under the formal forall. The prior lead-audit HF-06 MAJOR is still present in the current revision? Hmm — the leadform reply said "the data-class freeze is RESOLVED as smooth-with-decay default with a registered Sobolev variant (rule_spec v1.3, identical across F1/F2a/F2b), so the H^4_{1/2+eps} divergence belongs to the drafts". But the current file still writes D0 as "Sobolev variant ... or the smooth-with-decay default". If the freeze is "smooth-with-decay default" and Sobolev is a registered *variant* (not this class), then D0 should NOT be a disjunction. Line 56 still has "or", and the quantifier formal ranges over (s,delta) pairs — i.e., a family of class statements.
+
+Hold on, let me read the current D0 and regularity more carefully. Line 55-57:
+```
+D0:
+  definition: "admissible regularity pairs: Sobolev variant s > 5/2 and delta in (1/2,1), or the smooth-with-decay default"
+  definition_ref: regularity.data_regularity
+```
+And data_class.regularity_class lists default + sobolev_variant. Hmm. Compare with F2a's current D0? Let me check F1 and F2a. The gate criterion G-FORM: "exact quantifier prefix (no 'roughly', 'essentially', 'or')" from the rubric: "exact quantifier prefix (no 'roughly', 'essentially', 'or')". The D0 definition uses "or"! That's the lead-audit's HF-06 finding — still present at a8d899d2? Wait, but rev20 delta says "the data-class freeze is RESOLVED as smooth-with-decay default with a registered Sobolev variant (rule_spec v1.3...)". Let me check rule_spec v1.3's frozen_classes data-class decision and whether the schemas were supposed to collapse D0 to one class. Also check F2a's D0 at current hash.
+
+Wait — actually, hold on. Let me reconsider: maybe the current schemas' D0 wording was updated in rev20 and I'm reading the current file, which shows "Sobolev variant ... or the smooth-with-decay default". That IS a disjunction. And the Kish-convergence-18 review (worker-18) said "Q2 resolved". Hmm, but lead-formulation's 23:51 message said "the data-class freeze is RESOLVED as smooth-with-decay default with a registered Sobolev variant (rule_spec v1.3, identical across F1/F2a/F2b), so the H^4_{1/2+eps} divergence belongs to the drafts". The rev20 delta says "C0/C2 candidate tokens -> variant references; canonical publication of the 3 schemas..." — I don't see "D0 collapse" in rev20 delta. Rev6/rev7 deltas mention data-class things. Let me check the actual current D0 in F1/F2a and the rule_spec frozen_classes for data_class / variant registry entries for the Sobolev variant.
+
+This could be the big finding: the D0 disjunction (a family-of-classes defect, lead-audit HF-06 MAJOR) persists in the current canonical revision despite the lead's claim of resolution. Or maybe the Sobolev variant is explicitly declared NOT this class somewhere in the current file, making D0's wording inconsistent with its own exclusion.
+
+Let me search the current F2b for "sobolev" occurrences and read around them:
+- line 56: D0 definition "Sobolev variant s > 5/2 and delta in (1/2,1), or the smooth-with-decay default"
+- line 136: data_class.regularity_class.sobolev_variant: status "standard_choice; UNVERIFIED citation"
+- line 147: regularity.data_regularity "smooth-with-decay default, or H^s_delta with s > 5/2, delta in (1/2,1)"
+- line 162: genericity.ambient_space "X^{s,delta}_vac(AF)... weighted Sobolev product H^s_delta x H^{s-1}_{delta+1}"
+
+No "is_this_class: false" for the Sobolev variant in this file. Compare F2a: worker-15's P4 re-binding notice said "B-G2 STILL PRESENT (quantifiers.domains.D0 = 'admissible regularity pairs: Sobolev s>2.5 and delta in (0.5,1), or the smooth-with-decay default', formal ranges 'forall (s,delta) in D0' - a family of class statements)". So yes, the same defect persists in F2a at 8dae50da; likely F2b too.
+
+But wait — the VARIANT_REGISTRY.json (rev19/rev20) registers variants. Maybe the Sobolev variant is registered there as a variant with parent_class. Let me check VARIANT_REGISTRY for a Sobolev entry. If registered, then D0 disjunction remains a defect: the frozen class statement should be over one data class (smooth-with-decay default), with the Sobolev variant as a separate variant, not inside the class's forall.
+
+Hmm, hold on. Let me re-read line 56 exactly and check whether "or the smooth-with-decay default" might be a parenthetical about the class default, with the forall over (s,delta) being deliberate... The formal statement "forall (s,delta) in D0 exists G_{s,delta} comeager forall D in G..." quantifies over regularity pairs, so the statement is: for every admissible regularity pair (including each Sobolev pair and the smooth default), there's a comeager set of data at that regularity that is inextendible. This is a stronger (family) statement. The G-FORM rubric criterion: "exact quantifier prefix (no 'roughly', 'essentially', 'or')". So the "or" in D0 is precisely what the rubric forbids. Two prior reviewers flagged it (lead-audit HF-06 MAJOR at e6b1af2b; worker-15 at F2a current). Did the lead actually fix it? Let me check F2a/F1 current D0 and the rule_spec/variant registry.
+
+Actually, let me check the current F2b's `regularity.data_regularity` and `data_class.regularity_class`... It says default OR sobolev_variant. If the freeze resolved to smooth-with-decay default with Sobolev as a *registered variant*, then the canonical schemas should mark `sobolev_variant.status` as variant/not-this-class, and D0 should be the single default. The current file still presents it as part of the class (D0 disjunction, forall over (s,delta)). This looks like a **persisting B finding**, and it's exactly the kind of thing the gate needs.
+
+But careful — maybe the lead-formulation did resolve it in rev20 by adding a `variant_registry` reference that declares "Sobolev variant is a separate class-variant, not part of this class" while keeping the legacy text? Let me grep the current file for "variant" and "sobolev" and check VARIANT_REGISTRY. Also check the rule_spec.frozen_classes data class definition, and FROZEN rev20 rev20_delta which says "F1 one canonical visibility predicate + SET variant pointer". Hmm.
+
+Let me also check whether the *map* records the data-class freeze decision — the earlier grep showed the lead reply. And check the A1-rebind-coverage.json findings from lead-audit at 00:11, which may already flag this.
+
+Let me investigate.
+dsh: reasoning:
+Important:
+1. rule_spec.json on disk is spec_version 1.2 (revised_at 23:32), but the lead's reply claims "rule_spec v1.3" for the data-class freeze and FROZEN rev7_delta mentions "rule_spec v1.3: dense_escape in vocabulary, extension_class_containment chain". Let me check rule_spec more carefully — maybe `spec_version` is 1.2 but there's a `rev` field, or the file was updated. Let me check for "v1.3" in rule_spec and its mtime/hash. FROZEN rev7 says rule_spec v1.3, so on-disk 1.2 would be drift. Hmm, let me check whether there's another rule_spec file (artifacts/formulation/rule_spec.json vs some canonical path). The A1 assignment mentions "artifacts/formulation/rule_spec.json". Let me look at its full content for version history and "data_class_freeze".
+
+2. The D0 disjunction is still present in all three canonical schemas. And no Sobolev variant in VARIANT_REGISTRY? Let me list all variant_ids in the registry — need to see if a Sobolev/regularity variant exists (maybe "SOBOLEV"). Let me print all variants' parent_class + variant_id + status.
+
+3. The `variants` block in genericity (lines 177-181) is about genericity kinds, not data-class.
+
+Let me check VARIANT_REGISTRY variants list and rule_spec version/data-class freeze.
+dsh: reasoning:
+So the VARIANT_REGISTRY has 7 variants, none about the Sobolev/data regularity axis. The current canonical F2b (and F1/F2a) still have the disjunctive D0 "Sobolev variant ... or the smooth-with-decay default", and the formal quantifies over (s,delta) ∈ D0. The lead's message claimed the freeze resolved to "smooth-with-decay default with a registered Sobolev variant (rule_spec v1.3)". On disk:
+- rule_spec.json is spec_version 1.2 (not 1.3), revised_at 23:32:53.
+- No Sobolev variant in VARIANT_REGISTRY v2.0.
+- D0 still disjunctive in all three canonical schemas.
+
+But wait: FROZEN.json rev7_delta says "rule_spec v1.3: dense_escape in vocabulary, extension_class_containment chain" — that was rev7 of the manifest (earlier). If the file on disk says 1.2, then either the manifest delta describes a version not on disk (drift) or the version wasn't bumped. Let me check the `leakage_scan_blocks`/`rules` for dense_escape and extension_class_containment to see if the content matches v1.3's description. If the content has dense_escape and extension_class_containment but spec_version still says 1.2, it's a version-field drift (minor). Let me check.
+
+Also, importantly — is the D0 disjunction still considered a defect by the current gate? The gate G-FORM criterion from the map: "all three schemas exist with exact quantifiers/topology/regularity/genericity/I+/visibility/conclusion_type; no C0/C2 merge; reviewers 17,18 accept with cited sha256". The rubric G-FORM criteria say "exact quantifier prefix (no 'roughly', 'essentially', 'or')". The D0 "or" is in the domain definition, not the quantifier prefix itself, but the prior lead-audit review explicitly called it HF-06 MAJOR. The lead-formulation's reply said the freeze was resolved (smooth-with-decay default + registered Sobolev variant), yet the published rev20 schemas still carry the disjunctive D0. Hmm, wait — maybe the "freeze" means both are declared in the class data_class (default + variant), and the disjunction in D0 is intentional because the statement is a family quantified over regularity pairs. But then what did "RESOLVED as smooth-with-decay default with a registered Sobolev variant" mean? Let me look for the map's decision record — maybe in `research_map/formulation_taxonomy.yaml` (canonical F0) there's a data-class freeze decision. Let me grep the taxonomy for "data_class" / "freeze" / "sobolev".
+
+Also check REVISION_LOG.md and reviews/A1-rebind-coverage.json (lead-audit's 00:11 output) — it may explicitly list remaining blockers including D0.
+
+Let me look at A1-rebind-coverage.json and the taxonomy decision.
+dsh: reasoning:
+The A1-rebind-coverage.json is very informative: lead-audit's own matrix records F0 mirror_equal=false and frozen_match=false (canonical 565a6e50, authoring 01e7f841, frozen_pin = authoring 01e7f841!?). Interesting: `frozen_pin` for F0 is 01e7f841 (the authoring file), but canonical is 565a6e50, and FROZEN.json rev20 records BOTH: artifacts/formulation/formulation_taxonomy.yaml = 01e7f841 and research_map/formulation_taxonomy.yaml = 565a6e50. So F0 has two different hashes for the "same" taxonomy artifact — the map taxonomy and the lead contract supplement differ (as intended: map taxonomy 34348 bytes vs lead taxonomy 20921 bytes — they're different documents, one is the declared F0 artifact, the other the class-contract supplement). The FROZEN path_policy says "the artifacts/formulation/ entries are the authoring mirror and are byte-identical at publish time" — for the taxonomy they are NOT byte-identical, because the supplement is a different document. So `mirror_equal: false` for F0 is expected? The A1 matrix says frozen_match false because frozen_pin for F0 was set to the authoring hash. Hmm. This is ambiguous policy. Not my target though (F0 is a different review target).
+
+My focus: F2b at a8d899d2. The F0 binding inside F2b declares declared_f0_artifact = research_map/formulation_taxonomy.yaml with sha 66bf917b — neither the canonical 565a6e50 nor the supplement 01e7f841. So the binding is stale on its face. Confirmed by lead-audit's matrix measuring canonical F0 = 565a6e50 and FROZEN rev20 pinning 565a6e50 for research_map/formulation_taxonomy.yaml. Solid B1.
+
+Now, the D0 disjunction: Is it still a blocker? Let me check the A1-rebind-coverage.json F2b section for verdicts at the measured hash and any remaining findings. Let me print the rest of the file. Also maybe the coverage matrix already lists outstanding B findings from lead-audit's point of view (e.g., F1/F2a D0). Let me read the rest.
+dsh: reasoning:
+The coverage matrix confirms full-schema independent verdicts at a8d899d2 for F2b: ZERO. My review would be the first at the current hash. F1/F2a also have zero at current hashes (that's other workers' jobs).
+
+Now let me decide my findings. Before writing, let me do a final careful pass on F2b content for class leakage/inflation/quantifier issues, and verify the specific claim "D0 disjunction" is still a live defect vs. deliberately frozen.
+
+Evidence:
+- Current F2b line 56: D0 = "admissible regularity pairs: Sobolev variant s > 5/2 and delta in (1/2,1), or the smooth-with-decay default"
+- Current formal line 45-48: "forall (s,delta) in D0: exists G_{s,delta} ..."
+- line 217 statement_formal same.
+- Rule_spec R11 requires conclusion type == vocabulary (passes).
+- The rubric G-FORM criterion: "exact quantifier prefix (no 'roughly', 'essentially', 'or')" — the "or" appears inside the domain definition. The lead-audit's previous HF-06 MAJOR called exactly this "a family of class statements rather than one class, and it cannot satisfy T1's exact-match guard against F1/F2a". The lead-formulation's 23:51 reply claimed resolution: "the data-class freeze is RESOLVED as smooth-with-decay default with a registered Sobolev variant (rule_spec v1.3, identical across F1/F2a/F2b), so the H^4_{1/2+eps} divergence belongs to the drafts."
+- On disk: rule_spec spec_version 1.2 (not 1.3); VARIANT_REGISTRY has no Sobolev variant; the schemas still have the disjunctive D0. So the claimed resolution did NOT land in the published revision — or it landed differently than described. This is a strong, verifiable B finding: the frozen canonical artifact still contains the disjunctive data domain that the audit already flagged as a hard (major) finding; the response's declared fix is not present on disk.
+
+Hmm, wait. Let me consider: maybe the "freeze" is recorded in the *taxonomy* (research_map/formulation_taxonomy.yaml) — line 480 says "data_class fields must match exactly (including s, delta once F2 fixes them)" and line 166 says the topology and weighted spaces (s,delta) are owned by F1 and unresolved. Let me grep the taxonomy around data-class freeze for "smooth-with-decay". If the taxonomy says the class is the smooth-with-decay default with Sobolev as a separate registered variant, then D0's disjunction contradicts the taxonomy too. Let me check.
+
+Also, I realize I should verify one more thing about my B1: maybe the current F2b's f0_binding was intentionally left at 66bf917b because the *declared F0 artifact* is not research_map/formulation_taxonomy.yaml but something else... no, it explicitly declares that path. And its consistency evidence file at 00:10 says map_taxonomy = research_map/formulation_taxonomy.yaml, lead_contract = artifacts/..., consistent true. The consistency checker doesn't check the hash field. So the hash literal is simply stale.
+
+Let me check the taxonomy freeze text and then finalize. Also let me do a final leakage/inflation machine pass:
+- Search for conclusion words in F2b that don't belong (e.g., "I+ complete", "visible", "predictability", "C2 inextendibility" as conclusion). i_plus.role: assumption; visibility.role: not_in_conclusion; forbidden lists. Line 241-252 implication ledger correct.
+- Check `anti_scope` has no disjunction of class ids.
+- Check `falsifier.tier_1.witness_type` is witness-shaped: yes.
+- Check `extension_predicate` frozen_* fields present: regularity C0, equation none, direction future. ✓ (matches the rubric schema_formulation checks: extension regularity xor → C0 only).
+- topology: slice, end structure, completeness, conformal boundary, I+ topology, development, extension topology, forbidden. ✓
+- genericity: kind residual_comeager + ambient space topology. ✓
+- non_vacuity present. ✓
+
+One more check: `visibility.role: not_in_conclusion` vs rule_spec vocab visibility_role values. And i_plus role assumption vs vocab i_plus_role. The gate passed presumably.
+
+Now let me check the taxonomy's data-class freeze text.
+dsh: reasoning:
+This clarifies the history:
+
+- Originally F2b revision 5 froze smooth-with-decay and declared the Sobolev setting NOT-this-class (with `is_this_class: false` under data_class.regularity_class.sobolev_variant). The worker-05 status at 23:55 says: "C0 revision 5 names a Sobolev index under data_class.regularity_class.sobolev_variant with is_this_class false, which satisfies R05 while keeping the frozen class smooth-with-decay."
+
+- But the CURRENT canonical revision (rev9, a8d899d2) has:
+  - line 136: `sobolev_variant: {s: "s > 5/2", delta: "delta in (1/2, 1)", spaces: "...", status: "standard_choice; UNVERIFIED citation"}` — **`is_this_class: false` is GONE**.
+  - line 56: D0 = "admissible regularity pairs: Sobolev variant s > 5/2 and delta in (1/2,1), or the smooth-with-decay default" — the disjunction is back and the Sobolev variant is inside the class's quantified domain.
+  - line 147: data_regularity = "smooth-with-decay default, or H^s_delta with s > 5/2, delta in (1/2,1)".
+  - line 162: ambient_space uses the weighted Sobolev product.
+  - line 142: adm_mass hypotheses_reconciliation mentions "the Sobolev variant uses the same rates distributionally".
+
+So the rev9/rev20 publication appears to have REINTRODUCED the disjunctive data domain (the exact HF-06 MAJOR that lead-audit raised and that worker-05 said was resolved by `is_this_class: false`). This is a regression relative to the claimed freeze ("RESOLVED as smooth-with-decay default with a registered Sobolev variant"). And the lead-formulation's 23:51 reply explicitly said: "the data-class freeze is RESOLVED as smooth-with-decay default with a registered Sobolev variant (rule_spec v1.3, identical across F1/F2a/F2b), so the H^4_{1/2+eps} divergence belongs to the drafts". Yet the published canonical files still carry the disjunction and no registered Sobolev variant in VARIANT_REGISTRY (v2.0 has 7 variants, none Sobolev).
+
+Wait, but maybe I'm misreading: maybe the rev9 publication intentionally re-included both because they wanted F1/F2a/F2b to be "identical across" all three (the three now all say the same disjunctive D0). And lead-audit's HF-06 at e6b1af2b said this made it a family of class statements. Hmm, but if all three now share the SAME disjunctive D0, the T1 exact-match guard is satisfied (identical text) — but the G-FORM rubric criterion "exact quantifier prefix (no 'roughly', 'essentially', 'or')" is still violated by the "or" in D0? The criterion says quantifier prefix, and D0 is a domain, not the prefix. However, "forall (s,delta) in D0" IS the quantifier prefix. With D0 being a disjunction, the prefix effectively ranges over a union — a family of statements.
+
+Let me be careful about asserting "regression": the current file might have `is_this_class` elsewhere. Let me print the full data_class.regularity_class and search for "is_this_class" in the current F2b. Earlier grep for "variant" showed lines 277/278/295/309 but not is_this_class in data_class. Let me confirm.
+
+Also note worker-05's artifact at 23:55 was for `schemas/af_scc_regularities.yaml` (the retired aggregator) with C0 revision 5, not the current canonical rev9. The current canonical data_class might legitimately differ. But the lead-formulation's own reply (23:51) declared the freeze: "smooth-with-decay default with a registered Sobolev variant". On disk, VARIANT_REGISTRY v2.0 has no Sobolev variant; and the schemas' D0 includes Sobolev in the class. So the declared resolution is not implemented. This is a well-evidenced inconsistency.
+
+Now — is this a defect I should mark B? Prior reviewer lead-audit marked the same structure HF-06 MAJOR at e6b1af2b and the map's G-FORM criteria require "exact quantifiers". Since rev9 was published after the claimed resolution but still contains it, and the registry doesn't register the Sobolev variant, yes: this is a blocking finding (B) for G-FORM acceptance. The fix: either (i) collapse D0/data_regularity to the smooth-with-decay default (as the lead's message asserts) and mark the Sobolev setting as a registered variant with `is_this_class: false` (as worker-05's rev5 did), or (ii) if the class is intended to range over both, amend the rubric/rule_spec to license a regularity-family statement and record it as such (the gate criterion would need changing). Either way, the artifact and the declared freeze disagree.
+
+Hmm, hold on. Let me reconsider the direction of interpretation once more by looking at the actual current F2a/F1 D0s: F1's D0 adds "; the class is fixed at these values and does not range over 'suitable' regularity". All three share the same Sobolev-or-smooth D0. The class_family/vocab might define `regularity_token: C0` separately from data regularity. The F2b class's regularity_token is C0 (extension regularity), while data regularity is a separate axis. So quantifying over data-regularity pairs is arguably a family of class statements — the exact objection lead-audit raised.
+
+Given the assignment asks me to check "exact quantifiers ... weighted data class", and given the earlier HF-06 was major, I'm confident this is the primary substantive B finding. But is it "still present"? Yes, measured at a8d899d2 lines 55-56, 136, 147. Let me also compare with the "rev9 delta" comments: "# rev9 delta (astra-classscope-02): class_identity_variants restructured to parent_class + variant_id ... anti_scope candidate class-id tokens converted to variant references." Nothing about D0. So the disjunction persists.
+
+Wait — one more possibility: maybe `is_this_class: false` for the Sobolev variant is in the *taxonomy* or *variant registry* under a different name. The registry's class_id_rule lists variant ids SET, CH, H2LOC, TWOSIDED, DISTRIBUTIONAL, L2CONN, LIP — no SOBOLEV. The taxonomy line 480 says "data_class fields must match exactly (including s, delta once F2 fixes them)" and line 166 says the topology/weighted spaces are owned by F1 and unresolved. Let me check the taxonomy's C0 class contract (line 299+) for data class. Let me read taxonomy lines 299-360 and 470-490 to see the freeze decision.
+
+Actually, time budget: I've spent a fair amount. The task is bounded (1 agent-hour). I have enough for a solid review. Let me do a couple of quick confirmations (is_this_class absence; taxonomy C0 data-class text), then write the review.
+
+Let me also double check my B1 (f0 binding) is not already fixed in the mirror... no, the canonical is what matters and mirror is byte-identical.
+
+One more consideration: the review file must be JSON with specific fields: target_id, artifact, artifact_sha256, verdict, score 0-5, hard_failures[], findings[] with line refs. I'll include:
+- review_id, reviewer deepseek-flash-17, actor
+- created_at (current time ~00:15)
+- node_id F2b, class_id AF-SCC-C0-VAC-GEN
+- assignment_event_ids: ["audit-a1-20260912T0008-f2b-w17"] (and the older astra-rev-03? no that was F1. The F2b assignment is audit-a1-...-f2b-w17)
+- independence declaration: I did not author F2b; I authored F1/F0 reviews and the QNF extractor artifact (worker-17) — declare that as prior involvement, no conflict with F2b authorship. Note: I authored artifacts/worker-17/quantifier_nf/* which analyzed the three schemas including F2b. Is that a conflict? The assignment says "you must not review an artifact you authored" — I didn't author the schema. But I did produce a QNF report on it. Declare it for transparency: not an author of the target; prior QNF analysis was on quantifier forms and is not reused as the verdict.
+- target hash: measured a8d899d2... ; assignment hash e6b1af2b superseded (note).
+- verdict: revise (with B findings)
+- score: 3/5? Let me calibrate: worker-18 gave 3 for revise at e6b1af2b; lead-audit gave 4 accept. Given the artifact is largely mature (quantifiers, leakage, falsifier, topology, genericity all sound) but has 2-3 blocking structural/consistency defects, score 3 is fair. Let me use 3.
+- hard_failures: I'll report B1/B2/B3 as blocking findings. Should I map them to HF ids? The rubric's HF taxonomy: HF-06 assumption_smuggling could arguably apply to the data-class freeze mismatch? HF-06 is "statement requires smallness/symmetry/regularity/measure condition present in the cited theorem but absent from the schema's assumptions (or vice versa)" — not exactly. HF-04 quantitative_mismatch — no. I'll list hard_failures as rubric HF ids: [] or "none of the rubric's HF-01..HF-14 apply at critical severity"? Hmm, the acceptance says "hard_failures as a list". I'll include structured entries with severity "blocking" and a rubric_hf field mapping to the closest taxonomy id where applicable:
+  - B1 (f0_binding stale hash): maps to rubric HF-05? HF-05 is done_without_artifact (node status done). Not applicable. I'll set rubric_hf: null and explain it's a hash-binding/provenance defect that blocks gate-readiness under the artifact's own rule. Hmm, but maybe better: the review JSON's `hard_failures` should list the blocking findings with ids. I'll do that, with `rubric_taxonomy` mapping where valid.
+  - B2 (D0 disjunctive data domain / undeclared Sobolev variant): closest HF-06 (assumption_smuggling) in spirit: the class statement ranges over an extra regularity condition/or not declared as a separate class; also violates rubric G-FORM "exact quantifier prefix (no ... 'or')". I'll map to HF-06 with a note.
+  - B3 (duplicate YAML keys): structural, no HF id; blocks machine-checkability under strict parsers.
+  - Should the status-vocabulary conflict be B or N? Given three Bs might be excessive, and the schema does record `refutation_candidate`/conditional content while R11's own vocabulary says `open_problem` is valid... The A0 rubric says "MUST be recorded as conditional or refuted_candidate, never open_conjecture". The schema's top-level is `open_problem`, which is not in the rubric's allowed tokens. That IS a conformance failure against A0, which G-AUDIT checks. I'll include it as B4? Hmm. Let me think about fairness: the schema's `known_status` block has `status: open_problem_with_scoped_conditional_refutation`, `refutation_candidate`, `antecedent_status`, and explicitly records the Dafermos-Luk candidate; line 325 says the literal class is expected FALSE conditional on Kerr stability and that L1 must adjudicate a status change. A strict reading of the rubric: status must be `conditional` or `refuted_candidate`. The schema uses neither token at top level; R11's vocab has `open_problem` and `conditional_theorem` — so the two governance artifacts disagree. This is a cross-artifact inconsistency: an audit finding, but is the schema at fault? The schema follows R11; the rubric's status_risk conflicts with R11's vocabulary. I'd report it as **B (blocking for G-AUDIT/A0 conformance)** but note the resolution may be an A0/rule_spec reconciliation, not only a schema edit. Hmm, but the assignment for me is F2b review under G-FORM; the status_risk line is an A0 requirement. The G-FORM gate criteria don't include status vocabulary. I'll report it as a high-severity finding with label B4 but scope it explicitly as "cross-artifact status-vocabulary conflict; requires lead-audit/lead-formulation adjudication; does not by itself indicate a quantifier or class-binding defect". Actually, to keep the verdict crisp and defensible, maybe label it N (non-blocking backlog) since the artifact's status handling is transparent and the conflict is between two governance documents — it can't be fixed by the schema author alone. Hmm.
+
+The convergence triage says "verdict revise only with >=1 B finding". I already have B1/B2/B3 (well, B2 and B3 depend on severity judgement). I'm comfortable with:
+- B1: stale F0 binding (definitely blocking due to artifact's own rule + A1-rebind hash-binding requirement).
+- B2: disjunctive data domain D0 + Sobolev variant neither frozen as class nor registered as variant, contradicting the declared freeze and prior HF-06 (blocking for G-FORM exact-quantifier criterion). Strong.
+- B3: duplicate `revised_at` mapping keys → invalid YAML under strict parsing (blocking for a machine-checked canonical artifact; trivial fix).
+- B4: status token vs A0 rubric status_risk — I'll make this **N** (non-blocking, cross-artifact adjudication) with a note that if A0 governs, `epistemic_status` must change, but R11's vocabulary currently has no conforming token. Actually hmm, if it "must" change for gate conformance, it's blocking. But since two governance artifacts conflict, the right label is N with an escalation note: "cannot be resolved by editing F2b alone; record as inter-artifact conflict for A1/G-AUDIT adjudication". I'll label it N-B? Let me use the project convention "B"/"N" with explicit labels: B1, B2, B3, N1, N2.
+
+N findings:
+- N1: status vocabulary conflict (as above).
+- N2: `class_contract_pointer` (line 33) points to the authoring tree `artifacts/formulation/formulation_taxonomy.yaml#class_contracts.AF-SCC-C0-VAC-GEN` rather than the canonical `research_map/formulation_taxonomy.yaml`, contrary to the ASTRA controller canonical-path policy (ASTRA_HANDOFF lines 18-23) and FROZEN path_policy. The two taxonomies are NOT byte-identical (measured 565a6e50 vs 01e7f841), so the pointer resolves to a different document than the canonical F0 artifact. Recommend repointing to the canonical path. Non-blocking because FROZEN records the supplement and the consistency checker compares the two.
+- N3: `revised_at_unused` key (line 23) is a nonstandard leftover; fold into history.
+- N4: `provenance.known_status_signals` (lines 324-325) says the literal class is "expected FALSE conditional on Kerr exterior stability" while `known_status.status` says open_problem_with_scoped_conditional_refutation; both are qualified, but the two fields should be reconciled into one status vocabulary (this overlaps N1; maybe merge).
+- N5: falsifier.tier_1 machine-checkable_steps (line 260) overstate machine-checkability — "iota is an isometry onto an open proper subset" and continuity/nondegeneracy "sampled" are not finite checks; prior worker-18 F-B3 raised this at the older hash; still present in substance (line 260). Non-blocking: tiering itself is correct and the non-machine step is flagged at line 261. Hmm, line 260 says "g' is continuous and nondegenerate on a neighbourhood of the boundary (sampled)" — sampled checks are not verification; "iota is an isometry onto an open proper subset" is not decidable by sampling. But line 261 explicitly says the non-machine-checkable step is non-meagerness. So machine-checkable_steps overstate in a different way. I'll include as N.
+- N6: `review_status.requested_reviewers: ["deepseek-flash-19", "astra-lead-audit"]` (line 336) is stale relative to the map's current reviewer assignments (17/18) — minor metadata drift. Maybe not worth it; but "any field two readers disagree" — it's bookkeeping. Could include as N. Eh, the file's review_status is a self-report; lead-audit already disposed soft flags. I'll skip or include briefly. I'd rather keep findings focused: B1, B2, B3; N1..N4. Too many Ns dilute. Let me include N1 (status vocab), N2 (pointer path), N3 (duplicate/history hygiene handled under B3 — no, B3 covers duplicate keys; N3 could be the leftover key), N4 (machine-checkable overstatement).
+
+Wait, careful on B2. Let me re-verify precisely what the earlier resolution said and whether the current data_class has an explicit "not-this-class" marker for the Sobolev variant. Let me grep 'is_this_class' in the current F2b and F2a. Also check the taxonomy C0 contract for its declared data class (line ~299+), because if the taxonomy (declared F0) says C0 uses smooth-with-decay, then the schema's D0 contradicts the declared F0 artifact → even stronger (and links to B1: the binding is both stale in hash and inconsistent in content).
+
+Let me run that.
+dsh: reasoning:
+This is decisive for B2:
+
+The declared F0 taxonomy (research_map/formulation_taxonomy.yaml) C0 class contract says:
+- H3: "Data

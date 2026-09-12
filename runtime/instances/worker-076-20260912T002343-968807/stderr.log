@@ -1,0 +1,659 @@
+dsh: reasoning:
+Let me start by understanding the environment. The task says: "You are a bounded execution worker. Read handoff/map and comms. Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit. worker=076"
+
+I need to look at the workspace to find "handoff/map" and "comms". Let me explore.
+dsh: reasoning:
+The workspace root is huge. I need to find "handoff/map" and "comms". Likely under a swarm directory. Let me search for files/directories named handoff, map, comms. Also there's `ai4math-swarm.tar.gz`, `launch_swarm.sh`, `supervise_swarm.sh`. Let's look for those.
+dsh: reasoning:
+There's `/data3/guoshaoyang/workdir/ai4math-swarm`. Let's inspect it.
+dsh: reasoning:
+This is the ai4math-swarm. The "handoff/map" likely refers to HANDOFF.md and research_map directory. "comms" is the comms directory with inbox/outbox. Let me read HANDOFF.md and README.md, and check comms inbox for worker=076.
+dsh: reasoning:
+There's an outbox file worker-076.jsonl already (from a prior 076 worker?). I'm worker=076. The task: "Read handoff/map and comms. Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit."
+
+I need to understand the protocol: read comms/PROTOCOL.md, research_map, and the assignments. Let me check:
+- comms/PROTOCOL.md
+- comms/outbox/assignments/
+- research_map (map)
+- runtime/control, runtime/state
+- the existing worker-076.jsonl to see what prior worker 076 did.
+
+Let me read several files.
+dsh: reasoning:
+There are lots of workers. Let me look at the existing worker-076.jsonl in outbox (maybe it is the assignment/messages from worker 076 earlier?). Also, the assignment files directory is empty. Hmm, "Take one class-bound task" — maybe from the research_map's nodes with class_id. Let me read ASTRA_HANDOFF.md which likely describes the current sprint and class-bound tasks.
+
+Let's look at worker-076.jsonl and flash-39 (most recent worker output?) to understand the required output format. Also read the research_map's ARCHITECTURE.md and ASTRA_HANDOFF.md.
+dsh: reasoning:
+So worker-076 already existed and produced an artifact. But I'm worker=076 — perhaps this is a respawn, and my task is to take a new class-bound task. The instruction says "Read handoff/map and comms. Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit. worker=076".
+
+Hmm, but maybe the existing worker-076.jsonl was produced by an earlier run of worker 076 (in this same session or by a different agent). Wait, currently the time in files is Sep 12 00:23. The worker-076 output is timestamped 00:23:00. This could be output from me (the current worker) if the harness had already run? No — my session just started. Actually maybe prior worker 076 completed. I'm being spawned as worker=076 again (a new round), so I should take a NEW class-bound task, produce my own artifact, request/emit JSON lines, checkpoint, and exit.
+
+Let me check:
+1. comms/inbox/worker-076.jsonl — does it exist? The inbox listing showed no worker-076.jsonl (there are astra*, deepseek-flash*, flash*, worker-01, worker-06, worker-16). So no assignment for worker-076 in inbox.
+2. The research_map.json — map with nodes, class_ids, assignments. I need to take one class-bound task. There may be open tasks in the map that lack artifacts. Let's inspect research_map.json structure and current state: gates, assignments, nodes.
+
+Also check `independent_supervisor*.sh`, `supervise_swarm.sh`, `launch_swarm.sh` at workspace root — those are likely the scripts spawning this worker with the prompt "worker=076". Let me look at them to understand exactly what's expected of a worker and where output should be written (maybe a specific output path/format).
+
+Let me check the supervisor scripts and the swarm's runtime/bin.
+dsh: reasoning:
+So I'm worker 076 launched by independent_supervisor_100.sh (or similar). The prompt is exactly: "You are a bounded execution worker. Read handoff/map and comms. Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit. worker=076".
+
+I must:
+1. Read handoff/map and comms.
+2. Take ONE class-bound task.
+3. Emit valid JSON with IDs, evidence, hash, falsifier.
+4. Checkpoint.
+5. Exit.
+
+The previous worker-076 run already did a task (W076-GFORM-HFBIND-01) and created artifacts. Since the supervisor re-launches worker 076 (tmux session worker-076 persists? Actually launch() returns if session exists, so worker-076 wouldn't be relaunched if tmux session "worker-076" still exists). Hmm — but I'm running as worker 076 maybe launched in a new instance. Wait: `launch worker "$n"` with n from seq -w 1 100 → slots "01".."100". worker-076 is slot 076. If the tmux session `worker-076` still exists, launch skips. So possibly the earlier 076 finished/exited and the session ended, so supervisor relaunched. The output file at 00:23:00 suggests previous run just finished. Current time? Let me check date.
+
+I need to see what tasks remain open and pick one class-bound task not already done, avoiding duplication (CF-12: one canonical path one owner). Let me inspect the research_map.json: nodes, assignments, gates. It's ~1MB. Let me use python to summarize.
+
+Also need to understand how to "checkpoint": the runtime has checkpoint.py, and worker checkpoints are files like `runtime/state/w0XX_checkpoint_*.json`. Previous workers wrote checkpoint files. Let me look at one example worker output (e.g. worker-085 or the most recent) and its checkpoint format to mimic. Also the schema `research_map/events.schema.json`.
+
+Plan:
+1. Summarize research_map.json (nodes, gates, assignments, open items).
+2. Look at latest worker outputs to find an unclaimed class-bound task that is bounded and verifiable now.
+3. Do the work: produce artifact (with evidence), hash it.
+4. Emit JSON lines to comms/outbox/worker-076.jsonl (append, not overwrite — careful: file exists with prior run's events; I should append new events with unique event_ids).
+5. Write checkpoint file to runtime/state/.
+6. Exit.
+
+Let me check the time and summarize the map.
+dsh: reasoning:
+Let me look at gates, assignments (open ones), nodes. The map doesn't have "nodes" as a key? Maybe nodes are inside groups or assignments. Let me print gates, open assignments, and the structure of an assignment.
+dsh: reasoning:
+The assignments all seem to lack status/assignment_id. It's a fairly chaotic map.
+
+My job: "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit."
+
+I'm worker-076, and a previous worker-076 run did W076-GFORM-HFBIND-01 (G-FORM hash-rebind + hard-failure persistence probe). It emitted an artifact and status/blocker with no gate verdict. That's a solid precedent: a bounded, class-bound probe with evidence, hashes, falsifier.
+
+Now I should take ONE bounded class-bound task, different from what 076 already did (to add value, not duplicate). Given the map state at 00:21:55 and live files, the highest-value bounded task is probably one of:
+- Re-measure canonical hashes and validate the G-FORM/G-F0 state at the live revision (but worker-076 already did that).
+- A different class-bound falsification probe: e.g., check whether C0 schema conclusion is distinguishable from C2 conclusion (class leakage), or run a specific class-separation test on the live schemas.
+
+Actually, the protocol says class-bound task: a task bound to a class_id (one of AF-WCC-VAC-GEN, AF-SCC-C2-VAC-GEN, AF-SCC-C0-VAC-GEN, AF-WCC-SCALAR-SPH). The prior worker-076 covered C2 and C0 vacuum via hash-bind probe. To avoid duplication (CF-12: one canonical path, one owner), I should pick a distinct, still-open class-bound probe.
+
+Let me look at what other workers already did recently to avoid duplication — check the newest outbox files (worker-085, 087, 088, 091, flash-39, astra-lead-formulation latest) to find gaps. Also check the map's controller_findings and reviews to see open soft flags.
+
+Also consider the most valuable current bottleneck: G-FORM is blocked because F1/F2a/F2b have revise verdicts with named hard failures HF-A1 (dangling extension_predicate), HF-A2 (forall mismatch), HF-B1 (composite-regularity exemption), HF-B2 (node_id mismatch). Worker-076's probe found these failures no longer reproduce at the live revision (0/4 persisted). So the remaining question: do any of those failures persist in the live canonical bytes? That's answered. What about F0? F0 canonical 276009f4 vs authoring c8e979a1 divergence was noted.
+
+A genuinely distinct bounded task: independently test class separation on the live canonical schemas — i.e., whether the C2 schema is satisfiable by a C0-only datum (the G-CLASSBIND gate criterion), using a concrete fixture-based test. Hmm, that's what worker08/flash-11 did. But we can do a specific falsifier: scan canonical live schemas for leakage (C0-only tokens in C2 schema, composite "C0 or C2" strings, shared conclusion_type) — a lexical+semantic check with hashes. But careful: prior probe may have done similar.
+
+Let me check what tasks other recent workers did (worker-085, 087, 088, 091, and worker-09-v9) to map the space and avoid duplicates. Let me grep the last lines of the recent outbox files.
+
+Also: is there any inbox assignment sent to worker-076 now? The inbox has no worker-076.jsonl (listing showed none). So "no assignment card" — same as previous run. I must pick a task myself, bounded.
+
+Let me look at recent worker outputs to see current open themes, and inspect the live canonical schemas to design a task.
+
+Plan for my task: Pick a class-bound task that is:
+1. Bounded (can complete in this session).
+2. Evidence-producing: artifact file with measurements, sha256-hashed.
+3. Not duplicating prior work.
+4. Falsifiable with explicit falsifier.
+5. Recorded via JSON events in outbox + checkpoint.
+
+Candidate: "W076-GFORM-F0-LIVE-DIVERGENCE" — measure the F0 canonical/authoring divergence and check whether the map's G-F0 unmet list still holds at the live revision, i.e., whether the 9 taxonomy cases remain undispositioned and the F0 hash changed. Hmm, worker-076 already covered hash pins.
+
+Alternative class-bound task with high value: A falsification probe for class leakage between AF-SCC-C2-VAC-GEN and AF-SCC-C0-VAC-GEN: check the canonical schemas for the specific requirement "no C0/C2 merge" and test with concrete data-class fixtures. If the schemas now pass (as worker-076 found the HFs repaired), then the remaining gap is review verdicts at live hashes. A worker can't issue verdicts.
+
+Another candidate: verify the "no single frozen data class (s,delta,norm) shared by F1/F2a/F2b" unmet item — measure whether the live canonical schemas now declare a shared `data_class` object with s, delta, norm. That's a concrete, decidable, class-bound check across the three canonical schemas. This directly addresses G-FORM unmet item #4 ("no single frozen data class (s,delta,norm) is shared by F1/F2a/F2b, which disables the licensed C0=>C2 transfer"). If the live revision now has it, that's new evidence; if not, it pins the blocker precisely. This is bounded, class-bound (F1/F2a/F2b class ids), artifact + hash + falsifier. And I don't think the previous 076 probe measured it (it measured hash pins + hard failures).
+
+Let me check the live schemas to see what they contain first, then decide. Let me also check the recent worker outputs for duplicates.
+
+Let me grep for "data_class" in schemas and artifacts.
+dsh: reasoning:
+The swarm is very active; many workers took distinct probes. I need to pick one bounded class-bound task that's not yet done. Let me survey what's been claimed in recent outbox events (task_ids) to avoid duplication. A quick grep of task_ids in outbox files modified in the last ~15 min.
+
+Also, note the environment: my session seems to have a live swarm running concurrently. I should be efficient and bounded.
+
+Let me list the unique task_ids from comms/outbox/*.jsonl sorted by recency. Use python to parse all jsonl lines, collect task_id + actor + summary first 120 chars, and show the last ~60.
+dsh: reasoning:
+Many events have future timestamps (CF-14). The map was updated 00:21:55 but outbox events have later timestamps up to 02:00 (future-dated). Interesting.
+
+My extraction was flawed (task_id null for many). Let me instead look at what recent workers' summaries say, and identify uncovered probes. But time is passing; the swarm is huge and noisy. My mandate is narrow: take ONE class-bound task, emit valid JSON, checkpoint, exit. I don't need to find a globally unique topic, but I should avoid exact duplication of worker-076's prior task and pick something well-grounded.
+
+Let me now examine the live canonical schemas to design the task. A strong candidate: measure the "single frozen data class (s,delta,norm) shared by F1/F2a/F2b" G-FORM unmet item #4 at the live canonical hashes. Let me check the schemas for data_class fields.
+
+Let me read key parts of the three canonical YAML files. Start with grep for "data_class" / "s," / "delta" / "norm".
+dsh: reasoning:
+The live hashes match what previous worker-076 cited (F1 9a8bd4c9, F2a b6123750, F2b 1bb78ce9, F0 276009f4). Good, canonical revision unchanged.
+
+Now, about picking a task. Let me think about what a genuinely useful, bounded, class-bound task would be that is:
+- Verifiable with code I write.
+- Tied to a class id.
+- Adds evidence the map lacks.
+
+Options:
+
+(A) Data-class sharing check: extract the `data_class` blocks from F1/F2a/F2b canonical schemas and check whether there's a single shared frozen data class (s,delta,norm). Map's G-FORM unmet #4 says no. Deliverable: a measurement report with per-schema extraction, a diff, a verdict (SHARED / NOT SHARED), evidence hashes, falsifier. This is bounded, decidable, and directly speaks to the C0=>C2 transfer license. Also it's class-bound (three class ids). Also check whether the transfer is licensed only with a shared data class — that's a documented criterion. The instrument: a parser + comparator + controls (e.g., synthetic schemas with identical data_class → SHARED; perturbed → NOT SHARED). Controls make it strong.
+
+(B) Conclusion-type leakage check: verify no composite "C0 or C2" string and that conclusions are distinguishable. Likely already done by many.
+
+(C) F0 taxonomy case disposition vs. corpus. Already done by worker-087.
+
+(D) Class separation under the semantic contract tests. flash-10/flash-06 doing that.
+
+I like (A): "W076-GFORM-DATACLASS-C0C2-TRANSFER-01" — measure whether F1/F2a/F2b declare a single shared frozen data class (s,δ,norm) at the live canonical hashes, and whether the licensed C0⇒C2 transfer precondition holds. Also check the cross-references in the schemas: F2a's "licensed C0=>C2 transfer" claim may be stated in the file with explicit witnesses. Let me look at the data_class blocks and the transfer section in F2a to see what the schema itself claims. That gives me a precise precondition list I can measure.
+
+Let me read relevant chunks of the three schemas: data_class blocks and transfer sections. Also check schemas/af_scc_regularities.yaml (F2 aggregator) maybe binds the transfer.
+
+Also I should check whether the map's `frozen_artifacts` and `publication_status` pin those same live hashes. If not, that's still the prior 076 blocker.
+
+Let me read the data_class blocks.
+dsh: reasoning:
+Now, key observation: the three data_class blocks share the same structure: matter none, Lambda 0, Einstein vacuum, same constraints, same regularity_class default smooth-with-decay, sobolev_variant {s: "s > 5/2", delta: "delta in (1/2,1)"}, same asymptotic_decay, same symmetry, adm_mass, gauge, diffeo_quotient. The F1 also has parity_conditions within asymptotic_decay while F2a/F2b have parity_conditions "not imposed" as sibling key inside asymptotic_decay? Let me check: in F1, asymptotic_decay includes parity_conditions; in F2a, data_class.asymptotic_decay.parity_conditions: "not imposed". Actually F1's is inside asymptotic_decay too. So they look nearly identical except whitespace/formatting and adm_mass handling.
+
+Wait — but the G-FORM unmet says "no single frozen data class (s,delta,norm) is shared by F1/F2a/F2b, which disables the licensed C0=>C2 transfer". Hmm, the "(s,delta,norm)" refers to the unverified numeric thresholds s>5/2, delta in (1/2,1), and probably the "norm" = weighted Sobolev spaces. Maybe the issue is that the data classes must be equal for the C0⇒C2 implication to hold — actually for C0⇒C2 transfer you want the SAME data class (same data, same development) with only the extension regularity differing. Let me check whether the schemas state "same data class as sibling" explicitly, and whether there's a machine-checkable field. The three have equal data_class by inspection now? Let me diff them programmatically with PyYAML.
+
+This is a very checkable task: parse the three canonical YAMLs with PyYAML, extract data_class, compare pairwise for equality (semantically), and check the transfer precondition. The result would either refute the map's unmet item #4 (i.e., show the data classes are now identical) or confirm it (show the diff). This is exactly the kind of bounded, falsifiable evidence the swarm wants.
+
+But careful — perhaps the previous worker-076 probe already touched the HFs, and the lead just rewrote schemas at 00:19-00:34. This data-class comparison is likely NOT yet done (map unmet list from 00:15 still says not shared; schemas were last modified 00:19; lead-formulation published more at 00:34/00:44 per outbox).
+
+Actually, wait. The lead-formulation artifacts at 00:34/00:44 may have already addressed it. Let me check the most recent lead-formulation outbox and their artifacts to see if they published a shared data_class resolution. Let me look at the last status event from astra-lead-formulation (00:44).
+
+Let me also check current file mtimes and hashes — the schema hash 9a8bd4c9 etc. was measured at 00:24; maybe files changed since. Let me re-hash now.
+
+Let me read the latest astra-lead-formulation status + artifact events.
+dsh: reasoning:
+Very important: lead-formulation says the final hashes are:
+- F1 af_wcc_vacuum 68392dd8205... (that's the "canonical publication" hash from ASTRA_HANDOFF: F1 aligned at 68392dd82050)
+- F2a 4f97273ef440
+- F2b a2aef5ac7fe3
+- F0 276009f4
+
+But the on-disk `schemas/af_wcc_vacuum.yaml` hashes to 9a8bd4c9 — that's the authoring hash. So there are two trees: `schemas/*.yaml` (authoring) and `artifacts/formulation/*` (canonical published). ASTRA_HANDOFF says: "Canonical-path policy stands: `schemas/*.yaml` and `research_map/formulation_taxonomy.yaml` are authoritative; `artifacts/formulation/**` must be published byte-identically before verdicts bind."
+
+Hold on. ASTRA_HANDOFF says canonical = schemas/*.yaml, and artifacts/formulation/** must be published byte-identically. But lead-formulation's final blocker says independent verdicts should bind "final G-FORM hashes 9a8bd4c9..., b6123750..., 1bb78ce9..." — those are the schemas/ hashes. Meanwhile earlier in the same status it mentions "schemas rev11 9a8bd4c9...". And in the 00:34 blocker it names "FINAL hashes ... af_wcc_vacuum 68392dd82050..., ..." which are artifacts/formulation hashes. Confusing: 00:34 says final = 68392dd8 (artifacts tree), 00:44 says final = 9a8bd4c9 (schemas tree).
+
+And the controller's ASTRA_HANDOFF (00:18) said publication: F1/F2a/F2b aligned at 68392dd82050 / 4f97273ef440 / a2aef5ac7fe3, meaning artifacts/formulation copies equal to... hmm, "aligned" means canonical and authoring agree? Let me compute hashes of artifacts/formulation files to see.
+
+This is getting complex. A really valuable bounded task: measure the current canonical-vs-authoring hash alignment for the three G-FORM schemas + F0 taxonomy + FROZEN.json at this instant, and determine whether the map's binding target is unambiguous. But that's close to the prior 076 hash-bind probe (which measured stale map pins).
+
+Better: the data-class sharing question (unmet #4) is specific, class-bound, and unresolved. Since lead-formulation says the formulation side is "frozen and machine-green" and B1/B2 only need independent verdicts at final hashes, a worker probe that measures whether "single shared frozen data class (s,delta,norm)" now holds at the LIVE canonical bytes would either clear a stated unmet item with evidence or pin it. That's a good bounded task.
+
+But hold on: I need to be careful about what "canonical" bytes to use. The map's own `publication_status` may define it. Let me check `publication_status`, `frozen_artifacts`, and `artifacts/formulation/FROZEN.json` to find the authoritative paths and hashes. Then my probe can pin both trees and report alignment.
+
+Let me look at publication_status and frozen_artifacts, and FROZEN.json.
+dsh: reasoning:
+The map's publication_status at 00:24:40 is now stale too (schemas unchanged, F0 divergent). FROZEN.json revision 26 at 00:24:49.
+
+At this point, the swarm is moving fast. I should just pick a well-scoped task and finish it quickly. Time budget: I should aim to be done within a few minutes of work.
+
+Let me choose the data-class sharing task. It is directly one of the G-FORM gate's unmet criteria, class-bound to F1/F2a/F2b, and mechanically decidable:
+
+Task: W076-GFORM-DATACLASS-SHARED-02 (name it distinctly to avoid collision).
+Deliverable: `artifacts/worker-076/gform_dataclass_shared/` containing:
+- `probe_dataclass_shared.py` — YAML parser + comparator + controls + falsifier logic.
+- `probe_result.json` — per-schema extracted data_class (normalized), pairwise equality, verdict SHARED/NOT_SHARED, controls, input hashes (pre/post scan), measurement timestamp.
+- `README.md` — method, verdict, falsifier, limits.
+- `.sha256` sidecars for each file.
+
+Measurement:
+1. Parse the three canonical schemas at measured sha256 (recompute at scan time; fail-closed if changed between pre/post scan).
+2. Extract `data_class` subtree.
+3. Normalize: compare semantic equality — but what counts as the "shared data class (s,delta,norm)"? The gate unmet says "no single frozen data class (s,delta,norm) is shared by F1/F2a/F2b". So I should compare:
+   - `regularity_class.sobolev_variant.s` and `.delta`
+   - `regularity_class.sobolev_variant.spaces` (the norm/space definition)
+   - `regularity_class.default`
+   - `asymptotic_decay` fields
+   - `matter`, `cosmological_constant`, `equations`, `constraints`, `symmetry`, `gauge`, `diffeo_quotient`
+4. Report per-key equality; overall SHARED iff all the relevant keys match exactly after normalization.
+5. Controls:
+   - Positive control: synthetic copy of F1 with identical data_class for all three → comparator must say SHARED.
+   - Negative control: perturb one field (e.g., delta range) → comparator must say NOT SHARED, and identify the field.
+   - Also a "same but key-order-insensitive" control to show normalization works.
+6. Falsifier: if the comparator says SHARED while a byte-visible difference exists in a listed field, the probe is false; explicit statement.
+
+Additional useful check: whether the schemas explicitly assert the sibling transfer precondition (e.g., "same data class as sibling" fields / implication_ledger). Let me check for "implication_ledger" in F2a/F2b to see how the transfer is licensed and whether there's a per-class data-class identity requirement. Actually, the transfer C0=>C2 requires the SAME data class and the SAME development; the schemas' C0/C2 difference is the extension regularity axis. Let me grep "implication_ledger" and read that section for how they define it. That gives me the exact precondition text to quote (evidence with line numbers).
+
+Let me also check if data_class equality is already stated somewhere by lead (maybe an evidence file already measured this). Quick grep for "shared" in artifacts/formulation/evidence and map unmet. The map unmet still said no shared class as of 00:15. The 00:24 publication_status didn't mention it. Let me grep evidence dir for "data_class".
+
+Let me do:
+- grep -rn "data_class" artifacts/formulation/evidence/ | head
+- grep -n "implication_ledger" -A 20 in F2a and F2b.
+
+Then write the probe.
+dsh: reasoning:
+Good. Let me see the full implication_ledger section (lines 241-...).
+dsh: reasoning:
+Excellent. This confirms the transfer question: the entailment C0 => C2 requires the SAME data class (same initial data / same development), only extension regularity differs. The schemas' implication_ledger neither asserts nor denies data-class identity — the map's unmet item says it's disabled because no single frozen data class is shared.
+
+Now let me write the probe. Key design:
+
+Inputs (canonical, per map publication_status policy):
+- schemas/af_wcc_vacuum.yaml (F1, class AF-WCC-VAC-GEN)
+- schemas/af_scc_c2_vacuum.yaml (F2a, class AF-SCC-C2-VAC-GEN)
+- schemas/af_scc_c0_vacuum.yaml (F2b, class AF-SCC-C0-VAC-GEN)
+
+Measured fields: data_class subtree, normalized. Also, separately, the "transfer precondition" key: are the data classes pairwise semantically equal? Also compare "extension classes differ only in regularity/equation axes" — i.e., all else (quantifier shape? no, quantifiers live outside data_class).
+
+Important nuance: data_class blocks might legitimately differ in `adm_mass` annotations (F1 has citation_status unresolved + rigidity; F2a has locator "to be supplied by L1"; F2b has hypotheses_reconciliation). Those are annotation/metadata fields, not the data class proper. So I need a principled normalization: compare the *mathematical* content keys, and separately report annotation-level diffs:
+Core keys: matter, cosmological_constant, equations, constraints (hamiltonian, momentum), regularity_class.default, regularity_class.sobolev_variant.{s,delta,spaces}, asymptotic_decay.{metric, second_fundamental_form, parity_conditions}, symmetry, gauge, diffeo_quotient, data_regularity? (regularity block is separate top-level).
+Annotation keys: sobolev_variant.status, adm_mass.*, etc.
+
+Verdict: CORE_SHARED / CORE_DIVERGENT, plus a list of exact differing paths.
+
+Controls:
+1. Identity/permuted-key positive control: deep-copy F1's data_class into all three slots → expect CORE_SHARED with 0 diffs.
+2. Perturbation negative control: change F2b sobolev_variant.delta to "delta in (0,1)" → expect CORE_DIVERGENT at exactly path data_class.regularity_class.sobolev_variant.delta.
+3. Order/formatting control: YAML re-serialization shouldn't trigger diff (we compare parsed objects).
+4. Fail-closed hash control: hashes recomputed pre and post; if changed → status UNMEASURED.
+
+Falsifier (of the probe): If the pure-Python comparator, run over a synthetic pair of parsed data_class dicts that differ in a core key, returns CORE_SHARED, the instrument is broken; or if the schemas' actual bytes change between pre/post scan, the snapshot is void. Directional falsifier for the claim: the claim "core shared" is false if any pairwise core-key diff is non-empty when inspected manually; the claim "not shared" is false if a core key I labeled annotation does in fact change the mathematical data class (e.g., adm_mass sign).
+
+I should also test the actual claim semantics: does data-class identity even *license* the C0=>C2 transfer? The transfer requires same data space; the schemas signal their data classes as identical. I can also check whether the transfer appears in F2b's implication_ledger and whether F1's class is disjoint (WCC-SCC: forbidden AF-WCC-VAC-GEN → SCC transfer). That's an important boundary: the map unmet item says no shared class "disables the licensed C0⇒C2 transfer". My probe measures the precondition; I should not claim the transfer is licensed (that's a semantic judgement). I'll report: precondition status + the exact evidence; conclusion_type: formal_model.
+
+Time to write. Let me also verify PyYAML availability.
+
+Also, I must not modify the map or run controller tools. Just:
+1. Create artifact dir `artifacts/worker-076/gform_dataclass_shared/` with probe script, result JSON, README, sha256 sidecars.
+2. Append events to `comms/outbox/worker-076.jsonl` (unique event_ids with today's timestamp).
+3. Write checkpoint to `runtime/state/w076_checkpoint_dataclass_shared.json` (following the pattern of other workers) — maybe also append to a checkpoints jsonl.
+
+Let me check PyYAML and one example worker checkpoint format (e.g., w043_checkpoint_1.json) to match conventions.
+dsh: reasoning:
+Interesting! worker-043's findings_summary already includes "shared_data_class_core_F1_F2a_F2b": "shared_core_annotation_diffs_only". So another worker (043) already measured this. Hmm. That reduces novelty. But worker-043 was a different task (F2a independent verdict at rev10 b6123750). Their checkpoint says shared core with annotation diffs only.
+
+So my planned task is partially duplicated. I need a distinct bounded class-bound task. Options now:
+
+1. Extend/independently replicate the data-class check *with a different instrument* and also measure whether the schemas' `implication_ledger` declares the same-data-class precondition explicitly, and whether any of the three canonical schemas carry a machine-checkable "sibling_data_class_identical" binding. Could be framed as independent replication of worker-043's claim — valuable (independent replication is a core value here). Worker-043's claim is buried in a checkpoint; nobody reviewed it. An independent probe with controls would be legitimate: "independent replication of the shared-core data-class claim at the live hashes". But is it class-bound and non-duplicative? It would be independent replication, which the project explicitly values ("independently replicated"). I can make it distinct by measuring at the CURRENT hashes (worker-043 measured b6123750, which is still current) and adding the previously unchecked part: the annotation diffs list and whether they are class-semantics-bearing.
+
+Hmm, but there might be a more clearly needed task. Let me look at what open unmet items remain that a worker can measure and that nobody claimed:
+
+From G-FORM unmet (00:15):
+1. F1 at 7a3e1f93 revise verdicts — superseded (live 9a8bd4c9, HFs repaired per prior 076).
+2. F2a HF-A1/HF-A2 — prior 076 says repaired/not reproduced.
+3. F2b HF-B1/HF-B2 — prior 076: HF-B1 not reproduced, HF-B2 repaired.
+4. No single frozen data class shared — worker-043 says shared core (annotation diffs only). My independent replication would help confirm.
+5. Map bound F2 to retired merged artifact — prior 076 flagged stale pins.
+
+Also the lead-formulation FINAL blocker (00:44): B1 no independent verdict binds final G-FORM hashes; B2 no independent verdict binds final F0 hash. A worker can't issue gate verdicts, but a worker CAN issue a review verdict (review event type is in the protocol for any agent; verdict accept|revise|reject|inconclusive). Worker-088 emitted a review at F2a (revise). Workers 001/002/020 etc. probably emitted reviews. So "take one class-bound task" could be: perform an independent review of one class-bound artifact at its live hash, with a verdict. That's arguably the single most needed thing (B1 needs two independent verdicts per target). But there are already many reviews (flash-16 r2, lead-audit). The gate needs accepts, not just any verdicts. A worker review is allowed, but "authority: worker events cannot set ... a gate verdict" — a review verdict is not a gate verdict, so acceptable.
+
+But which target lacks independent review? F1: reviews F1-review-16-r2 (revise), F1-review-lead-audit (revise). F2a: worker-043 verdict at b6123750 (revise, score 3.0 per worker-088? no, worker-088's own review revise 3.0 HF-088-1), F2a-review-18 (revise). F2b: F2b-review-18 (revise), F2b-review-worker-001. So many revise verdicts at the live hash.
+
+Hmm, the cleanest bounded contribution given the state: a *decisive falsification test* of one named remaining hard failure. But prior 076 already did hard-failure persistence.
+
+Let me instead look for something genuinely unclaimed and high-value: the F0 divergence. Map publication says F0 canonical 276009f4 vs authoring c8e979a1 (divergent). The lead published FROZEN rev25/26. The lead-formulation 00:44 status says "Declared F0 rev4 276009f4..." and B2 needs an independent verdict at 276009f4. Nobody in the recent outbox seems to have done F0 verdict at 276009f4? Actually flash-19 has flash19_T19-01 events; F0-review-19 exists. Hmm.
+
+Alternatively, pick a class-bound *evidence* task that is clearly missing: verify the `implication_ledger` chain arrows between F2a and F2b are consistent with the frozen regularity tokens (a machine check of the one_way_entailments against `extension_class_containment` statement) — i.e., check for contradictions/typos in the ledger directions. That's bounded and nobody seems to have done it. But its value is modest.
+
+Actually, let me reconsider. The instruction is generic and the supervisor just wants a bounded worker that produces a valid JSON event with IDs/evidence/hash/falsifier and a checkpoint. Perfection/novelty is less critical than doing a real, well-formed bounded task. The project values independent replication. I'll do:
+
+**Task W076-GFORM-SHARED-DATACLASS-INDEP-01**: Independent replication of the shared data-class core claim for F1/F2a/F2b at the live canonical hashes, with a controlled comparator, plus a first-of-its-kind check of the annotation diffs' class-semantics bearing, and an explicit statement of what it does/doesn't license (C0⇒C2 transfer precondition). This complements worker-043 (different instrument, different question scope: they checked in service of F2a verdict; I check the transfer precondition + classify diffs) and directly addresses G-FORM unmet item #4 / the lead's B1.
+
+Wait — but maybe I should check whether worker-043's artifact already does exactly this. Let me quickly look at their report to see their method and whether an independent replication adds value. If their report has the same structure, I can still do an independent implementation (that IS the value), but I should be honest in the event summary: "independent replication of W043's shared-core finding; instrument differs (normalized core-key comparison with positive/negative controls); extends it by classifying each annotation diff as class-semantics-bearing or not."
+
+Let me check worker-043's report quickly. Then write my probe.
+
+Actually, let me also consider a cleaner true gap: does ANY artifact measure whether the ANNOTATION diffs (adm_mass fields etc.) change the data class? Worker-043 says "annotation_diffs_only" but maybe not enumerated. My probe can enumerate and rule each one in/out by a stated test. That's a real increment.
+
+Let me look at worker-043's report.
+dsh: reasoning:
+Let me see the rest of worker-043's report, particularly their data-class check (A3?) — check_f2a.py A1-A4. Let me grep report.json for "shared".
+dsh: reasoning:
+Worker-043 did measure A4-shared-data-class-contract = SHARED_CORE_WITH_ANNOTATION_DIFFS. So my planned task is largely duplicative.
+
+Let me find what is NOT done. Given the limited time, let me pick a task that is clearly distinct and useful. Let me look at the newest events (last 10 min) from all agents to see the current frontier and gaps. Since outbox has future-dated events, sort by file mtime maybe. Let me collect events with created_at >= 00:40 and print actor/type/summary/statement briefly. Actually current wall clock is ~00:26 (date said 00:24 earlier). Events dated after 00:30 are future-dated (CF-14) but may have been written already. The lead-formulation 00:34/00:44 events were already written. So "future" timestamps are used deliberately (maybe the swarm's synthetic clock).
+
+Let me scan all outbox files modified in the last 5 minutes and list their events (excluding astra leads). This tells me the current frontier tasks.
+dsh: reasoning:
+Many workers already finished at ~00:19-00:23. Current time 00:26. The previous worker-076 finished at 00:23. I'm a fresh 076 that must do a NEW bounded task. The most useful thing may be to check the frontier of what got produced: many workers produced artifacts. Since the swarm is broad, duplication is rampant; the key value is a well-formed, hash-pinned, falsifier-bearing event + checkpoint.
+
+Let me choose a task that is:
+- Truly bounded (~5 minutes).
+- Class-bound.
+- Distinct from prior 076 and from the most obvious prior probes.
+- Useful: addresses an open unmet item.
+
+Idea: **G-FORM binding-target audit for F2b (AF-SCC-C0-VAC-GEN)**: measure whether the two independent non-author reviewer verdicts required by G-FORM exist and bind the live hash of `schemas/af_scc_c0_vacuum.yaml` (1bb78ce9). Worker-091 did exactly this for F2b (f2b_verdict_rebind). Hmm.
+
+Idea: **F1 (AF-WCC-VAC-GEN) verdict-binding audit** — same as 091 but for F1 (9a8bd4c9). Is there one? Let me check quickly: grep recent outbox for task_ids mentioning F1 verdict rebind. Workers 020 (F2a), 030 (F2b?), 091 (F2b), 043 (F2a), 088 (F2a). Maybe F1 is not covered. That would be a genuinely useful, bounded, class-bound task: scan `reviews/` and `comms/outbox/` for F1 review verdicts, classify independence, check cited sha256 vs live hash, and report MET/UNMET for the G-FORM criterion "reviewers 17,18 accept with cited sha256" — well actually the criterion is two independent accepts at one hash. The map's unmet for F1: "F1 at 7a3e1f93 has revise verdicts (flash-16 r2, lead-audit); no accept at the current hash". Now at the live hash 9a8bd4c9, are there accept verdicts? Let me check reviews dir for F1.
+
+This is exactly the kind of "verdict rebind" probe that workers 091/020/088 did per-target. If F1 hasn't been covered, do it. Let me check the reviews directory and grep for F1 verdicts at 9a8bd4c9.
+dsh: reasoning:
+There are F1 reviews already at 9a8bd4c9: F1-review-090, -094, -19, -21, -22, lead-audit-r2. So F1 verdict-binding is likely already covered by workers 090/094. Let me check their verdicts quickly.
+
+Given the swarm's saturation, maybe the best bounded contribution is a **cross-target G-FORM verdict-binding census**: for F1, F2a, F2b at the live canonical hashes, count independent accept verdicts bound to the measured hash, classify independence (author vs reviewer), and report the remaining deficit per target. This aggregates and updates the map's B1 blocker with one number per target and the exact verdict files/hashes. But workers 091 (F2b), and likely 090/094 (F1), 020/043/088 (F2a) did per-target rebind audits. A consolidated census is mildly duplicative but a useful single-pane snapshot... Hmm.
+
+Alternative distinct task: **verify that all cited sha256s in the newest review verdicts actually match the current live artifacts** — i.e., stale-binding scan across reviews/ (the "convergence" reports from flash-15..18 had B/N labels). A cross-file scan: every review verdict that cites a sha256 prefix, check whether the prefix matches one of the live canonical artifacts; report counts (bound/stale/unresolvable). This is bounded, mechanical, and directly relevant to B1/B2 (only verdicts bound to final hashes count). It's also class-bound by including class_id per target. Nobody seems to have done a full census (the map has stale hashes from earlier eras). Workers did per-target rebinds — a census is the union check. I think that's a reasonable increment and useful to the controller: it identifies which review files can be counted for G-FORM/G-F0 at the final hashes and which cannot.
+
+But careful: reviews/ files may cite multiple hashes; and file names to target mapping needs parsing. This is doable: parse all JSON in reviews/ + relevant artifact review files, extract any 12-hex prefixes near "sha256", compare to the measured live hashes of F1/F2a/F2b/F0/protocol/etc. Then per target classify.
+
+Yet the risk: many review files, heterogeneous schema; the census may be noisy. But the deliverable is a measurement with falsifier, and the limits can be stated. Alternatively use the map's `reviews` array (128 entries) which already has structured verdicts — but it's stale relative to files.
+
+Hmm. Let me weigh: the supervisor just wants a worker to do a bounded task and emit valid JSON + checkpoint. Time is a factor; I've spent ~5 minutes. I want something with crisp semantics and high signal.
+
+Option: **F0 declaration-vs-freeze divergence probe at the live instant**, class-bound to all four classes via F0 taxonomy. Map says F0 canonical 276009f4 vs authoring c8e979a1 divergent as of 00:24:40; lead published FROZEN rev25/26. Check: (a) recompute all hashes now; (b) compare FROZEN.json's declared hashes vs on-disk bytes for the canonical files; (c) determine whether FROZEN.json still lists an authoring-only path as canonical (G-F0 unmet item / lead falsifier). This is a classic "hash manifest vs bytes" audit — bounded, mechanical, high relevance (G-F0 and G-FORM both blocked on hash-binding), and directly extends the prior 076 probe (which measured map pins, not FROZEN.json). Actually the prior 076 measured "stale map pins 6/17" — the map's frozen_artifacts/gates pins. The FROZEN.json manifest audit is distinct: FROZEN.json rev26 at 00:24:49 lists files with sha256; does every listed file exist at that hash? Does it list canonical or authoring paths? Is F0 listed twice with different hashes (the ASTRA_HANDOFF item: "FROZEN.json does not name one frozen F0 revision")? That last one is a great question — check whether FROZEN.json names one F0 revision or two.
+
+Let me quickly inspect FROZEN.json's F0 entries and the full file list to see if the audit is non-trivial. Let me check keys: files dict has paths and hashes. Let me compute mismatches right now as a scouting step (fast). If there are mismatches, that's a solid finding. Let me run a quick inline check (not the deliverable yet).
+dsh: reasoning:
+Interesting: FROZEN.json rev26 lists BOTH `artifacts/formulation/formulation_taxonomy.yaml` (authoring, c8e979a1) and `research_map/formulation_taxonomy.yaml` (canonical, 276009f4) — so the "two different hashes for one logical artifact" issue persists in FROZEN.json (though it now has `logical_artifacts` and `f0_mirror_adjudication_request` keys, likely addressing exactly that). Let me inspect `logical_artifacts`, `f0_mirror_adjudication_request`, `path_policy`, `self_reference`, and `independent_replication`.
+
+Also all 40 listed files match — good. So the deliverable could be a concise, hash-pinned audit that says: FROZEN.json rev26 internally consistent (40/40), but it still lists two hashes for the F0 logical artifact (canonical vs authoring), with `f0_mirror_adjudication_request` documenting the open item. That's a measurement of G-F0 unmet item "FROZEN.json does not name one frozen F0 revision" (from ASTRA_HANDOFF 00:18). If FROZEN.json's newer revisions now explicitly adjudicate the mirror, then the unmet item may be resolved — but the controller's map (00:21:55) still lists it. My probe can determine the current state precisely.
+
+Wait — but this audit (FROZEN.json manifest vs disk) is very close to the prior worker-076 task (hash-rebind persistence at live revision, "stale map pins 6/17"). The prior probe checked `map.gates[*].unmet`, `map.frozen_artifacts` pins vs live; it did mention FROZEN.json? In the blocker it says edit "frozen_artifacts" pins. It cited `schemas/*` and taxonomy. It didn't check FROZEN.json internal consistency (40 files) as far as I can tell from the 3 lines.
+
+I think a good framing for my task, distinct and clearly scoped:
+
+**W076-GF0-FROZEN-MIRROR-01**: Audit the F0 logical-artifact binding in `artifacts/formulation/FROZEN.json` rev26 against the live bytes: (i) verify every listed file hash (40/40); (ii) enumerate every distinct hash bound to the F0 taxonomy logical artifact and to F1/F2a/F2b, across FROZEN.json, the map's `publication_status`, and the live canonical paths; (iii) determine whether exactly one frozen F0 revision is named, or two (canonical 276009f4 vs authoring c8e979a1); (iv) report the `f0_mirror_adjudication_request` status. Class-bound to all four classes (F0 governs the taxonomy). Falsifier explicit. Controls: synthetic manifest mutation must be caught; hash recomputation pre/post.
+
+Hmm, but "one class-bound task" — maybe better to focus on a single class rather than F0 aggregation. The classes are F0's taxonomy classes. Eh.
+
+Alternatively, the cleanest truly-needed bounded task given B1/B2: **an independent verdict census at final hashes** (which review files count). Let me quickly measure that with an inline script to see whether it yields a crisp answer; if yes, I'll build the deliverable around it. It directly serves the lead's B1/B2 "no independent verdict binds the final hashes" blocker: the census would enumerate which verdicts DO bind. Workers did per-target rebinds, but a census across all four targets at the final hashes is the union view, and it would tell the controller exactly what's still missing.
+
+Actually, hold on. Let me check the newest review files: F1-review-21/22, F2a-review-21/22, F2b-review-21/22, L0-review-21/22, lead-audit-r2 at 00:25. These look like a *convergence round* (21/22) — likely fresh independent verdicts at the final hashes. If so, the binding deficit may now be zero/one per target, and a census would give the controller current numbers. That is high-value and time-sensitive: the map snapshot at 00:21:55 predates these verdicts.
+
+Let me quickly inspect one of them (F1-review-21) to see the schema and hash binding. Then decide.
+dsh: reasoning:
+Interesting: flash-21's reviews bind STALE hashes (F1 16128b62, F2a 4b3dfd76, F2b 962f33c6) — those were intermediate revisions. flash-22 binds the live hashes but verdicts are all `inconclusive` at 9a8bd4c9/b6123750/1bb78ce9, and lead-audit-r2 revise. F0 review-21/22 both inconclusive at 276009f4.
+
+So at the final hashes: F0 has 2 inconclusive (21,22) + revise (17,19?) — no accepts. F1: inconclusive (22), revise (lead-audit-r2), plus older accepts maybe? F1-review-090/094 might have accepts. Let me check those two: they cited 9a8bd4c9. If workers 090/094 accepted F1 at the live hash, then F1 might have 2 accepts already. The controller map (00:21) wouldn't know. Let me check F1-review-090/094, F2a-review-086/088, F2b-review-030/etc.
+
+A census is now clearly valuable: it would tell whether B1 ("no independent verdict binds the final G-FORM hashes") is still true or now false. Let me quickly scan all review JSONs for verdict/sha256/target/reviewer and compute the binding table. That scan is the meat of my task. Let me first do a quick reconnaissance pass inline to see the answer, then formalize into an artifact with a reproducible script.
+
+Let me write a quick inline census (not the deliverable).
+dsh: reasoning:
+My census is noisy because I globbed artifacts recursively (many duplicates). But there are clearly many accept verdicts bound to live hashes from various workers (F2a: worker-047, worker-050, worker-069, worker-098). Yet the map says F2a only has revise (map from 00:15). The controller hasn't ingested these newer verdicts.
+
+The problem with doing a "census" is that it requires independence classification (author vs non-author; distinct reviewers; not same text) which the protocol demands. That's a substantial but bounded task: build a fail-closed census with:
+- pick target set: F1/F2a/F2b (G-FORM) + F0 (G-F0), live hashes measured at scan time;
+- scope of review corpus: a curated whitelist of review roots rather than glob-everything (to avoid counting echo files in artifacts): `reviews/*.json` plus explicit per-worker review artifacts is messy. Better: scan `reviews/` only, plus the map's `reviews` array. Hmm, but worker-001's F2b accept lives where? `reviews/F2b-review-worker-001.json` — in reviews/. Good. Most systematic reviews are in reviews/. The noise came from artifacts/** — I can restrict to reviews/*.json and state that scope.
+
+From reviews/ alone, which accepts bound to live hashes?
+- F1: F0F1-softflag-disposition-review.json (astra-lead-audit, accept, but does it cite the hash? cited= blank; textbound=True). F1 has no accept in reviews/ at 9a8bd4c9 except maybe this one. Hmm.
+- F2a: worker-047 accept at b6123750; worker-050? (in artifacts). In reviews/: F2a-review-047 accept bound. Others (086/088 revise, 21/22 inconclusive, lead-audit-r2 revise). Also F2a has older accepts not bound.
+- F2b: worker-001 accept at 1bb78ce9; worker-030 accept at 1bb78ce9; deepseek-flash-07 accept at 1bb78ce9 (interesting: in one glob it showed revise for flash-07 and accept in another? The first block said deepseek-flash-07 revise 3 with F2b-review-07.json; second said accept 4. Two files maybe: reports/review? Let me not rely on the noisy output).
+- F0: none bound accept; worker-16/082 revise, 21/22 inconclusive, lead-audit-r2 revise.
+
+So the census answer: F2b likely has ≥2 independent accepts bound (worker-001, worker-030, flash-07) → G-FORM criterion for F2b may already be MET (if independence holds); F2a maybe 1 (worker-047) + others; F1 0; F0 0.
+
+This is genuinely useful and up-to-date. Worker-091 did F2b; workers 020/088/043 did F2a; possibly someone did F1 (090/094 were revise). Did anyone do the F1 census? worker-059 produced review_F1_9a8bd4c9.json (revise). F1 census may be unclaimed.
+
+Given time, I'll do a focused, high-quality task on **F1 (AF-WCC-VAC-GEN)** — the class node with the least recent coverage — as a "verdict-binding census for G-FORM F1 at the live hash": enumerate every verdict in the review corpus (scoped to reviews/ + map.reviews entries for F1), classify bind status (cited sha256 == measured live sha256), independence (reviewer ≠ author `astra-lead-formulation`; reviewer distinct; same-text check), and report the count of independent accept verdicts at the live hash vs the gate criterion (2). Plus controls and falsifier.
+
+Hmm wait, but is that duplicating worker-090/094 (they reviewed F1 at 9a8bd4c9, resulting revise)? They reviewed; they didn't census. And the useful fact for the controller: F1 currently has NO bound accept → gate still blocked on F1. That's a crisp finding that updates the map's stale "F1 at 7a3e1f93" claim.
+
+Actually, let me reconsider between F1 census and the data-class replication. The F1 verdict census is more directly aligned with the lead's FINAL blocker B1 ("no independent verdict binds the final G-FORM hashes") — a census answers "still true for F1, and here is the exhaustive list of bound verdicts". It's mechanical, bounded, hash-pinned, and falsifiable. And it complements (not duplicates) per-target first-party reviews.
+
+But careful: the census's "independence" classification is judgment; I'll keep it mechanical and conservative: count only verdicts where (a) reviewer id is not the artifact author (astra-lead-formulation; also not `lead-formulation`), (b) the cited 64-hex sha256 equals the measured live sha256, (c) verdict == accept, (d) the review file's content contains the target path. Report both raw and independent counts, and state the classification rule as falsifiable.
+
+I need a corpus scope decision. Options: all JSON files under `reviews/` only (canonical review dir per PROTOCOL: "review — target_id, reviewer, verdict"), plus `map.reviews` entries (already ingested structured verdicts, which may include verdicts whose files are elsewhere). The map's `reviews` array has 128 entries — good structured source, but stale (updated 00:21:55) and includes future-dated ones? Let me check map.reviews for F1 accept at 9a8bd4c9. Let me also check the reviews/ dir F1 files in detail for accept verdicts and cited hashes. Then build the artifact.
+
+Let me quickly inspect map.reviews entries for F1 and the accept at F0F1-softflag.
+dsh: reasoning:
+Now this is very clear and valuable: F1 at the live hash 9a8bd4c9 has multiple independent **revise** verdicts, chief blocking finding being duplicate top-level YAML keys (`revised_at` x7) causing last-wins semantics — a genuine machine-checkable defect in the live canonical F1 schema. That's a concrete, class-bound, falsifiable defect: YAML duplicate mapping keys.
+
+And this affects ALL schemas potentially (F2a/F2b may have too?). Let me check duplicates in the three schemas via PyYAML? PyYAML silently last-wins; need a custom loader that detects duplicate keys. This suggests a really crisp bounded task:
+
+**W076-GFORM-YAMLKEY-01**: Detect duplicate mapping keys in the three canonical G-FORM schemas using a duplicate-detecting YAML constructor (fail-closed), enumerate exact paths/line numbers, and report which revision metadata is silently lost (e.g., `revised_at` values), with hashes pre/post. This corroborates worker-094's HF-094-2 and lead-audit-r2's BLOCKING finding, and extends it to F2a/F2b/F0 (and maybe the whole canonical set). Controls: a synthetic YAML with a known duplicate must be detected; a synthetic clean YAML must pass. Falsifier: if the detector misses a duplicate that `grep -n` finds, or reports a duplicate that a spec-compliant parser doesn't (e.g., merge keys/anchors), the probe is invalid.
+
+That's class-bound (F1/F2a/F2b class ids), bounded, mechanical, high-value (it's the current blocking HF for F1), and distinct from prior 076 (hash persistence) — though worker-094 found it for F1; extending to all three + quantifying which keys are lost is an increment. Hmm, but is it "one class-bound task"? Yes: the F1 class schema's YAML integrity, and siblings.
+
+Wait — careful about duplication with worker-094 and 059. They flagged the F1 duplicate keys. A new probe that merely re-finds them adds less value than something unclaimed. But an *independent replication across all canonical schemas* with a strict detector is exactly what "independent verification" means here, and it gives the lead a machine-readable defect inventory to fix in one pass. I can frame it as: "duplicate-key integrity census of the three canonical G-FORM schemas + F0 taxonomy and F2 aggregator at live hashes; quantifies which fields are silently shadowed and whether the shadowed values are semantically load-bearing."
+
+Actually let me first check: how many duplicates exist in each file? Quick reconnaissance with a strict loader. If F1 has 9 (7 revised_at + 2 revised_at_unused), F2a/F2b may have similar. Let me check now. This will also tell me if the finding is rich.
+dsh: reasoning:
+All three G-FORM canonical schemas have duplicate `revised_at` top-level keys (and F2 aggregator has 4). This is a genuine, machine-checkable defect at the live hashes, independently corroborating worker-094's HF-094-2 for F1 and extending it to F2a/F2b (new). It's exactly what's blocking F1 per lead-audit-r2 (BLOCKING). This is a strong bounded task:
+
+**Task W076-GFORM-YAML-DUPKEY-01** (class-bound: AF-WCC-VAC-GEN, AF-SCC-C2-VAC-GEN, AF-SCC-C0-VAC-GEN):
+- Instrument: strict YAML loader that records every duplicate mapping key with line numbers and all shadowed values; PyYAML last-wins semantics demonstrated (the value a spec-compliant consumer sees vs the first-seen value).
+- Measure at live hashes (pre/post scan).
+- Deliverable: defect inventory per file (path, class_id, duplicate key, line numbers, shadowed values, surviving value), plus a check that the shadowed values are semantically load-bearing revision metadata (a last-write-wins parser silently discards earlier revision deltas — meaning the audit trail is wrong).
+- Controls: (a) synthetic clean schema → detector reports 0; (b) synthetic file with a duplicate at a nested path → detected; (c) confirm detector is not triggered by YAML aliases/merge keys (construct a control with anchors) → 0.
+- Falsifier: if any file's duplicate count differs from an independent `grep`/`awk` line census; or if a spec-compliant parser (e.g., ruamel.yaml) accepts the file without warning; or if hashes change between pre/post scan.
+- Also record whether the duplicate keys are in the canonical set only vs the authoring tree (interesting: authoring artifacts/formulation/schemas/* are hash-identical to canonical, so same).
+- And importantly: note that the map/lead treated the files as "machine-green" (acceptance pipeline PASS) — the structural gate doesn't check duplicate keys; that's the gap. Evidence: F1-review-094 HF-094-2, F1-review-lead-audit-r2 blocking.
+
+This is bounded, novel enough (F2a/F2b not previously reported as far as I've seen), useful, and thoroughly falsifiable. Let me check whether ruamel is available for the spec-compliant control. If not, I can implement an independent second detector (regex/line-based census of top-level keys) as the cross-check — that's actually better as an independent instrument than another YAML library.
+
+Let me also quantify: what does PyYAML see as the surviving revised_at for each file? And what are the line numbers/values of all duplicates? Let me extract them to design the result JSON.
+
+Also check nested duplicates (my loader raises on first found; I should collect all duplicates, not just the first). I'll write a collector that records all duplicate keys at any depth.
+
+Then the artifact:
+- `artifacts/worker-076/gform_yaml_dupkey/probe_yaml_dupkeys.py`
+- `.../probe_result.json`
+- `.../README.md`
+- `.sha256` sidecars.
+
+Then outbox events:
+1. `artifact` event (path, sha256, artifact_type, node F1/F2a/F2b, class_ids, evidence_refs, falsifier, validation_status unverified).
+2. `claim` event (conclusion_type formal_model, statement with measured counts, falsifier).
+3. `status` event (task id, hours, summary, next_falsifier, status active).
+Maybe a `blocker`? The defect blocks F1 accept; but it's already a blocker stated by lead-audit-r2. I could emit a blocker with the exact repair (de-duplicate keys / use a list-valued revision_log). The protocol's blocker requires description, needed_to_unblock, evidence_refs. That's appropriate: "canonical G-FORM schemas carry duplicate top-level revised_at keys; a repair (append-only revision_log list or single latest revised_at) is needed before a clean accept". But the prior 076 emitted a blocker too. Fine — but keep it as evidence-first; maybe skip blocker to avoid noise? The finding is genuinely blocking for G-FORM. I'll include a concise blocker if it doesn't duplicate exactly. Actually worker-094 + lead-audit-r2 already raised it for F1. My blocker would extend to F2a/F2b. I'll include it — it's the actionable summary.
+
+4. Checkpoint file: `runtime/state/w076_checkpoint_yaml_dupkey_1.json` (naming similar to others: w0XX_checkpoint_*.json). Include artifact hashes, findings, next falsifier.
+
+Order of operations: write artifact files → hash → verify hashes stable → append JSONL events with hashes → write checkpoint (which references the events and artifacts). Note: writing events appends to the outbox; the controller ingests later. The checkpoint should be written last.
+
+One important consideration: "emit valid JSON with IDs evidence hash falsifier" — every event needs event_id, event_type, created_at, actor. I'll use `w076-20260912T00XX-...` IDs with real wall-clock created_at (current ~00:26-00:30). Avoid future-dating (CF-14 warns about it) — use actual `date -Is` at write time. Since the supervisor's prior 076 events used 00:23, mine at ~00:28+ are fine.
+
+Also: do not claim gate verdicts or done/passed.
+
+Let me now extract the duplicate details for the result. I'll write the probe script to be self-contained and deterministic:
+
+- `load_strict(path)`: custom SafeLoader subclass collecting duplicates (key, first_line, dup_lines, path of parent keys), then last-wins value; plus return the parsed doc.
+- `line_census(path)`: independent regex scan for top-level `^([A-Za-z_][A-Za-z0-9_]*):` occurrences (column 0), count duplicates. Cross-check.
+- `shadowed_values`: for duplicate key, capture each occurrence's line and a short representation of its value. Values are strings (dates). I'll capture the raw line text.
+- Controls:
+  - control_clean: synthetic YAML string with unique keys → expect 0 duplicates, parse OK.
+  - control_nested_dup: synthetic YAML with duplicate key inside a nested block → expect exactly 1 duplicate at that nested path.
+  - control_anchor_merge: synthetic YAML using anchors + merge keys `<<` → expect 0 false positives.
+  - control_quoted: a key appearing inside a quoted string / comment → expect 0 false positives.
+- Assertions: detector catches both controls and produces expected counts.
+- Pre/post hash stability: measure sha256 at start and end; if differ → `status: UNMEASURED`.
+- `verdict`: `DEFECT_PRESENT` if any duplicate across the target canon set; else `NO_DEFECT`.
+- Falsifier text fields.
+
+Also list the target set: the 3 G-FORM canonical schemas (class-bound), plus optionally the F0 taxonomy and F2 aggregator as non-class context. I'll include the F2 aggregator in the targets marked `aggregator (F2, legacy_artifacts per map)` and F0 taxonomy as `F0` — the map says `schemas/af_scc_regularities.yaml` is a non-class aggregator. To keep the claim tightly class-bound, I'll treat the three schemas as PRIMARY and the other two as CONTEXT.
+
+Let me write the script now. Use Python 3 with PyYAML. Relative paths from repo root. The script should be runnable from the repo root: `python3 artifacts/worker-076/gform_yaml_dupkey/probe_yaml_dupkeys.py`.
+
+Design of the duplicate collector: subclass SafeLoader, override construct_mapping to inspect node.value; record duplicates in a list on the loader object (self.dup_records). Need to handle nested paths: maintain a stack? Simpler: after parsing, walk raw events? Actually within construct_mapping we can record duplicates with line numbers; the path can be derived later via Composer? Alternative: use yaml.compose to get the node tree, then walk it recursively with path tracking — that avoids constructors entirely and gives full control, plus records all duplicates at all depths. Then use yaml.safe_load for the last-wins effect and compare against a first-wins manual evaluation for shadowed values.
+
+Plan:
+1. `node = yaml.compose(text, Loader=yaml.SafeLoader)`.
+2. Walk mapping nodes: for each mapping node, keys = [scalar value of key node]; find duplicates; record {path, key, lines, raw key values}.
+3. `doc = yaml.safe_load(text)` gives last-wins values.
+4. `first_wins` doc: construct via a custom loader that keeps first occurrence — I can implement by building from the composed node manually: recursively convert nodes to Python objects, using first occurrence for duplicates. That gives me both "surviving" (last) and "shadowed" (first). Compare at each duplicate path to show the values differ or not.
+5. Independent line census for top-level keys: regex `^([^\s#][^:]*):` count.
+
+That's robust. Keys could be non-scalar; ignore with note. Let me write it.
+
+Also record file-level: path, class_id (read from doc['class_id'] if present), sha256, bytes, mtime.
+
+For F2 aggregator `af_scc_regularities.yaml`, doc may have class_id? Probably not. I'll classify by path mapping and mark `class_ids` accordingly.
+
+Result JSON structure:
+```
+{
+ schema_version, artifact_kind: "yaml_duplicate_key_probe", task_id, worker, created_at,
+ authority_note,
+ targets: [ {role, path, class_ids, sha256_pre, bytes, mtime, yaml_parses, duplicate_count, duplicates:[{path,key,occurrence_lines,first_wins,last_wins,values_differ}], top_level_key_census:{...}, status} ],
+ controls: [ {name, expect, observed, pass} ],
+ controls_all_pass: bool,
+ hash_stability: {pre: {path: hash}, post: {...}, stable: bool},
+ verdict, falsifier, limits
+}
+```
+
+Then events.
+
+Let me write the script file now. I need to create the directory. Use write tool.
+
+Let me also double check the current live hashes haven't changed since my last check (they matched). The script will pin them itself.
+
+One more thing: is there any chance PyYAML's compose-based walk counts merge keys (`<<`) as duplicates? For our files there are no anchors likely. My control with anchors will verify the detector handles `<<` correctly (a merge key appearing once is not a duplicate; and if `<<` appears twice, that IS a duplicate). Also note: duplicated keys in *nested* mappings should be reported too.
+
+Let me write the script.
+dsh: reasoning:
+Now write the probe script.
+dsh: reasoning:
+The `main()` prints the result but doesn't write the JSON file. I'll run it and capture stdout to probe_result.json, but better to have the script write the file itself. Let me add a `--out` argument or write to a default path. Simpler: in main, write the JSON to a file next to the script when run with `--write`. Actually let me just run it and redirect: `python3 probe.py > probe_result.json` — but then the result includes a trailing newline fine. However the README should say how it's produced. Cleaner: modify script to write `probe_result.json` in its own directory by default, and print path. Let me edit.
+
+Also there's a bug in the cross-check `agree` computation — it's convoluted and effectively always True for census keys that are in walk keys. Let me fix: agree if every census key with count>1 also appears among node-walk duplicates (with parent root); report missed ones. Nested-only duplicates are not expected to appear in the column-0 census. So:
+
+missed = [k for k in census_keys if k not in walk_keys] → agree = not missed.
+
+Let me fix both.
+dsh: reasoning:
+Bug: `t` shadows the target dict in the loop `for t in TARGETS: rec = measure_file(t["path"]) ... targets.append(rec)` — then `primary = [t for t in targets if ...]` is fine. But the error is at line 305: `primary_dups = {t["path"]: ...}` — t is fine there. Wait, `t` in the comprehension... Actually the issue: earlier in `main`, `for t in TARGETS:` — `t` is a target dict with keys role/node_id/path/class_ids. But `measure_file` returns rec; `rec.update({...})` — fine. Then `primary = [t for t in targets if t["role"]...]` fine. Hmm, line 305 error? Let me look: the traceback says line 305 `primary_dups = {t["path"]: t["duplicate_count"] for t in primary}` raised... what error? The stderr got cut. Let me see the full stderr. Actually the head -c 400 shows only the landlock line; the real message may be after. Let me check the full file.
+dsh: reasoning:
+KeyError 'path' in primary items. That means `rec` lacks "path" key — I never added `"path"` to rec in `measure_file` (it returns sha256, bytes, ... but not path). Indeed. Fix: add `"path": rel_path` in measure_file return. Let me edit.
+dsh: reasoning:
+The probe works and the finding is sharp:
+- F1 9a8bd4c9: 2 duplicate keys (`revised_at` x7, `revised_at_unused` x2), both with differing first/last values.
+- F2a b6123750: 1 duplicate key (`revised_at` x8), differing values.
+- F2b 1bb78ce9: 1 duplicate key (`revised_at` x8), differing values.
+- F0 taxonomy 276009f4: 0 duplicates (clean).
+- F2 aggregator 94562101: 1 duplicate (`revised_at` x4).
+
+Notably, F1's first-wins revised_at is "2026-09-11 23:34:10+08:00" (note: the first line 8 value maybe `"2026-09-11 23:23:03+08:00"`? Actually the raw first value shows 2026-09-11 23:34:10 — hmm because line 8 might be `revised_at: "2026-09-11T23:34:10+08:00"`? Earlier head showed line 8 `revised_at: "2026-09-11T23:23:03+08:00"`? No, that was authored_at line 7. Anyway, the first-wins reconstruction works.)
+
+Note the typo nuance: F1 line 8-23 include `revised_at` values with differing formats (`2026-09-11 23:34:10+08:00` with a space vs ISO T format). The important measurable fact: a spec-compliant consumer sees only the last occurrence, so 6+ earlier revision timestamps are lost from the machine-readable history.
+
+Now I need to:
+1. Read the result JSON to extract key numbers for the README/events.
+2. Write README.md.
+3. Hash all files, write .sha256 sidecars.
+4. Append events to outbox.
+5. Write checkpoint.
+
+Also, should I verify the numbers against F1-review-094's HF (7x revised_at)? Mine says 7 occurrences of revised_at (lines 8,10,12,14,16,20,23 = 7) and 2 of revised_at_unused — matches HF-094-2 exactly ("7x '^revised_at:' and 2x '^revised_at_unused:'"). Great corroboration; F2a/F2b at 8 each is new.
+
+Let me get the full result summary for numbers, including controls. Then write README.
+dsh: reasoning:
+Now write README.md with method, findings, falsifier, limits. Then hash and sidecars.
+
+A note on the "duplicate_count" semantics: it's the number of duplicate *keys*, not occurrences. F1 has 2 duplicate keys (revised_at with 7 occurrences; revised_at_unused with 2). I'll present both.
+
+Let me write the README.
+dsh: reasoning:
+Now compute hashes of the three artifact files, write .sha256 sidecars, and re-verify hashes are stable (the script result embeds hashes of inputs; artifact file hashes are separate).
+
+Sidecar format: look at existing example `schemas/af_scc_c0_vacuum.yaml.sha256`: 88 bytes, likely "hash  filename". Let me check.
+dsh: reasoning:
+Artifacts:
+- probe_yaml_dupkeys.py sha256 18cd63a829a84a41211d7049dafd9096c702e77ccfaaeb62999b290dae30c008
+- probe_result.json sha256 08030f63b4b668f30c4ec0bb42bf5013446e76360991b1dfbae56935f5da45d6
+- README.md sha256 f47c856e51f1cd8030749565d56b318de66dc74626441898aff2a3a2130def59
+- SHA256SUMS.txt (self)
+
+Now emit JSON events to `comms/outbox/worker-076.jsonl` (append). Events (protocol-compliant, each with event_id, event_type, created_at, actor):
+
+1. artifact event:
+```json
+{"event_id":"w076-20260912T00xx-yaml-dupkey-artifact","event_type":"artifact","created_at":"<now>","actor":"worker-076","node_id":"F1","class_id":"AF-WCC-VAC-GEN","class_ids":["AF-WCC-VAC-GEN","AF-SCC-C2-VAC-GEN","AF-SCC-C0-VAC-GEN"],"gate":"G-FORM","task_id":"W076-GFORM-YAML-DUPKEY-01","artifact_type":"yaml_duplicate_key_probe","path":"artifacts/worker-076/gform_yaml_dupkey/probe_result.json","sha256":"08030f...","validation_status":"unverified","falsifier":"...","evidence_refs":[...]}
+```
+2. claim event (conclusion_type formal_model, statement, assumptions, falsifier, evidence_refs, artifact_refs).
+3. status event (status active, hours, summary, next_falsifier, evidence_refs).
+4. blocker (optional but useful): description of defect + needed_to_unblock.
+
+Note the existing worker-076.jsonl has 3 lines from the prior run. Appending is correct (channel semantics; controller ingests all). My event_ids must be unique — use a distinct slug (yaml-dupkey) and timestamp.
+
+Check the events schema to ensure required fields. Let me read research_map/events.schema.json (1.7KB).
+dsh: reasoning:
+Schema: oneOf claim/artifact/review/resource_request/direction_update. Status/blocker aren't in the schema strict list, but PROTOCOL.md lists them as upward message types and the map ingests them (many worker-076 prior status/blocker events got ingested). The schema validator may only apply to those five types? The prior worker-076 emitted status and blocker and they were ingested. I'll emit:
+- artifact (validates against baseArtifact)
+- claim (validates against baseClaim; needs class_id, statement, conclusion_type, assumptions, falsifier, evidence_refs)
+- status (base-ish; protocol)
+- blocker (protocol)
+
+Let me write them with a Python script to append, ensuring valid JSON per line and verifying each line parses. Also include `_source_file`? No, the controller adds that.
+
+Note: `class_id` vs `class_ids`: map normalizes class_ids→class_id. I'll include both where useful.
+
+Evidence refs format: `path#sha256-prefix`. I'll use 12-hex prefixes of artifact hashes and canonical schema hashes.
+
+Let me now compose the events. Timestamps: real wall clock, current ~00:30. Let me get date -Is and use it.
+
+Event contents:
+
+Artifact event evidence_refs:
+- artifacts/worker-076/gform_yaml_dupkey/probe_result.json#08030f63b4b6
+- artifacts/worker-076/gform_yaml_dupkey/probe_yaml_dupkeys.py#18cd63a829a8
+- artifacts/worker-076/gform_yaml_dupkey/README.md#f47c856e51f1
+- schemas/af_wcc_vacuum.yaml#9a8bd4c96800
+- schemas/af_scc_c2_vacuum.yaml#b6123750b37d
+- schemas/af_scc_c0_vacuum.yaml#1bb78ce9b357
+- reviews/F1-review-094.json (HF-094-2 corroboration)
+- reviews/F1-review-lead-audit-r2.json
+
+Claim event:
+- class_id: "AF-WCC-VAC-GEN" (primary), class_ids all three
+- statement: measured defect with numbers
+- conclusion_type: "formal_model"
+- assumptions: ["PyYAML 6.0.3 / YAML 1.1 mapping-key uniqueness; live canonical hashes unchanged during scan"]
+- falsifier: as in probe
+- evidence_refs + artifact_refs
+- node_id F1
+
+Status event:
+- status active, hours 0.4, summary, next_falsifier, evidence_refs, node_id F1, gate G-FORM, task_id
+
+Blocker event:
+- node_id F1, class_ids, description, needed_to_unblock, evidence_refs, gate G-FORM, task_id
+
+Let me write the JSONL via Python (append mode), then verify line count and JSON validity, then write the checkpoint.
+
+For the checkpoint file naming: `runtime/state/w076_checkpoint_yaml_dupkey_1.json`. Include:
+- checkpoint, at, worker, task_id, class_ids, node_id, gate, status
+- reviewed/measured inputs with pre/post hashes
+- findings_summary
+- artifacts with sha256
+- controls
+- outbox events refs
+- next_falsifier
+- authority note
+
+Let me do it.
+dsh: reasoning:
+Events appended (4 new, file now 7 lines). Now write the checkpoint to `runtime/state/w076_checkpoint_yaml_dupkey_1.json` plus a checkpoints jsonl maybe. Prior workers wrote both `w0XX_checkpoint_1.json` and `w0XX_checkpoints.jsonl`. I'll write one JSON checkpoint and append to `runtime/state/w076_checkpoints.jsonl`? The prior 076 didn't create a checkpoint file (not in the ls I saw... I saw w030, w033 etc. but not w076 — so the prior 076 didn't checkpoint, which is a gap). I'll create the checkpoint JSON.
+
+Checkpoint contains artifact hashes and status. Then verify by reading it back and re-hashing artifacts once more.
+
+Let me write the checkpoint with the write tool for clarity, then verify hashes. Actually easier with Python to embed hashes computed now (they must be stable). Use write tool with the known hashes.
+
+Checkpoint contents:
+- checkpoint: 1
+- at: now (00:29:02+)
+- worker, task_id, class_ids, node_ids, gate
+- status: complete_pending_lead_review
+- measured_inputs: hashes pre/post + stable
+- findings_summary: duplicates per file
+- artifacts: {path: {sha256, note}}
+- controls, cross_check
+- outbox events: 4 event_ids
+- authority note
+- next_falsifier
+- next: lead-formulation repair + re-review
+
+Let me write it.
+dsh: reasoning:
+Now final verification:
+1. Re-hash artifact files — must match checkpoint and outbox.
+2. Validate JSON of checkpoint + outbox lines.
+3. Verify canonical hashes unchanged (pre/post) one more time.
+4. Confirm no map mutation was done (I didn't touch research_map.json).
+5. Optionally append to a checkpoints jsonl — not necessary; the checkpoint file is the artifact. But other workers also wrote `<worker>_checkpoints.jsonl`. My checkpoint references only one. That's fine.
+
+Also should I run the probe one final time to confirm reproducibility (idempotent output except created_at)? Re-running would rewrite probe_result.json with a new created_at → changing its hash, invalidating the outbox hash. Don't re-run. Instead, verify hashes match.
+
+Let me do the verification.
+dsh: reasoning:
+All verified. The map wasn't mutated by me (mtime 1789143910 ≈ 00:25:10, before I started writing at 00:27+).
+
+Task complete:
+1. ✅ Read handoff/map (HANDOFF.md, ASTRA_HANDOFF.md, research_map.json) and comms (PROTOCOL.md, inbox/outbox).
+2. ✅ Took one class-bound task (F1/F2a/F2b, G-FORM): duplicate YAML key probe.
+3. ✅ Emitted valid JSON with IDs (event_id, task_id, class_ids, node_id), evidence (evidence_refs with sha256 prefixes), hash (artifact sha256 + canonical input hashes), falsifier.
+4. ✅ Checkpoint written to runtime/state/w076_checkpoint_yaml_dupkey_1.json.
+5. Now exit.
+
+I should give a concise final summary. The instruction says "checkpoint, then exit" — I'm done. Let me report briefly what was done, the findings, and the artifact/event paths.
+
+One consideration: should I also append a line to `runtime/state/w076_checkpoints.jsonl`? Prior workers did both for multi-checkpoint runs (e.g., w027_checkpoints.jsonl). My checkpoint JSON is the record; the supervisor patterns don't require the jsonl. I'll leave it.
+
+Final answer: concise summary with paths, hashes, verdict, falsifier, and note that no gate/node status was moved.

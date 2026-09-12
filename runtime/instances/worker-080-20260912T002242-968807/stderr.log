@@ -1,0 +1,863 @@
+dsh: reasoning:
+I'm a bounded execution worker. I need to read handoff/map and comms, take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit. worker=080.
+
+Let me start by exploring the workspace.
+dsh: reasoning:
+No handoff directory at root. Let me look for it. There's a `workdir`, `.agents`, `deepseek-harness`. Let me look for "handoff" and "comms" directories.
+dsh: reasoning:
+The task: "Read handoff/map and comms. Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit. worker=080"
+
+The workspace is /data3/guoshaoyang/workdir/ai4math-swarm. Let me read HANDOFF.md, research_map, and comms.
+
+Let me create a todo list perhaps. First read.
+dsh: reasoning:
+Let me read PROTOCOL.md (comms protocol), and the research_map. Also entry_hashes.json, ledger, and schemas to know the JSON schema expected. Also check the runtime directory, maybe worker registry.
+
+The instruction: "Read handoff/map and comms. Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit. worker=080"
+
+So likely the swarm has a protocol for worker agents: read HANDOFF.md, research_map (map), and comms (PROTOCOL.md + inbox/outbox). Then claim one task from a task class, emit JSON with IDs, evidence, hash, falsifier; checkpoint; exit.
+
+Let me read PROTOCOL.md, research_map contents, ledger, schemas.
+dsh: reasoning:
+This is a large active swarm. I'm worker=080. Let me read ASTRA_HANDOFF.md (the map's handoff), ARCHITECTURE.md, and the current state of the research map. Also check runtime/state for worker registry and assignments; check comms/outbox/assignments; check inbox for worker-080 assignment? There's no worker-080 file yet in inbox. My job: "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit."
+
+So I need to:
+1. Read handoff/map (HANDOFF.md, research_map/ASTRA_HANDOFF.md, research_map.json).
+2. Read comms (PROTOCOL.md, inbox, outbox, assignments).
+3. Take one class-bound task — presumably there are open task classes in the map with status queued and assignee unclaimed. "class-bound" likely means a task tied to a `class_id` (a formulation class). 
+4. Emit valid JSON upward to comms/outbox/worker-080.jsonl with event fields: event_id, event_type, created_at, actor plus type-specific fields (claim: class_id, statement, conclusion_type, assumptions, falsifier, evidence_refs, artifact_refs...). Include IDs, evidence, hash, falsifier.
+5. Checkpoint — run `python3 research_map/checkpoint.py`? But that's the controller command. As a worker, maybe write to runtime/state or call checkpoint. Hmm. "checkpoint, then exit" — likely write a checkpoint of my work (maybe append to ledger or run checkpoint.py). Let me examine the state and schemas.
+
+Let me read ASTRA_HANDOFF.md and ARCHITECTURE.md first.
+dsh: reasoning:
+Now let me look at the map state: open assignments, nodes, classes. And the inbox for worker messages. I'm worker=080, but the protocol lists deepseek-flash-01..20 and workers 001+. Since worker=080 doesn't have an inbox, I need to find an open class-bound task. Perhaps the tasks are in `map.assignments` with assignee not yet claimed, or in the assignments directory of outbox. Let me look at:
+
+- comms/outbox/assignments/
+- runtime/state/
+- research_map/research_map.json structure (keys)
+
+Let me also check the recent events for worker patterns (e.g., worker-06 outbox events) to know what a valid worker JSON looks like.
+
+Let me check schemas.py and events.schema.json for event validation.
+dsh: reasoning:
+Interesting — there are already w080_checkpoint.json and w080_checkpoint_2.json and w080_checkpoints.jsonl in runtime/state. So worker 080 was already working? Wait, the checkpoint files are timestamped Sep 12 00:20 and 00:22, very recent — but perhaps these are from a previous worker=080 instance? Hmm, or maybe these were created by the supervisor launching me... Actually, wait. The task says "worker=080". Maybe the supervisor already created a checkpoint slot. Let me read w080 checkpoint files to understand the expected format and what the previous 080 did.
+
+Also check the supervisor log for worker=080 assignment.
+
+Let me read:
+- runtime/state/w080_checkpoint.json
+- runtime/state/w080_checkpoint_2.json
+- runtime/state/w080_checkpoints.jsonl
+- runtime/state/supervisor.log tail
+- comms/outbox/worker-* files to see the emitted JSON format (e.g., worker-06.jsonl outbox? Actually outbox has deepseek-flash-*.jsonl; let me look at worker-06 outbox file? The inbox has worker-06.jsonl; outbox may have workers dir?)
+
+Let me check.
+dsh: reasoning:
+So worker-080 was launched at 00:22:42 (me, presumably), and there are earlier w080 checkpoints from an earlier invocation at 00:20 and 00:22 (which is confusing: the earlier worker-080 ran at 00:20 and 00:22, before this launch?). Hmm, the checkpoint timestamps 00:20:38 and 00:22:19 are before launch 00:22:42. There may have been an earlier worker-080 that produced those. Wait — the supervisor log shows launch worker-080 at 00:22:42 but no earlier launch of worker-080? Let me grep supervisor.log for worker-080.
+
+Actually the earlier checkpoints could be from a parallel process (another worker numbering) that used w080 as its label; or from a previous launch. Let me grep.
+
+Also, my outbox file worker-080.jsonl already exists. Let me read it, and the inbox if any (there is no worker-080.jsonl in inbox listing... wait the inbox listing showed worker-01, worker-06, worker-16 only. So no downlink assignment for worker-080). Hmm. The task says "Read handoff/map and comms. Take one class-bound task..." So I must select a task from the map myself — take one class-bound task, presumably from the open assignments in the map (assignments with status queued/unclaimed), and execute it.
+
+But careful: rule CF-12 says "one canonical path has exactly one owner". Many assignments are claimed by other workers. I need to find an unclaimed class-bound task. Let me look at the map's assignments and find ones with no owner / status queued. Also check the latest outbox traffic and inbox fallback: maybe Astra broadcast class-bound prompts to all workers via a shared inbox file, or `comms/outbox/assignments/` directory. Let me check that directory (it was listed as a dir but the ls output truncated). Let me list it.
+dsh: reasoning:
+So worker-080 has run twice before (001230 and 001657) and I'm the third launch (002242). The prior instances did FORM-SEP-05 containment rebind (v1 and v2). I'm a fresh bounded execution worker. I must take ONE class-bound task, emit valid JSON with IDs/evidence/hash/falsifier, checkpoint, exit.
+
+Since the previous worker-080 already did the containment rebind task, I should pick a new class-bound task that's not yet done/claimed. To avoid duplicating CF-12 ("one canonical path has exactly one owner"), I need to find an unclaimed task.
+
+Let me look at:
+1. `comms/inbox/` — no worker-080 file. But maybe there's a shared inbox or the latest broadcast. Let me check `comms/inbox/astra.jsonl` and any files with assignments. Also check the map's assignments list — fields: node_id, assignee, artifact, gate, evidence_refs, falsifier, status, due.
+
+Let me dump assignments summary: id, node, assignee, status, due, class_id, title.
+
+Also check the runtime/instances/worker-080-20260912T002242-968807 directory to see if there's an assignment/prompt card for this specific launch.
+
+Let's do that.
+dsh: reasoning:
+The assignments in the map don't have `status`/`id` fields apparently; they have different keys. Let me inspect a single assignment to see the fields. Also note there's no worker-080 assignment.
+
+I need to select one class-bound task. Given the swarm state at 00:22, and the map indicates gates pending:
+- G-F0: needs two independent accepts at published F0 hash + 2 soft-flag dispositions
+- G-FORM: full-schema accepts at rev21 hashes + F1 soft flag
+- G-LIT: L0 accept at ce42d205e761 and 3 L1 spot checks at 315c19145065 (2 recorded)
+- G-NUM: criterion C8 vs protocol
+- G-AUDIT: 0/2 independent accepts per target
+
+A class-bound task that is useful and not duplicated. Since I'm a worker with limited turn budget, I should pick something concrete, verifiable, class-bound (class_id), and produce an artifact + emit valid JSON, then checkpoint.
+
+Approach options:
+1. Independent re-measurement/rebind of a soft flag (e.g., F1 `AF-WCC-VAC-GEN-SET` soft flag) at current hashes — class-bound.
+2. L1 spot check #3 at `315c19145065` — G-LIT needs 3 L1 spot checks at that hash (2 recorded). That's class-bound (L1, classes) and highly useful. But lead-literature owns `astra-life02-l1-spotcheck`. CF-12 says one canonical path has exactly one owner — but this is a spot check, one of 3 needed; multiple spot checks are explicitly needed (3). Hmm, but assignment says lead-literature.
+3. G-AUDIT needs 0/2 independent accepts per target — a review is a lead job though (worker events can't set validation_status).
+4. Soft flags dispositions: G-F0 needs 2 soft-flag dispositions. Worker can produce evidence to adjudicate a soft flag — class-bound to F0? But F0 hash is divergent.
+5. Check the latest outbox traffic newer than pass end (00:17:46) — un-ingested. Perhaps there are requests that need independent verification.
+
+Let me check the current live state of the latest events, especially what other workers just did (to avoid duplication), and the inbox (Astra's latest messages). Let me read the tail of the map's assignments with full schema, the controller_gate_audit, and check newest events.
+
+Actually, an important consideration: I'm a "bounded execution worker" with a limited context/turn budget. I should pick one task I can complete well: produce an artifact with a deterministic checker, evidence hashes, falsifier, event JSON, checkpoint.
+
+Let me examine the current canonical schema files and the soft flags. First, let me look at the newest un-ingested outbox events (after 00:17:46) to understand what's happening now and find gaps. Also look at `runtime/state/current_checkpoint.json` for the latest gate audit details.
+
+Let me look at controller_gate_audit and recent events.
+dsh: reasoning:
+Whoa — there are many future-dated events (CF-14: 55–72 future-dated events, max 02:00). So those are pre-dated/future events, advisory. The actual current time appears to be ~00:22-00:25. Events dated up to 02:00 exist already. Interesting.
+
+I need to pick one class-bound task. Given worker-080's previous work was FORM-SEP-05 containment rebind at F2b rev25 (C0 hash 1bb78ce9b357). But lead-formulation's future-dated events (00:44) claim F2b rev25 etc., with blockers: "B1: no independent verdict binds the final G-FORM hashes 9a8bd4c96800...". Hmm, those are future-dated; current measured hashes at 00:21:55: F1 9a8bd4c96800, F2a b6123750b37d, F2b 1bb78ce9b357 — matching the "final" hashes. So the lead is saying no independent verdict binds the final G-FORM hashes.
+
+Given the gate audit: G-FORM needs full-schema accepts at rev21 hashes (which are these final hashes) — "review scan at these hashes: F1 [0 accepts], F2a [0], F2b [0]". G-AUDIT needs 2 independent accepts per target.
+
+But a worker cannot set validation_status/review verdicts — only leads can. However, workers can produce independent verification artifacts + claims, which leads then turn into reviews. The G-FORM criterion needs reviewer accepts, and the map says review scan found 0 accepts at current hashes (verdicts bound to superseded hashes are advisory only).
+
+So a very valuable class-bound worker task: an independent, hash-bound schema conformance check at the current canonical F2a/F2b (or F1) hashes that produces a deterministic checker + evidence, so lead-audit can bind a review. Since a worker can't issue a review verdict, we produce "review-grade evidence for the reviewer": an independent re-measurement and checklist against the G-FORM criteria, with each criterion's exact pass/fail and hash binding, plus a falsifier.
+
+Alternatively an L1 spot check (independent re-fetch of a citation) — but G-LIT already has 15 (≥3 required). So that's saturated.
+
+G-NUM: criterion C8 against protocol 1e6cdf04d7a2 — the recorded verdict binds stale hash. C8 is presumably a numerics protocol review. N0 is allowed (flat-space). But numerics work is more involved; also class AF-WCC-SCALAR-SPH. A worker could do an independent C8 check? Let me check what C8 is.
+
+G-F0: two independent accepts + 2 soft-flag dispositions. F0 canonical is divergent: canonical 276009f4f63d vs authoring c8e979a1eb48. Hmm.
+
+The most tractable and highest-value within bounded time: **independent G-FORM conformance verification at the current canonical hashes** for one of the classes (F2b C0, since worker-080 already has context on the containment inversion, or F1 WCC). Actually, the previous worker-080 found a hard failure (containment inversion in ledger reason) at F2b rev25 hash 1bb78ce9b357. But note worker-06's future events claim F2b rev6 at e6b1af2bd692... and rev5, rev4... There's a lot of churn. The current canonical F2b per the 00:21:55 audit is 1bb78ce9b357.
+
+Wait — important: the map's current measurement at 00:21:55 says F2b canonical 1bb78ce9b357. And worker-080 v1/v2 already verified the containment inversion at that hash. So that finding is already emitted. I should do something new.
+
+Let me now check what the "soft flags" are and what F1 flag remains. ASTRA_HANDOFF says: "the F0 class-token soft flags were gone, leaving only the F1 `AF-WCC-VAC-GEN-SET` flag and two dual-tree divergences". A soft flag disposition is needed for G-FORM (the F1 soft flag). A worker could independently verify whether the F1 soft flag (class token in a set/aggregator?) is a real issue at the current F1 hash 9a8bd4c96800. That's class-bound to AF-WCC-VAC-GEN.
+
+Also G-F0 needs 2 soft-flag dispositions — maybe already handled.
+
+Let me inspect the soft flags in the map: `controller_findings` and maybe `reviews` mention soft_flag. Let me grep the map JSON for "soft".
+
+Also, let me check `runtime/state/current_checkpoint.json` — it may have per-worker instructions or the latest assignments. And check the `astra-lead-formulation` future blocker details for what's needed (B1: no independent verdict binds final G-FORM hashes; maybe B2/B3).
+
+Let me look at these.
+dsh: reasoning:
+Very informative. The formulation lead's final blocker set (future-dated 00:44, but apparently the actual state now) says the needed unblock is **independent verdicts at the final hashes for G-FORM and G-F0** — and specifically: "one reviewer runs `artifacts/formulation/tools/check_class_schema.py` and `run_acceptance.py` against the final rev11 canonical schemas ... and returns a G-FORM verdict citing sha256".
+
+As a worker, I can't set a gate verdict or validation_status. But I *can* perform the independent verification run and produce a review-grade evidence artifact (independent re-run of the lead's tooling at the measured hashes + my own independent checker), emitting events that lead-audit can turn into a binding review. That's exactly the "class-bound task" that is missing and non-duplicative.
+
+Important: the lead's tools live in `artifacts/formulation/tools/`. The canonical schemas are at `schemas/*.yaml`. Let me check current hashes right now — the handoff says remeasure; the 00:21:55 audit says F1 9a8bd4c96800, F2a b6123750b37d, F2b 1bb78ce9b357, F0 taxonomy 276009f4f63d. The lead's final message (00:44 future) gives schemas rev11 = 9a8bd4c968..., b6123750b37d..., 1bb78ce9b357... matching. Good: hashes are stable and aligned now.
+
+Wait, but note worker-06's future events (01:15, 01:50, 02:00) claim F2b rev6 at e6b1af2bd6925f27 and FROZEN revision 9, etc. Those are future-dated — advisory. But their content might reflect actual later work? The events are future-dated relative to real clock ~00:25. The checkpoint was at 00:22. Hmm, the "current time" in this environment — what is it? Let me check `date`. The supervisor log last line is 00:22:42 (my launch). Future-dated outbox events up to 02:00 exist as files already (created at 00:22 mtime). So they are pre-written speculative events, as CF-14 says. Treat future created_at as advisory for ordering. Their content may be from previous workers who stamped future times by design (e.g., worker-06 incremental revisions with future timestamps). Hmm, but worker-06's F2b rev6 at e6b1af2bd692—if that artifact exists on disk now, then the canonical F2b may have changed. Let me check the actual files and hashes NOW. That's the crucial "re-measure before citing" rule.
+
+Let me:
+1. `date` current time.
+2. sha256 of canonical schemas: schemas/af_wcc_vacuum.yaml, schemas/af_scc_c2_vacuum.yaml, schemas/af_scc_c0_vacuum.yaml, research_map/formulation_taxonomy.yaml.
+3. Check artifacts/formulation/FROZEN.json revision and hashes.
+4. Check tools: artifacts/formulation/tools/check_class_schema.py, run_acceptance.py.
+5. Check reviews that bind these hashes.
+
+Then decide the task. Let me also check if a "FORM-SEP-06" or similar naming pattern exists for worker tasks; previous worker-080 did FORM-SEP-05. So I could do FORM-SEP-06... but better to name it after what it is: e.g., `W080-GFORM-INDEP-01-REMEASURE`. Let me look at how the lead's checker works and what it validates, then run it independently.
+
+Let me check current hashes and files.
+dsh: reasoning:
+Current time 00:23:58. Canonical schemas are stable and equal to authoring for the three schema files: F1 9a8bd4c96800, F2a b6123750b37d, F2b 1bb78ce9b357. F0 taxonomy canonical 276009f4f63d vs authoring c8e979a1eb48 — divergent.
+
+Now, the lead's blocker B1/B2 is exactly: no independent verdict binds these final hashes. As worker-080 I can't issue a binding verdict, but I can produce independent verification evidence at exactly these hashes. This is the highest-value, non-duplicative, class-bound task, and it can be done in bounded time with deterministic tooling:
+
+**Task W080-GFORM-INDEP-01: independent hash-bound G-FORM conformance re-run at the three canonical rev11 hashes, using a from-scratch independent checker (not just re-running the lead's tool, which would be a "same-instrument replication"), plus a documented re-run of the lead's own declared pipeline for cross-check.**
+
+Actually, for a genuinely independent verification, I should write my own checker that:
+1. Re-measures sha256 of the three canonical schema files and the declared FROZEN.json pins; verify canonical == authoring byte-identical for the schemas; verify FROZEN.json file entry sha matches measured.
+2. Checks the G-FORM criteria: exact quantifiers, topology, regularity/genericity, I+, visibility, conclusion_type; no C0/C2 merge (separate files, separate class_ids, disjointness).
+3. Extracts each schema's declared class_id, conclusion_type, quantifier structure, containment/one-way entailments, forbidden transfers; cross-checks internal consistency (the containment inversion issue found by worker-080 v2 in F2b — but careful: that's already reported).
+4. Re-runs the lead's `check_class_schema.py` and `run_acceptance.py` at the pinned hashes and records exit codes and outputs — noting that this is not an independent verdict but a reproduction of the lead's claim.
+5. Produces report JSON + checker script + README; emits events; checkpoint.
+
+But time/token budget: I should be bounded. Writing a full independent YAML schema checker is doable — schemas are YAML; check python has yaml. Let me first inspect the three schemas and the lead's checker to see what's checked. Also check what G-FORM criteria require exactly ("all three schemas exist with exact quantifiers/topology/regularity/genericity/I+/visibility/conclusion_type; no C0/C2 merge").
+
+Importantly, there might be a risk of duplicating other workers' current jobs (many workers launched at 00:22:42 — worker-019, 021, 025, 026, 027, 032, 037, 080, 090, 098 — those are numerics-group launches per lead-numerics). My slot 080 in the 00:22:42 batch was launched alongside the numerics group, but my prompt is the generic worker prompt. Worker slot assignment isn't necessarily meaningful.
+
+The key dedup check: has anyone else already done an independent G-FORM verification at these hashes? The gate audit at 00:21:55 says 0 distinct accepts. Let me grep the events for artifacts named like "w*-gform*" or "independent". Let me check the artifacts dir for worker-* that might be doing this right now. Let me search for recent files.
+
+Also, I should consider the "class-bound" instruction: pick a class. The task should be bound to one class id. Options: F1 AF-WCC-VAC-GEN, F2a AF-SCC-C2-VAC-GEN, F2b AF-SCC-C0-VAC-GEN. I'll bind to the triplet? PROTOCOL says "class-bound prompt". The lead's request is for the three-schema G-FORM verdict. A worker task can cover the G-FORM triplet with a per-class binding — the event needs class_id; I can use the specific class of the schema where I find something, or list. Given the events schema, `class_id` is a string. For a G-FORM-wide check I could bind to the strongest one, F2b (C0) whose prior hard failure worker-080 already found — and now verify whether rev11 fixed it! Wait — worker-080 v1/v2 ran at 00:20/00:22 on rev25 hash 1bb78ce9b357 and found the containment inversion STILL present. So F2b rev11 (1bb78ce9b357) still has the inversion. That's a known hard failure on the current frozen hash, already reported by worker-080 in the previous instance. As the new worker-080 instance, duplicating that is wasteful.
+
+Hmm. But what about F1 (9a8bd4c96800) and F2a (b6123750b37d)? The lead says machine-green at these hashes. A fresh independent check at the final hashes adds exactly what's needed. Let me focus on:
+
+**W080-GFORM-INDEP-06: independent, process-isolated G-FORM conformance verification at the three final canonical rev11 hashes (F1 9a8bd4c96800, F2a b6123750b37d, F2b 1bb78ce9b357) + declared F0 taxonomy 276009f4f63d, with a from-scratch checker and a separate re-run of the lead's declared gate tool; report each of the G-FORM criteria per class with pass/fail and hash binding, plus the falsifier.**
+
+That produces "review-grade evidence", not a verdict. The event's conclusion_type can be "formal_model" or "review_evidence"; claim needs class_id. I need to check the events schema to ensure validity. Let me read events.schema.json and schemas.py to know allowed event types/fields, and how ingest validates.
+
+Also check whether other workers already produced something similar within the last minutes: grep artifacts dirs for "gform" / "G-FORM" / "indep".
+
+Let me do these in parallel:
+1. events.schema.json + schemas.py (validation rules).
+2. grep recent artifacts for gform/independent verification by workers.
+3. Inspect the three schema YAMLs quickly (structure).
+dsh: reasoning:
+Many workers are running concurrently. I need to be careful to not duplicate. Let me check whether anyone is doing G-FORM independent verification at final hashes right now. Check artifacts/worker-0*/ for names mentioning gform, g_form, indep, final hashes. Also grep events for "9a8bd4c968" recently.
+
+Let me grep the outbox for "9a8bd4c968" and "G-FORM" mentions, sorted by time, and check current running worker artifacts with recently modified files.
+dsh: reasoning:
+There are already independent verdict artifacts for F2b: `artifacts/worker-060/f2b_independent_verdict/` and `artifacts/worker-007/f2b_review/`. Also worker-029 made an F2b review, worker-091 an f2b rebind, worker-088 an F2a review/blocker. So F2a/F2b are being covered by multiple workers right now. I must avoid duplication!
+
+What about F1 (AF-WCC-VAC-GEN) independent verification at 9a8bd4c96800? Let me check whether anyone has an F1 independent verdict artifact. The gate audit says 0 accepts for F1 at current hash. Let me search artifacts for f1 verification dirs and outbox events referencing F1 reviews at the hash.
+
+Let me check `artifacts/worker-*/` for F1-related dirs and check which workers have F1 claims. Also check the `reviews/` dir for existing review files bound to which hashes (F1-review-16-r2, F1-review-lead-audit, F1-review-17, etc.) — all bound to superseded hashes, per audit.
+
+Given the swarm, maybe the least-covered target is F1 or F0. F0 canonical vs authoring divergence is also a key blocker (B2: no independent verdict binds final declared-F0 hash 276009f4f63d; plus the divergence CF-13 / FROZEN pin mismatch: FROZEN.json pins c8e979a1eb48 (authoring) while canonical is 276009f4f63d).
+
+Hmm, wait. An independent F0 verification would be very valuable: G-F0 needs 2 independent accepts at the published F0 hash. But the divergence means a verdict must decide which is authoritative — canonical policy says `research_map/formulation_taxonomy.yaml` (276009f4f63d) is authoritative, and `artifacts/formulation/**` must be published byte-identically before verdicts bind. So an F0 verdict at canonical hash can be produced but the divergence must be flagged.
+
+Yet the "class-bound" requirement suggests a claim tied to a class. F0 is GLOBAL taxonomy (all four classes). Hmm.
+
+Let me look at what F1 verification already exists (worker-16 review at F1 rev?), and whether an F1 independent verification at 9a8bd4c96800 is in flight. Let me check artifacts dirs for f1.
+
+Also let me quickly check the most recent outbox events from workers 002, 024, 030, 037, 03, 045, 053, 057, 059, 061, 064, 065, 068, 071 that reference 9a8bd4c968 — what are they doing? Maybe they're F1 stuff. Let me look at the last few events from each of these and grep for "F1" + verdict.
+
+Actually a better approach: find the least-duplicated, most-needed, class-bound check. Let me compute: for each class (F1 AF-WCC-VAC-GEN, F2a AF-SCC-C2-VAC-GEN, F2b AF-SCC-C0-VAC-GEN, F0 global), how many independent verification artifacts exist that bind the current hash?
+
+Let me grep the events.jsonl for claims/artifacts with "9a8bd4c968" and see their event types/actors; same for b6123750b37d and 1bb78ce9b357.
+dsh: reasoning:
+There is already an F1 independent verdict artifact: `artifacts/worker-059/f1_independent_verdict`. And worker-090 has review_f1_independent.py with F1 reviews. F0 has worker-082 independent F0 verdict, worker-087 F0 rebind, worker-094 F0 claim, flash-21/22 F0 reviews. F2b: worker-060, worker-007, worker-029, worker-091, worker-084... F2a: worker-088, worker-033, worker-078, worker-098.
+
+So all major classes are being covered by the fleet. What's left that is class-bound and not duplicated? Given the massive parallel coverage, I need to find a niche that's genuinely missing. Options:
+
+1. **Independent verification of the F1 soft flag `AF-WCC-VAC-GEN-SET`** (G-FORM needs "the F1 soft flag" disposition). Check whether that's already done: CF-9 says soft flags are documented candidate variants, folded into A1-REBIND-01. Maybe worker-0xx did it. Let me grep for `AF-WCC-VAC-GEN-SET`.
+
+2. **Cross-schema consistency check across the three rev11 schemas**: containment chain, one-way entailments, forbidden transfers — a systematic consistency matrix of the three final schemas (not just single-class). worker-080 v1/v2 found the containment inversion in F2b. But has anyone checked F1/F2a for the same class of error, or built the full cross-schema entailment graph and checked each edge against the cited schema semantics? That would be class-bound to the triplet and non-duplicative-ish. Hmm, but worker-059 did "f1_independent_verdict" and worker-060 did f2b... The cross-schema angle might still be uncovered.
+
+3. **FROZEN.json self-consistency at revision 25**: verify every file in FROZEN.json matches measured sha256 + byte count on disk, including the authoring/canonical divergence and the declared pin; that's provenance-level, not class-bound per se. worker-087 did F0 rebind audit, worker-006 did freeze blocker.
+
+4. **G-NUM C8**: check criterion C8 exact requirement — maybe under-covered (numerics group just launched workers 019-098 at 00:22:42 though). The lead-numerics launched 10 workers. Probably covered.
+
+5. **The `AF-SCC-C0-VAC-GEN` forbidden-transfer ledger inversion re-verification at rev11** — done by prior 080 and worker-091.
+
+6. **Independent verification of the G-FORM "no C0/C2 merge" criterion at the file level**: a class-separation check of the three schemas as a set (not just tokens): ensure C0 file doesn't assert C2 semantics, quantifier structures differ appropriately, etc. The lead's own checker `check_class_schema.py` may do this. There are class-separation tools: `research_map/class_separation.py` and `runtime/bin/classsep_regression.py`, `artifacts/worker-06/*`.
+
+Let me think about what a bounded worker can do that is clearly valuable and low-duplication:
+
+**A. FROZEN.json revision-25 full-manifest verification with independent byte-level re-measurement** — likely partially done by worker-006 and worker-087. But specifically: verify `FROZEN.json`'s declared sha256 for every entry against disk, report mismatches (the taxonomy pin c8e979 vs canonical 276009f4 is a known divergence; FROZEN pins authoring). Also check `frozen_at` vs mtime (clock discipline). This is a "provenance/hash-bound" task. Is it "class-bound"? Not to one class — it's cross-cutting.
+
+**B. The missing piece the lead explicitly requested: independent G-FORM verdict at final hashes.** Multiple workers are producing per-class verdicts. The lead needs a reviewer (lead-audit) to bind accepts. A worker can only supply evidence. Given worker-059 (F1), worker-060 (F2b), worker-088 (F2a) already produced independent verdicts, this lane is covered.
+
+**C. Look at the actually-uncovered gate: G-AUDIT "2 independent accepts per formulation/literature target", and G-F0 "2 independent accepts at published F0 hash + 2 soft-flag dispositions".** The F0 soft flags dispositions may be the missing piece! CF-9 said "A1-REBIND-01: audit must either calibrate the checker to the candidate annotation or record a documented blind spot." The G-F0 criterion needs "2 soft-flag dispositions". Let me check if F0 soft flags (AF-WCC-VAC-GEN-SET, AF-SCC-C0-CH-VAC) have documented dispositions in the map/reviews. ASTRA_HANDOFF (00:18) says F0 class-token soft flags were gone at 00:19 post-pass. So maybe resolved already.
+
+**D. Check the `schemas/taxonomy_cases.jsonl` and `schemas/f1_falsifier_tests.jsonl` re-pin (B4)**: "downstream worker artifacts still pin superseded hashes - schemas/taxonomy_cases.jsonl (flash-02) on F0 66bf917b [and] flash-02 and flash-04 re-pin their corpora." This is a concrete, bounded, class-bound (GLOBAL/F0/F1) task: independently verify which downstream artifacts pin superseded hashes, produce a census (path, declared hash, current hash, status), and a checker. That's useful and likely not done — it's B4 in the final blocker set. But it's "not class-bound" to a single class... it touches F0/F1 classes.
+
+Hmm. Let me reconsider: the instruction says "Take one class-bound task". In this swarm's vocabulary, "class-bound" means the task is bound to a formulation class (class_id) and a prompt with class binding, acceptance tests, artifact schema (per ARCHITECTURE.md: "DeepSeek Flash is appropriate for breadth work only after the lead has supplied a class-bound prompt, acceptance tests, and artifact schema"). Since no inbox card exists for worker-080, I self-select a class-bound task like other workers did (e.g., worker-048/068/085/041 explicitly say "No assignment card exists... Taking one bounded class-bound task").
+
+Given the coverage, the highest-value non-duplicative class-bound task I can identify: **B4 downstream hash re-pin audit / stale-pin census for the frozen formulation revision 25**, plus checking the specific F1 corpus `schemas/f1_falsifier_tests.jsonl` and F0 corpus `schemas/taxonomy_cases.jsonl`. Let me check whether these files' current contents match their declared pins and whether anyone has already done this (worker-093 did cf5_token_census; worker-085 did tokenizer window).
+
+Actually wait. Let me look at what's happening with F1 specifically: `artifacts/worker-059/f1_independent_verdict` — let me examine it and see if it binds current hash and what its verdict is. Also worker-090's review_f1_independent.py. And whether an F1 *rebind* (B4 corpus re-pin) is missing.
+
+But more importantly: I should pick something I can finish in a bounded number of steps with high certainty of a valid artifact. Let me evaluate effort:
+
+Option B4: census of downstream artifacts pinning superseded hashes. Implementation: scan JSON/YAML/MD files under artifacts/, ledger/, schemas/, numerics/ for 12-hex or 64-hex hash tokens; compare against current measured hashes of the referenced paths (resolution requires mapping hash→path; we can build a hash→current path index for known artifacts and check tokens that equal old F0 66bf917b/c8e979a1, old F1 hashes etc.). Simpler: verify the specific claims in B4: (1) schemas/taxonomy_cases.jsonl pins F0 66bf917b...; (2) schemas/f1_falsifier_tests.jsonl pins something superseded; (3) enumerate any other stale pins in files under schemas/ and ledger/ that claim a revision. Produce a report with exact path:line of each pin, the pinned hash, the current correct hash, and status.
+
+That's doable, deterministic, bounded, and a genuine gap (the lead names it as B4 with owners flash-02/flash-04, but an independent census verifies it and gives lead-audit evidence). It's class-bound to F0 (AF-WCC-VAC-GEN-SET? no — F0 taxonomy covers all four classes; the corpus files bind F0/F1).
+
+Hmm, but "one class-bound task" — maybe better to bind to AF-WCC-VAC-GEN (F1) since B4 mentions F1 corpus + F0 corpus.
+
+Alternatively: **independent F1 falsifier-corpus validation**: check the F1 falsifier tests file (`schemas/f1_falsifier_tests.jsonl`) actually falsifies the F1 schema claims and is bound to the current hash, plus re-pin status. That's class-bound to AF-WCC-VAC-GEN and directly serves B4 + G-FORM.
+
+Let me look at what these corpus files contain and their declared pins. Let me inspect:
+- schemas/taxonomy_cases.jsonl (head)
+- schemas/f1_falsifier_tests.jsonl (head)
+- check_gate_tests / run_acceptance.py to see how they're used.
+
+Also check F1 schema for declared hashes inside.
+
+Let me do that quickly.
+dsh: reasoning:
+This is a huge rich state. Key observation: `schemas/taxonomy_cases.jsonl` still has `binding_status: "bound_taxonomy_sha_66bf917bd368"` in every case (stale: the canonical taxonomy is now 276009f4f63d, and the meta says it rebound to 565a6e50 but the case records still say 66bf917b). That's exactly blocker B4: "downstream worker artifacts still pin superseded hashes — schemas/taxonomy_cases.jsonl (flash-02) on F0 66bf917b".
+
+Similarly `schemas/f1_falsifier_tests.jsonl` binds `9a8bd4c9680042a4` which IS the current F1 hash — good, that's current (binding_frozen_revision 25). Let me verify whether all records in f1_falsifier_tests bind current hash or some are stale.
+
+So a bounded, class-bound, genuinely useful task:
+
+**W080-F1-BIND-AUDIT-06**: independent stale-pin audit of the two downstream corpora against FROZEN revision 25 / current canonical hashes:
+- `schemas/taxonomy_cases.jsonl` (F0/G-F0 corpus; class-bound to all four classes)
+- `schemas/f1_falsifier_tests.jsonl` (F1/AF-WCC-VAC-GEN corpus)
+Report every declared binding that does not match the measured current canonical hash, with path:line evidence, plus a deterministic re-check script and a falsifier.
+
+But wait — is anyone already doing this exact thing? worker-093 did cf5_token_census (ledger tokens), worker-085 tokenizer window, worker-068 heldout-09, worker-087 F0 rebind audit, worker-082 F0 indep verdict. Let me check worker-087's F0 rebind audit — it might overlap. Also check whether `artifacts/flash-02/frozen_rebind_report.json` etc. Not a stale-pin census across corpora, probably.
+
+Alternatively, look at the highest-signal gap: `schemas/taxonomy_cases.jsonl` is bound to a superseded taxonomy hash in *every* case line (binding_status bound_taxonomy_sha_66bf917bd368) while the meta line claims rebound_at to 565a6e50. The canonical taxonomy is now 276009f4f63d. This is a real, demonstrable defect that blocks G-F0's "disjointness tests / taxonomy corpus" and B4. A census + repair proposal (not a silent patch — "silent patching is forbidden" per meta note) is exactly the kind of worker artifact + blocker event that feeds the lead.
+
+But hold on. Am I sure 66bf917b is stale? The meta's rebind_note says "Rebound rev3 (66bf917b) -> rev3' (565a6e50) after the canonical file's bytes changed in place while revision stayed 3". The case lines still say 66bf917b. Then the canonical file changed again to 276009f4 (rev4?). So yes: case-level binding_status is stale twice over. The meta line itself binds taxonomy_ref sha256 565a6e50 (also stale vs 276009f4 canonical now). This is a concrete finding with exact line numbers and a deterministic check.
+
+However — is this duplication of worker-087's "F0 rebind audit"? Let me read worker-087's artifacts and worker-082's report to be sure. Let me also check if any events mention 66bf917b (maybe someone already flagged it).
+
+Let me grep research_map/events.jsonl and outbox for 66bf917b.
+dsh: reasoning:
+worker-087 already did "F0 open-case re-binding audit" including taxonomy_cases.jsonl at current hash. It concludes REBIND_REQUIRED_CONSISTENT. So the stale `binding_status` field on case lines is known to worker-087 (they audited "re-binding"). Hmm, their task was "re-bind the 9 open F0 taxonomy cases and the flash-02 disposition matrix to the current canonical taxonomy rev4, without using flash-02's own checker". So the stale pins aren't an untouched gap, but the *repair* is with flash-02.
+
+Given the extensive coverage, I need to find something else. Let me think about what genuinely isn't covered and is class-bound.
+
+Let me step back and consider the gate-state gaps from the 00:21:55 audit:
+- G-F0: 0 distinct accepts at canonical taxonomy 276009f4f63d. F0 is divergent (canonical vs authoring c8e979a1). Needs 2 independent accepts + soft-flag dispositions.
+- G-FORM: 0 accepts at F1 9a8bd4c96800, F2a b6123750b37d, F2b 1bb78ce9b357. Publication aligned for the 3 schemas.
+- G-LIT: 0 accepts at L0 ce42d205e761; 15 spot checks at L1 (satisfied).
+- G-NUM: C8 exact unmet requirement.
+- G-AUDIT: 0 accepts (need >=2 per target).
+
+Note: *worker events cannot set validation_status=passed or gate verdicts*. So workers can only generate evidence. But at 00:23-00:24, many workers are producing "reviews" (worker-029, worker-038, worker-088, worker-089, worker-041, worker-091) — they can emit review-type events, but reviewers that count for gates are supposed to be group leads/independent? The audit says "distinct accept reviewer(s)" from the review corpus — reviews from any actor may count if bound to current hash (maybe excluding authors). So worker reviews do enter the corpus.
+
+What's clearly missing at this instant? Let me measure: which of the five gate targets has the *least* in-flight coverage by the current fleet? F0 and F1 have lots of events referencing hashes (many claims/reviews). Let me actually compute distinct accept reviewers at current hashes from the *live* outbox (not just map snapshot) — including the newest events. If some target has 0 or 1 accepts and no in-flight worker, that's the gap. But that requires parsing review events with target_hash binding. Reviews might cite sha256 in evidence_refs. The controller's review scan logic is in astra_lifecycle.py or apply_events.py. Let me look at how it counts accepts — then I can compute the current standing myself, and identify the gap precisely.
+
+Actually, maybe better: rather than chasing gate coverage (which leads must adjudicate anyway), do a genuinely independent *second-instrument* verification of a class that the first worker instruments may have all shared a blind spot on. Note HANDOFF's ground rule: "almost all of it was caught by a control rather than by thinking harder" and "run the null first". A valuable class-bound worker task: **negative control on the G-FORM checker**: verify that the lead's `check_class_schema.py` (and/or `run_gate_tests.py`) actually fails on mutated schemas (i.e., has liveness), since a checker that always passes is worthless evidence. That's a falsification-oriented task, class-bound to AF-WCC-VAC-GEN / AF-SCC-C0/C2.
+
+Has anyone done checker liveness/mutation testing? worker-006 did semantic escape tests (mutants) for the class-binding gate; worker-068 did held-out mutants. But those target the class-binding pipeline (FORM-HELDOUT), not the schema *acceptance* checker used for G-FORM. Let me check for "liveness" / "mutation" events re check_class_schema.py. There's `artifacts/worker-13/form_gate/check_class_schema.py` (flash-13 gate tests earlier). Hmm, flash-13 built a form gate checker; worker-006 built the class-binding checker. The lead's current check_class_schema.py (32672 bytes) — is there an independent liveness test of it at rev11? Let me grep for "liveness" in outbox.
+
+Also candidate: **G-NUM criterion C8** — let me check what C8 is. If it's a protocol review requirement and worker-081 just did a c8-review (w081-20260912T002140-c8-review), it's covered.
+
+Let me grep outbox for liveness/mutation of the schema checker, and inspect what C8 is, and look at the review corpus scan logic to compute current accept counts. Let me also check the current list of workers running and their claimed tasks to avoid overlap. A compact way: dump the last status event from each worker-* outbox file. That tells me what everyone is doing RIGHT NOW. This is the best dedup tool. Let me do that.
+dsh: reasoning:
+The fleet has extensively covered F0, F1, F2a, F2b reviews, L0/L1, N0 C8, soft flags, class binding, clock discipline, containment, etc. Nearly every angle is covered by some worker. So the question is what unique, useful, bounded, class-bound task remains.
+
+Let me look at the gaps that are explicitly named and *not yet claimed*:
+
+1. worker-057 (00:21:30) blocker: "F1 (AF-WCC-VAC-GEN) at rev 11 sha256 9a8bd4c9680042a4 needs a lead adjudication, not a repair that a worker may make: quantifiers.ordered declares 6 q..." — this is a claim that F1 has a defect (quantifier ordering?) that needs lead adjudication.
+
+2. worker-071 (00:21:17): "FORM-DC-ALIGN-071: at measured hashes F1 9a8bd4c9, F2a b6123750, F2b 1bb78ce9, the three data_class blocks are NOT canonical..." — a defect finding.
+
+3. worker-090 (00:22:12): F1 review verdict revise (3.5), three major binding/provenance/precision defects (HF090-01...).
+
+4. worker-059 (00:22:52): F1 independent verdict v2: "Semantics pass 11/11 independent checks..." — likely accept or conditions.
+
+5. worker-064 (00:23:08): blocker — "Binding-instruction inconsistency measured... (F-CHURN-2) the hashes advertised as final in leadform-resource-request-2026-09-12T00:34:00+..." — the lead's future-dated resource request advertises hashes that differ from current? Let me read that.
+
+6. worker-076 (00:23:00): blocker — "G-FORM/G-F0 adjudication blocker: map.gates[*].unmet and map.frozen_artifacts still pin superseded hashes".
+
+7. worker-036 (00:22:33): "the map's measured hash side is sound but the declared side is defective: F0/F1/F2a/F2b declared artifact_sha256 are 16-hex pr..." (truncated prefixes).
+
+Given the enormous coverage, perhaps the most valuable remaining bounded task is to **adjudicate/verify one of the open contested claims with a decisive control** — i.e., a falsification test of a *specific* claimed defect that other workers assert, using a method independent of theirs. For instance:
+
+- worker-057 claims F1 `quantifiers.ordered` declares 6 quantifiers but something's wrong. Let me read the full claim.
+- worker-071 claims the three `data_class` blocks are not canonical.
+- worker-090 claims 3 major F1 defects.
+
+If a worker (090/057/071) found a real F1 defect, the highest-value next step is an independent *reproduction/falsification* of that defect (different instrument), which converts one worker's assertion into replicated evidence. That's exactly what the project values ("controls", "replication"). And it is class-bound to AF-WCC-VAC-GEN (F1).
+
+But if the defect is already being replicated by another worker, we'd duplicate. Let me read the three F1 claims in full, then check if anyone else has reproduced them. Given time, I'll choose one specific claim, verify it independently with my own instrument, and emit either "reproduced" or "falsified" with exact evidence and falsifier.
+
+Let me read worker-057, worker-071, worker-090 events in full.
+dsh: reasoning:
+Interesting. worker-057 found the same F2b line-157 containment denial (HF-B1b) that worker-080 v2/prior found (the `implication_ledger.forbidden_transfers[0].reason` inversion). Actually, wait: prior worker-080 found the *inversion* in `implication_ledger.forbidden_transfers[0].reason` saying "C2 is a strictly larger extension class". worker-057 found line 157 `regularity.must_not_conflate` denying containment. These are two distinct sentences in the same schema — both inconsistent with the containment chain:
+- line 157: denies containment (stale denial)
+- forbidden_transfers[0].reason: says C2 is strictly larger (inverted premise)
+
+worker-058 (00:21:37) did "W058-CONTAIN-01: independent containment-premise audit of the frozen SCC ledger pair. Verdict FAIL, 1 hard failure (class_size_premise_invert...".
+
+So the F2b containment inconsistencies are well covered.
+
+Now, what's genuinely uncovered? Let me look at the F1 defects claimed by worker-090 (three major binding/provenance/precision defects, HF090-01..). And worker-071 (data_class blocks not canonical). And worker-064 (binding-instruction inconsistency F-CHURN-2). These are F1 and cross-cutting. Let me read worker-090's review and worker-071, worker-064 in full. Then decide whether to replicate one of these specific defects with an independent instrument.
+
+Actually, let me think about the meta-situation. There are ~100 workers, each doing a bounded task. Most produce "me too" reviews. What would be genuinely distinctive and valuable: **a falsification/controls audit of the F1 findings** (replication of a newly claimed defect with a different instrument), or **a decisive check of a claim that hasn't been independently checked**.
+
+The most consequential newly-claimed F1 defect: worker-090's verdict revise (3.5) with three major defects. Let me read it. Also worker-071's "data_class blocks are NOT canonical". Let me read both fully.
+dsh: reasoning:
+Now I see three specific F1 defects from worker-090:
+- HF090-01: `contract_pointer_not_canonical` — class_contract_pointer points to something not canonical.
+- HF090-02: `parser_dependent_future_dated_timestamp` — duplicate revised_at/revised_at_unused keys, future timestamp.
+- HF090-03: `undefined_normative_symbol` — AF_{I+} undefined.
+
+And worker-071: T1/T2 data_class not exactly shared (transfer rule T1 requires exact match).
+
+Has anyone independently replicated worker-090's three hard failures? Let me search outbox for "HF090" or "contract_pointer" / "AF_{I+}" / "revised_at_unused".
+
+This is a good candidate: **W080-F1-HF090-REPLICATION**: independent replication/falsification of the three F1 hard failures claimed by worker-090 at hash 9a8bd4c96800, using my own instrument (not their script), and in addition checking whether they survive at the *current* hash (re-measure). That's class-bound to AF-WCC-VAC-GEN, bounded, and adds replication value (the project explicitly values independent replication: "run the null first", "verdicts bound to superseded hashes are advisory", "two independent accepts"). A replication of a *revise* verdict is exactly what G-FORM needs: if the defects reproduce, the reviewer's revise verdict is confirmed; if not, the F1 accept path opens.
+
+But wait: maybe worker-059's v2 verdict and worker-065's remesa already addressed these. Let me grep for HF090 / contract_pointer / revised_at_unused / AF_{I+} across outbox and artifacts to see if replicated.
+
+Let me do a comprehensive grep.
+dsh: reasoning:
+Now the picture is clearer. There are multiple independent F1 reviews converging on the same defects:
+- worker-059 (revise 4.0): HFs — duplicate keys, future timestamps, cross-tree class_contract_pointer, calibration suite unusable.
+- worker-090 (revise 3.5): HF090-01 contract_pointer_not_canonical, HF090-02 parser_dependent_future_dated_timestamp, HF090-03 undefined_normative_symbol (AF_{I+}).
+- deepseek-flash-19, flash-22, worker-088 mention revised_at_unused and AF_{I+}.
+
+So these are already replicated twice. What about the **undefined AF_{I+} symbol** (HF090-03)? Only worker-090 and deepseek-flash-19 mention "AF_{I+" — 2 workers. That one is *less* replicated. And it's a "precision" defect: `statement_formal` uses `AF_{I+}(M_D)` which is not defined anywhere in the schema. Under "exact quantifiers" / formal precision, is that a hard failure? worker-090 says define AF_{I+} or inline the predicate. Let me check deepseek-flash-19's take. Maybe flash-19 also flagged it as unresolved. Let me read.
+
+Also the "class_contract_pointer crosses trees" defect is interesting and class-bound: `class_contract_pointer: artifacts/formulation/formulation_taxonomy.yaml#class_contracts.AF-WCC-VAC-GEN` — this points into the *authoring* tree (artifacts/formulation/...) rather than the canonical `research_map/formulation_taxonomy.yaml`, and, crucially, the canonical taxonomy's structure uses `classes:` while the authoring uses `class_contracts:` — so the pointer resolves only in the authoring mirror. This is an F1 defect but it's tied to G-F0 canonical policy (canonical-path policy). Multiple workers flagged it (flash-05/15/18/19/22, worker-020/029/030/033/034, 059, 090).
+
+Given the replication is already strong, another F1 review adds little. I need to find a genuinely different gap.
+
+Let me reconsider the overall task instruction: "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit." Perhaps I'm overthinking uniqueness. The instruction is from the supervisor; the worker's job is one bounded class-bound task with artifact+events+checkpoint. Dozens of workers are doing essentially the same thing (many "me too" reviews). The swarm's design accepts breadth coverage. But a good worker should still pick something useful and non-duplicative if possible.
+
+Let me look for untouched ground in the current open blocker sets. Let me list the open blockers right now (from map + newest outbox) and pick one that is *assigned to nobody* and *worker-actionable* (not lead-owned). Let me dump the map's open assignments (statuses) and blockers from recent events.
+
+Actually, here's a thought: the gate audit says G-LIT L1 spot checks: 15 recorded, required >=3 — saturated; G-LIT needs an L0 accept at ce42d205e761 (0 accepts). worker-032 delivered "independent accept verdicts for L0 (ledger ce42d205)" at 00:22:21 — one accept. Needs 2. A second independent L0 accept could be valuable! But L0 is the literature ledger — class-bound to the four classes. Is anyone else doing L0 review? worker-032 just did one; worker-007 did L0 hf01 refs; deepseek-flash-19 L0 class_token_census. A second independent L0 full-schema accept review at the *current* hash would directly move G-LIT toward 2 accepts. But L0 is lead-literature-owned and the ledger may churn (L1 spotcheck saturating; L0 hash ce42d205 stable since 00:08?). Let me check if the L0 ledger changed after ce42d205: sha256 now.
+
+Hmm, but is G-LIT's criterion "L0 accept" — reviewer verdict. Workers can emit review events; the controller's review scan counts distinct accept reviewers at the measured hash. If worker-032's accept binds ce42d205 and the current ledger hash is still ce42d205, then one more independent accept gets G-LIT to 2. That's high-value and bounded: review the L0 ledger (theorems.jsonl) for criterion: "ledger rows have resolvable locators; verification_status honest; unresolved marked unresolved". worker-032's approach: "independent accept verdicts for L0 (ledger ce42d205) and the L1 spot-check binding (audit 315c1914), with 0 blocking". A second independent check would need to add something: e.g., independently verify ALL locators resolve (not just a sample), check honesty of verification_status against fetched primary sources, check unresolved marks. That's heavy (the ledger is 140KB, ~hundreds of rows) but can be automated: parse rows, check locator formats/DOIs/arXiv IDs, check that verification_status values are in allowed set, that "verified" rows have artifact refs that exist and hashes match, that unresolved are marked. A bounded deterministic audit is feasible.
+
+But careful: L0 also has an "artifact_refs required" gate (HF-01: L0 rows missing artifact_refs). worker-007 did l0_hf01_artifact_refs. So L0 review territory is partly covered.
+
+Alternatively, **G-NUM**: worker-081 did C8 review (accept at 1e6cdf04d7a2), worker-067 noted lead-audit replaced the review with accept. G-NUM needs measured+replicated N0 order and the lock. Several workers covered it.
+
+Let me check the actual current map gate state (reload) — maybe gates changed since 00:21:55 due to ingest of worker events. The map file mtime was 00:21, but the astra_lifecycle may have run again. Let me reload and print gate audit reasons + publication status. Also check L0 current hash and whether worker-032's review is in the review corpus.
+
+Let me also check current time (it was 00:23:58; maybe now ~00:26).
+
+I'll reload the map. If G-LIT reason still says L0 0 accepts, then a second L0 accept is valuable. But note ingest happens only via `comms.py ingest` (controller). Worker events in outbox are not yet in the map. The controller's gate audit scans the review corpus — probably `map.reviews` or all events. Let me look at how astra_lifecycle computes "distinct accept reviewer(s)" — then I can compute the live count including un-ingested outbox reviews. Let me grep the lifecycle code for "distinct accept".
+
+Actually, time budget. Let me make a decision framework:
+- High value + non-duplicative + bounded + class-bound.
+- Candidate A: **Second independent L0 accept review** (G-LIT needs exactly this; 1 accept delivered by worker-032). Class-bound: the ledger is organized by class tags (AF-WCC-VAC-GEN etc.). Bounded: automated ledger audit + spot primary-source checks. Risk: lead-literature may already have dispatched another reviewer; and L0 ledger might be frozen/stale.
+- Candidate B: **Independent check of the AF_{I+} undefined symbol + formal-precision sweep of the three schemas** (the least-replicated F1 defect). Class-bound AF-WCC-VAC-GEN. Bounded. But it's another F1 review; lead needs accepts, and more revise verdicts don't unblock G-FORM. Although: "no independent verdict binds final hashes" — a revise verdict *is* an independent verdict (worker-059, 090 already gave revise). So F1 has 2 independent revise verdicts at the hash already. Adding a third is low marginal value.
+- Candidate C: **F0 independent accept at canonical 276009f4** — worker-040 delivered accept 4.0 at F0 (00:22:41), worker-082 review, worker-087 rebind, worker-016 review. F0 has coverage.
+- Candidate D: **Check the G-F0 "2 soft-flag dispositions"** — worker-002 did softflag-disposition. Covered.
+- Candidate E: **Verify a newly claimed defect nobody replicated**: worker-064's "binding-instruction inconsistency F-CHURN-2" (hashes advertised as final in the future-dated lead resource request differ from...?). Let me read worker-064. If the advertised final hashes (from leadform-resource-request-2026-09-12T00:44) differ from measured canonical hashes, that's a serious coordination blocker and a quick, decisive check. Let me read.
+- Candidate F: **L1/Citation**: G-LIT L1 spot checks saturated (15 >= 3). No.
+
+Let me read worker-064's blocker and worker-076's blocker; then decide. Also reload the map for current gate reasons.
+dsh: reasoning:
+The map has been updated (updated_at 00:25:10) and G-LIT now has 3 distinct accepts at L0 (astra-lead-audit, worker-006, worker-011) — already ≥2, so G-LIT L0 is now satisfied. The gates move fast; many workers' events are being ingested.
+
+The situation is extremely dynamic. The controller is ingesting events every ~15s. Whatever gap I find may be filled within minutes. Given that, the best strategy for a bounded worker: pick a task that is *definitionally additive* — an independent replication with a distinct instrument, producing hash-pinned evidence — rather than trying to fill a transient coverage gap.
+
+Also important: the task says "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit." It does NOT require me to be the uniquely non-duplicated worker. The supervisor will reap me regardless. But quality matters for the swarm's outcome.
+
+Let me check the latest gate audit for G-FORM/G-F0/G-AUDIT to see the current standing, then pick. If F1/F2a/F2b now have ≥2 accepts, then G-FORM might be close to passing. Let me reload the full gate audit.
+
+Then decide: Probably the most robust, additive, bounded class-bound task = **independent, second-instrument verification of the F2a/F2b/F1 "shared data-class" transfer precondition at the final hashes**, or **replication of worker-090's HF090-03 (undefined AF_{I+})**, which is the least-replicated hard failure.
+
+Actually, let me reconsider what the *swarm-level* bottleneck is: the lead-formulation's final blockers B1-B4 (no independent verdict binds final hashes; FORM-HELDOUT-08 pinned to rev13; downstream stale pins). B1 is being addressed by many reviews now. B3 (FORM-HELDOUT-08 re-issued against revision 25) — worker-068 did FORM-HELDOUT-09 (a new held-out corpus at rev25!) and worker-006 did heldout-07. So B3 likely covered.
+
+Given all this, here's a distinctive, decisive, bounded, class-bound task that I don't see covered:
+
+**Null/control test of the G-FORM "exact quantifiers" criterion**: worker-057 flagged F1's `quantifiers.ordered` lists 6 kinds but `statement_formal` realizes 4 (abbreviation). worker-090 flagged `AF_{I+}` as an undefined symbol in `statement_formal`. Both point at the same thing: the formal statement in F1 may not be a well-formed, self-contained formula. A decisive test: **parse the F1 `conclusion.statement_formal` as a formula against its declared symbol table**, i.e., check every non-logical symbol used in the statement is defined in the schema (data class, predicates, function symbols), every quantifier in `quantifiers.ordered` is realized or foldable, and the statement is not vacuous. Then compare F2a/F2b statements for the same. This produces a per-symbol table and a precise verdict: which symbols are undefined (AF_{I+}, complete, visible_singularity_from_I_plus, ...), which quantifiers are folded. That is exactly "exact quantifiers" evidence for G-FORM and it replicates/extend worker-090's HF090-03 with a systematic symbol-level instrument.
+
+This is class-bound (AF-WCC-VAC-GEN primary; cross-check F2a/F2b), bounded (parse YAML + regex symbol extraction + declared-symbol inventory), deterministic, and produces a falsifiable claim: "symbol X is used in statement_formal but not defined anywhere in the three schemas; F1 statement_formal realizes 4/6 declared quantifiers; F2a/F2b similarly".
+
+But is it already done? The greps: "AF_{I+" only in flash-19 and worker-090. "undefined_normative" only worker-090. So a systematic undefined-symbol census at the final hashes is at most partially covered. Good candidate.
+
+Alternative: worker-057's "HF-A2 abbreviation_observed" (6 vs 4 quantifiers) — is that replicated? Let me grep for "abbreviation_observed" or "statement_formal" in outbox.
+
+Let me check quickly. Then finalize the plan:
+
+Task: **W080-F1-FORMALSYM-01** — independent normative-symbol and quantifier-realization audit of the F1/F2a/F2b `conclusion.statement_formal` fields at the current canonical hashes:
+1. Re-measure the three schema hashes + F0 taxonomy; fail closed on drift.
+2. Extract `conclusion.statement_formal` (and `conclusion.statement`?) from each of the three schemas.
+3. Build the declared symbol inventory from each schema (data_class fields, predicates, definitions sections, quantifiers.ordered).
+4. Tokenize the formal statement into identifiers/predicates; classify each as: logical/quantifier, declared-in-schema, defined-in-text, or undefined.
+5. Report per schema: realized quantifier count vs declared, undefined symbols with exact location, and whether the abbreviation is documented (i.e., a folding rule exists in the schema).
+6. Control: run the same checker on a synthetic positive schema (all symbols defined) and a synthetic negative (undefined symbol) to prove liveness.
+7. Emit report JSON + checker + README with sha256s, plus events (status/claim/artifact/blocker if warranted), then checkpoint to runtime/state/w080_*.
+
+Falsifier: repair one of the flagged symbols/quantifier folds at a new revision; or show a definition of AF_{I+} (or an explicit abbreviation rule) elsewhere in the schema that my extractor missed → voids per-item.
+
+That's a solid bounded task. Let me first check for existing coverage of this exact instrument (grep statement_formal + quantifiers in outbox), and check what the F1 schema looks like around the conclusion/quantifiers to design the extractor. Let me also check yaml parses with duplicate keys (yaml.safe_load handles? It allows duplicates silently keeping last). Python yaml is available? Check.
+
+Let me view the relevant sections of the F1 schema.
+dsh: reasoning:
+No existing "formal symbol" audit. The instrument is novel. Let me look at the F1 schema sections in more detail: lines 40-100 (quantifiers), 190-260 (i_plus, visibility, conclusion). Also the same in F2a and F2b. Then design the checker.
+
+Let me read the relevant chunks of F1.
+dsh: reasoning:
+Now I understand the F1 schema. The `statement_formal` at line 251 uses `AF_{I+}(M_D)` — "AF" here likely abbreviates "asymptotically flat at I+"? Actually `AF_{I+}(M_D)` probably means "M_D is asymptotically flat with future null infinity I+" or "I+ exists/asymptotically flat". It's not defined as a predicate in the schema. `complete(I+_D)` is defined under `i_plus.completeness_definition`; `visible_singularity_from_I_plus` is defined under `visibility.predicate_name`; D0 defined in quantifiers.domains; comeager defined in D1.
+
+So the checker: extract identifiers used in `statement_formal`, and look them up in a symbol table built from the schema's declared names. Expected finding: `AF_{I+}` undefined (no `definition`, no `predicate_name`), while `complete` and `visible_singularity_from_I_plus` are defined. Also quantifier realization: `statement_formal` has quantifiers: forall, exists, forall, not exists = 4; `quantifiers.ordered` declares 6 (forall, exists, forall, exists, forall, not_exists). The `exists` over D3 (completion) and the `forall` over D4 (gamma) are folded into `AF_{I+}(...)`/`complete(I+_D)` and `visible_singularity_from_I_plus(M_D)` respectively.
+
+This is a robust, small, deterministic instrument. Cross-check F2a/F2b statement_formal for the same pattern and undefined symbols.
+
+Let me look at the F2a/F2b conclusion/statement_formal sections to design accordingly. Then write the checker.
+
+Plan:
+1. Create artifacts/worker-080/formal_symbol_audit/:
+   - `audit_formal_symbols.py` — fail-closed checker:
+     - inputs: the three schema files + F0 taxonomy path, expected hashes hardcoded? Better: measure and record; fail if drift from expected (I'll set expected = measured now). Actually "fail closed on input drift" means: measure at start and end of run, abort if changed mid-run; and compare to expected pinned constants (optional). I'll pin the expected hashes as constants and abort on mismatch (so the report is hash-bound).
+     - build symbol inventory per schema: from keys named `definition`, `predicate_name`, `definition_ref`, domains D*, quantifier binders, plus explicit symbol_definitions if present.
+     - extract from `statement_formal`: parenthesized/bare identifiers, filter logical keywords (forall, exists, not, and, in, subset, ...), classify: declared / defined-by-reference / undefined.
+     - quantifier realization: count declared kinds in `quantifiers.ordered` (by kind string, mapping not_exists→¬∃) vs realized quantifier tokens in statement_formal; report folded binders as those declared in ordered but not realized.
+     - controls: synthetic schemas — positive (all symbols defined) and negative (undefined symbol) — assert the checker flags the negative and passes the positive (liveness).
+   - `report.json` — findings, per-schema tables, hashes, verdict, falsifier.
+   - `README.md` — method, repro, result, non-claims.
+2. Emit events to comms/outbox/worker-080.jsonl (append; do not clobber prior events): status (task claim), artifact ×3, claim, blocker (if undefined symbol confirmed), status final.
+3. Checkpoint: write runtime/state/w080_formal_symbol_checkpoint_<ts>.json + append to runtime/state/w080_checkpoints.jsonl (prior file exists; append). Verify sha256s.
+4. Also verify event JSON validity by running the project's schema validation? There's `research_map/schemas.py` maybe with validate_event. Let me check schemas.py to validate my events before writing. Ideally run comms.py ingest? No — ingest is controller-only; protocol says the accepted stream is written only by `comms.py ingest`. Workers just write outbox. But I can run a local validation via `research_map/schemas.py` functions or jsonschema directly.
+
+Important: "emit valid JSON with IDs evidence hash falsifier" — ensure event_ids unique, created_at = wall clock (not future!), actor worker-080, class_id present, evidence_refs with path#sha256-prefix, artifact events with node_id/artifact_type/path/sha256/validation_status, claim with class_id/statement/conclusion_type/assumptions/falsifier/evidence_refs (+artifact_refs since formal_model? rule 1 only requires artifact_refs for theorem; but include anyway).
+
+Let me check `research_map/schemas.py` for the exact validator used. Then check F2a/F2b statement_formal sections. Then write everything.
+
+Given the "bounded" nature, I'll keep the checker compact but rigorous. Let me first inspect F2a/F2b conclusion sections and their quantifiers.
+dsh: reasoning:
+Good — I have the validator. `validate_event` from research_map.schemas can validate my events.
+
+Now let me look at F2a/F2b quantifiers.ordered and the extension_predicate definition to build the symbol table. Let me view F2a lines 44-80 and 210-225, and F2b lines 45-80 and 212-225.
+dsh: reasoning:
+Now I have enough to design the checker.
+
+Symbol inventory per schema (declared symbols):
+- Quantifier domain ids: D0..Dn (from `quantifiers.ordered` + `quantifiers.domains` keys).
+- `comeager` keyword (declared in D1 definition as "comeager (residual)").
+- Predicates: those with `predicate_name` (visibility.predicate_name = visible_singularity_from_I_plus) and definitions of extension predicate (`extension_predicate` section with definition / predicate_name?).
+- For F1: `complete` — is it declared? `i_plus.completeness_definition` defines completeness of I+. The token in statement_formal is `complete(I+_D)`. So "complete" maps to i_plus completeness_definition (declared).
+- `AF_{I+}` — is there any key/section? Search for "AF_" in F1. There's the class file `AF_...` naming and `AF structure` in data_class? Actually `AF_{I+}(M_D)` — maybe intended as "asymptotically flat at I+"? Let me grep for "AF_{" or "AF_" occurrences in the three schemas to see if it's defined anywhere.
+
+Let me do a precise extraction in Python now: load YAML, walk keys and string values, collect candidate defined symbols, then analyze statement_formal.
+
+Design decisions for the checker:
+- Define the "surface" tokens from `statement_formal`: split on whitespace/punctuation; extract identifiers matching `[A-Za-z_][A-Za-z0-9_]*` and bracketed macros `AF_{...}`, plus function-call names followed by `(`.
+- Classify:
+  - logical keywords: forall, exists, not, and, or, in, subset, comeager (declared D1), letting, be...
+  - declared quantifier binders: (s,delta), G_{s,delta}, D, MGHD, M_D, etc.
+  - declared predicate symbols: scan the schema's YAML for keys `predicate_name`, and for `definition_ref` targets; also collect all section names containing "definition" etc.
+  - undefined: any identifier that looks like a predicate/function symbol used in the statement and is not present in the schema's text outside the statement itself. Implementation: search the raw YAML text for the symbol name (excluding the statement_formal line) — if not found anywhere else, flag undefined; if found only as a substring of other words, refine with word boundary.
+
+Simplest robust approach: 
+1. For each schema, scan all *other* text (all string values + all keys) excluding the statement_formal value itself, and collect the set of identifier tokens present.
+2. Tokenize statement_formal; for each token in a whitelist of logical/structural words → skip; else if token appears in the schema-external token set → declared; else → undefined (with `AF_{I+}` handled as a token: normalize braces/underscores).
+3. Also map each declared predicate to the YAML path where it's defined, by locating the first occurrence outside statement_formal (e.g., search the parsed YAML for the token).
+4. Quantifier realization: parse `quantifiers.ordered` kinds → expected sequence; parse statement_formal for quantifier keywords in order → realized sequence; report foldings: declared binders whose domain does not appear explicitly as a quantifier in the statement (D3, D4 for F1; D3 for F2a/F2b? F2a statement has "not exists proper_future_extension_in_class(MGHD(D))" which realizes the D3 not_exists explicitly. So F2a/F2b realize 4/4; F1 realizes 4/6).
+5. Controls: synthetic positive/negative YAML strings, checker must return no undefined for positive, and flag `undeclared_pred` for negative.
+
+Then the cross-schema checks: F2a vs F2b statement_formal byte-identical (already known from worker-057's shared core measurement but fine to record), and F1's undefined `AF_{I+}` vs F2a/F2b's defined `proper_future_extension_in_class` + `MGHD` (is MGHD defined? In F2a, `MGHD(D)` used in statement; is MGHD defined in the schema? grep). Let me check that too: if MGHD is not defined, that's another undefined symbol finding for F2a/F2b. Let me check with grep.
+
+Let me run a quick exploratory Python to see which tokens would be flagged, before writing the final artifact. This is the "run the null/control first" approach.
+dsh: reasoning:
+My naive tokenizer splits `AF_{I+}` into AF_ and _D etc. I need proper handling:
+- Treat bracketed subscript macros as single tokens: `AF_{I+}`, `G_{s,delta}`, `I+_D`, `X^{s,delta}_vac`.
+- `M_D` is a bound variable (M_D = development of D) — declared via "letting (M,g) be the maximal globally hyperbolic development". Hmm, in F1's statement_formal, `M_D` and `I+_D` are ad-hoc subscripted variables not explicitly declared in the statement itself (the `quantifiers.formal` says "letting (M,g) be the maximal globally hyperbolic development"). In F2a, `MGHD(D)` is a function defined somewhere ("MGHD" appears). So there is a real asymmetry: F1 uses `M_D`/`I+_D` while F2a/F2b use `MGHD(D)`; and F1's `AF_{I+}` is undefined.
+
+For rigor and to avoid false positives, the checker should have a declared-symbol table extracted from the schema:
+- Bound variables: (s,delta), G_{s,delta}, D, (Sigma,h,K), M_D / (M,g), I+_D, gamma, q, (Mtilde,gtilde,Omega)...
+- Function/predicate symbols: comeager, complete, visible_singularity_from_I_plus, proper_future_extension_in_class, MGHD, AF_{I+}.
+- Domain ids D0..D5 defined in quantifiers.domains.
+
+Undefined = symbol used in statement_formal with no definition anchor anywhere in the schema (outside the statement). `AF_{I+}` doesn't occur anywhere else except as substring `AF` (in e.g. "AF structure", "asymptotically flat (AF)"); `AF_{I+}` as an exact token doesn't. So the finding is: `AF_{I+}` is used as a predicate symbol but has no definition anchor; `AF` (asymptotically flat) is defined in prose but the subscripted predicate `AF_{I+}` is not. That's exactly worker-090's HF090-03 (replicated), and I can strengthen it: compare with F2a/F2b which define `proper_future_extension_in_class` (where? maybe "extension_predicate.definition"). Let me check F1 for a comparable top-level predicate definition: is `complete` defined? `i_plus.completeness_definition` yes. Is `visible_singularity_from_I_plus` defined? `visibility.predicate_name` + `definition` yes. So the only undefined normative symbol in F1's `statement_formal` is `AF_{I+}`.
+
+Now, this alone reproduces worker-090. To add value beyond replication, I can extend the audit to a **cross-schema formal-surface conformance check**:
+1. Every predicate/function symbol used in `statement_formal` must have a definition anchor (own instrument).
+2. The declared `quantifiers.ordered` sequence must be realized by the statement (own instrument; worker-057's HF-A2 replicated but with my own counting and a precise folding map).
+3. **Cross-schema consistency of the formal surface for shared structure**: the three schemas all use `comeager`, `proper_future_extension_in_class`, `MGHD(D)`, `D0`... but F1 uses `M_D`/`I+_D` instead of `MGHD(D)`, and its quantifier folding differs. Report a matrix of shared/divergent symbols and folding patterns.
+4. **Falsifier/semantic tie**: F2a/F2b's `proper_future_extension_in_class` is a class-relative predicate whose regularity token differs (C2 vs C0) — check that the same surface token in both files resolves to file-local definitions with the correct regularity token (i.e., no cross-class leakage at the formal surface). Look at extension_predicate in F2a/F2b to see whether the definition differs appropriately (C2 vs C0). This adds the class-separation angle at the *formal statement* level, which is exactly the G-FORM criterion "no C0/C2 merge" applied to the formal layer rather than the prose layer. 
+
+Also, importantly, the finding should be reported as a *blocker* for the G-FORM reviewer: F1 statement_formal has an undefined predicate; under "exact quantifiers ... conclusion_type" criterion, a reviewer must either get a definition or an explicit abbreviation rule.
+
+This is a solid, distinctive, bounded deliverable. Let me now look at F2a/F2b extension_predicate to see the definitions and confirm no leakage. Then write the checker.
+dsh: reasoning:
+Good: F2a/F2b define `proper_future_extension_in_class` via `extension_predicate.name` + `definition`, with file-local `frozen_regularity` (C2 vs C0) — class separation at the formal surface is intact. `MGHD(D)` appears in both prose and statement; there's a definition of maximal development in prose (data_class/development_topology) — the token MGHD itself is used elsewhere in the file (e.g., line 75 negation_normal_form), so it's "declared by usage"; my checker should note whether MGHD has a *definition anchor* (key `definition` referencing it). Its first use outside statement is line 75 which is not a definition. So maybe I should treat function symbols as defined if: (a) there is a `definition`/`definition_ref`/`name` anchor, or (b) they appear in the `quantifiers.formal` full prose (which for F2a line 49 says "letting (M,g) be the maximal globally hyperbolic development" — no "MGHD"), hmm.
+
+To avoid overclaiming, my checker should classify symbols into:
+- `defined_anchor`: an explicit YAML node whose `name`/`predicate_name` equals the symbol, or a text where the symbol is introduced by "is a ..." / "definition".
+- `used_elsewhere_only`: appears elsewhere in the file but without a definition anchor.
+- `single_use`: appears only in statement_formal.
+And only flag as *undefined normative symbol* those in `single_use` that are predicate-like (followed by `(` or containing `_{`), where "AF_{I+}" is the only one. For MGHD, report `used_elsewhere_only` with the note that no explicit definition anchor exists but the expansion appears in quantifiers.formal prose ("maximal globally hyperbolic development") — an advisory, not a hard failure. This is honest and precise.
+
+Actually, let me be careful and rigorous: `AF_{I+}` — search the whole file for "AF_{I+}" (outside statement_formal): zero hits (grep earlier found only line 251). `AF` alone appears (e.g., "AF structure", "asymptotically flat"). So it's single_use + predicate-like. That's the hard finding.
+
+Quantifier realization instrument:
+- Parse `quantifiers.ordered` → sequence of kinds.
+- Parse `statement_formal` for quantifier keywords in order: regex `\b(forall|exists|not\s+exists)\b`.
+- F1: declared [forall, exists, forall, exists, forall, not_exists]; realized [forall, exists, forall, not_exists] → folded binders: index 3 (`exists` over D3 (Mtilde,gtilde,Omega)) and index 4 (`forall` over D4 gamma). Statement surface `AF_{I+}(M_D)` presumably encodes existence of a conformal completion + complete I+; `visible_singularity_from_I_plus(M_D)` encodes the forall gamma. So yes, 2 folded.
+- F2a/F2b: declared [forall, exists, forall, not_exists]; realized [forall, exists, forall, not_exists] → 4/4 match.
+
+Cross-schema: all three realize the same "forall (s,delta) in D0 exists G_{s,delta} comeager forall D in G_{s,delta}" prefix; the F1 fold is the only mismatch.
+
+Now, is the `AF_{I+}` finding *material*? It's a precision defect: the statement's first conjunct is an undefined predicate. F2a/F2b by contrast use a named predicate with an explicit definition anchor in the same file. So the G-FORM criterion "exact quantifiers ... conclusion_type" is not met for F1 as long as the symbol is undefined; the reviewer must either get a definition, an explicit inline expansion, or a recorded abbreviation rule. This is exactly the kind of evidence needed. It also directly answers worker-090's HF090-03 replication.
+
+Additional value-add: the F1 `quantifiers.formal` (line 48-55) IS an explicit expansion of the same statement with the 6 quantifiers. So the schema does contain an exact formal version — the issue is only in `conclusion.statement_formal`'s abbreviation, and the *abbreviation rule* ("the completion-existence and visibility quantifiers are folded into atomic predicates") is not recorded in the schema. So the checker can output a precise disposition: "the exact quantifier form exists at quantifiers.formal; the defect is that conclusion.statement_formal is not accompanied by a recorded folding rule, and the predicate AF_{I+} it relies on is undefined; two acceptable repairs." Good — this is constructive and non-inflammatory.
+
+Now let me write the artifacts. Plan of files:
+
+`artifacts/worker-080/formal_symbol_audit/audit_formal_symbols.py`:
+- Constants: INPUTS = {F1: (path, expected_sha256), F2a: ..., F2b: ...} with the measured hashes.
+- Functions:
+  - sha256_file
+  - load YAML with a duplicate-key detector? Not needed for this task.
+  - extract_symbol_anchors(doc, raw): walk YAML collecting anchors: keys `name`, `predicate_name`, `definition_ref` values, `quantifiers.domains` keys (D0...), and top-level section names; plus for each anchor record its YAML path.
+  - tokenize_formal(sf): produce tokens with macro handling: `[A-Za-z_][A-Za-z0-9_]*(\{...\})?` and `[A-Za-z_]+\^\{...\}_[A-Za-z0-9]+` for X^{...}_vac; simpler: replace `_{...}` and `^{...}` groups with a marker so the base identifier is captured with the subscript attached.
+  - logical keywords set.
+  - classify tokens: declared_domain (D\d), bound_variable (single letters, greek-ish), logical, predicate_like (token followed by `(`), other identifiers.
+  - for each predicate-like or macro token, compute occurrences outside the statement_formal text (word-boundary regex with escaped braces) and in anchor names; classify defined_anchor / used_elsewhere_only / single_use.
+  - quantifier sequence extraction + folding map.
+  - cross-schema comparison of the shared prefix and predicate surfaces.
+  - controls: synthetic positive/negative schema text analyzed with the same tokenizer/classifier (the negative must produce a single_use predicate-like symbol; the positive must not).
+- Fail-closed: measure hashes at start and end; abort nonzero if drift; abort if expected hash mismatch (exit 2).
+- Output: prints JSON result and writes report.json only when valid? Simpler: script prints JSON to stdout; I'll run it with `--out report.json`.
+
+`report.json`: built by the script with: tool, generated_at, inputs (path, sha256, bytes), per-schema results, findings with ids (W080-FSYM-01...), controls, verdict, falsifier, non_claims.
+
+`README.md`: hand-written summary.
+
+Then events. Event IDs: `w080-20260912T00xx-formalsym-*`. Must use actual wall-clock time. Let me get the time when emitting. Use `date +%Y-%m-%dT%H:%M:%S+08:00`.
+
+Events:
+1. `status` (claim of task): node_id F1, class_id AF-WCC-VAC-GEN, status active, hours, summary, evidence_refs, next_falsifier. Note: status requires node_id/status/hours/summary/evidence_refs/next_falsifier.
+2. `artifact` for the checker script (node_id F1, artifact_type verifier_script, path, sha256, validation_status unverified).
+3. `artifact` for report.json.
+4. `artifact` for README.md.
+5. `claim`: class_id AF-WCC-VAC-GEN, statement, conclusion_type formal_model, assumptions, falsifier, evidence_refs, artifact_refs.
+6. `blocker`: node_id F1, description, needed_to_unblock, evidence_refs.
+7. `status` final: node_id F1, status active, hours, summary, evidence_refs, next_falsifier.
+
+All validated with `python3 -c "from research_map.schemas import validate_event; ..."`.
+
+Checkpoint:
+- `runtime/state/w080_formal_symbol_checkpoint_<ts>.json` with worker, task_id, node_id, class_id, verdict, bound sha256s, artifacts+hashes, events emitted, next_falsifier.
+- append the same to `runtime/state/w080_checkpoints.jsonl`.
+
+Do all file writes with the write tool (or bash heredoc? The write tool is preferred). For the checker script, use write. For the events, I can append with bash `cat >>` or a Python script. I'll use a Python script to compose events and validate before appending, to guarantee valid JSON. Actually simpler: use the write tool to create report/README/checker, then run the checker, then use a small Python one-liner (heredoc) to append validated events. The instruction says use edit/write for files; heredoc via bash for appending JSONL is fine and common in this workspace (other workers did it). But the guidance says "Use the write tool to create files" — for outbox JSONL append, bash is appropriate since it's an append to an existing file.
+
+Let me now confirm exact line numbers for evidence_refs:
+- F1 statement_formal: schemas/af_wcc_vacuum.yaml:251
+- F1 quantifiers.ordered: lines 56-62
+- F1 quantifiers.formal: 48-55
+- F1 domains D3: 73-75; D4: 76-78
+- F2a statement_formal: 218; quantifiers.ordered 51-55
+- F2b statement_formal: 220; quantifiers.ordered 52-?; extension_predicate name line ~92
+- F2b: line numbers for ordered: 52-? Let me get exact via the script (the script can record line numbers using a line index of the raw text for each anchor).
+
+I'll have the script compute line numbers by searching raw text.
+
+One more consideration: the schema files were modified at 00:19 and the map audit 00:24:40 still measures 9a8bd4c96800 etc. I'll re-measure right before writing and pin those. If they change while I write, the checker fails closed and I report drift. Good.
+
+Let me write the script now. Keep it self-contained, stdlib+yaml only.
+
+Also: do NOT modify any canonical file — read-only. Artifacts under artifacts/worker-080/formal_symbol_audit/. Events appended to my outbox. Checkpoint under runtime/state/.
+
+Let me write the checker.
+dsh: reasoning:
+Let me re-measure hashes now and then write the script.
+dsh: reasoning:
+Hashes stable since 00:19:14. Now write the checker script.
+
+Design details for the script:
+
+```python
+#!/usr/bin/env python3
+"""W080-FSYM-01: independent formal-surface symbol and quantifier audit ..."""
+import argparse, hashlib, json, re, sys, datetime
+from pathlib import Path
+import yaml
+
+REPO = Path(__file__).resolve().parents[3]   # artifacts/worker-080/formal_symbol_audit/audit_formal_symbols.py -> repo root
+INPUTS = {
+ 'F1': {'path':'schemas/af_wcc_vacuum.yaml','sha256':'9a8b...','class_id':'AF-WCC-VAC-GEN'},
+ 'F2a': {'path':'schemas/af_scc_c2_vacuum.yaml','sha256':'b612...','class_id':'AF-SCC-C2-VAC-GEN'},
+ 'F2b': {'path':'schemas/af_scc_c0_vacuum.yaml','sha256':'1bb7...','class_id':'AF-SCC-C0-VAC-GEN'},
+}
+TAXONOMY = {'path':'research_map/formulation_taxonomy.yaml','sha256':'2760...','class_id':'GLOBAL'}
+LOGICAL = {'forall','exists','not','and','or','in','subset','iff','implies','with','letting','be','the','a','of','is','that','such'}
+```
+
+Tokenization: I need to handle macros. Approach: replace `_{...}` and `^{...}` with `_SUB`/`_SUP` placeholders before tokenizing, but preserve the full macro token for reporting. Simpler robust method:
+
+```python
+def normalize(sf):
+    # join subscript/superscript brace groups into the preceding identifier
+    s = sf
+    s = re.sub(r'([A-Za-z0-9_]+)_\{([^{}]*)\}', lambda m: m.group(1)+'_{'+m.group(2)+'}', s)  # already
+```
+Actually the issue: regex `[A-Za-z_][A-Za-z0-9_]*` on "AF_{I+}" yields "AF_" then "{I+}". I'll write a custom tokenizer:
+
+```python
+TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:_\{[^{}]*\}|\^\{[^{}]*\})?(?:_[A-Za-z0-9]+)?")
+```
+Order matters: try `X^{...}_vac`: regex `[A-Za-z_][A-Za-z0-9_]*(?:\^\{[^{}]*\})?(?:_\{[^{}]*\}|_[A-Za-z0-9]+)?`.
+For "X^{s,delta}_vac" → matches X^{s,delta}_vac. For "AF_{I+}" → AF_{I+}. For "G_{s,delta}" → G_{s,delta}. For "M_D" → M_D. For "I+_D": starts with I then '+'... regex: `I` then `+` not matched by `\^`... so gets "I" then "_D" separately. Hmm. Handle "I+_D" specially: pre-normalize "I+_D" → "Iplus_D" and "I+" → "Iplus"? But then reporting shows normalized names. I can keep a display mapping. Alternatively define a manual normalization table for known symbols: replace "I+_D" -> "IPLUS_D", "I+" -> "IPLUS" (word-boundary, avoid "I+_D" first), then tokenize, then map back for display.
+
+Let me define:
+```python
+PRE = [('I+_D','IPLUS_D'), ('I+','IPLUS'), ('J^-(','JM('), ...]
+```
+Hmm "J^-(q) intersect M" — that's prose-y; predicate-like extraction: only tokens followed by `(` matter, plus macro tokens with `_{`. The statement_formal predicate-like tokens are: `AF_{I+}(`, `complete(`, `visible_singularity_from_I_plus(`, `proper_future_extension_in_class(`, `MGHD(`. Plus `comeager` (a predicate but not followed by parens). Bound vars: (s,delta), G_{s,delta}, D, M_D, I+_D.
+
+Practical approach for the audit:
+1. Extract "predicate surface" = tokens that are either immediately followed by `(` in the statement or are macro tokens `NAME_{...}` not quantified. Report each with classification.
+2. For classification, search the full raw file for the exact token (with `re.escape`), excluding its occurrences inside the statement_formal string. Count occurrences and capture the first line number.
+3. Anchor classification:
+   - `defined_anchor` if token equals a `name:`/`predicate_name:` value in the parsed YAML or is a key of `quantifiers.domains` (D0..) or appears in a `definition_ref` chain target, or the token appears in a YAML node that also contains the word "definition" within ±? Simpler: token equals a value of any key in {'name','predicate_name','definition_ref','class_selector'} OR token is a top-level YAML key OR token appears in a line that contains 'definition' (case-insensitive) outside statement_formal.
+   - `used_elsewhere_only` if occurrences outside statement_formal > 0 but no anchor.
+   - `single_use` if 0 occurrences outside statement_formal.
+
+For `AF_{I+}`: 0 occurrences outside → single_use (hard).
+For `MGHD`: occurrences outside (line 75 negation_normal_form, etc.) and line with 'maximal globally hyperbolic development' exists; anchors: is "MGHD" in a line with 'definition'? Let me check: F2a line 67 "definition: proper future C2 vacuum extensions of the maximal development, in the exact sense of extension_predicate" — no MGHD. So MGHD = used_elsewhere_only (advisory, not hard). Actually let me check if "MGHD" appears in a line containing "definition" in either file: unlikely. Fine: advisory finding.
+For `comeager`: in D1 definition line → anchor via line containing 'definition' → defined_anchor.
+For `complete` (F1): occurrences outside? "complete" appears in many places ("complete future null infinity", "future-complete", "complete Riemannian"). The token `complete(` exact — only in statement_formal. But 'complete' as word appears in lines with definitions e.g. `i_plus.completeness_definition` (line 202). My anchor rule "token appears on a line containing 'definition'" → yes (line 202 contains "completeness_definition" which contains "complete" as substring? I should use word-boundary regex on the line, and "completeness_definition" won't match `\bcomplete\b`. Hmm. So `complete(` would be `used_elsewhere_only` — but semantically it maps to i_plus.completeness_definition. To be honest, classify it as `used_elsewhere_only` with a note that the nearest anchor is `i_plus.completeness_definition`... that's getting complicated.
+
+Alternative cleaner design: build an explicit, *declared* anchor index from YAML structure:
+- All keys (full paths) and all values of keys named `name`, `predicate_name`, `definition_ref`, `class_selector`, plus domain ids.
+- For F1: does `complete` appear as a key or name? `i_plus.completeness_definition` key contains "completeness" not "complete". `visibility.predicate_name: visible_singularity_from_I_plus`. `extension_predicate` absent in F1. 
+- So with a strict anchor index, F1's `complete` would also be flagged undefined — which may be overclaiming. Hmm, but is it? In `statement_formal`, `complete(I+_D)` — the schema defines I+ completeness in `i_plus.completeness_definition` and `required_properties[1] "I+ future-complete in the affine parameter of gtilde"`. A reviewer would say complete is defined. To be fair and precise, I should implement a *definition-proximity* rule: a token is anchored if any line outside statement_formal matches a "definitional pattern" containing a morphological variant of the token: stem match (token with trailing 'e' dropped, or token stem ≥5 chars appearing inside a key/value that also carries 'definition' or is a `definition_ref` target). `complete` → stem "complet" appears in `i_plus.completeness_definition` → anchored (record the anchor path). `AF_{I+}` → no morphological variant anywhere (AF_ / "AF" alone appears but the subscripted predicate does not; stem "AF" is too short/ambiguous; require exact or stem≥5). Good: so rule = anchored if exact token OR a stem (>=5 chars, strip trailing e) appears in a definition-anchor context (key containing 'definition', values of name/predicate_name/definition_ref, or a line containing 'is defined'/"definition"). For MGHD: stem "MGHD" (4 chars <5) — hmm, exact "MGHD" appears in prose lines but not definition context. I'll allow exact-token match anywhere outside statement_formal to classify as `used_elsewhere_only` (advisory), which is honest.
+
+So final classes:
+- `defined_anchor`: exact token or stem(≥5, minus trailing 'e') found in anchor context.
+- `used_elsewhere_only`: exact token found outside statement_formal but no anchor context.
+- `single_use_unresolved`: no occurrence outside statement_formal (hard finding for predicate-like tokens).
+
+Findings:
+- W080-FSYM-01 (F1, hard): predicate `AF_{I+}` used in `conclusion.statement_formal` (line 251) has no definition anchor and no occurrence anywhere else in the schema (single_use_unresolved). The other two predicate symbols in the same statement are anchored (`complete` → i_plus.completeness_definition; `visible_singularity_from_I_plus` → visibility.predicate_name). Disposition options: define AF_{I+}; inline it as in quantifiers.formal; or record an explicit abbreviation rule.
+- W080-FSYM-02 (F1, advisory/medium): quantifier realization 4/6; folded binders: exists over D3, forall over D4. The exact expansion exists in quantifiers.formal (6/6) but no recorded folding rule accompanies conclusion.statement_formal. Note also `quantifiers.formal` uses different variable names (M,gamma) than statement_formal (M_D) — a reviewer can bind them, but the abbreviation should be recorded.
+- W080-FSYM-03 (F2a/F2b, pass): 4/4 quantifiers realized, all predicate symbols anchored (`proper_future_extension_in_class` → extension_predicate.name with file-local frozen_regularity C2 resp. C0; `MGHD` used elsewhere, expansion "maximal globally hyperbolic development" in quantifiers.formal prose). No C0/C2 merge at the formal surface: the shared predicate token resolves to file-local definitions differing in frozen_regularity, and the two statement_formal strings are byte-identical (a shared syntactic surface, semantically differentiated by the file-local definition). This is worth reporting as the class-separation-at-formal-surface check.
+- Cross-schema shared prefix check: F1/F2a/F2b share `forall (s,delta) in D0 exists G_{s,delta} comeager forall D in G_{s,delta}` exactly.
+
+Controls:
+- positive synthetic: statement uses only defined symbols → 0 single_use.
+- negative synthetic: statement uses `UNDEFINED_PRED(X)` with no occurrence elsewhere → 1 single_use flagged.
+- control 3 (quantifier): synthetic declared 2, realized 1 → fold detected; realized 2 → no fold.
+These prove liveness.
+
+Fail-closed: check expected hashes; measure again at end; abort if drift (exit 2). Also abort if report path would overwrite? No, just write.
+
+The script prints a compact JSON summary and writes report.json when `--out` given.
+
+Let me also ensure we time-stamp with current time.
+
+I'll write the script now with the write tool. I need the repo root detection: file at artifacts/worker-080/formal_symbol_audit/audit_formal_symbols.py → parents[0]=formal_symbol_audit, [1]=worker-080, [2]=artifacts, [3]=repo root. Good.
+
+Let me write it carefully.
+dsh: reasoning:
+Wait, I imported yaml only in `__main__`, but `analyze` uses `yaml.safe_load` in main() — main() uses yaml.safe_load, and yaml is imported in `__main__` block before calling main, so the global name `yaml` is defined in module globals. That works, but it's ugly; let me move `import yaml` to the top. Also the script returns exit 1 if hard findings exist — but I want exit 0 when the instrument is valid (controls pass) even if findings exist; the verdict conveys FAIL. If exit 1 on hard findings, then "instrument valid" semantics get confused. Let me define: exit 0 = instrument ran valid (controls pass, no drift), regardless of findings; exit 1 = control failure; exit 2 = drift. I need to change the return: `return 0 if control_ok else 1`.
+
+Also potential bug in classify_symbol: the stem-hit branch does `{k.lower(): v for k,v in anchors.items()}.keys()` — that's fine. And `anchor = anchors[[k for k in anchors if k.lower()==stem_hit.lower()][0]]`.
+
+Another bug: `analyze()` calls `predicate_candidates(statement)` and classifies each. For F1, candidates: tokens followed by "(" — "AF_{I+}" (followed by "("), "complete", "visible_singularity_from_I_plus", "exists" (followed by "visible..."? No: "not exists visible_singularity_from_I_plus(M_D)" — "exists" followed by " visible" so not called. "forall" followed by " ("? "forall (s,delta)" — yes! `forall (s,delta)` → "forall" is followed by " (" → flagged as predicate candidate. Also "forall D in ..." not called. Hmm: in F1 statement: "forall (s,delta) in D0 exists G_{s,delta} comeager forall D in G_{s,delta}: AF_{I+}(M_D) and complete(I+_D) and not exists visible_singularity_from_I_plus(M_D)". Candidates via called-or-macro:
+- "forall" (followed by "(") → candidate, but it's a logical keyword; should be excluded.
+- "(s,delta)" no.
+- D0 not called/macro.
+- G_{s,delta} macro → candidate (bound var).
+- comeager: not called, not macro → not candidate (fine).
+- forall D → "forall" not followed by (.
+- AF_{I+} macro+called.
+- M_D macro inside parens → candidate (bound var).
+- complete called.
+- I+_D macro → candidate.
+- visible_singularity_from_I_plus called.
+- M_D macro.
+
+So I must filter LOGICAL and BOUND_TOKENS from candidates before classification, and classify only predicate-like symbols. Let me restructure `predicate_candidates` to exclude LOGICAL and BOUND_TOKENS (with the normalized name handling). Also `D0` isn't a candidate. BOUND_TOKENS should include "G_{s,delta}", "M_D", "I+_D", "MGHD". Let me put those in.
+
+Also for F2a/F2b: candidates: forall (→logical, excluded), G_{s,delta} (bound), MGHD (called), "not" no, exists no (followed by proper...). So candidates = MGHD + proper_future_extension_in_class. Both anchored? `proper_future_extension_in_class` in anchors via extension_predicate.name → yes. `MGHD`: exact occurrences outside statement → line 75 etc; anchors? no → used_elsewhere_only (advisory, not a finding since findings only from single_use_unresolved and folded binders). Good.
+
+F1 candidates after filtering: AF_{I+}, complete, visible_singularity_from_I_plus. Classify:
+- AF_{I+}: outside occurrences exact with regex `(?<![A-Za-z0-9_])AF_\{I\+\}(?![A-Za-z0-9_])` → 0. stem: `stem("AF_{I+}")` = lower "af_{i+}" length 7 ends with '}' not 'e' → stem = "af_{i+}". len ≥5, pattern `[A-Za-z_][A-Za-z0-9_]*af_\{i\+\}[A-Za-z0-9_]*` with re.I → search outside → no match. anchors: no. → single_use_unresolved. 
+- complete: outside exact `\bcomplete\b` → many occurrences (e.g. "complete future null infinity"). anchors: does anchor_index contain "complete"? The walk adds tokens from values of name/predicate_name/definition_ref keys. `i_plus.completeness_definition` is a key containing "definition" and its value is a string → for tok in tokenize_formal(value): tokens include "every","null","geodesic","generator","of","is","future","complete","it","defined",... → "complete" is added to anchors via `kp (definition-bearing key)`! Yes. So complete → defined_anchor. 
+- visible_singularity_from_I_plus: anchors via predicate_name → defined_anchor. Good.
+
+So F1 has 1 unresolved: AF_{I+}. F2a/F2b have none. Findings: W080-FSYM-01 (hard, F1 undefined symbol), plus folded binders for F1 (2 advisories). 
+
+Wait: "verdict FAIL if hard" — the F1 severity hard is my judgment: worker-090 called undefined_normative_symbol a hard failure (HF090-03). I'll keep hard for F1 but note in the report that this is a formal-surface accept blocker under G-FORM's "exact quantifiers" criterion, not a mathematical error.
+
+Also the quantifier fold logic: for each index, compare declared[i] vs realized[i]; for F1: declared=[forall,exists,forall,exists,forall,not_exists], realized=[forall,exists,forall,not_exists]; at i=3 declared exists vs realized not_exists → folded i=3; i=4 declared forall vs realized[4] missing → folded i=4; i=5 declared not_exists vs realized[5] missing → folded i=5. That's wrong: the realized sequence after folding should be computed by matching the realized tokens to declared binders *in order but allowing skips*. My index-wise comparison flags 3 folded binders instead of 2, because after the first mismatch everything shifts. I need a subsequence match: find the longest alignment where realized tokens match declared kinds in order (like a subsequence match). Since folded binders are skipped, the correct approach: for each realized token in order, advance a pointer through declared until kind matches; unmatched declared entries in between are folded. But ambiguity: realized "not_exists" could match declared index 3 (exists)? No, kinds differ. Greedy first-match: realized[0]=forall→match declared[0]; realized[1]=exists→match declared[1]; realized[2]=forall→match declared[2]; realized[3]=not_exists→scan declared[3]=exists (no), declared[4]=forall (no), declared[5]=not_exists (yes) → folded declared[3], declared[4]. Exactly 2 folded. Good. Implement that.
+
+Edge: if a realized token doesn't match any later declared kind → unmatched realized (report separately). Let me implement.
+
+Also the fold control: declared [forall, exists], realized [forall] → folded exists (index1). pass=True. Good.
+
+Let me also fix: `predicate_candidates` should filter out BOUND_TOKENS using normalized names; BOUND set should include the detokenized forms. And LOGICAL tokens.
+
+One more: `analyze()` returns `quantifiers_declared` etc. In findings, for folded binder detail I wrote `D{fb['domain_id']}` which would print "DD3" since domain_id is "D3". Fix to `{fb['domain_id']}`.
+
+Also, in the report summary, `schema_verdicts` references — fine.
+
+Also `classify_symbol` — the `stem_hit and stem_hit.lower() in {k.lower():v...}` branch: if stem match found and that matched word is an anchor key. For "complete", exact occurs already. Fine.
+
+Let me also double check the negative control: `wholly_undefined_pred(MGHD(D))` with raw = json.dumps (no textual occurrence outside statement... wait, `negative_raw = json.dumps(negative_doc)` CONTAINS the statement_formal string, and we do `outside = raw.replace(statement, "")` — the statement appears once in raw so replace removes it. Good. `anchored_pred` positive: anchors from predicate_def.name → defined_anchor. MGHD: outside occurrences? `MGHD` appears only inside statement → single_use_unresolved! That would make positive control fail and negative control have 2 unresolved. I need the positive control's statement to not use MGHD, e.g. `forall D in D0: defined_pred(D)`. And negative: `forall D in D0: wholly_undefined_pred(D)`. Then positive unresolved=0, negative=1. 
+
+Hmm, but in positive control, `defined_pred` is anchored via `predicate_def.name`. Good.
+
+Also fold control: statement "forall D in D0: anchored_pred(D)" — candidates: forall (filtered), anchored_pred → anchored. Good.
+
+Also `anchor_index` walk: `predicate_def.name` is a key "name" with value "defined_pred" → anchors["defined_pred"] = "predicate_def.name=defined_pred". Good.
+
+Let me now apply these fixes with edits. Actually there are several changes; let me rewrite the whole file cleanly (write tool, full replacement) to avoid patch errors.
+
+Also move `import yaml` to top.
+
+One more consideration: `TOKEN_RE` with `(?![A-Za-z0-9_])` boundary check in classify — fine.
+
+Let me also add a check that `conclusion.statement_formal` exists (KeyError handling would traceback; acceptable but let's be explicit).
+
+Rewrite now.
+dsh: reasoning:
+I left a dead loop in align_quantifiers (the first pass with `pass`). Let me clean that up. Also note: `raws` unused; fine but let me remove. Let me edit align_quantifiers to remove the dead code.
+dsh: reasoning:
+Interesting: F1 unresolved_symbols is empty. My classifier anchored `AF_{I+}` somehow, or it wasn't a candidate. Let me inspect the report's per_schema predicate_symbols for F1. Probably `AF_{I+}` was classified as `defined_anchor` because of stem matching: stem("AF_{I+}") = "af_{i+}" (len 7, doesn't end with 'e') → search pattern `[A-Za-z_][A-Za-z0-9_]*af_\{i\+\}[A-Za-z0-9_]*` — that shouldn't match. Or maybe the anchor_index contains "AF_{I+}" via the `definition_ref` values or `name` values? Let me check: F1 might have a `predicate_name` or `name` with AF_{I+}? Hmm. Or maybe `predicate_candidates` didn't include it because the macro check: `("_{" in tok or "^{" in tok) and tok not in LOGICAL` → tok = "AF_{I+}" contains "_{" → macro True. And called True. Not in LOGICAL/BOUND. So it should be a candidate. Let me debug: print the classifier output.
+
+Possibility: `tokenize_formal` on pre_normalized "AF_{I+}(M_D)" → TOKEN_RE: `[A-Za-z_][A-Za-z0-9_]*` matches "AF_", then optional `\^\{...\}` no, then optional `(?:_\{[^{}]*\}|_[A-Za-z0-9]+)?`... wait the base identifier match already consumed the trailing "_" in "AF_". Then `_\{` requires an underscore after; but the next char is "{" so neither alternative matches. So the token is "AF_" and then `{I+}` separate. Damn — the base regex greedily includes the trailing underscore. I need to make the base not end with underscore: `[A-Za-z][A-Za-z0-9_]*(?<!_)` or use a regex where base is `[A-Za-z][A-Za-z0-9_]*[A-Za-z0-9]` (must end alnum) plus single-letter case. Better: `[A-Za-z](?:[A-Za-z0-9_]*[A-Za-z0-9])?` — for "AF_" base would match "AF" (since trailing underscore not allowed), then subscript macro `_\{I+\}` matches. 
+
+But careful: identifiers like `M_` don't exist. And "X^{s,delta}_vac": base "X", superscript `^{...}`, then `_vac`. Good. "I+_D" pre-normalized to "IPLUS_D": base matches "IPLUS_D" entirely. Good. "G_{s,delta}": base "G", subscript macro. Good.
+
+Let me fix TOKEN_RE base: `[A-Za-z](?:[A-Za-z0-9_]*[A-Za-z0-9])?`. Hmm, for "IPLUS_D" → base: starts I, middle "PLUS_", ends D → "IPLUS_D". Good. For "AF_{I+}": base "AF" then `_\{I+\}`. Good.
+
+Wait: does the old regex matter for the positive control? `defined_pred` matched fine.
+
+Also check: with the fixed regex, `predicate_candidates` for F1 yields AF_{I+}(...) → classified. classify_symbol: exact occurrences of "AF_{I+}" outside → 0; stem "af_{i+}" search pattern with escaped stem inside a larger identifier class won't match; anchors: does anchor_index contain "AF_{I+}"? Let me check the report now for what anchor it found (if it classified defined_anchor). Actually with the old broken tokenizer, the token was "AF_" and stem("af_") len 3 <5, exact occurrences of "AF_" outside → maybe `AF_` appears in filenames like `AF-WCC`? No, "AF_" with trailing underscore... In F1 raw there are strings like `X^{s,delta}_vac(AF)`; not "AF_". Hmm, but report says unresolved=[]. Maybe "AF_" got defined_anchor via anchors containing "AF_"? Wait — `anchor_index` with the old tokenizer: values of `name`/`predicate_name`/`definition_ref` are tokenized with the same broken tokenizer; e.g. `definition_ref: regularity.data_regularity` → walk adds `anchors["regularity.data_regularity"]` and `anchors["data_regularity"]`. Hmm "AF_" could come from... no.
+
+Let me just inspect the report predicate_symbols for F1 to see what happened.
+dsh: reasoning:
+Confirmed: `AF_{I+}` was tokenized as "AF_" and dropped/never seen properly. With base regex fix, it will be captured. Note also `complete` gets stem_match 'incomplete' but anchor found via definition-bearing key — fine.
+
+Let me fix TOKEN_RE. Also the `macro` detection in predicate_candidates uses "_{" in tok — after fix, tok "AF_{I+}" contains "_{" → macro. Good. `BOUND_TOKENS` check: "AF_{I+}" not in set. LOGICAL not.
+
+One more subtlety: with fixed regex, `G_{s,delta}` in statement is macro and in BOUND_TOKENS → filtered. Good. `M_D` macro and in BOUND_TOKENS → filtered. `I+_D` → pre_normalize to IPLUS_D; BOUND_TOKENS contains "IPLUS_D" → filtered. Good. `D0` not called/macro. Good.
+
+For F2a/F2b, `MGHD(D)` called → candidate, used_elsewhere_only. Good.
+
+Now, after the fix, will `AF_{I+}` be classified single_use_unresolved? Check stem: stem("AF_{I+}") → lower "af_{i+}", len 7 >5, doesn't end with 'e', so stem = "af_{i+}". Pattern `[A-Za-z_][A-Za-z0-9_]*af_\{i\+\}[A-Za-z0-9_]*` — note `\{` and `\+` escaped; searching outside; no match expected. Anchors: could `anchor_index` have added "AF_{I+}" from some definition-bearing key? Possibly if some definition value contains "X^{s,delta}_vac(AF)" → tokens "X^{s,delta}_vac" and "AF" (from "(AF)")... with fixed regex "AF" alone. Not "AF_{I+}". So unresolved. Let me fix and rerun.
+
+Also double check: the fixed base regex could break "defined_pred" → base `[A-Za-z](?:[A-Za-z0-9_]*[A-Za-z0-9])?` matches "defined_pred". Good. "wholly_undefined_pred" good.
+
+Fix via edit.
+dsh: reasoning:
+Now the instrument works:
+- F1: 1 unresolved predicate symbol `AF_{I+}` (hard finding), 2 folded binders (advisory).
+- F2a/F2b: clean; class-local predicate resolution true.
+- Controls pass.
+
+Let me verify the report contents (findings, folded binders details, cross-schema) and make sure nothing looks wrong (e.g., folded binders 2 for F1 with correct indices 3 and 4). Also verify that the hard finding is genuinely a non-false-positive by manually grepping the whole F1 file for "AF_{I+}" outside line 251 — confirm 0. Let me check.
+dsh: reasoning:
+The audit is clean, reproducible, and the hard finding is real: `AF_{I+}` occurs exactly once in the file (line 251).
+
+Now write README.md and then re-run the checker one final time to get the report hash bound to the final bytes (report.json already written). Note: report.json includes summary of itself; fine.
+
+README should include: task id, class binding, inputs+hashes, method, results, controls, verdict, falsifier, reproduce command, non-claims. Keep it concise but complete.
+
+Then compute sha256 of the three artifacts, emit events, checkpoint.
+
+One consideration on the report: my report says F1 hard finding severity "hard". worker-090 already reported HF090-03 same defect (undefined_normative_symbol). So my artifact replicates it with an independent instrument and extends it: F2a/F2b are clean, the folded-quantifier map is exact (indices 3,4 = D3/D4), and the cross-schema comparison shows class-local predicate resolution holds. In the claim statement I should explicitly say this replicates HF090-03 and adds the cross-schema formal-surface check, with reference to worker-090's finding (honest provenance).
+
+Let me also double-check that F1's folded binders claim is accurate against `quantifiers.formal`: it does contain all 6 in order. Yes (lines 48-55). I'll note in README that the exact expansion exists at quantifiers.formal, so the defect is the missing recorded folding rule + undefined symbol, not missing quantization. My report finding detail says "no folding rule is recorded beside conclusion.statement_formal" — accurate. Maybe I should add a field to the finding noting `quantifiers.formal` contains the expansion. Let me add that to the script detail text for the folded binder finding: "the exact expansion exists in quantifiers.formal". Actually, the report's per_schema doesn't capture quantifiers.formal. For precision/honesty, let me add to the folded finding detail: "An exact 6-binder expansion exists at quantifiers.formal; what is missing is a recorded abbreviation rule beside conclusion.statement_formal." That prevents misreading. Let me edit the script accordingly and rerun (report regenerates).
+
+Also add `quantifiers_formal_line` maybe. Keep it simple: edit detail string.
+
+Then README.
+dsh: reasoning:
+Wait: report.json hash `86b748d1...` — but I ran the checker to regenerate report.json after editing the script; the hash is for the regenerated report (which includes the new detail string). Good. But careful: the report.json contains the pinned hashes and results; it doesn't contain its own hash, so stable.
+
+However, one issue: the README hash was computed before I might make any further edits — I won't edit it further.
+
+Now update todos and emit events. Event time: 00:28:45+08:00. Use a compact timestamp for event IDs: `20260912T002845`.
+
+Events to append to comms/outbox/worker-080.jsonl (append, preserve earlier events):
+1. status (task claim): event_id `w080-20260912T002845-formalsym-status-claim`, node_id F1, class_id AF-WCC-VAC-GEN, status active, hours 0.4, summary, evidence_refs [schemas/af_wcc_vacuum.yaml#9a8bd4c96800, ...], next_falsifier.
+2. artifact checker: `-artifact-checker`, node_id F1, artifact_type verifier_script, path, sha256 11885a..., validation_status unverified.
+3. artifact report: `-artifact-report`, artifact_type formal_symbol_audit_report, path, sha256 86b748..., validation_status unverified.
+4. artifact readme: `-artifact-readme`, artifact_type documentation, sha256 00c433...
+5. claim: `-claim-formalsym`, class_id AF-WCC-VAC-GEN, conclusion_type formal_model, statement, assumptions, falsifier, evidence_refs, artifact_refs.
+6. blocker: `-blocker-f1-afsymbol`, node_id F1, description, needed_to_unblock, evidence_refs.
+7. status final: `-status-final`, node_id F1, status active, hours 0.5, summary, evidence_refs, next_falsifier.
+
+Validate all with research_map.schemas.validate_event, then append. Also confirm JSONL validity of the whole file afterwards.
+
+I'll write a Python script via bash heredoc that builds the events, validates, appends, and prints confirmation. Use the exact wall-clock times. Then compute the new outbox file sha256 (for checkpoint event list only; no need to bind the outbox itself as artifact).
+
+Let me write the emitter. Be careful with created_at not future-dated (CF-14): use `datetime.now` at emission.
+
+For evidence_refs use `path#sha256-prefix` format (PROTOCOL rule 4).
+
+Let me also include `class_ids` field (some events use it) — optional; the validator doesn't require it. I'll include `class_ids` for the cross-schema scope in artifact events maybe. Keep valid.
+dsh: reasoning:
+Events emitted and validated (validate_event passed for all). Now checkpoint:
+- `runtime/state/w080_formal_symbol_checkpoint_20260912T002902.json`
+- append to `runtime/state/w080_checkpoints.jsonl`
+
+Checkpoint schema follows prior worker checkpoints: worker, task_id, node_id, class_id, verdict, hard_failure_kinds, bound_sha256, artifacts, events_emitted, next_falsifier, checkpoint_at, path.
+
+Then verify artifact hashes match what events claim (recompute), and confirm no canonical file was modified.
+
+Then final answer.
+dsh: reasoning:
+Checkpoint written and verified. Let me do a final integrity pass:
+1. Confirm the outbox tail is valid and includes the 7 events (done).
+2. Confirm no canonical file changed by me: hashes still equal pinned (done).
+3. Confirm checkpoint file list and that w080_checkpoints.jsonl now has 3 lines.
+4. Optionally run the project's map validator? `python3 research_map/validate_map.py` validates map DAG, not my outbox; ingest is controller-only. I could optionally validate my last events with validate_event again — done already.
+
+One more: the earlier w080_checkpoints.jsonl had 2 lines; now 3. Good.
+
+Let me do a final quick verification and then exit with a concise summary. Also update todos to completed.
+
+Also note: the task said "emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit". Done. I should not do more work (bounded worker). Let me verify and finish.

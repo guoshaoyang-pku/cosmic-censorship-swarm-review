@@ -1,0 +1,747 @@
+dsh: reasoning:
+I'm a bounded execution worker with worker=19. I need to read handoff/map and comms, take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit.
+
+Let me start by exploring the workspace to find the handoff directory and comms.
+dsh: reasoning:
+The glob for handoff/** returned nothing. Let me look at the swarm-related things: ai4math-swarm.tar.gz, launch_swarm.sh, supervise_swarm.sh, supervise_loop.sh, workdir. The handoff/map and comms might be under workdir, or under the swarm directory. Let's look.
+dsh: reasoning:
+I'm worker=19 in the cosmic-censorship research swarm. The root is /data3/guoshaoyang/workdir/ai4math-swarm. I need to read HANDOFF.md, research_map, comms, take one class-bound task (assigned by a group lead; if no assignment, inspect the immediate queue and propose one artifact-backed task without claiming completion), emit status/claim/artifact/blocker or resource_request JSON in comms/outbox with node/class IDs, evidence refs and next falsifier. Then checkpoint and exit.
+
+Let me explore the swarm directory.
+dsh: reasoning:
+This is a swarm workspace. I'm worker=19 (deepseek-flash-19 presumably). But wait, there is already deepseek-flash-19.jsonl in outbox. Hmm, so maybe "worker=19" refers to a new bounded execution worker, and I should emit my own output. Let me read the comms protocol, the inbox assignments, and the research_map.
+
+Key instruction: "Read handoff/map and comms. Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit. worker=19"
+
+Let me read:
+1. comms/PROTOCOL.md
+2. research_map/research_map.json (or ASTRA_HANDOFF.md)
+3. inbox (assignments)
+4. schemas/ (for valid JSON event schema)
+5. Check the existing deepseek-flash-19.jsonl to avoid duplicating.
+
+Let me do this efficiently.
+dsh: reasoning:
+Let me read my inbox as deepseek-flash-19 (worker 19). Also read ASTRA_HANDOFF.md, and check the existing outbox deepseek-flash-19.jsonl to see what prior worker 19 did (I shouldn't duplicate). Also examine the "proposed" directory and "evaluation" directory.
+
+The task says "Take one class-bound task". There might be an assignment in comms/inbox/deepseek-flash-19.jsonl. Let's read it.
+dsh: reasoning:
+I'm worker 19. There are 10 assignment cards, but many of them are stale (23:19–23:29). The most recent assignments (2026-09-12T00:05 and 00:07) are:
+- Item 8: `astra-indep-1-CF5-ledger-verify` — class token census artifact at `artifacts/flash-19/class_token_census.json` (G-LIT, node L0), class_id list of 4 frozen IDs. Deadline 03:15. Independent verification only, do not modify ledger files.
+- Item 9: `reviews/A0-review-19-current.json` — current on-disk hash d748a9e3574e (G-AUDIT, A0)
+- Item 10: `reviews/A2-review-19.json` — hash 1b2a83ef670b (G-AUDIT, A2)
+
+Also item 3: A1 patch + fixtures under artifacts/audit/validate_map_evidence_patch/ (class GLOBAL, budget 2h) — that's a larger engineering task.
+
+Instruction: "Take one class-bound task". Class-bound means has a class_id. Item 8 has class_id: "AF-WCC-VAC-GEN;AF-SCC-C2-VAC-GEN;AF-SCC-C0-VAC-GEN;AF-WCC-SCALAR-SPH" — that's class-bound. Items 9/10 have class_id GLOBAL, which is not really class-bound. So the natural class-bound task is the class token census (item 8), which is also the most recent assignment from astra (00:05) and fits "bounded execution worker" — machine census, artifact + sha256, evidence refs, falsifier.
+
+But wait — I should check whether this task was already done by a prior worker-19 instance (outbox deepseek-flash-19.jsonl was modified at 00:07, just before/after the assignment at 00:05). Let me check the outbox and artifacts/flash-19/. The assignment was issued at 00:05:13 and the outbox file was modified 00:07. So the previous worker 19 may have already processed it. Let me check.
+
+Also I must be careful: instruction says "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit." So my job: pick one class-bound task, do bounded work, write the artifact, emit event JSON to outbox, run checkpoint, exit.
+
+Let me look at the outbox for worker 19 and the artifacts dir.
+dsh: reasoning:
+The previous worker 19 (same agent id) did F2a reviews (T19-01, T19-02). Now there is a NEW assignment issued at 2026-09-12T00:05:13: `astra-indep-1-CF5-ledger-verify` — class token census artifact at `artifacts/flash-19/class_token_census.json`, gate G-LIT, node L0. This is the class-bound task (class_id has 4 frozen ids) and is the most recent. It says "Independent verification only: census class tokens, do not modify ledger files."
+
+But also items 9 and 10 from astra-lead-audit at 00:07:42: A0 re-review and A2 review. Those have class_id GLOBAL. The instruction says "Take one class-bound task", so the class-token census is the correct pick. It's also bounded: machine census of every class token in ledger/theorems.jsonl and ledger/citation_audit.csv with counts, each classified frozen / ledger-tag / violation, plus a one-line remedy per violation. Artifact: artifacts/flash-19/class_token_census.json.
+
+Also I need to check if a previous worker-19 already took it — the outbox tail shows the last events at 00:08:30 were about T19-02 (F2a review). And artifacts/flash-19/ doesn't exist. So the census task is unstarted.
+
+Let me check the current state of the map to know the frozen class ids, and examine ledger/theorems.jsonl and citation_audit.csv structure. Also check research_map/class_separation.py for the frozen ids and any existing census tooling to avoid duplication. Also check `proposed/` and `evaluation/` dirs briefly? Not needed for this task.
+
+Plan:
+1. Read research_map/class_separation.py and possibly research_map/research_map.json's class list to establish the four frozen class IDs.
+2. Inspect ledger/theorems.jsonl (140KB, ~?) and ledger/citation_audit.csv (102KB) to census class tokens.
+3. Write a script under artifacts/flash-19/ (e.g., census tool) — actually assignment says artifact `artifacts/flash-19/class_token_census.json`. I can write the census script too, but keep the canonical artifact path exact. Since "A submission elsewhere is recorded as drift", the artifact must be at artifacts/flash-19/class_token_census.json.
+4. Compute sha256 of the artifact.
+5. Emit event JSON to comms/outbox/deepseek-flash-19.jsonl: artifact event (node_id, artifact_type, path, sha256, validation_status) plus status event with class_id, evidence_refs (path#sha256-prefix), next_falsifier. Maybe a claim? The instruction says "emit valid JSON with IDs evidence hash falsifier". Artifact + status should suffice; maybe include a claim of type "open_problem"? Protocol says claim requires class_id, statement, conclusion_type, assumptions, falsifier, evidence_refs, artifact_refs (required for theorem). I'll emit artifact + status. Possibly also a claim with conclusion_type "verification" — but the valid conclusion types? Let me check schemas.py/events.schema.json for allowed event types and conclusion types.
+6. Run checkpoint: `python3 research_map/checkpoint.py`. But careful — checkpoint writes to runtime/state; that's fine, checkpointing is asked of me. The instruction "checkpoint, then exit" means run the checkpoint script. Also the controller owns map updates; I should not run ingest? The protocol says controller runs ingest. But the ASTRA_HANDOFF says "Pull accepted traffic: python3 research_map/comms.py ingest". Running ingest mixes events; the controller does that. Hmm, "checkpoint" in my instruction likely means write a checkpoint status event and/or run `research_map/checkpoint.py`. Let me check what checkpoint.py does — it might snapshot state including artifact hashes. Running it seems safe and aligned with "Checkpoint every 15 minutes". But it might be controller-only. Let me read it.
+
+Let me first check events schema and class_separation.py.
+dsh: reasoning:
+Good. The event schema oneOf includes direction_update, claim, artifact, review, resource_request. Status is not in schema! But the protocol says upward message types include status and blocker. Yet events.schema.json's oneOf doesn't include status/blocker — presumably validate_events uses a different or looser schema, or status/blocker events are rejected by schema. Interesting: the outbox already contains status events from worker 19. Hmm, the rejected.jsonl is 84KB and growing. Let me check whether status events are validated. Actually the schema has `additionalProperties: true` on base but `oneOf` requires matching one of the five defs; a status event matches none ⇒ schema invalid. But `comms.py ingest` might not use events.schema.json strictly... The checkpoint runs validate_events. Let me check validate_map.validate_events.
+
+Also I need the frozen class IDs list: KNOWN_CLASSES = {AF-WCC-VAC-GEN, AF-SCC-C2-VAC-GEN, AF-SCC-C0-VAC-GEN, AF-WCC-SCALAR-SPH}. The assignment says the four frozen ids and "a class token in the ledger that is not one of the four frozen ids and not explicitly tagged as a ledger-local tag falsifies the census". So I need to census tokens matching the class-token pattern `AF-...-...-...-...` in ledger/theorems.jsonl and ledger/citation_audit.csv.
+
+Let me look at the actual ledger files. Also check which fields contain class tokens in theorems.jsonl. Let me inspect heads and run a quick python census to understand shape. Also check ledger/class_coverage.csv maybe includes class tokens too but assignment scopes only two files: ledger/theorems.jsonl and ledger/citation_audit.csv.
+
+Let me check the files.
+dsh: reasoning:
+Now let me census class tokens. The token regex used by class_separation.py: `AF-[A-Z0-9]+-[A-Z0-9]+-[A-Z0-9]+-[A-Z0-9]+`. But class tokens might also appear in forms like "AF-SCC-C2-VAC" (shorter) or "AF-WCC-SCALAR-SPH" (matches: AF-WCC-SCALAR-SPH = 4 groups: WCC, SCALAR, SPH... wait the regex needs 4 groups after AF: AF-[A-Z0-9]+-[A-Z0-9]+-[A-Z0-9]+-[A-Z0-9]+ → AF + 4 groups. "AF-WCC-VAC-GEN" has only 3 groups after AF! Let's check: AF-WCC-VAC-GEN → groups: WCC, VAC, GEN = 3. The regex `AF-[A-Z0-9]+-[A-Z0-9]+-[A-Z0-9]+-[A-Z0-9]+` requires 4 hyphenated groups. Hmm, that would not match AF-WCC-VAC-GEN. Wait let me recount: pattern is "AF-" then [A-Z0-9]+ "-" [A-Z0-9]+ "-" [A-Z0-9]+ "-" [A-Z0-9]+. That's AF-XXXX-XXXX-XXXX-XXXX. KNOWN_CLASSES are AF-WCC-VAC-GEN (3 segments total after AF? no: WCC, VAC, GEN → 3 segments). So the regex in class_separation.py does NOT match the actual class names?! Let me verify.
+
+Actually "AF-WCC-SCALAR-SPH" → WCC, SCALAR, SPH → 3 segments. All four KNOWN_CLASSES have 3 segments. But the regex requires 4. That looks like a real bug — maybe intentional? Let me test quickly. This could be a genuine finding: any census using class_separation's `_class_tokens` would find nothing. But the assignment says census class tokens, and the falsifier: "A class token in the ledger that is not one of the four frozen ids and not explicitly tagged as a ledger-local tag falsifies the census."
+
+So I need to define the token pattern properly. I should census:
+- occurrences of exact frozen class ids,
+- occurrences of near-miss / variant class-like tokens (AF-...) such as AF-SCC-C2-VAC (without -GEN), AF-WCC (family markers), etc.
+
+Classification: frozen / ledger-tag / violation. Ledger-tag refers to ledger-local tags like in `ledger_tags` field (e.g., "DEFINITIONS", "WCC-STATEMENT"). Hmm, "explicitly tagged as a ledger-local tag" — maybe variants like "AF-SCC-C2-VAC" appear inside a ledger_tags entry? Let me check what class-like tokens actually exist in the two files.
+
+Let me run a census with a broad pattern `AF-[A-Z0-9-]+` and also `\b(?:WCC|SCC|C0|C2)\b`? No — the assignment says "every class token". Let me define class token as any token matching `AF-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*` (i.e., any AF- prefixed token), plus exact frozen ids. Then classify each distinct token:
+
+- frozen: exactly in KNOWN_CLASSES (the four)
+- ledger-tag: tokens that appear as a declared local tag (in `ledger_tags` array) — perhaps with a prefix like "LOCAL:"? Need to check what's actually there.
+- violation: everything else.
+
+Let me run the scan first to see what is present. I'll write the census script as I go, and run exploratory scans.
+
+Also need to check `informs_classes` field (7 entries) and csv columns `used_by_theorems`, `class_mapping`. Let me extract all AF-like tokens per file and per field.
+dsh: reasoning:
+Interesting. Non-frozen tokens:
+- theorems.jsonl: `AF-SCC` (2 occurrences, fields scope_caveats and unresolved — prose context, e.g., "AF-SCC family"?), `AF-SCC-C2` (1 occurrence in next_action).
+- citation_audit.csv: `AF-SCC-C0` (2 occurrences in assessment field, probably "assessed: AF-SCC-C0..."?).
+
+Are these "explicitly tagged as a ledger-local tag"? Let me see the exact contexts. The falsifier says: "A class token in the ledger that is not one of the four frozen ids and not explicitly tagged as a ledger-local tag falsifies the census." So these near-miss tokens might be acceptable if they're tagged as ledger-local tags. Let me look at the exact contexts and the ledger_tags field.
+
+Also, I should check for tokens with different casing, Unicode superscripts, "C2^0" etc. And check `ledger_tags` values to understand what a "ledger-local tag" is. Let me inspect.
+
+Also there's the class_separation.py regex bug (requires 4 groups, matches none of the real tokens). That's an important finding for the census: the canonical detector's `_class_tokens` does not match any frozen class id. Wait, let me verify: pattern `AF-[A-Z0-9]+-[A-Z0-9]+-[A-Z0-9]+-[A-Z0-9]+`:
+- "AF-WCC-VAC-GEN": after AF-, need X-Y-Z-W: WCC-VAC-GEN is only 3. So no match. Indeed `_class_tokens` returns nothing for real class ids. That's a real defect worth reporting, but is it in scope? The census artifact is about class tokens in the ledger. I can include a finding about the detector regex mismatch as a "remedy" note, maybe as a secondary check. Careful with scope: "Machine census of every class token in ledger/theorems.jsonl and ledger/citation_audit.csv with counts, each classified frozen / ledger-tag / violation, plus a one-line remedy per violation." Adding a detector-consistency note is within the spirit (evidence_refs include class_separation.py). But keep the artifact focused.
+
+Let me look at the contexts of non-frozen tokens and ledger_tags.
+dsh: reasoning:
+Now I understand the landscape. Non-frozen tokens:
+1. `AF-SCC-C2` in T-304 `next_action` (line 26): "bind to the AF-SCC-C2 dossier" — a shorthand, not one of the four frozen ids, not a ledger-local tag (ledger_tags for T-304? let me check). This is arguably a violation (shorthand class token).
+2. `AF-SCC` in T-526 `scope_caveats` and `unresolved` (line 58): "The result is nonlinear vacuum without symmetry: this is the strongest vacuum SCC-type statement in the ledger." Wait, the actual token AF-SCC appears in the second caveat: "Whether the AF-SCC class should count a characteristic interior result as discharging it." So AF-SCC is a shorthand family token used in prose. Is it "explicitly tagged as a ledger-local tag"? The theorem's ledger_tags include both "C0" and "C2" and "C2-FORMULATION" etc. Hmm, T-526's tags? Let me check. But AF-SCC itself is not in ledger_tags.
+
+3. `AF-SCC-C0` in citation_audit.csv rows 97, 98 assessment field: "must not be cited as evidence that the AF-SCC-C0 class is degenerate" — appears in a *negative* context (not attached to any class), not tagged as a ledger-local tag. Interesting nuance: it's used to say the citation is NOT attached to the class. The assignment's classification is frozen / ledger-tag / violation, and the falsifier says any token not one of the four frozen ids and not explicitly tagged as a ledger-local tag falsifies the census. Strictly, these are violations. But I should record them with context and a "no-binding/negative mention" nuance in the remedy. The classification per the assignment is mechanical: token ∉ frozen ∧ not tagged ledger-local ⇒ violation. I can add a subtype "negative_context" as annotation but the class field = violation, since the acceptance is about classification and remedy.
+
+Wait — need to double check `AF-SCC-C2` token also in other fields. The scan says tokens found: AF-SCC (2), AF-SCC-C0-VAC-GEN, AF-SCC-C2 (1), etc. Also need to consider token casing variants (lowercase `af-scc`), Unicode superscripts (C², C⁰), and spaced forms like "AF-SCC-C2-VAC-GEN". The census should be exhaustive "every class token". What counts as a class token? I'll define:
+- Primary pattern: `AF-` followed by hyphenated alphanumeric groups (case-insensitive), which catches the four frozen ids and near-misses.
+- Also detect the class family shorthand in canonical forms: `WCC`, `SCC`, `C0`/`C^0`/`C⁰`/`C2`/`C^2`/`C²` only when they appear as part of an AF- token? Hmm. "Class token" likely means tokens that denote a class: the AF-* ones. The frozen ids are all AF-*. The falsifier explicitly is about "a class token ... not one of the four frozen ids". I'll scope the census to AF-prefixed tokens (case-insensitive), and separately report a bounded secondary scan for superscript/caret variants of the four ids (e.g., `AF-SCC-C²-VAC-GEN` would be a variant of a frozen id, not a different id) to be thorough.
+
+Let me also confirm what tokens appear with case-insensitive matching and Unicode-normalized. Also scan for family-only tokens `SCC`, `WCC` classified separately (not as class tokens — they are family names, not class ids). I'll include them in an auxiliary section to support the "no leakage" claim but not in the violation count, since the falsifier defines a class token as absent from frozen and untagged. Hmm, but a strict audit might consider `AF-SCC` a class token (it is AF-prefixed but incomplete). It is. `SCC` bare is not AF-prefixed, so not a class token — but it's the family marker. I'll document the rule clearly.
+
+Now, "explicitly tagged as a ledger-local tag": What does this mean concretely? Probably if a token appears in the `ledger_tags` array of a theorem, it's a ledger-local tag (e.g., tags "C0", "C2", "SCALAR-SPH", "VACUUM"). The near-miss tokens appear in prose fields, not in ledger_tags. So they are violations.
+
+Let me check if any theorem has a ledger_tags entry containing an AF- token (none in the list above — tags are non-AF). So "ledger-tag" class in the census would have 0 members... unless some tags like "C0"/"C2" are class-ish but not class tokens. Hmm. The classification "frozen / ledger-tag / violation" — maybe "ledger-tag" means the token appears in a `ledger_tags` list. Since no AF-* tokens appear in ledger_tags, count 0. But then why mention it? Perhaps because some class-like tokens are intentionally local tags like "C0" or "C2". I need to define the census scope carefully to make "ledger-tag" meaningful.
+
+Alternative scope: census "class tokens" = exact frozen ids + AF-prefixed near-miss tokens + bare local dialect tokens {C0, C2, WCC, SCC, SCALAR-SPH, VACUUM} that are ambiguous. Then classify:
+- frozen: the four
+- ledger-tag: tokens that appear in some theorem's `ledger_tags` array (declared local vocabulary) — C0, C2, SCALAR-SPH, VACUUM, etc.
+- violation: everything else (AF-SCC, AF-SCC-C2, AF-SCC-C0).
+
+That gives a meaningful ledger-tag class. But including bare C0/C2 etc. inflates scope. The assignment's evidence_refs include class_separation.py, whose KNOWN_CLASSES are the four. Its `_class_tokens` regex targets 4-group AF tokens (buggy). The falsifier: "A class token in the ledger that is not one of the four frozen ids and not explicitly tagged as a ledger-local tag falsifies the census." This suggests the census defines "class token" more broadly than the four ids; ledger-local tags are the escape hatch. The ledger's `ledger_tags` are exactly the "ledger-local tags" (C0, C2, SCALAR-SPH, VACUUM, etc.).
+
+I think the cleanest, most defensible definition:
+
+**Class token** = any token matching the canonical class-id shape `AF-[A-Za-z0-9]+(-[A-Za-z0-9]+)*` (AF-prefixed, case-insensitive), OR (secondary) any member of the ledger-local tag vocabulary used in `ledger_tags` that names a class/family/regularity {C0, C2, WCC, SCC, SCALAR-SPH, VACUUM} when it occurs in a class-denoting field. Hmm, second part is getting complicated. Let me simplify: primary census over AF-prefixed tokens (this is where violations are); secondary census over ledger-local dialect tags from `ledger_tags` (C0, C2, ...) classified as ledger-tag by construction, with counts, to substantiate that the remaining class-ish vocabulary is ledger-local. That is honest and complete.
+
+For each distinct token: counts per file, per field, classification, and for violations: locations (line/row, theorem_id/citation_id, field), exact context snippet, and one-line remedy.
+
+Also check: does `informs_classes` contain non-frozen? Token scan says AF-SCC-C0-VAC-GEN (3) and AF-SCC-C2-VAC-GEN (4) in informs_classes. Fine.
+
+Also check csv `class_mapping` for multi-class values/pipes, e.g., "AF-SCC-C2-VAC-GEN;AF-SCC-C0-VAC-GEN" — the token scan counts each separately. The assignment says "every class token ... with counts, each classified". I can additionally report multi-mapping rows (composite class tokens) since class_separation R1 flags composites. But the scope says census of class tokens; composite detection is a bonus. Let me check whether any class_mapping contains multiple tokens or slash/commas.
+
+Let me also check class_mapping values in csv: distinct values. And check for unusual whitespace/unicode. Let me run a thorough scan including lower-case and superscript normalization. Then build the artifact.
+
+Also important: verify file hashes for evidence refs: sha256 of ledger/theorems.jsonl and ledger/citation_audit.csv at the time I read them. The artifact must reference the hash of the ledger files it censused, so it's pinned.
+
+Also note the ledger files are being actively modified by literature lead (theorems.jsonl modified 00:08). My census must pin the hashes and note that it's valid only at those hashes. If the ledger changes, the census is invalidated (falsifier/refresh rule).
+
+Let me now check for composites and do the full scan.
+dsh: reasoning:
+Interesting! The composite regex flags theorem lines 5, 20, 30, 39, 41. Let me check what those are — could be legitimate discussion ("C0 or C2" in a prohibition context) or genuine merges. That's relevant to class separation but not strictly the census. However, the assignment's falsifier is about class tokens, not composites. I'll keep the census focused but may include a bounded auxiliary finding if a genuine violation exists. Careful about scope creep; the artifact must be a "machine census of every class token ... with counts, each classified frozen / ledger-tag / violation, plus a one-line remedy per violation."
+
+Wait, there's a subtlety: the class_mapping column has multi-class values like "AF-SCC-C0-VAC-GEN;AF-SCC-C2-VAC-GEN" (12 rows). Is that a violation of class separation? The protocol says never use "C0 or C2"; but a citation can legitimately bear on two separate classes (it's a mapping of evidence to multiple classes). That's the ledger's design: `class_mapping` maps a source to potentially several classes. Not necessarily a leak. The falsifier for this task is only about tokens not in the four frozen ids. So the multi-class CSV values are fine — each constituent token is frozen. I'll report that as a "composite mapping" auxiliary statistic (rows with >1 frozen id) without calling it a violation, unless class_separation flags it. Let me run the actual class_separation detector on these ledger records to see if it flags anything — that's the canonical tool referenced in evidence_refs. It takes objects; `findings(obj, where)`. Let me test it on the two ledger files to get the canonical verdict. That will strengthen the artifact: "canonical detector reports X findings".
+
+But note the detector's regex bug for `_class_tokens`. Let me check the rest of class_separation.py to see how findings work and whether it flags composites in these files. Let me run it.
+
+Also, the composites in theorems lines 5,20,30,39,41: let me look at them.
+
+Let me now:
+1. Run class_separation.findings on each ledger record.
+2. View the composites.
+
+Then write the census script and artifact.
+
+Time budget: I'm a bounded worker; this is a small task. Let me be efficient.
+dsh: reasoning:
+Very interesting. Key finding: `class_separation._class_tokens` regex matches only 2 of the 4 frozen ids:
+- `AF-WCC-VAC-GEN` and `AF-WCC-SCALAR-SPH` are NOT matched (both have only 3 hyphen-separated segments including AF? Let's see: AF-WCC-VAC-GEN → "AF", "WCC", "VAC", "GEN" = 4 segments; the regex requires AF + 4 more segments = 5 total. AF-SCC-C2-VAC-GEN = 5 segments → matched. So the regex requires 5 segments; two frozen classes have 4 segments. This is a genuine detector defect (R2 "unknown class token" wouldn't fire for WCC ids). This is worth including as an auxiliary finding in the census since evidence_refs include class_separation.py, and the census's whole point is class-token coverage. But careful: the assignment says census of tokens in the ledger, with remedy per violation. The detector defect is not a token violation but affects the canonical verification tool. I'll include it as a "instrument_note" section within the artifact, clearly marked, with its own evidence (a tiny reproduction). It strengthens the value and is machine-checkable.
+
+Hmm, but also note that the prior worker-19 events referenced class-separation detector "17/17 leaks, 10/10 controls clean". If the regex doesn't match WCC ids, how did the regression pass? Maybe the fixtures use full 5-segment ids... not my concern now.
+
+Also, the detector DOES flag T-402 line 30 `regularity` field: "Between C0 and C2 (weak null singularity)." — a bare composite expression. In context, this is describing the intermediate formulations "strictly between the C^0 and C^2 formulations", not merging the classes. The detector's own docstring says R1 should handle benign contexts locally, but for that field it flags. Is this a true class-hygiene violation? It reads as a description of intermediate regularity formulations, not a class merge. It's a detector false positive, but the task is class-token census, not composite audit. I'll mention it in an auxiliary "related observations / out-of-scope" section? The assignment says "plus a one-line remedy per violation". The T-402 flag is not a token violation. I think including it in a clearly-labeled auxiliary section is good, with a note that it is a detector finding (not part of the token census) and that its remedy is wording ("Between the C^0 and C^2 formulations") if the gate treats the detector as authoritative. But scope control: the artifact census should be clean and focused. I'll include a small `auxiliary_observations` array with two entries: (1) detector token-regex defect, (2) T-402 regularity composite flagged by canonical detector. Each with evidence and remedy. Clearly labeled as not affecting the frozen/ledger-tag/violation counts. Actually the assignment says "Machine census ... each classified frozen / ledger-tag / violation, plus a one-line remedy per violation." Adding an auxiliary section is fine as long as the required fields are exact.
+
+Now, what about "ledger-tag"? No AF-token appears in ledger_tags. But the ledger-local vocabulary includes bare tags like "C0", "C2", "SCALAR-SPH", "VACUUM". Should those count as class tokens? The falsifier says a class token not one of the four frozen ids and not explicitly tagged as a ledger-local tag. If I count bare "C0"/"C2" family tags as class tokens, they ARE ledger tags (in `ledger_tags`), so they'd be classified ledger-tag. That gives the ledger-tag class real content and matches the classification intent. If I exclude them, ledger-tag class = 0 members. Which interpretation is intended?
+
+Look at the non-frozen AF tokens:
+- `AF-SCC` (2) — family shorthand, appears in scope_caveats/unresolved prose. Not in ledger_tags.
+- `AF-SCC-C2` (1) — shorthand in next_action. Not in ledger_tags.
+- `AF-SCC-C0` (2) — in csv assessment prose ("must not be cited as ... class evidence for AF-SCC-C0"). Not in ledger_tags.
+
+If ledger-tag class is empty, the classification "frozen / ledger-tag / violation" still works with a zero-count class documented. But the falsifier mentions "explicitly tagged as a ledger-local tag" — an escape hatch for tokens like bare `C0`/`C2` which are deliberately local vocabulary. I think the best census defines the token universe in two tiers:
+
+Tier A (canonical class-id shape): AF-prefixed tokens. Classification: frozen (4 ids) vs violation (everything else).
+Tier B (ledger-local dialect tags): bare class-family/regularity tags that occur in `ledger_tags` (C0, C2, WCC-STATEMENT, SCALAR-SPH, VACUUM, C0-FORMULATION, C2-FORMULATION, ...). Classification: ledger-tag (explicitly declared local vocabulary).
+
+Then the required classification "frozen / ledger-tag / violation" is complete and each has members:
+- frozen: 4 ids, counts in both files.
+- ledger-tag: declared local tags (count from ledger_tags census).
+- violation: AF-SCC, AF-SCC-C2, AF-SCC-C0 (5 occurrences total across both files).
+
+Hmm wait, but is `AF-SCC-C2` in the csv too? No. The csv has AF-SCC-C0 in assessment (2).
+
+I need to be careful about what "class token" means in Tier B: I'll take the set of tag values in `ledger_tags` across theorems.jsonl as the declared local vocabulary (59 distinct tags), and for the census of class-denoting dialect tags, filter to those denoting class/family/regularity: C0, C2, SCALAR-SPH, VACUUM, WCC-STATEMENT? Hmm, WCC-STATEMENT isn't a class. Maybe I'm overcomplicating. Simpler: report the full `ledger_tags` vocabulary census (all 59 tags with counts) and mark those containing class-denoting markers (C0, C2, WCC, SCC, SCALAR, VACUUM) as `ledger-tag`. Then the classification rule is: any token that appears verbatim inside a `ledger_tags` array is classified `ledger-tag` by definition. That's mechanical and defensible. The near-miss AF tokens do not appear there → violation.
+
+Let me check: does the string "C0" appear as a ledger_tag? Yes. "C2" yes. So ledger-tag class has members.
+
+OK here's my final census design (artifact JSON):
+
+```json
+{
+  "artifact": "class_token_census",
+  "schema_version": "1.0",
+  "task_id": "astra-indep-1-CF5-ledger-verify",
+  "run_id": "run-2026-09-12T00:00+08:00",
+  "node_id": "L0",
+  "gate": "G-LIT",
+  "class_ids_scope": [4 frozen],
+  "generated_at": "...",
+  "generator": {"path": "artifacts/flash-19/class_token_census.py"?...}
+  "inputs": [
+    {"path":"ledger/theorems.jsonl","sha256":"ce42d2...","bytes":...,"records":62},
+    {"path":"ledger/citation_audit.csv","sha256":"315c19...","bytes":...,"rows":97}
+  ],
+  "token_definition": {...regex, normalization, fields scanned...},
+  "classification_rules": {...},
+  "frozen_ids": [...],
+  "census": [ {token, classification, total, by_file:{...}, by_field:{...}, sample_locations:[...]}, ... ],
+  "violations": [ {token, classification:"violation", total, occurrences:[{file,line/row,record_id,field,snippet}], remedy} ],
+  "ledger_local_tags": {"distinct": 59, "occurrences": ..., "class_denoting": [...], "all": {...}},
+  "auxiliary_observations": [...],
+  "falsifier": "...",
+  "reopen_rule": "any ledger sha256 change invalidates this census"
+}
+```
+
+Counts: I should count occurrences robustly (string-level regex over the JSON-serialized field values, after NFKC + superscript normalization). But the "by_field" counts from my first scan were raw (no normalization). Should be same for these tokens.
+
+Now, evidence: the artifact refs should include input file hashes. Let me also produce a companion `class_token_census.py` script? The assignment only requires the JSON artifact. Reproducibility is good practice: a script under artifacts/flash-19/ (same dir as artifact) with its own sha256 referenced in the JSON's `generator` field. That's allowed (write scope: artifacts/flash-19/). It makes the census machine-checkable/reproducible. I'll do that: `artifacts/flash-19/class_token_census.py` writes the JSON. Then artifact event for the JSON; maybe also an artifact event for the script? One artifact event for the canonical path; I can list the script in evidence_refs of the status event. Actually the assignment names exactly one artifact path. I'll emit one artifact event for the JSON, and mention the generator script in the JSON + status evidence_refs.
+
+Wait — "A submission elsewhere is recorded as drift, never completion." The canonical path is `artifacts/flash-19/class_token_census.json`. Writing the generator script in the same directory is fine and not a submission.
+
+Also, the csv has 98 lines = 97 data rows? wc -l said 98 including header → 97 data rows. Let me confirm count. Earlier `citation_id` max SRC-097/098? The rows were enumerated to 98 in the loop (row index starting at 2, so 97 rows). Let me verify: the composite check printed rows 97/98 for SRC-096/097 → so 97 data rows (SRC-001..SRC-097?). Fine — script will compute.
+
+Now also check: are there tokens in theorem fields `informs_classes` that are near-misses? No.
+
+One more check: tokens might appear with lowercase `af-` or with spaces "AF - WCC". My case-insensitive scan found same set, so no.
+
+Also check tokens in the csv's `used_by_theorems` column (theorem ids, not classes). Fine.
+
+Now the status/checkpoint events. The instruction: "emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit." 
+
+"valid JSON" — must conform to the event schema. The schema `oneOf` covers: direction_update, claim, artifact, review, resource_request. `status` events are NOT in events.schema.json, yet the protocol says status is an upward type and existing outbox is full of status events. `validate_events` in validate_map.py — let me check how it validates. If it strictly applies events.schema.json, all those status events would be rejected... but the rejected.jsonl is 84KB. Let me check validate_map.validate_events and whether status is accepted. Let me grep.
+
+Actually the safest: emit an `artifact` event (definitely schema-valid) + a `claim` event whose conclusion_type is a valid enum choice. What are allowed conclusion_type values? Let me check schemas.py / validate_map. The claim schema just requires conclusion_type string. The F2a claim used "open_problem". For the census, my claim is a verified statement about the ledger at pinned hashes. conclusion_type could be "empirical" or "verification" — need allowed values. Let me check research_map/schemas.py and validate_map.py.
+
+And a checkpoint: run `python3 research_map/checkpoint.py`. It ingests comms (comms.ingest) — that would ingest my outbox event and move it to events.jsonl. That's the controller's job, but the instruction explicitly says "checkpoint". Let me read checkpoint.py more fully to see if it's safe to run (it writes runtime/state files only, never mutates research_map.json per its docstring — but it does call comms ingest? The docstring says "ingest comms, validate map, audit evidence, account budgets, snapshot". Let me read the main()). Running it as a worker might be acceptable and expected ("Checkpoint every 15 minutes"). But there's a risk of racing with the controller. The safer interpretation: emit a `status` checkpoint event (CP1) to my outbox and run `python3 research_map/checkpoint.py --label worker-19`. Hmm.
+
+Let me read the main of checkpoint.py and validate_map.py first.
+dsh: reasoning:
+Interesting: `validate_map.py` mentions "integrated from worker-19's proposed patch (artifacts/audit/flash19_validate_map_gate.patch)". So a previous session of worker-19 already did the A1 patch task. Good — that assignment (item 3) is done.
+
+Now `schemas.py` validate_event — let me check whether `status` and `blocker` are allowed. Let me read schemas.py.
+
+Also checkpoint.py runs `comms.ingest(dry_run=False)` which will ingest ALL outboxes including mine, appending to events.jsonl and rejected.jsonl. That's the controller's function; running it as worker could interfere/race with the controller. But the instruction says "checkpoint". The ASTRA_HANDOFF says checkpoints are `runtime/state/current_checkpoint.json` every 15 min. The controller also runs checkpoint each cycle presumably. As a bounded worker, my "checkpoint" more likely means: emit a checkpoint status event with my current task state and then exit. But the instruction says "emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit" — the sequence suggests: emit JSON events, then checkpoint, then exit. Running `checkpoint.py` is the literal checkpoint action.
+
+Risk assessment: checkpoint.py is designed to be idempotent (it reads comms, ingests, snapshots). Running it concurrently with the controller could cause duplicate ingest, but ingest dedups by event_id. The write to current_checkpoint.json could race but it's atomic-ish text write. ingest moves/records events — let me check if ingest is safe: it may mark files as processed. Let me read comms.py ingest quickly. If it's append-only with dedup by event_id, it's safe enough.
+
+Alternatively, I can run `python3 research_map/checkpoint.py --label worker-19-census` — this matches "checkpoint". But if my outbox event hasn't been written yet, the checkpoint won't include it. Order: write artifact → write outbox events → run checkpoint (which ingests them into events.jsonl and snapshots). That satisfies "emit JSON ... checkpoint".
+
+Hmm, but is it appropriate for a worker to trigger ingest of the entire outbox? The supervisor/controller does it every 30s cycle. The instruction explicitly says to checkpoint, so I'll do it. But let me first check comms.ingest for destructive behavior (e.g., truncating outbox files). Let me look.
+
+Also check schemas.py for allowed event types.
+dsh: reasoning:
+Good: `status` and `artifact` events are schema-valid per schemas.py (validate_map's validate_events uses schemas.validate_event, not events.schema.json — events.schema.json is a separate JSON-Schema doc, apparently not enforced by validate_events; it's used by apply_events maybe). I'll emit `artifact` + `status` (+ maybe `claim`).
+
+The claim conclusion_type choices: theorem, conditional_theorem, stability_result, counterexample, numerical_evidence, formal_model, open_problem. My census result is a verification statement about files — closest is "open_problem"? Not great. The F2a claim used open_problem. Alternatively "formal_model"? No. I could emit only artifact + status, avoiding a forced conclusion_type. But the worker instruction says "emit valid JSON with IDs evidence hash falsifier" — the artifact event has node_id but no falsifier field required (extra fields allowed). I can include `falsifier` and `next_falsifier` as additional properties on the artifact event (additionalProperties allowed). The status event requires next_falsifier. So:
+- artifact event: node_id L0, artifact_type "census", path artifacts/flash-19/class_token_census.json, sha256, validation_status "unverified" (worker cannot set passed), plus task_id, class_id, evidence_refs, falsifier, next_falsifier.
+- status event: node_id L0, status "active"/"done"? Authority: worker cannot set node status=done (it's recorded as completion_claim). The A1 review earlier used status "active". I'll emit status "active" with summary and next_falsifier? Or "done"? The instruction says the worker exits after; the node is not done until reviewed. Use "active" with a completion_claim note? Hmm. The controller notice says worker events cannot set node status=done; those are recorded as completion_claims. Emitting status done would be rejected/recorded as completion claim; but honest status for my bounded task is "done" (my task is done) though the node L0 isn't. Prior worker-19 status events used "active". I'll use "active" and state in summary that the assigned task is complete pending reviewer verdict, no node completion claimed. That's the safest and honest.
+
+Actually, wait. Let me reconsider: maybe emit status "done"? The instruction says "Take one class-bound task, emit valid JSON..., checkpoint, then exit." It doesn't say claim victory. Prior worker examples use "active". I'll use "active" for the node and note "task_complete_pending_review": true in extra fields.
+
+Also `blocker` not needed.
+
+Now the artifact. Let me write the generator script `artifacts/flash-19/class_token_census.py` that:
+1. Pins input paths and computes sha256.
+2. Extracts all AF-prefixed tokens from every field of every record of theorems.jsonl and citation_audit.csv, with normalization (NFKC, superscripts, caret/braces removal).
+3. Classifies: frozen if in 4 ids; ledger-tag if the exact token appears in any `ledger_tags` array (for theorems) — for csv there is no ledger_tags column, so no; violation otherwise.
+4. Records per-token counts by file and field, and for violations all occurrences with record id and snippet.
+5. Adds auxiliary census of ledger_tags vocabulary (declared local tags with counts) and class-denoting subset.
+6. Adds auxiliary observations: (a) detector `_class_tokens` regex mismatch for 2 of 4 frozen ids (reproduced by import); (b) canonical detector finding on T-402 line 30 regularity composite (reproduced by calling findings()). Clearly marked out-of-scope for token classification.
+7. Includes falsifier, reopen rule, classification rules, definitions, and the exact command to reproduce.
+8. Writes the JSON to the canonical path and prints sha256.
+
+Important: fix the file hashes at the moment of generation. Since the literature lead may modify the ledger concurrently, my generator computes sha256 at read time. To ensure consistency between hash and census, read bytes once, hash them, then parse from those bytes. Good practice.
+
+Also: deterministic output (sort keys, sorted token lists) so re-running while files unchanged yields identical bytes → same sha256.
+
+Let me define occurrence counting carefully: count occurrences of the token pattern in the JSON-serialized value of each field (so 3 mentions in one string count 3). For violations, capture each occurrence with surrounding context.
+
+Which fields to scan? All string fields/values recursively in each theorem record (list/dict values included). For csv: all columns.
+
+Validation checks to include in the artifact (it should be machine-checkable):
+- `frozen_ids_missing`: []
+- `falsifier_fired`: bool = bool(violations) — well, the falsifier statement: "A class token in the ledger that is not one of the four frozen ids and not explicitly tagged as a ledger-local tag falsifies the census." My census finds 5 such occurrences → so under the strict reading, the census's "clean" hypothesis is falsified. I should report that honestly: `falsifier_status: "FIRED"` with the 5 occurrences. Hmm, "falsifies the census" — the census being the claim that all class tokens are frozen or ledger-tag. Yes, the census result is: violations exist. That's the finding, reported as measured evidence. The census artifact itself is valid; the finding is "3 distinct non-frozen AF tokens, 5 occurrences, all untagged".
+
+Wait, let me re-read: "acceptance: Machine census of every class token in ledger/theorems.jsonl and ledger/citation_audit.csv with counts, each classified frozen / ledger-tag / violation, plus a one-line remedy per violation." and "falsifier: A class token in the ledger that is not one of the four frozen ids and not explicitly tagged as a ledger-local tag falsifies the census." So the falsifier fires if such a token exists. It does (AF-SCC, AF-SCC-C2, AF-SCC-C0). So my report: census complete; falsifier fired with 5 occurrences; remedies given. That is exactly the useful output: CF-5 (controller finding) confirmed with measured evidence.
+
+Hmm, but is `AF-SCC` a "class token"? It's an AF-prefixed family token. I'll define the token universe explicitly and report both a strict tier (tokens matching the full canonical shape `AF-[A-Za-z0-9]+(-[A-Za-z0-9]+){2,}` i.e. ≥3 groups after AF, which includes the four ids and AF-SCC-C2, AF-SCC-C0 but excludes bare AF-SCC) and a broad tier (any AF-prefixed token, including bare AF-SCC). Then report violations under both, so no matter the reader's definition, the finding is present. Good idea: `violations_strict` (AF-SCC-C2, AF-SCC-C0 → 3 occurrences... wait AF-SCC-C0 appears 2x in csv, AF-SCC-C2 1x in theorems = 3) and `violations_broad` (+AF-SCC 2x = 5). Let me structure:
+
+- tokens table with `shape_tier`: "canonical_id" (≥3 hyphen groups after AF), "family_abbrev" (bare AF-SCC).
+- classification per token: frozen / ledger_tag / violation.
+- violations: all non-frozen, non-ledger-tag tokens (both tiers), each with remedy.
+
+The falsifier fires on any → report `falsifier_status: FIRED`, with `falsifier_occurrence_count: 5`.
+
+Now let me check where bare C0/C2 and other tags sit: they are not AF-prefixed, so out of the token universe; the ledger_tags census documents them as declared local vocabulary. Good.
+
+Also — should I count tokens inside `ledger_tags` values as ledger-tag classification if they were AF-prefixed? There are none. Fine, but the rule stands.
+
+One more consideration: the csv's `class_mapping` column has multi-class composite strings. The assignment doesn't ask to flag them, and each token is frozen. I'll add them to the auxiliary observations as "composite mappings exist (n rows, each maps one source to several frozen classes); not a token violation" — maybe useful. Also the canonical detector found none there. Keep it as a statistic in auxiliary, or omit? I'll include a compact `auxiliary_observations` with 3 items (detector regex defect, T-402 bare composite flag, composite mapping statistic) — each with evidence and disposition. This is within the spirit of an independent verification and clearly separated.
+
+Hmm, actually the T-402 detector finding: is it a genuine violation of class hygiene? The text is "Between C0 and C2 (weak null singularity)." — describes intermediate regularity, and the record's class_ids are both SCC classes. The detector's R1 treats bare "C0 and C2" as a merge. This is a false-positive candidate; the remedy (if strict) is rewording to "between the C^0 and C^2 formulations" — but the detector's _MERGE_PAT would still match "C^0 and C^2" after normalization... Actually norm removes carets, so "C^0 and C^2" → "c0 and c2" → still matches. So rewording must avoid adjacency, e.g., "intermediate between the continuous and C^2 formulations". I'll note that. But careful about scope: I'll mark it "detector_finding, out_of_scope_for_token_census, disposition: refer to audit lead". Good.
+
+Now let me also double-check there are no other AF-like tokens hidden with different separators, e.g., "AF_SCC_C2_VAC_GEN" or "AF SCC". Let me run one more scan with flexible separators to be thorough, plus lowercase.
+
+Then write the script and run it. Let me first check `artifacts/` structure to see naming conventions and whether artifacts/flash-19 exists (it doesn't).
+
+Also check current checkpoint state? Not needed.
+
+Let me do the flexible scan quickly.
+dsh: reasoning:
+The flexible scan shows "AF data", "AF vacuum" etc. — these are "AF" (asymptotically flat) followed by a word, not class tokens. So my token universe (AF-<alnum> hyphenated) is the right one; it doesn't pick up "AF data" because there's a space, and "AF class" etc. Good. But note "AF-SCC class binding" — the broad token is AF-SCC which is family shorthand.
+
+I now have everything needed. Let me write the generator script.
+
+Design decisions for the artifact:
+
+```json
+{
+  "artifact_type": "class_token_census",
+  "artifact_version": "1.0",
+  "task": {...assignment id, node L0, gate G-LIT, run_id...},
+  "generated_at": "<ISO>",
+  "generator": {"path": "artifacts/flash-19/class_token_census.py", "sha256": "<self-hash? tricky>"},
+  ...
+}
+```
+
+Self-hash of generator script: I can compute hash of the script at runtime and include it. That's fine and reproducible (hash of the .py, not of JSON).
+
+Token universe:
+- Pattern: `AF-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*` applied to NFKC-normalized JSON-serialized field values, case-insensitive.
+- Normalization also maps superscripts ⁰¹²³ to digits and strips ^ { } so `AF-SCC-C²-VAC-GEN` would be captured as `AF-SCC-C2-VAC-GEN`.
+- Note: caret-stripping could turn "AF-SCC-C^2-VAC-GEN" into the frozen id — that's a *variant spelling of a frozen id*, recorded in `normalized_variants` if detected; none found. Actually my regex on normalized text would capture `AF-SCC-C2-VAC-GEN`, indistinguishable from the canonical spelling. To detect variants I should compare raw text. Let me add a specific check for raw variants: count occurrences of superscript/caret forms of frozen ids in raw text: `AF-SCC-C[²^]...`. Probably zero. Let me include a `variant_check` that scans raw text for `AF-...` sequences containing `^` or superscripts, listing them (expected empty). Good.
+
+Classification:
+- frozen: token ∈ FROZEN (exact case-sensitive match to canonical caps; case-insensitive scan yields canonical case as written; if a lowercase variant existed, it would be a different token string and thus violation? Hmm. Better: map token to canonical by uppercasing for classification, but record the raw forms. If raw form differs in case from canonical, that's a formatting variant — classify as frozen_variant? Keep it simple: classify case-insensitively; record `raw_forms` list. If the only difference is case, it's still the frozen id. I'll note zero case variants found.)
+- ledger_tag: token (case-insensitive) ∈ set of values in any `ledger_tags` array in theorems.jsonl. (None of the AF tokens.)
+- violation: otherwise.
+
+Occurrences for violations: file, line (theorems) / row number (csv, 1-based with header excluded? I'll use the physical line number including header, csv_line, and data_row), record_id (theorem_id/citation_id), field, snippet (~120 chars centered), context_class: "prose_shorthand" | "negative_no_binding" determined by keyword heuristics? Let me manually annotate disposition text but derive mechanically a `context` string. I can compute a simple context label:
+  - csv rows 97/98: snippet contains "must not be cited as evidence" / "assessed_no_binding" → context "negative_mention_no_binding".
+  - T-304 next_action: "bind to the AF-SCC-C2 dossier" → "forward_reference_shorthand".
+  - T-526 scope_caveats: "AF-SCC class binding is therefore provisional" → "open_question_shorthand"; unresolved: "Whether the AF-SCC class should count..." → "open_question_shorthand".
+I'll compute context mechanically with regexes and fall back to "unclassified".
+
+Remedies (one line each):
+- `AF-SCC-C2` (T-304 next_action): "Replace the shorthand with the frozen id AF-SCC-C2-VAC-GEN, or demote it to a ledger-local tag declared in ledger_tags."
+- `AF-SCC` (T-526 scope_caveats + unresolved): "Use the family phrase 'the SCC classes' (no AF- prefix) or list the specific frozen ids; AF-prefixed tokens are reserved for frozen class ids."
+- `AF-SCC-C0` (SRC-096/097 assessment): "Write 'the AF-SCC-C0-VAC-GEN class' (full frozen id) or 'the C^0 SCC class'; here the sentence is a no-binding disclaimer, but the token shape is still non-frozen."
+
+Plus a machine-checkable assertion section:
+```json
+"assertions": {
+  "frozen_ids_present_in_both_files": true,
+  "non_frozen_af_tokens": 3,
+  "non_frozen_af_occurrences": 5,
+  "untagged_non_frozen_occurrences": 5,
+  "falsifier_status": "FIRED",
+  "detector_regex_matches_all_frozen_ids": false
+}
+```
+
+Falsifier (for the census artifact):
+"The census is falsified if a rerun on the same input sha256s finds any AF-prefixed token not classified here, or reports a frozen/ledger-tag/violation class inconsistent with the pinned input hashes; it is invalidated (must be re-run) if either input sha256 changes."
+
+Reopen rule: input hash change.
+
+Auxiliary observations:
+1. `class_separation._class_tokens` (research_map/class_separation.py) requires 4 hyphen-groups after `AF-`, so it fails to match `AF-WCC-VAC-GEN` and `AF-WCC-SCALAR-SPH` (both 3 groups). Reproduced: `_class_tokens("AF-WCC-VAC-GEN") == []`. Remedy: fix pattern to `AF-(?:[A-Z0-9]+-){2,}[A-Z0-9]+` or just match KNOWN_CLASSES literally; add regression fixtures for all four ids.
+2. Canonical detector flags `ledger/theorems.jsonl:30` field `regularity` ("Between C0 and C2 (weak null singularity).") as a bare composite. Out of scope for token census; refer to audit/formulation leads. Remedy if enforced: rephrase to "between the continuous and C^2 regularity formulations" — but the normalized detector would still match "C^0 and C^2"? Let's check: "between the continuous and C^2 formulations" has no C0 token adjacent; fine.
+3. Composite `class_mapping` values: 34? rows map one source to >1 frozen class (count from distinct values: 12+8+2+2+2 = 26 rows with 2 tokens, 2 rows with 3 tokens → 28 rows). Let me compute exactly in script: rows where class_mapping contains >1 AF token. It's a multi-class evidence mapping, not a token violation; recorded for completeness.
+
+Wait: distinct values listed: 12 (C0;C2), 8 (C0;WCC), 2 (C2;SPH), 2 (C0;C2;WCC), 2 (C0;SPH) = 26 rows with multi. Let me compute in script.
+
+Also ledger_tags census: total distinct tags, occurrences, and tags that denote classes/families/regularities: C0, C2, SCALAR-SPH, VACUUM, C0-FORMULATION, C2-FORMULATION, WCC-STATEMENT, GENERIC-CLASS-G? I'll mark class-denoting with a regex `^(C0|C2|SCALAR-SPH|VACUUM|WCC|SCC)` . Let me just present all tags with counts and mark class_denoting by regex.
+
+Hmm — one thing to be careful about: theorem records have `class_ids` and `informs_classes`; the csv has `class_mapping`. The assignment says census "every class token ... with counts". My per-token `by_field` gives that.
+
+Let me now write the generator script. I'll keep it clean, ~200 lines. Then run it, verify output JSON validity, check sha256, then write outbox events, then run checkpoint.
+
+Also, per the earlier note: no editing research_map/*.py, no ledger modifications. I'm only creating artifacts/flash-19/.
+
+Let me check whether artifacts/flash-19 directory creation is allowed (workspace-write, yes).
+
+One more consideration: the previous worker-19 session wrote `artifacts/audit/flash19_validate_map_gate.patch` (mentioned in validate_map.py). Fine.
+
+Let me also look at an example artifact event in the outbox to match conventions (evidence_refs with path#sha256-prefix). Let me grep one artifact event.
+dsh: reasoning:
+Now I know the conventions. Let me create the generator script and run it.
+
+Important detail: the input ledger files may change between now and when I run. The script pins hashes at read time. Fine.
+
+Let me write `artifacts/flash-19/class_token_census.py`.
+
+Design the script to be deterministic: sort everything, no timestamps inside deterministic payload? A `generated_at` timestamp makes the artifact change on rerun. That's normal. But for reproducibility check, better to include generated_at and note that byte-identity holds on rerun only modulo the timestamp. Or derive generated_at from the input hashes? No, keep generated_at but add `content_digest` computed over the payload excluding generated_at, so independent verification can compare content digests. Nice: `content_digest_sha256` = sha256 of canonical JSON of the payload minus generated_at/generator script hash? Careful with self-reference. I'll compute content digest over all top-level keys except `generated_at`. The generator script hash is stable.
+
+Let me write it now.
+
+```python
+#!/usr/bin/env python3
+"""class_token_census.py — independent machine census of class tokens in the L0 ledger.
+
+Assignment: astra-indep-1-CF5-ledger-verify (node L0, gate G-LIT)
+...
+"""
+from __future__ import annotations
+import csv, hashlib, json, re, sys, unicodedata
+from datetime import datetime, timezone, timedelta
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+THEOREMS = ROOT/"ledger"/"theorems.jsonl"
+CITATIONS = ROOT/"ledger"/"citation_audit.csv"
+OUT = ROOT/"artifacts"/"flash-19"/"class_token_census.json"
+FROZEN = ["AF-WCC-VAC-GEN","AF-SCC-C2-VAC-GEN","AF-SCC-C0-VAC-GEN","AF-WCC-SCALAR-SPH"]
+CST = timezone(timedelta(hours=8))
+TOKEN_RE = re.compile(r"AF-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*", re.I)
+SUP = {"⁰":"0","¹":"1","²":"2","³":"3"}
+VARIANT_RE = re.compile(r"AF-[A-Za-z0-9^⁰¹²³{}-]*[⁰¹²³^][A-Za-z0-9^⁰¹²³{}-]*")
+```
+
+Functions:
+- `sha256_bytes(b)`
+- `normalize(s)`: NFKC, superscripts, strip ^ { }
+- `serialize(v)`: json.dumps(v, sort_keys=True, ensure_ascii=False) if not str else v
+- iterate fields:
+  - theorems: for line_no, raw line; parse; for key, value: scan(normalize(serialize(value)))
+  - csv: DictReader; row_index (data row, 1-based), csv_line = row_index+1; for each key/value scan.
+- `scan(text)` → list of (match_start, token_lower or matched?) I want raw matched string as written. For classification case-insensitive.
+
+Occurrences record: dict(file, line/row, record_id, field, token_raw, snippet, context).
+
+For counting: token key = matched.upper() for classification but preserve raw_forms. Since no case variants, each distinct matched string is canonical-ish. Violations found: AF-SCC, AF-SCC-C2, AF-SCC-C0.
+
+Snippet: from normalized text around match, collapse whitespace, ±60 chars, prefix/suffix ellipsis.
+
+Context classification:
+```python
+def context_label(field, snippet):
+    s = snippet.lower()
+    if "must not be cited" in s or "assessed_no_binding" in s or "not attached" in s or "nor as class evidence" in s:
+        return "negative_no_binding"
+    if field in ("next_action",) and "bind to" in s: return "forward_reference_shorthand"
+    if "should count" in s or "provisional" in s: return "open_question_shorthand"
+    return "unclassified_shorthand"
+```
+
+Remedy mapping per token:
+```python
+REMEDIES = {
+ "AF-SCC-C2": "Replace with the frozen id AF-SCC-C2-VAC-GEN (or drop the AF- prefix and write 'the C^2 SCC dossier') in T-304.next_action; AF-prefixed tokens are reserved for the four frozen ids.",
+ "AF-SCC": "In T-526.scope_caveats and T-526.unresolved, write 'the SCC classes' / 'the four frozen SCC ids' instead of the AF-prefixed family token; AF-<...> tokens are reserved for frozen class ids (or declare it in ledger_tags if deliberately ledger-local).",
+ "AF-SCC-C0": "In SRC-096/SRC-097.assessment, write the full frozen id AF-SCC-C0-VAC-GEN or the unprefixed phrasing 'the C^0 SCC class'; the no-binding disclaimer is correct in substance but the truncated token is still non-frozen.",
+}
+```
+
+Ledger tags census: read all theorems, collect Counter of tags; class_denoting if re.match(r'^(C0|C2|SCALAR-SPH|VACUUM|WCC|SCC)($|-)').
+
+Auxiliary:
+1. detector regex probe: import class_separation via sys.path; for each frozen id, `_class_tokens(id)`; report matches. Use importlib to avoid depending on cwd. Also record detector module sha256.
+2. detector findings on both files: iterate and call `findings`; report list (with the T-402 one).
+3. composite class_mapping rows count.
+
+Assertions:
+- `frozen_ids_present`: all four appear in both files? In theorems.csv: all four appear (theorems has all 4; csv has all 4). Compute.
+- `non_frozen_af_tokens`, `non_frozen_af_occurrences`, `untagged_...`
+- `falsifier_status`: "FIRED" if untagged occurrences > 0 else "not_fired"
+- `detector_regex_matches_all_frozen_ids`: false.
+
+Falsifier text and reopen_rule.
+
+Fields for the census table per token:
+```json
+{"token":"AF-WCC-VAC-GEN","classification":"frozen","occurrences":14,
+ "by_file":{"ledger/theorems.jsonl":14,"ledger/citation_audit.csv":22},
+ "by_field":{...},
+ "raw_forms":["AF-WCC-VAC-GEN"]}
+```
+Wait totals across both: AF-WCC-VAC-GEN 14+22=36. Fine.
+
+For violations, include `occurrences_detail`.
+
+Also include `scope`: exactly the two files.
+
+Now write and run. Also note file `census` counts: I should count occurrences in raw text vs normalized. Normalization strips `^`/`{}` which could create token matches that weren't literally present (e.g., "AF-SCC-C^{2}-VAC-GEN" → "AF-SCC-C2-VAC-GEN"). None found, but the variant check should verify. Variant check: scan raw text with VARIANT_RE for AF tokens containing `^`/unicode superscript; list any (expected []).
+
+Also add a `checks` object with a few boolean invariants that a reviewer can recompute:
+- sum(frozen occurrences by file) == counts computed independently
+- violation tokens ⊆ non-frozen
+- `ledger_local_tags` contains no AF tokens.
+
+OK, writing now. I need to be careful with the code quality since it's an artifact for external review.
+
+After running, I'll emit events. Event IDs: `flash19-L0-01-artifact-class-token-census-<stamp>` and `flash19-L0-01-status-cp1-<stamp>`. Maybe also a `claim` event? The claim conclusion_type options don't include a "census/verification" type. "open_problem" isn't right for a verified file-level fact. I could use "formal_model"? No. Better to emit artifact + status only. The status event summarizes the finding with next_falsifier; the artifact event carries falsifier. The instruction "emit valid JSON with IDs evidence hash falsifier" is satisfied by both events (IDs: event_id, node_id L0, task_id, class_id; evidence: evidence_refs with hashes; hash: sha256; falsifier: explicit fields).
+
+Hmm, but maybe also a `claim` with conclusion_type "open_problem" stating the census result — the previous worker did that. The protocol's claim requires statement/falsifier/evidence. A census is not really a claim of a mathematical result; but a claim that "at pinned hashes, the ledger contains 5 untagged non-frozen class-token occurrences" is a factual/verification claim. conclusion_type "open_problem" is the least-wrong. Actually "numerical_evidence"? No. I'll skip the claim to avoid semantic inflation — the artifact + status is exactly what the assignment asks, and status carries the summary. Hmm, but the user instruction says "emit valid JSON with IDs evidence hash falsifier" — artifact+status includes all. Fine. Actually, let me include a claim too but with conclusion_type "open_problem" and carefully worded statement about machine-checkable fact at pinned hashes. The F2a precedent used open_problem for a similar machine-checkability statement. It adds an explicit `class_id` binding, which the status also has. I think artifact + status is cleaner and avoids conclusion inflation (which the audit lead explicitly polices). I'll do artifact + status. The status summary will carry the result.
+
+Wait — one more requirement from the assignment card: "acceptance: Machine census ... plus a one-line remedy per violation." The artifact must contain remedies. Yes.
+
+Now write the script.
+dsh: reasoning:
+Now write the script. Use the write tool to create /data3/guoshaoyang/workdir/ai4math-swarm/artifacts/flash-19/class_token_census.py.
+dsh: reasoning:
+Now run it. One concern: the `raw_variants` detection block is awkward — it iterates RAW_VARIANT_RE on normalized text but checks caret in raw. It will likely produce nothing. Fine.
+
+Another: `scan_text` for the theorems `by_field` counts include all fields. Good.
+
+`frozen_missing` uses entry["by_file"].get(path) — the "in_theorems" values. Good.
+
+Run it.
+dsh: reasoning:
+Wait — there's an ordering bug: `content_digest_sha256` is computed over `content` (payload minus generated_at), then added to payload. But `content` didn't include content_digest itself — that's intentional (digest over the payload excluding generated_at; note it also excludes generator, which is added after). Actually `generator` is added after the digest too, so digest covers task/scope/token_definition/.../falsifier/reopen_rule but not generator/generated_at/content_digest. That's a bit inconsistent with the docstring ("covers the payload minus generated_at"). Minor: the digest excludes generator as well. Let me fix the docstring or compute digest over payload minus generated_at minus content_digest (including generator). Better: compute generator hash first, then content = payload with generator but without generated_at/content_digest. Let me restructure slightly:
+
+1. Build payload with generator info (path, sha256, reproduce_command).
+2. content = payload minus generated_at (content_digest not yet present) → compute digest over content.
+3. Add content_digest and generated_at.
+4. Write.
+
+That makes digest cover everything except generated_at and content_digest itself. Update docstring wording: "content_digest_sha256 covers every top-level field except generated_at and content_digest_sha256 itself".
+
+Also the assertions field says `census_reproducible_from_content_digest: true` — fine.
+
+Let me also verify the artifact contents look right (violations detail, census table, ledger tags). Then fix the digest ordering. Let me view the JSON.
+dsh: reasoning:
+The artifact looks good. Issues to fix:
+
+1. Digest ordering: `content_digest_sha256` doesn't cover `generator` (added after digest). Fix to include generator in the digest and update docstring.
+2. The "frozen ids present" check: fine.
+3. `row` numbering: row 96 for csv_line 97 (data row index). Slightly confusing but documented by both keys.
+
+Also, should the census include tokens in the `ledger_tags` values themselves? The token universe is AF-prefixed only; ledger tags are separate. The classification "ledger_tag" is empty in the census. That's fine and documented in `ledger_local_tags.note`.
+
+Hmm — but wait. There's a nuance: the assignment expects each class token classified as frozen / ledger-tag / violation. If ledger-tag class is empty, a reviewer may ask why. The note explains: no AF token appears in ledger_tags, therefore no AF token is redeemed. Good.
+
+Also, `raw_superscript_or_caret_class_variants: 0` — but my variant detection code is a bit sketchy: it searches normalized text with RAW_VARIANT_RE for tokens containing superscript/caret chars, but normalization already folded them, so it can never match. The check `if "^" in ser(value) or any(ch in ser(value) for ch in SUP)` guards the append, but RAW_VARIANT_RE runs on normalized text where those chars are gone → always 0. I should fix it to scan the RAW text for the pattern. Let me fix: apply RAW_VARIANT_RE to the raw serialized value (not normalized). RAW_VARIANT_RE itself includes superscript chars, so it works on raw. Then `raw_variants` will capture e.g. `AF-SCC-C²-VAC-GEN` if any. Let me fix that.
+
+4. `context_label` takes `in_csv` but for the theorems scope_caveats it returned "open_question_shorthand" via the "provisional" branch. Good.
+
+5. `assertions.census_reproducible_from_content_digest: true` is a static claim; fine.
+
+Let me patch the script: digest ordering + raw variant scan. Then rerun and verify determinism (run twice, compare content digest; artifact sha will differ due to timestamp, but content digest should be stable).
+
+Also: the generator script hash in the artifact is the hash before this edit; after editing I rerun, so it updates.
+
+Let me make the edits.
+dsh: reasoning:
+Oops, that edit was wrong — I replaced the csv block with the theorems block content (with CITATIONS... vs THEOREMS... mismatch). Wait let me re-read. The old_string was the csv block:
+
+```
+        for field, value in sorted(row.items()):
+            if not value:
+                continue
+            text = normalize(value)
+            loc = {"file": str(CITATIONS.relative_to(ROOT)), "row": row_no,
+                   "csv_line": row_no + 1, "record_id": rid, "field": field}
+            scan_text(text, tokens, loc, occurrences)
+            for vm in RAW_VARIANT_RE.finditer(normalize(value)):
+                if "^" in value or any(ch in value for ch in SUP):
+                    raw_variants.append({**loc, "raw_token": vm.group(0)})
+```
+
+and new_string:
+```
+        for field, value in sorted(row.items()):
+            if not value:
+                continue
+            text = normalize(value)
+            loc = {"file": str(CITATIONS.relative_to(ROOT)), "row": row_no,
+                   "csv_line": row_no + 1, "record_id": rid, "field": field}
+            scan_text(text, tokens, loc, occurrences)
+            for vm in RAW_VARIANT_RE.finditer(value):
+                raw_variants.append({**loc, "raw_token": vm.group(0)})
+```
+
+That's correct actually — I kept CITATIONS and row_no. Good. I misread. Fine.
+
+Now fix the digest ordering: move generator construction before digest computation.
+
+Current code:
+
+```python
+    content = {k: v for k, v in payload.items() if k != "generated_at"}
+    digest = sha256_bytes(json.dumps(content, ensure_ascii=False, sort_keys=True).encode())
+    payload["content_digest_sha256"] = digest
+    payload["generated_at"] = datetime.now(CST).isoformat(timespec="seconds")
+    payload["generator"] = {
+        "path": str(Path(__file__).resolve().relative_to(ROOT)),
+        "sha256": sha256_path(Path(__file__).resolve()),
+    }
+    payload["generator"]["reproduce_command"] = (
+        "python3 artifacts/flash-19/class_token_census.py"
+    )
+```
+
+Replace with:
+
+```python
+    payload["generator"] = {
+        "path": str(Path(__file__).resolve().relative_to(ROOT)),
+        "sha256": sha256_path(Path(__file__).resolve()),
+        "reproduce_command": "python3 artifacts/flash-19/class_token_census.py",
+    }
+    content = {k: v for k, v in payload.items()
+               if k not in ("generated_at", "content_digest_sha256")}
+    digest = sha256_bytes(json.dumps(content, ensure_ascii=False, sort_keys=True).encode())
+    payload["content_digest_sha256"] = digest
+    payload["generated_at"] = datetime.now(CST).isoformat(timespec="seconds")
+```
+dsh: reasoning:
+Now rerun twice and verify the content digest is stable and that the JSON is valid, plus a self-check of the digest computed independently. Also verify the artifact sha256. Note: input files may have changed since my first run (literature lead active). Let me check whether hashes changed; if they did, the census covers the new heads, which is fine, but then my earlier exploratory findings may shift. I'll rerun and inspect.
+dsh: reasoning:
+The content digest is stable across runs (5941eb2b...), and the artifact sha256 is f7b1b0df14a5d8fecc19e25e706284db2cc607f23c74673f4f6e1ce5321bab1b. Input hashes unchanged from earlier reads.
+
+Also verify raw_superscript_or_caret_class_variants is 0 and that the OBS-1 evidence is still correct (generator hash eab... now changed after edits — it will be recomputed). Let me quickly validate the artifact against schemas-like requirements and check JSON parse + key summaries. Also compute generator script sha256 to cite in evidence.
+
+Now, before writing events, double check that the ledger hasn't changed in the last minute (competition). I'll pin at write time in the events with input hashes. If the ledger changes after my census, the census is stale per reopen_rule; the events should include the pinned hashes so the controller can detect staleness. Good.
+
+Now emit the events to comms/outbox/deepseek-flash-19.jsonl. Events:
+
+1. artifact event:
+```json
+{
+  "event_id": "flash19-L0-01-artifact-class-token-census-<stamp>",
+  "event_type": "artifact",
+  "created_at": "...",
+  "actor": "deepseek-flash-19",
+  "group_id": "literature",
+  "node_id": "L0",
+  "task_id": "astra-indep-1-CF5-ledger-verify",
+  "class_id": "AF-WCC-VAC-GEN;AF-SCC-C2-VAC-GEN;AF-SCC-C0-VAC-GEN;AF-WCC-SCALAR-SPH",
+  "artifact_type": "class_token_census",
+  "path": "artifacts/flash-19/class_token_census.json",
+  "sha256": "f7b1b0...",
+  "validation_status": "unverified",
+  "evidence_refs": [
+    "artifacts/flash-19/class_token_census.json#sha256:f7b1b0df14a5",
+    "ledger/theorems.jsonl#sha256:ce42d205e761",
+    "ledger/citation_audit.csv#sha256:315c19145065",
+    "artifacts/flash-19/class_token_census.py#sha256:<gen>",
+    "research_map/class_separation.py#sha256:c266dbceca87"
+  ],
+  "summary": "...",
+  "falsifier": "...",
+  "next_falsifier": "..."
+}
+```
+
+Wait: class_id value with semicolons — that's the assignment's own format. Fine.
+
+2. status event:
+```json
+{
+  "event_id": "flash19-L0-01-cp1-<stamp>",
+  "event_type": "status",
+  "created_at": "...",
+  "actor": "deepseek-flash-19",
+  "group_id": "literature",
+  "node_id": "L0",
+  "task_id": "...",
+  "class_id": "...",
+  "status": "active",
+  "hours": 0.5,
+  "summary": "...",
+  "evidence_refs": [...],
+  "next_falsifier": "...",
+  "task_complete_pending_review": true
+}
+```
+
+Note: status must include node_id, status, hours, summary, evidence_refs, next_falsifier — all included.
+
+Should I include a `claim`? I decided no (avoid conclusion inflation). Hmm, but the user instruction says "emit valid JSON with IDs evidence hash falsifier". Artifact+status suffice. Actually, re-reading again: "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit." — plural "emit valid JSON" likely means event JSON. Good.
+
+Implementation: append to comms/outbox/deepseek-flash-19.jsonl. Must be careful: the file is being written by... well, only me (my worker id). The previous worker-19 process may still be running! The supervisor restarts workers; deepseek-flash-19 tmux session may be a different agent currently running with the same outbox file. Hmm. The prior worker-19 events ended at 00:08:30 (a checkpoint event). Right now the time? Let me check `date`. The current session is the worker=19 process; the earlier outbox lines are from a previous incarnation of the same tmux session (the session may have exited after its bounded task — the supervisor starts a fresh worker per assignment). Since I am deepseek-flash-19 now, appending is correct. There's a risk of two concurrent writers if the earlier process were still alive, but outbox writes are append (`>>`). I'll append with a single atomic write via python `open(...,'a')`.
+
+Let me check tmux/session state quickly: `tmux ls` and see if deepseek-flash-19 exists. Actually the supervisor may restart sessions every 30s; my own process is inside one of them. Let me check `ps` for my PID's session. Not critical, but a quick `tmux ls | grep 19` tells me if another deepseek-flash-19 session is alive. Since I AM deepseek-flash-19, if the session exists it's me. Let me check anyway.
+
+Also `date` to timestamp events. Use CST (+08:00) as the convention does. The controller's events use +08:00. I'll generate ISO with timezone.
+
+Let me write the events with a Python script. Then verify they pass `schemas.validate_event`. Then run the checkpoint.
+
+Before the checkpoint, let me think again about whether running `python3 research_map/checkpoint.py` is safe/appropriate:
+- It calls `comms.ingest(dry_run=False)` → ingests all outboxes, including mine → appends to events.jsonl, sets ingested_ids.json.
+- The controller normally does this itself; running it early just means the controller sees my events already ingested (same event_ids → dedup). No harm.
+- It updates runtime/state/current_checkpoint.json etc. There might be a concurrent controller checkpoint, but writes are whole-file writes; worst case the other overwrites — no corruption.
+- It also runs `class_separation.regression()` and audit_evidence — read-only.
+So it's safe. I'll run it with label "worker-19-astra-indep-1-CF5-ledger-verify".
+
+Then final: validate all my new events with schemas.validate_event, confirm the events landed in outbox, and report.
+
+One question: should the checkpoint be run BEFORE writing events? No — after, so it ingests them and snapshots. The instruction "emit ... checkpoint, then exit" suggests that order.
+
+Let me now write the events.
+dsh: reasoning:
+Events appended. Now run the checkpoint. First, verify that the ledger hasn't changed since the census (re-check hashes). If it changed, my census is stale and I should note it. Let me check, then run `python3 research_map/checkpoint.py --label worker-19-astra-indep-1-CF5`.
+
+Note: checkpoint will ingest all outboxes into events.jsonl, which may take a moment. Run it.
+dsh: reasoning:
+Checkpoint ran successfully:
+- My 2 events were accepted (accepted: 2, rejected: 0, duplicates: 920).
+- Map VALID, evidence hard failures none, classsep regression PASS.
+- Checkpoint ID ckpt-20260912-001308.
+
+Wait — the output shows the checkpoint JSON only partially? It printed the comms result then the checkpoint record subset (as designed). Files seen 96.
+
+Now let me verify:
+1. My events are in research_map/events.jsonl (ingested).
+2. The checkpoint artifact_hashes registry includes class_token_census.json?
+3. My events validate in the event stream (validate_events over events.jsonl may take time — 1.1MB+; skip, but I can check my two lines).
+
+Let me confirm the two event IDs appear in events.jsonl and in the checkpoint's artifact registry/hashes. Also check the current_checkpoint.json for the artifact hash.
+
+Then finalize todos and give the final answer. The instruction says exit after checkpoint. I'll do a final verification and summarize.
+dsh: reasoning:
+My 2 events are in events.jsonl. The artifact registry in the checkpoint doesn't include the census because the controller hasn't applied the events to the map yet (worker events can't move the map; Astra applies them, and `audit_evidence` measures hashes for registered artifacts/nodes). That's expected and consistent with the authority rules.
+
+Wait — the checkpoint ID in current_checkpoint.json is ckpt-20260912-001311, not my ckpt-20260912-001308. That's because the controller ran a checkpoint ~3 seconds after mine; it now shows pending events: 23 (including mine). Fine.
+
+One more check: did my census artifact get into `runtime/state/artifact_hashes.json`? The checkpoint's artifact_hashes is `ev["hashes"]` from audit_evidence, which only covers registered node artifacts. Since L0 node's declared artifact is presumably ledger/theorems.jsonl, my census won't be there until the controller registers it. That's fine; my artifact event carries the sha256.
+
+Now — should I run `python3 research_map/audit_evidence.py` for my artifact? Not needed; checkpoint already ran it (0 hard failures).
+
+Let me do a final sanity check that my appended events pass validate_event in-stream. `validate_map.py events.jsonl` would validate the entire 1.1MB event stream (could report other agents' rejects, not my problem). Instead validate only my 2 lines. Already validated at write time with schemas.validate_event. Good.
+
+Also double-check the artifact file itself conforms to the acceptance criteria:
+- Machine census of every class token in both files with counts ✓
+- Each classified frozen/ledger-tag/violation ✓
+- One-line remedy per violation ✓
+- Evidence refs with hashes ✓ (in the event and in the artifact inputs)
+- Falsifier ✓
+- IDs ✓
+
+One loose end: the assignment card said "artifact + sha256 + reviewer verdict" evidence rule; verdict comes from a reviewer, not me. validation_status unverified is correct.
+
+Another loose end: `hours` in status = 0.5 estimated. Fine.
+
+I should also confirm I didn't modify anything outside artifacts/flash-19/ and comms/outbox/deepseek-flash-19.jsonl (plus runtime/state via checkpoint, which is checkpointing). The checkpoint itself wrote runtime/state files — that's expected.
+
+Let me update the todo list and finalize. Also, should I create/complete a goal? No — this is bounded single-turn work; no goal tools needed.
+
+Final answer: concise report of what I did, the finding, artifact path/hash, event IDs, checkpoint ID, and the falsifier. Mention worker=19. No need for more tool calls.
+
+Let me finalize todos.

@@ -1,0 +1,1004 @@
+dsh: reasoning:
+Let me start by understanding the environment. I'm a bounded execution worker with worker=078. I need to read handoff/map and comms, take one class-bound task, emit valid JSON with IDs, evidence, hash, falsifier, checkpoint, then exit.
+
+Let me explore the workspace.
+dsh: reasoning:
+There's no handoff or comms directory directly in the workspace root. Let me look in workdir, .agents, and other likely locations.
+dsh: reasoning:
+Found it: /data3/guoshaoyang/workdir/ai4math-swarm/comms and /data3/guoshaoyang/workdir/ai4math-swarm/research_map. Let me explore the ai4math-swarm directory.
+dsh: reasoning:
+This is a swarm. I need to read HANDOFF.md, comms/PROTOCOL.md, research_map/ASTRA_HANDOFF.md, and the runtime directory to figure out my task as worker=078.
+
+Let me read the key documents.
+dsh: reasoning:
+Now let me read ASTRA_HANDOFF.md, and the runtime directory, plus comms/inbox for worker 078 (deepseek-flash-XX). The worker id is "078" — maybe there's an agent named e.g. `deepseek-flash-078`? Let's check inbox.
+dsh: reasoning:
+I'm worker=078. There may be an instance dir for worker-078 with a prompt.txt that contains my assignment. Let me check.
+dsh: reasoning:
+My instance dir: worker-078-20260912T002202-968807 (latest). Let me read the prompt.txt and meta.json.
+dsh: reasoning:
+The prompt is generic. It matches my task instruction exactly. So I need to find my assignment from the map. Workers are deepseek-flash-01..20 in the protocol, but here they're "worker-0XX". Let me check the previous worker-078 run's stdout to see what it did (00:16 → 00:21, exit code). And check `map.assignments` to find assignments bound to worker-078.
+
+Let me check the previous stdout.
+dsh: reasoning:
+Previous worker-078 did F2a independent verification. Now I'm a fresh worker 078 at 00:22. I need to take one class-bound task. Let me look at the map's assignments, gates, and the current state. Let me also check the inbox for worker-078 (may not exist), and see what tasks are open/unassigned.
+
+Let me inspect assignments for open ones, plus gates status, plus recent outbox of leads to see what tasks are requested.
+dsh: reasoning:
+The assignments list is confusing (no statuses). I see that recent assignments are to astra leads (01:00, 01:30 deadlines). Worker tasks come via inbox messages. Let me check if there's a `comms/inbox/worker-078.jsonl` — no, there isn't. The prompt says "Read handoff/map and comms. Take one class-bound task" — I must choose an unclaimed task, not be assigned one.
+
+Let me look at the current gate audit to see what's needed. The ASTRA_HANDOFF says:
+- G-F0 needs two independent accepts at the published F0 hash plus 2 soft-flag dispositions
+- G-FORM needs full-schema accepts at the rev21 hashes plus the F1 soft flag
+- G-LIT needs an L0 accept at ce42d205e761 and 3 L1 spot checks at 315c19145065 (2 recorded)
+- G-NUM needs criterion C8 against protocol 1e6cdf04d7a2
+- G-AUDIT has 0/2 independent accepts per target
+
+The previous worker-078 did F2a independent verification. But wait — the output said F2a [0 distinct accept reviewer(s)]. My predecessor did an accept. That may already be ingested or not.
+
+Let me check `controller_gate_audit` in the map for currently missing accepts, and also examine `research_map/events.jsonl` tail for latest state. Also check what assignments workers have actually completed and which targets still need independent verification.
+
+Let me look at the gate audit.
+dsh: reasoning:
+The gates need:
+- G-F0: 2 distinct independent accepts at canonical taxonomy 276009f4f63d
+- G-FORM: F1 9a8bd4c96800, F2a b6123750b37d, F2b 1bb78ce9b357 — need accepts at these hashes (0 each)
+- G-LIT: L0 ce42d205e761 needs an accept; L1 spot checks ≥3 done (15)
+- G-AUDIT: A1 coverage needs ≥2 accepts per target (F0,F1,F2a,F2b,L0)
+
+So there's high demand for independent accepts at exact hashes. My predecessor worker-078 accepted F2a at hash b6123750b37d — that may now be ingested. It was at 00:21:41. The gate audit at 00:21:55 still shows 0 for F2a; maybe not ingested yet.
+
+Note the key challenge: canonical tree is actively being republished, so hash binding drifts. My task should be to produce a verified review of a target at the current measured hash, bound by hash, with snapshot pinned bytes.
+
+Let me check the latest gate state, plus whether F2a accept from worker-078 got ingested into events. Also let me check review corpus for existing accepts per target to pick an unclaimed target. Also the "one canonical path has exactly one owner (CF-12)" rule — assignments have canonical path owners. I need to avoid duplicating another worker's current work.
+
+Recent worker activity (00:19-00:22 outbox): deepseek-flash-04, 12, 14, 18, 19, astra-lead-numerics, worker-039, worker-025... Let me check which workers are actively running and on what.
+
+A safer approach: pick a target that's clearly unclaimed and needed. The gates need accepts at:
+- F0 canonical taxonomy (2 accepts)
+- F1 (needs accepts)
+- F2a (predecessor did; maybe another needed? G-FORM needs "full-schema accepts at rev21 hashes plus F1 soft flag")
+- F2b
+- L0
+
+But there's a constraint: independent verification of the same target at the same hash by multiple workers = more accepts. G-AUDIT needs >=2 accepts per target for F0/F1/F2a/F2b/L0.
+
+Let me check the reviews in the map to see which reviews bind at current hashes. Let me scan reviews.
+dsh: reasoning:
+Lots of workers running (up to 100). My worker id 078. There's high contention. I need to pick a class-bound task that is not duplicated. Let me check recently written outbox events to understand what's currently being claimed, and the "claims" section of the map, plus look at the artifacts dir for worker-078 (predecessor's F2a verification).
+
+Given "one canonical path has exactly one owner (CF-12)", and there are many workers doing independent verification (which is allowed — "independent accepts"), the natural task for me: independently verify one of the targets that still lacks an accept bound to the current canonical hash. Current gate audit says all of F0, F1, F2a, F2b, L0 have 0 distinct accepts at current hashes (but the audit was computed at 00:21:55, and new accepts are arriving).
+
+However, high risk: if I do F2a again, other workers (098, 001) already accepted F2a at b6123750b37d. Let me check timestamps and current hashes. The gate needs 2 distinct accepts per target for G-AUDIT; G-FORM needs accepts (probably 2 too? no, "full-schema accepts"). Hmm.
+
+Wait — the audit says "0 distinct accept reviewer(s)" because the accepts bind to superseded hashes or none. Worker-078's accept binds b6123750b37d; and the audit measured F2a at b6123750b37d at 00:21:55, yet says 0 accepts. Hmm, maybe the review scan requires the review to be in comms/outbox ingested after the audit was computed at 00:21:55? worker-078's accept was created 00:21:35, so should have been ingested... Maybe the map snapshot used at 00:21:55 was generated before the ingest. Also worker-098's accept at 00:20:39 has no cited_sha256 so it doesn't bind.
+
+Let me check `events.jsonl` tail for the latest ingested reviews and see if worker-078 review was ingested. Also examine the "review coverage" logic in astra_lifecycle.py or audit_evidence.py to understand exactly what constitutes a binding accept. That is crucial: to produce a useful artifact I need to match the checker's expectations (hash binding via cited_sha256, target_id format, etc.).
+
+Let me look at the checker code that scans reviews.
+dsh: reasoning:
+Key insight: review coverage reads `reviews/*.json` files (not outbox events). For a review to count as a binding full accept, I need to write a JSON review into `reviews/` with:
+- `verdict: "accept"`
+- `reviewer`: distinct name
+- `target_id` (normalized alias) e.g. "F2a"
+- `cited_sha256` (or artifact_sha256/reviewed_sha256/sha256) pinning at least the first 12 chars of the measured canonical hash
+- `counts_as_full_schema_verdict` not false (default true)
+
+The gate audit also names soft flags from `audit_evidence.py` — "class-separation soft flags on F0/F1/F2b await disposition".
+
+So the highest-value task for me: produce an independent, hash-bound accept review at the measured canonical hash for one of the targets currently lacking accepts, with a real verification artifact. But which one? Since many workers are doing F2a/F2b/F1 now, maybe L0 or F0.
+
+Let me check current measured hashes and the review corpus to see which accept files already exist. Let me look at `reviews/` dir.
+dsh: reasoning:
+The artifact_hashes.json has structure {'hashes':..., 'registry':...}. Let me get the actual measured hashes from the map or from the file properly. Also check the registry.
+
+I need to decide my task. Given the state:
+- Reviews are being written rapidly by many workers. F2a-review-047.json (worker-047), F2b-review-030/034/001, F1-review-090/094/19/22, L0-review-032, F0-review-22, etc. Lots of new reviews at 00:22.
+- All targets are being actively worked.
+
+To avoid duplication with concurrent workers, I should pick a task that has a distinct, verifiable deliverable. Options:
+
+1. Independent verification of a target at current hash (F2a/F2b/F1/L0/F0) — heavily contested right now; many workers already wrote reviews at 00:22. Duplicating wastes budget.
+
+2. A cross-cutting verification task: e.g., verify the hash binding/integrity of the review corpus itself — check whether the reviews cited_sha256 pins actually match current canonical bytes, and produce a "binding integrity audit". But the audit lead already has A1-rebind-coverage.
+
+3. Verify a *different* aspect not covered: e.g., the CF-12 dual-assigned canonical path issue, publication drift F0 (canonical vs authoring). Or the class-separation soft flags.
+
+Let me look at the map's claims and see what open verification needs exist. Also check the current live state of `research_map.json` gates and `controller_findings`. Let me also read the `runtime/state/controller_verification/lifecycle_20260912-001746.json` to see soft/hard flags and what's missing.
+
+Actually the instruction says: "Take one class-bound task". Class-bound means tied to one of the formulation classes (AF-WCC-VAC-GEN etc.). Independent verification of F2a (AF-SCC-C2-VAC-GEN) is class-bound. My predecessor did exactly that.
+
+Given that the newest lifecycle at 00:17:46 says "G-FORM needs full-schema accepts at the rev21 hashes plus the F1 soft flag; G-LIT needs an L0 accept at ce42d205e761 and 3 L1 spot checks at 315c19145065 (2 recorded)".
+
+At 00:22:xx now. The measured hashes at 00:21:55 were: F1 9a8bd4c96800, F2a b6123750b37d, F2b 1bb78ce9b357, F0 276009f4f63d, L0 ce42d205e761, L1 315c19145065.
+
+The most valuable *non-duplicative* thing may be to check which review JSONs actually bind and count as distinct full accepts, and pick the target where I can add a distinct independent accept that isn't already covered by 2 others. From ls: F1-review-090, F1-review-094, F1-review-19, F1-review-22, F1-review-lead-audit-r2... F2a: F2a-review-047, F2a-review-lead-audit-r2, F2a-review-19, F2a-review-18, F2a-review-17... F2b: many. L0: L0-review-032, L0-review-17, L0-review-lead-audit-r2. F0: F0-review-22, F0-review-lead-audit-r2.
+
+But do these bind to current hashes? Let me write a quick scan using astra_lifecycle.review_coverage on current measured hashes. That tells me which target still needs my accept. Let me do it correctly by invoking the module functions.
+
+Note: reviews/*.json are being written right now; a scan gives me live data.
+
+Also important: the reviewer name must be distinct. My reviewer id should be "worker-078" (respecting CF-12 ownership of canonical paths — but I'm not owning a path, just reviewing).
+
+Wait: predecessor worker-078 already wrote a review "schemas/af_scc_c2_vacuum.yaml#b6123750b37d" reviewer worker-078 accept at 00:21:35 — but it was in the map's `reviews` list, not necessarily as a reviews/*.json file. The cov scan only reads reviews/*.json. So if I write a review file, I should make it consistent with my predecessor's finding; but as "worker-078" reviewer, adding a second review could look duplicative. Actually each worker instance is distinct; but reviewer identity "worker-078" would collide with the predecessor's accept. Since the predecessor's accept was in the map reviews list (different channel), for the cov scan it doesn't count.
+
+Hmm, but better to be honest: I'm worker-078 instance 3. The reviewer name should be unique and distinct — e.g., "worker-078-independent-2"? That seems odd. Actually the protocol lists agent ids; many workers write "worker-0XX". Being the same worker id but a new bounded run, it's fine to sign as "worker-078" but the predecessor already reviewed F2a. To be a *distinct* accept, another reviewer name is needed. If I write a review for F2a as "worker-078", the predecessor's map-review isn't in reviews/*.json so it would count as 1; but another fresh review by "worker-078" is still arguably one reviewer... but for the cov scan it's the file that matters.
+
+The safest high-value choice: pick a target where the count of distinct full accepts at the current hash is lowest. Let me compute.
+
+Let me run the scan.
+dsh: reasoning:
+Now let me run the review coverage scan against these hashes to see which targets lack distinct full accepts. I need to map hashes dict format expected by review_coverage: {t: {"sha256": ...}}.
+
+Let me call AL.review_coverage with a constructed dict.
+dsh: reasoning:
+Live state (00:22-00:23):
+- F0: 0 accepts; 1 revise (worker-082), 1 revise (lead-audit), 1 inconclusive scoped.
+- F1: 1 accept (astra-lead-audit), 3 revise, 1 inconclusive.
+- F2a: 2 accepts (lead-audit, worker-047) — satisfied for G-AUDIT but... G-FORM needs accepts too? G-FORM criterion is likely just needs the accepts? Level not specified; G-FORM reason lists accepts per target. Probably needs ≥1 accept at each? Actually the F2a has 2 already.
+- F2b: 3 accepts — satisfied.
+- L0: 1 accept (astra-lead-audit) — needs another distinct accept for G-AUDIT (need >=2) and specifically "an L0 accept" for G-LIT.
+- L1: 0 accepts at current hash — G-LIT needs 3 spot checks (15 exist) — fine. But G-AUDIT needs ≥2 accepts per target for F0,F1,F2a,F2b,L0 — L1 not included.
+- A0: 1 accept.
+- N0: 0 accepts.
+
+The largest gaps now: F0 needs 2 accepts (0 now), L0 needs 1 more, F1 needs 1 more (has 1), A0 needs 1 more (G-AUDIT needs >=2 per target, A0 is the rubric - the audit criterion says A1 coverage at measured hashes: F0 F1 F2a F2b L0 need >=2 each).
+
+So the top-value, least-duplicated tasks: independent accept on F0 (2 needed), or L0 (1 needed), or F1 (1 needed).
+
+F0 is the canonical taxonomy `research_map/formulation_taxonomy.yaml` — GLOBAL class F0 binds all four classes. F0 currently has 0 accepts and one revise from worker-082 and lead-audit revise. This is the biggest gap and the most contentious (F0 divergent publication pair, class-token soft flags were cleared at 00:19 per post-pass observation).
+
+But if reviewer "worker-078" produces an F0 accept, that's distinct from astra-lead-audit and from worker-082. Do F0 accepts need to be "full-schema"? F0 is a taxonomy, not a schema; `counts_as_full_schema_verdict` defaults True.
+
+Alternatively L0 (theorem ledger) needs 1 more accept and is directly on the G-LIT gate (needs an L0 accept at ce42d205e761). Adding a second independent accept for L0 would satisfy both G-AUDIT (2 accepts) and G-LIT (>=1 accept) — that seems high value: one accept closes two criteria.
+
+However, the risk: L0 is a huge ledger (140KB theorems.jsonl, 102KB citation audit). Independent verification requires spot-checking primary sources; a bounded worker can do a well-scoped verification: hash binding, schema, spot checks of N rows, class-token separation, and falsifier. There is already L0-review-032 (deepseek-flash-32?) — it didn't bind? Actually L0-review-032.json wasn't listed in cov verdicts at all — maybe it binds a different hash or target parse failed. Let me check that file.
+
+Also F0: worker-082 wrote a revise; lead-audit wrote revise. Both are "revise", meaning issues found. If I independently verify F0 and find it acceptable, a genuine accept would be valuable; but I must not rubber-stamp. I need to actually verify.
+
+Let me consider which gives the strongest bounded verification with the least chance of duplicating. The reviewer independence requirement: my accept as "worker-078" would be a distinct reviewer.
+
+Important caution from the swarm handoff: "Reject your own output before sending: does the artifact exist? does the falsifier actually falsify? does the class id match the file?" And rule: workers cannot set status=done or gate verdicts; reviews are allowed (the protocol lists `review` as an upward message type). Writing reviews/*.json is the binding channel the checker reads.
+
+Let me check what F0's actual content is, what worker-082 and lead-audit found wrong (their revise reasons), so I can either (a) reproduce their issue and choose a target where accept is warranted, or (b) address it. If F0 has genuine open defects, an accept would be wrong. Let me read those review files.
+
+Let me also look at the L0 reviews (L0-review-032 and L0-review-17) to see their status.
+
+Plan: read the current F0 review files and L0 review files, check the soft flag disposition, then decide target. I'll lean toward L0 if the ledger checks out; L0 accept simultaneously advances G-LIT and G-AUDIT.
+
+Actually wait. Let me re-read the instruction: "Take one class-bound task". L0 is class GLOBAL (all classes) per assignments. F0 is also GLOBAL. F1/F2a/F2b are class-bound. Hmm, "class-bound" likely means the task must be bound to a class id (any of the taxonomy classes). F2a = AF-SCC-C2-VAC-GEN. F0 taxonomy is global but binds all classes. F2a already has 2 accepts; F2b has 3; F1 has 1 and needs 1 more; L0 needs 1 more; F0 needs 2.
+
+Given the audit shows F1 with 3 revise verdicts (090, 094, 19) and an inconclusive, there may be genuine issues. But lead-audit accepted F1. Hmm.
+
+The F2a independent verification by my predecessor is done. But note: the predecessor's outbox review was to the map `reviews` list, not reviews/*.json. My new review file could be a *second* independent accept for F2a... but F2a already has 2. Not needed.
+
+So the best target by unmet need:
+1. F0: needs 2 distinct accepts (0 available). Highest need.
+2. L0: needs 1 more accept (G-AUDIT + G-LIT).
+
+F0 has an additional complication: "Publication pair F0 is divergent" and FROZEN.json doesn't name one frozen F0 revision; CF-13 publication drift. The gate needs "two independent accepts at the published F0 hash plus 2 soft-flag dispositions". At 00:19 audit, F0 class-token soft flags were gone (cleared), leaving F1 soft flag. So F0 flags may be cleared.
+
+If publication is divergent (canonical vs authoring tree), can a review bind? The canonical path policy: `schemas/*.yaml` and `research_map/formulation_taxonomy.yaml` are authoritative. The review scan binds by canonical hash. So an F0 accept at 276009f4f63d (canonical taxonomy) is valid per the scan. But the controller may require the publication pair aligned before verdicts bind ("canonical-path policy stands: ... must be published byte-identically before verdicts bind"). The publication pairs at 00:21:55 for F0? The G-F0 reason says "Publication pair F0 is divergent." So an F0 accept would be advisory until the authoring tree is republished. Risky.
+
+L0: "L0 measured ce42d205e761; review scan at this hash: 0 distinct accept reviewer(s)" as of 00:21:55, but now lead-audit-r2 accept exists (written 00:22). The ledger has a class-token flag cleared at this hash. L0 review binds to ledger/theorems.jsonl; publication alignment isn't mentioned as an issue for L0 (ledger isn't in the publication pairs; those are schemas + taxonomy).
+
+So L0 is cleaner: 1 accept already, need 1 more for G-AUDIT (>=2) and G-LIT (>=1). My independent accept would close both. And L0 is class-bound in the sense that the ledger rows carry class ids (AF-WCC-VAC-GEN, AF-SCC-C2-VAC-GEN, AF-SCC-C0-VAC-GEN).
+
+But is L0 accurate? The prior L0 reviews: L0-review-17 (revise), L0-review-032 (?), L0-review-lead-audit (accept), L0-review-lead-audit-r2 (accept), L0-conditional-review-16. If deepseek-flash-17 found real problems and they weren't fixed, an accept would be wrong. Let me investigate the current state of the ledger and the review findings.
+
+Let me read the key F0/L0 review files and the ledger structure. Also check `ledger/` directory and `LITERATURE_STATUS.md`.
+
+Let me gather quickly.
+dsh: reasoning:
+Interesting. L0 has an open critical HF-01 issue: 30 ledger rows set conclusion_type=theorem without artifact_refs; PROTOCOL rule 1 auto-rejects `conclusion_type: theorem` without artifact_refs. worker-032's review labels it non_blocking (claim-scoped detector), but it's flagged as an owner/controller decision. Also L0-review-17 flagged internal contradiction accepted vs verification status. So L0 has open issues that make an independent accept risky/unwarranted unless I verify the current revision resolves them. Wait — L0-review-17 bound artifact_sha256 5fb8bf... (stale hash) so it's advisory.
+
+Also, worker-032's file didn't have a `verdict` field? Let me check: the print showed no verdict for L0-review-032, so the cov scan skipped it (v not in VERDICT_KINDS). It's a findings-only review.
+
+Given this, F0 or F1 might be alternatives. But the cleanest high-value task might not be adding an accept at all. Perhaps a better class-bound task: independent verification of a specific *class* claim that supports the soft-flag disposition, e.g., F1's AF-WCC-VAC-GEN-SET soft flag.
+
+Let me step back and think about what "one class-bound task" to take, in a way that:
+1. Is genuinely useful (fills a gap the controller named).
+2. Is bounded (can complete in this run).
+3. Is independent and hash-bound.
+4. Doesn't duplicate concurrent workers.
+
+Look at the controller's stated unmet requirements at pass end (00:18):
+- G-F0: two independent accepts at published F0 hash + 2 soft-flag dispositions
+- G-FORM: full-schema accepts at rev21 hashes + F1 soft flag
+- G-LIT: L0 accept at ce42d205e761 + 3 L1 spot checks (2 recorded; now 15)
+- G-NUM: criterion C8 against protocol 1e6cdf04d7a2
+- G-AUDIT: 0/2 independent accepts per target
+
+Many workers are hammering F1/F2a/F2b/L0 accepts right now. F0 needs two accepts and has zero. The F0 target is the taxonomy (not a schema), and it has a publication divergence issue (canonical vs authoring).
+
+Hmm, but there's another angle: the *soft-flag dispositions*. The F0 soft flags were class-token flags "AF-WCC-VAC-GEN-SET" etc. Per ASTRA_HANDOFF post-pass observation, "the F0 class-token soft flags were gone, leaving only the F1 AF-WCC-VAC-GEN-SET flag and two dual-tree divergences."
+
+There's now a review file `F0F1-softflag-disposition-review.json` at 00:22. So someone is on it.
+
+What about a task nobody is doing: verifying the "dual-tree divergences" (canonical vs authoring trees). Hmm, that's CF-12/CF-13.
+
+Alternatively: G-NUM criterion C8 against protocol 1e6cdf04d7a2 — "the recorded protocol verdict reviews/G-NUM-protocol-review.json binds unbound (stale), so criterion C8 is the exact unmet requirement". But numerics is locked and N1 may not start. Reviewing G-NUM protocol is allowed (N0/flat-space). Workers 081 accepted G-NUM-protocol; there's convergence reviews. But my task must be class-bound; AF-WCC-SCALAR-SPH is the numerics class. A hash-bound independent review of the convergence protocol at its current hash, checking criterion C8, would be valuable and less contended (a few workers on it).
+
+Let me check what G-NUM criterion C8 is and what reviewers are doing. Let me read the gates definition in the map and the numerics protocol review state.
+
+Actually, let me first check the map's `gates` entries to see exact criteria.
+dsh: reasoning:
+Criteria:
+- G-F0: taxonomy exists; exactly 4 separate class ids; disjointness tests; 2 independent reviewer verdicts. The "revise" verdicts count as reviewer verdicts? It says "2 independent reviewer verdicts" — but the gate audit says "needs two distinct independent accepts". So accepts.
+- G-FORM: reviewers 17,18 accept with cited sha256 (the original criterion names reviewers 17, 18 — but their verdicts were revise; the gate audit generalized to accepts at current hashes).
+- G-LIT: ledger rows have resolvable locators; verification_status honest; >=3 spot checks; unresolved marked unresolved.
+- G-NUM: flat-space convergence order measured AND independently replicated within tolerance; protocol reviewed; lock guard passes.
+- G-AUDIT: rubric without universal scalar score; A1 has 2 independent verdicts per formulation/literature target with cited sha256.
+
+So for G-AUDIT, "2 independent verdicts per target" (not necessarily accepts!) — but the scan needs accepts, hmm. The audit reason says "distinct accepts (need >=2 each)". Fine.
+
+Now, what task is best? Let me consider the class-bound constraint from the human's instruction: "Take one class-bound task". So I should pick a task tied to a specific class id, produce JSON with IDs/evidence/hash/falsifier, checkpoint, exit.
+
+The clean, bounded, and genuinely needed task with least duplication risk: independent hash-bound verification (accept/revise) of the **F0 taxonomy's class disjointness** — i.e., verify "exactly 4 separate class ids; disjointness tests" as required by G-F0. F0 currently has 0 accepts; the two recorded verdicts are revise. A rigorous independent check of the taxonomy's structural properties (4 classes, disjointness, no leakage) at the measured canonical hash, with the publication divergence noted as a caveat, is exactly the class-bound task supporting G-F0. But is F0 "class-bound"? The taxonomy defines the classes, so yes.
+
+Alternatively: the "F1 soft flag AF-WCC-VAC-GEN-SET" disposition — that's class-bound to AF-WCC-VAC-GEN. Hmm, but someone is on it (F0F1-softflag-disposition-review.json, 00:22, likely lead-audit).
+
+Wait, let me reconsider: The most defensible and useful bounded task is verifying F1 (AF-WCC-VAC-GEN) at its current hash 9a8bd4c96800, since:
+- G-FORM needs "full-schema accepts at the rev21 hashes plus the F1 soft flag" — F1 currently has exactly 1 distinct accept (astra-lead-audit).
+- G-AUDIT needs ≥2 accepts for F1.
+- Adding a second distinct independent accept at the current hash directly closes F1 for both gates (if the soft flag is dispositioned, which is a lead task).
+- F1 has 3 revise verdicts from workers 090/094/19, so an accept must be earned by verifying those objections don't hold at the current revision (or are superseded).
+
+But wait — those revise reviews are bound to what? They're in the cov list at current hash for F1 (090, 094, 19 all show in the current-hash scan). So at the current revision, three independent workers say revise, one lead says accept. As a bounded worker, I can't overturn three revise verdicts with confidence unless I establish what the issues are and verify they're addressed or false. That's a big job but could be the highest value: an adjudication-style verification. However, risk of producing a low-quality accept.
+
+What about F0? F0 has one revise (worker-082) and one revise (lead-audit) plus an inconclusive. What did they flag? Let me read them. If the F0 issues are clear and checkable (e.g., a leaked token, a missing disjointness test), then an independent verification could legitimately be a "revise" rather than accept. But revise doesn't close the gate.
+
+Hmm. The human's instruction does not require me to produce an accept. It says: "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit." So I should do a real verification and report the honest verdict. The value is in the evidence, not the verdict.
+
+Let me look at F0's structure and the two revise reviews to understand the actual state. Then decide between F0 and F1. Let me also glance at worker-082's review and lead-audit r2.
+
+Let me read F0 reviews.
+dsh: reasoning:
+F0 has substantive open blocking findings:
+- W082-F-01/F-02: AF-WCC-SCALAR-SPH conclusion quantifier and false consistency record (major, blocking, but class AF-WCC-SCALAR-SPH — the numerics class).
+- F0 canonical vs authoring dual-tree divergence (276009f4 vs c8e979a1) — publication drift, unresolved.
+- FROZEN.json future-dated, unreliable.
+
+So an F0 accept right now would be inappropriate. Good to know.
+
+F1: has 3 revise verdicts at current hash — let me read them to see whether they're substantive. If F1's revisions are addressed or false, an accept from me could be valuable; else a revise is the honest verdict but doesn't advance gates.
+
+Let me read F1-review-090, 094, 19, and lead-audit-r2.
+
+Actually, wait. Let me reconsider the overall situation. There are ~100 worker instances churning every few minutes. The bottleneck requirements:
+- G-F0: 2 accepts + 2 soft-flag dispositions (accepts currently 0; F0 has real blocking findings)
+- G-FORM: accepts at 3 hashes (F1 needs 1 more; F2a 2; F2b 3) + F1 soft flag
+- G-LIT: L0 accept (1 now via lead-audit) + 3 spot checks (15)
+- G-NUM: C8 + N0 replication + protocol reviewed + guard
+- G-AUDIT: 2 accepts/target
+
+Hmm — a *very* useful class-bound bounded task: verify the **F1 soft flag `AF-WCC-VAC-GEN-SET`** disposition. The `F0F1-softflag-disposition-review.json` was just written at 00:22 by someone (likely astra-lead-audit). Let me check it.
+
+Another highly useful task: verify the **class-separation soft-flag checker's calibration** (CF-16: claims[36] CLASSSEP hard failure adjudicated false positive due to metalinguistic case labels). Hmm.
+
+Actually, let me look at the *most recent* states to find genuinely open work, rather than guessing. Let me look at the supervisor log tail, latest lifecycle report (00:21:55), and the `controller_findings`. Also check `proposed/` (proposals) — maybe open questions there.
+
+Let me read the latest lifecycle JSON's summary to see what the controller says is missing right now.
+dsh: reasoning:
+The controller lifecycle-03 is running right now (label astra-lifecycle-03-close). Note map_sha changed.
+
+Let me now decide. Given F0's genuine blocking issues and L0's open HF-01, F1 has 3 revises. Let me read F1's revise reviews to understand.
+
+Actually, let me think about the highest-value, bounded, independent task that is *not* an accept/reject of the contested canonical artifacts. Candidates:
+
+(A) Independent verification of the F1 `AF-WCC-VAC-GEN-SET` soft flag disposition — check whether the class-separation checker's soft flag is correctly cleared. Class-bound to AF-WCC-VAC-GEN. Bounded, concrete, and directly needed by G-FORM ("plus the F1 soft flag"). But someone wrote F0F1-softflag-disposition-review.json 30s ago; likely the lead is dispositioning it. My work could be an independent check of that disposition — useful but possibly duplicative.
+
+(B) Independent verification of the class-separation *regression corpus* calibration (CF-16) — the CLASSSEP hard failure on claims[36] was adjudicated a false positive. A calibration check could either confirm or refute. Bounded. Not class-bound to one class though.
+
+(C) Independent replication of the N0 flat-space convergence order (Q7?) — class AF-WCC-SCALAR-SPH. G-NUM requires "flat-space convergence order measured AND independently replicated within tolerance; protocol reviewed; lock guard passes". The replication verdict on disk is PROVISIONAL. An independent replication of the N0 convergence order would be extremely valuable (it's the actual physics gate). But it may require running numerics code; N0 is active/unverified, and work on N0 (flat-space) is allowed. Workers 12/13/14 are on it. Let me check what N0 replication involves — `numerics/tests/flat_wave.py` (28KB). Running it might take time but is bounded. The previous deepseek-flash-14 accepted a replication file. Hmm, "the replication verdict on disk is PROVISIONAL" per handoff. An independent replication (run the flat-wave solver at multiple resolutions, fit convergence order, compare with claimed order) is exactly the kind of real evidence this swarm needs, and it's class-bound AF-WCC-SCALAR-SPH.
+
+Let me look at this more closely: numerics/tests/flat_wave.py, numerics/CONVERGENCE_PROTOCOL.md, and the N0 replication artifact. If it's runnable quickly (a scalar wave on a grid), I can do a genuine independent replication with a different code path (e.g., independent implementation of the same PDE with a different method? no — replication usually re-running and re-analyzing with an independent analysis script).
+
+Given the emphasis in the project on falsification and controls, an independent *analysis* replication (not just re-running the same script) would be strong: parse the raw output data, fit the order independently, check the claimed order, and try to falsify (e.g., check that the fit isn't driven by coarse-grid pre-asymptotics; check residual scaling).
+
+Let me look at the numerics directory.
+dsh: reasoning:
+There's a lot of N0 activity already: worker-046 did independent 4-rung verification; worker-081 did C8 protocol review. So N0 replication is contended, and lead-numerics is on it.
+
+Let me step back and consider what the swarm most needs and what is genuinely open, per the latest controller run. Actually, let me read the latest lifecycle report's gate_audit/soft findings — that was at 00:21:55; the controller is running again now (00:23). Let me check if a newer lifecycle report appeared, and read its gate reasons. Simultaneously, look at the `proposed/` and `proposals/` dirs (open proposals may need review).
+
+Actually, I realize I should decide soon: I'm a bounded worker; time matters. Let me quickly gather the freshest controller state, then commit to a target.
+
+Let me check the newest lifecycle report and the F1 reviews.
+dsh: reasoning:
+Live gaps as of 00:21:55:
+1. G-AUDIT: accepts per target all 0 (now some have 1-3 as of my live scan).
+2. G-F0: 0 accepts; F0 divergent; blocking findings.
+3. G-FORM: F1 needs accept(s); F2a/F2b have some now.
+4. G-LIT: needs L0 accept (lead-audit r2 now provides 1).
+5. G-NUM: C8 exact unmet requirement; N0 replication PROVISIONAL.
+
+Highest-leverage *independent* contribution I can make in a bounded run that others aren't already covering:
+- L0 second accept: my live scan shows L0 has exactly 1 accept (astra-lead-audit). G-AUDIT needs 2 per target. G-LIT needs ≥1 (satisfied by lead). Adding a genuine independent accept for L0 = closes G-AUDIT for L0 and firms G-LIT. The open HF-01 (theorem without artifact_refs) was labeled non_blocking by worker-032 (claim-scoped detector) — but it's a real protocol-rule-1 concern. As an independent reviewer, I can examine it: does PROTOCOL rule 1 apply to ledger rows? Rule 1 says "`conclusion_type: theorem` without `artifact_refs` is auto-rejected" — in context of *events*, and ledger rows are not claim events. The A0 rubric detector is claim-scoped. The ledger rows carry source_ids locators to primary literature. So this is a vocabulary collision, not a fabricated theorem claim. An independent review could accept with a scoped note... but "counts_as_full_schema_verdict" would need to be true to count. Hmm. Actually I could verify and if the issues are non-blocking and honestly documented, issue accept with findings noting N-C5/N-C6 as non-blocking residuals. That's defensible if I verify the ledger's core criteria: locators resolve, verification_status honest, unresolved marked unresolved, no fabricated content in spot checks.
+
+- F0 accept: not appropriate now (blocking findings).
+- F1 accept: 3 revise verdicts; need to read them.
+
+L0 seems the best target: one accept closes G-LIT's reviewer requirement and G-AUDIT's 2-per-target for L0. And it's genuinely verifiable: I can independently re-fetch a sample of sources? Re-fetching external literature may not be possible (network?), but there are 15 L1 spot checks already. My independent check: parse ledger, validate JSON, uniqueness, locator resolution against citation_audit.csv, verify verification_status/labels, spot-check that the *claimed* status matches citation registry evidence depth, and check the class-token separation (the flag is cleared). Plus verify the hash binding.
+
+But hold on — "Take one class-bound task". L0 is GLOBAL in the assignment table. Hmm. But ledger rows carry class ids. The map alias L0 is a literature node. Is L0 "class-bound"? The taxonomy classes are the classes; L0 spans all. F2a (AF-SCC-C2-VAC-GEN) is clearly class-bound.
+
+Alternative class-bound task that's genuinely open and uncontended: verify the **F2a F0-binding and class-token integrity under the live F0 dual-tree divergence** — i.e., check whether F2a's `f0_binding.declared_f0_sha256` matches the live canonical F0 hash and whether the class tokens in F2a are canonical (not aliases). My predecessor verified F2a structurally at b6123750b37d. F2a already has 2 accepts. Not needed.
+
+What about F1? It's the last schema missing a second accept at the current hash. F1's revise verdicts: let me read them. If their objections are class-specific and checkable, and I find them resolved/non-blocking at the current revision, an accept adds the second accept for F1 → G-FORM one step closer. F1 = AF-WCC-VAC-GEN, definitely class-bound. This seems best if the objections are addressable.
+
+Let me read the three F1 revise reviews (090, 094, 19) and the F1 accept (lead-audit-r2).
+dsh: reasoning:
+F1 has serious unresolved content issues:
+- F-1 (critical): whole-curve vs tail quantifier contradiction (visibility predicate) — worker-19.
+- F-2 (major): D0 not well-typed.
+- F-3/F-4/HF-094: binding/evidence hygiene.
+- Duplicate YAML keys, future-dated timestamps.
+
+The lead-audit accept doesn't address F-1/F-2. So an accept from me would be dishonest unless I verify F-1 and find it wrong. It might actually be a genuine bug. This could be a genuinely valuable *falsification* task: independently adjudicate the F-1 critical claim (whole curve vs tail in the visibility quantifier). If F-1 is real, the map must keep G-FORM blocked; if it's a false positive, the lead's accept stands. That's a high-value bounded verification.
+
+Hmm, but the instruction says take one class-bound task and emit JSON with evidence hash falsifier. An adjudication of a critical claim IS such a task: class AF-WCC-VAC-GEN, target F1 at hash 9a8bd4c96800, evidence = textual analysis of exact lines, falsifier = "find a line where the formal quantifier asserts tail-visibility (∃q: γ∩J⁻(q) ...) consistent with the conclusion".
+
+Actually, wait. Let me re-read the class-bound instruction: "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit." The deliverable is a JSON with IDs, evidence, hash, falsifier, plus a checkpoint. So an adjudication artifact would fit.
+
+But let me think about which task gives the most value for the swarm right now. The three critical open things:
+(a) F0 blocking findings + divergence (needs authoring fix by lead-formulation, not a worker).
+(b) F1 critical F-1 quantifier issue (needs resolution: author fix or refutation). A worker can adjudicate precisely — this is exactly the "verifier" role.
+(c) L0 HF-01 vocabulary issue (non-blocking per worker-032; needs controller decision).
+(d) N0 replication (contended).
+
+Option (b) is highly valuable and bounded: read the exact lines of F1 and the taxonomy definition, determine whether the formal quantifier is weaker than the conclusion/visibility predicate, whether negation is the true negation, and what the consequence is (class leakage? conclusion inflation? decidable falsifier?). Produce a hash-bound adjudication artifact with a definitive falsifier. Then file a review (verdict: revise/accept) accordingly — honest, independent, and class-bound.
+
+Actually, there's a subtlety: I should ensure I'm not just duplicating worker-19's claim. As an *independent adjudicator*, my job is to attempt to refute F-1. If I can refute it (show the formal is actually equivalent or stronger), then the lead's accept stands, and F1 can be accepted by me. If I confirm it, the gate stays blocked and the author gets an actionable, precise defect report.
+
+Let me examine the F1 file at the pinned hash. First, pin the bytes (snapshot) and hash them. Then read the relevant sections.
+
+Let me set up my artifact directory: artifacts/worker-078/f1_f1_quantifier_adjudication/ (careful: my predecessor used artifacts/worker-078/f2a_indep_verify — same worker dir is fine, distinct subdir).
+
+Plan:
+1. Pin F1 snapshot: copy schemas/af_wcc_vacuum.yaml to artifact dir, sha256 it, verify equals 9a8bd4c96800...
+2. Read the exact lines cited: 47-100, 130-260, 269-290 of the schema; taxonomy lines 184-190.
+3. Formal analysis of the quantifier structure: Does quantifiers.formal (lines 49-55) capture the visibility predicate (line 215+)? Is negation the actual negation? Is the conclusion weaker/stronger?
+4. Write a report JSON with: task_id (class-bound), target, pinned hash, evidence refs with line numbers and quoted text, analysis, verdict on F-1 (confirmed/refuted), residual findings, falsifier (a concrete test that would overturn my adjudication), and the impact on the gate.
+5. Write the review file reviews/F1-review-078-adjudication.json? Hmm, naming: maybe `reviews/F1-quantifier-adjudication-078.json` with target_id F1, reviewer worker-078, verdict (revise if confirmed; accept if refuted + all else clean), cited_sha256 pinned, counts_as_full_schema_verdict true.
+   But if I confirm F-1, adding another "revise" doesn't count as accept — still valuable (it independently corroborates and blocks a premature gate).
+   If I refute F-1, I can legitimately accept, adding the second distinct accept → advances G-FORM.
+6. Checkpoint: runtime/state/w078_f1_adjudication_checkpoint.json + append to a checkpoints jsonl, and outbox events (status/artifact/review) validated with research_map/schemas.py.
+7. Exit.
+
+Before committing, let me check the pinning protocol the swarm uses (rule: a message is not a result until the artifact hash is recorded). Also verify whether writing to `reviews/` is permitted for a worker (authority: worker events cannot set status=done etc., but reviews are fine — many workers wrote reviews/*.json).
+
+One concern: "one canonical path has exactly one owner (CF-12)" — that's about assignments/ownership of canonical artifacts. Writing a review of F1 is not owning the path; and worker-19/090/094 already did. Fine.
+
+Let me first read the F1 file's key sections with line numbers. Also read the taxonomy's relevant part. Let me pin the file first.
+
+Actually, before all this, let me double check the timing/current hash stability: F1 canonical 9a8bd4c96800 was measured at 00:21:55. Let me re-measure now, then pin the exact bytes and hash. If it drifted, I need to decide whether to review the new revision. The controller says "re-measure before citing". Let me do that.
+dsh: reasoning:
+F1 canonical is stable at 9a8bd4c96800 (mtime 00:19:14, now 00:24:33 — 5+ minutes stable). Good.
+
+Now let me pin the snapshot and read the cited lines. Let me create artifact dir and snapshot. But first, read the file sections to understand the claim.
+dsh: reasoning:
+Now the critical part is lines 47-90 and visibility (line 215+), plus taxonomy 184-190. Let me read the visibility section around lines 190-260.
+dsh: reasoning:
+Now I can adjudicate the F-1 claim from worker-19:
+
+worker-19's F-1: "quantifiers.formal lines 54-55 read 'not exists q in I+ with gamma subset J^-(q) intersect M' and D5 lines 79-81 defines q by 'gamma([0,T)) is contained in the causal past J^-(q)'. That is whole-curve single-q containment... the operative quantifier expansion contradicts the canonical visibility predicate (whole curve vs tail); quantifiers.formal is strictly weaker than the conclusion it is supposed to expand, and quantifiers.negation does not negate quantifiers.formal."
+
+Let's check:
+- Line 54-55: `forall future-inextendible causal geodesics gamma of (M,g) with finite affine length: not exists q in I+ with gamma subset J^-(q) intersect M.`
+  Indeed, "gamma subset J^-(q)" — the whole curve/trajectory gamma (not a tail gamma([t0,T))).
+- D5 (line 79-80): "points q of I+ such that gamma([0,T)) is contained in the causal past J^-(q) intersected with M" — also whole curve.
+- visibility.definition (line 220): "gamma ... is visible from I+ iff there exists q in I+ AND t0 in [0,T) such that the TAIL gamma([t0,T)) is contained in J^-(q) intersect M."
+- visibility.negation_conclusion (line 222): "for every future-inextendible causal geodesic gamma of finite affine length, for every q in I+ and every t0 in [0,T), the tail gamma([t0,T)) is NOT contained in J^-(q) intersect M".
+
+So the formal quantifier's negative clause (not exists q: whole gamma ⊂ J^-(q)) is:
+- Weaker than "no visible singularity" in the tail sense? Let's see: 
+  - Tail-visible: ∃q ∃t0: γ([t0,T)) ⊂ J⁻(q).
+  - Whole-curve containment: γ ⊂ J⁻(q) implies tail containment with t0=0. So whole-curve visibility ⇒ tail visibility.
+  - Negation: ¬∃q: γ ⊂ J⁻(q) means no q sees the whole curve. The class conclusion wants ¬∃q∃t0: tail ⊂ J⁻(q), i.e., no q sees a tail.
+  - ¬∃q: whole γ ⊂ J⁻(q) is implied by ¬∃q∃t0: tail ⊂ J⁻(q)? If no q sees any tail, then certainly no q sees the whole curve (t0=0 is a tail). So the formal's condition (no whole-curve containment) is weaker than the intended (no tail containment). I.e., quantifiers.formal as written would be satisfied by a spacetime where some q sees the tail but not the whole curve — the tail-visible case — which is supposed to be a failure of the class (visible singularity). So the formal is strictly weaker than the conclusion. Correct.
+
+Wait, careful: "strictly weaker" in the sense that the formal statement is satisfied by MORE spacetimes than intended. Yes: formal condition (no whole-curve containment) ⊂ intended condition (no tail containment). So the formal statement is weaker (easier to satisfy). Hence "quantifiers.formal is strictly weaker than the conclusion it is supposed to expand" — confirmed.
+
+Also, negation (lines 84-88): "there exists (s,delta) ... there is (Sigma,h,K) in G whose development fails the conclusion: either it admits no conformal completion of the declared kind, or some null geodesic generator of I+ is incomplete, or some future-inextendible causal geodesic of finite affine length is visible from I+." This negation uses "is visible from I+" which per visibility.definition means tail-visible. So the negation is the negation of the intended tail-based P, not the negation of quantifiers.formal (whole-curve). Indeed, the negation of quantifiers.formal's last clause would be "∃q: γ ⊂ J⁻(q)" (whole-curve visible), while the stated negation uses tail visibility. So `quantifiers.negation` does not negate `quantifiers.formal` — confirmed.
+
+Let me double check line 88 says "some future-inextendible causal geodesic of finite affine length is visible from I+". Yes. And negation_normal_form line 89 defines non-meagerness of not-P_WCC. But whether P_WCC = formal or = tail-based is ambiguous. The formal is weaker.
+
+Impact: This is a real internal inconsistency (the schema's own schema_falsifiers[0]: "two competent readers classify the same described spacetime differently under this schema... the schema is imprecise and must be revised"). Also `must_not_conflate` line 227 explicitly says single-q non-containment must not be replaced by B-containment — but the whole-curve vs tail issue is a different conflation, and the schema's own visibility section was amended (rev9) to make the tail predicate canonical, yet quantifiers.formal and D5 were NOT updated. Indeed line 17-19 says "rev9 delta: ONE canonical visibility predicate (single-q tail) made explicit as the class's only predicate" — but the formal quantifier still uses whole-curve wording. That's strong evidence this is a real editing defect: the rev9 amendment updated the visibility block but missed quantifiers.formal and D5.
+
+Additionally, line 251 statement_formal says "not exists visible_singularity_from_I_plus(M_D)" — using the predicate name, which resolves to the tail definition. So the conclusion block is fine (it references the predicate), but quantifiers.formal expands it wrongly.
+
+So F-1 is CONFIRMED. My adjudication should be an independent confirmation, with precise line evidence, and the falsifier: "exhibit a line in the pinned bytes where the visibility expansion is tail-based (e.g., D5/formal uses gamma([t0,T))) — or show that whole-curve non-containment implies tail non-containment under the schema's assumptions (e.g., by monotonicity of J⁻ or a causality argument)."
+
+Wait — could there be a mathematical argument that whole-curve non-containment is equivalent to tail non-containment? Let's think: J⁻(q) is past of a point. If a tail γ([t0,T)) ⊂ J⁻(q) for some q and t0, does there exist q' with γ ⊂ J⁻(q')? Not necessarily — the earlier part of γ may be outside J⁻(q). Conversely if γ ⊂ J⁻(q), tail ⊂ J⁻(q) trivially. So whole-curve ⇒ tail but not conversely. Hence strict.
+
+Unless... in the schema, the class conclusion's negation is what's asserted (no visible singularity). The quantifier formal says "for all γ: not exists q: γ ⊂ J⁻(q)". This is strictly weaker than "for all γ: not exists q, t0: tail ⊂ J⁻(q)". Confirmed non-equivalent, with a concrete separating example: a geodesic that starts in the exterior (outside J⁻(q)) and ends inside the black hole such that its tail is in J⁻(q) for some q ∈ I⁺. In fact, the schema's own visibility.definition rationale says exactly this: "requiring the whole geodesic to lie in J^-(q) would misclassify a geodesic that starts in the exterior and ends inside the black-hole region." That's a self-contained proof that the author knew whole-curve is the wrong relation — and quantifiers.formal still uses it. Beautiful: the schema's own text at line 220 refutes its line 54-55.
+
+So this is a genuine, high-confidence, independently-verifiable critical defect in F1 at 9a8bd4c96800. The lead-audit's accept missed it. My adjudication artifact:
+- Confirms F-1 (worker-19) with independent evidence.
+- Notes the self-refutation via line 220.
+- Checks F-2? Maybe also verify the D0 well-typedness claim briefly. That would broaden the adjudication. But bounded: I can focus on F-1 (critical) and do a quick check of F-2 (D0/leaf line 150).
+
+Let me also check the claim F-3 about class_contract_pointer not resolving in canonical taxonomy (artifacts/formulation vs research_map). That's a hygiene defect (owner is lead-formulation to republish). I can verify it mechanically: does research_map/formulation_taxonomy.yaml have `class_contracts` key? Let me check. And F-4 (consistency evidence not hash-bound).
+
+The deliverable for this task should then be:
+1. Snapshot pinned bytes of F1 (sha256 9a8bd4c96800...) — artifact.
+2. `report.json`: full adjudication with IDs, evidence (file#line, quoted), hash, falsifier.
+3. A review JSON in `reviews/` with target_id F1, reviewer "worker-078", verdict "revise" (confirming critical defect), cited_sha256 = 9a8bd4c96800..., hard_failures [HF-06], counts_as_full_schema_verdict true — this is honest and blocks a premature gate; it doesn't close G-FORM but *prevents a wrong closure*, which is exactly the verification layer's value.
+4. Checkpoint file: runtime/state/w078_f1_adjudication_checkpoint.json.
+5. Outbox events: status/artifact/review events, validated against research_map/schemas.py.
+6. Maybe an alert event to lead-formulation with the precise fix (actionable): update quantifiers.formal lines 54-55 and D5 line 80 to the tail form: "not exists q in I+, t0 in [0,T): gamma([t0,T)) subset J^-(q) intersect M" and align the ordered list (add t0 binder / not_exists q).
+
+Let me verify the schema's JSON schema requirements for events before writing.
+
+Also — should my review be "revise"? Yes: content defect confirmed, so revise. Score maybe 3.0-3.5.
+
+But hold on: is there a chance the gate criterion for G-FORM says "reviewers 17,18 accept with cited sha256"? The criterion literally names reviewers 17 and 18 (both wrote revise originally). The controller generalized it. Anyway, not my concern.
+
+Before I commit, let me also consider: is the *formal* clause perhaps intended to be parsed with "gamma" as tail? No — it says "forall future-inextendible causal geodesics gamma ... not exists q in I+ with gamma subset J^-(q) intersect M". D5 confirms whole-curve. So confirmed.
+
+Let me also verify F-2 quickly: D0 definition (line 65) says "admissible regularity pairs: Sobolev variant s > 5/2 and delta in (1/2,1), or the smooth-with-decay default; the class is fixed at these values and does not range over 'suitable' regularity". The binder is (s,delta) ∈ D0, and if D0 includes the smooth default (not a pair), the typing is loose. Is that a real defect? It's a "major" but arguable: one can treat the smooth default as a distinguished element of D0. The phrase "the class is fixed at these values" vs "forall (s,delta) in D0" is indeed in tension. I'll note it as a secondary finding without over-claiming: "D0 has a mixed-type element; a reader cannot instantiate (s,delta) in the smooth branch without a convention. Non-blocking but should be disambiguated." worker-19 flagged it major; I'd call it a real but minor-major clarity defect. My review can carry it as a confirmed secondary finding with severity minor-major and citation, deferring the severity adjudication.
+
+Actually the crucial thing is that my adjudication is independent. Let me do the checks myself and not just trust worker-19. I've read the lines myself. Let me now:
+
+1. Create artifact dir and snapshot file.
+2. Write an independent checker script `adjudicate_f1_quantifier.py` that mechanically extracts the relevant text from the pinned snapshot and checks:
+   - the negative clause uses whole-curve containment (`gamma subset J^-`),
+   - D5 definition uses `gamma([0,T))` (whole parameter range),
+   - visibility.definition uses tail `gamma([t0,T))`,
+   - presence of the tail quantifiers `exists t0`,
+   - quantifiers.negation uses "visible from I+" (tail semantics),
+   - statement_formal uses predicate name only.
+   Then emit findings. Also check whether the pinned file hash matches the canonical live hash.
+3. Write report.json with verdicts.
+4. Write review JSON.
+5. Checkpoint + outbox.
+
+The script must parse YAML. Is PyYAML available? The lead tools use yaml, so yes.
+
+Let me check how other workers structure their artifacts for consistency. Let me look at one existing independent verification artifact, e.g. artifacts/worker-046/n0_4rung_independent/verification.json and README, to match conventions. Also check schemas.py for event schema validation. And check how checkpoints are structured (w077 or worker-078 predecessor's checkpoint). Let me look at the predecessor checkpoint and a recent review JSON to mirror format.
+dsh: reasoning:
+Good. I now know the event schema and the predecessor's conventions.
+
+Let me check the current state once more to make sure F1 is still at 9a8bd4c96800 and no one has already reported/refuted this F-1 (e.g., lead-formulation may have just fixed it). Also check if a new revision supersedes. Then start building.
+
+Let me also verify one thing: the review scan binds with prefix matching of 12 hex chars. My review must cite `cited_sha256` = "9a8bd4c96800..." (full or prefix). Since canonical may drift, I'll pin the snapshot and cite the snapshot hash; if the live file drifts, the review binds to the pinned bytes only and I'll note it.
+
+Let me now start the artifact. Steps:
+
+1. mkdir -p artifacts/worker-078/f1_quantifier_adjudication/{snapshot}
+2. cp schemas/af_wcc_vacuum.yaml snapshot/af_wcc_vacuum.9a8bd4c96800.yaml; sha256 verify.
+3. Write adjudicate_f1_quantifier.py — deterministic checks on the snapshot:
+   - load YAML (yaml.safe_load)
+   - C1: quantifiers.formal negative clause contains whole-curve containment and no t0
+   - C2: D5 definition uses gamma([0,T)) (whole curve) and no t0
+   - C3: visibility.definition uses tail gamma([t0,T)) and requires t0
+   - C4: visibility.negation_conclusion is tail-quantified (for every q, every t0)
+   - C5: quantifiers.negation uses "visible from I+" (tail semantics) and does not match the literal negation of quantifiers.formal
+   - C6: statement_formal references predicate name (fine)
+   - C7: self-refutation: visibility.definition text explicitly says whole-curve requirement "would misclassify" — proving author intent is the tail form
+   - C8: ordered list has no t0 binder (only q), consistent with whole-curve reading
+   - C9: hash binding: snapshot hash == live canonical (at run time)
+   - C10: check taxonomy's class contract? optional.
+
+   Then verdict: defect confirmed (F-1 confirmed). Also a "strictness witness": construct the separating scenario description — a causal geodesic γ that begins outside J⁻(q) for every q and whose tail enters J⁻(q) for some q. Show via logic: whole-curve containment ⇒ tail; tail ⇏ whole. Since schema's own line 220 gives the intended physical scenario (starts exterior, ends inside BH region), the schema's formal disagrees with its own visibility section.
+
+   Also check F-2 (D0 typing) mechanically: D0.definition contains "or" branch; binder (s,delta) has no values in the smooth branch. Flag as confirmed secondary defect (severity: major per worker-19, but I'll say "confirmed as written; severity adjudication deferred").
+
+   And F-3/F-4 hygiene: check canonical taxonomy has no `class_contracts` key; check consistency evidence file lacks sha256. These are quick checks supporting revise.
+
+4. report.json with all checks and the adjudication.
+5. reviews/F1-quantifier-adjudication-078.json: target F1, reviewer worker-078, verdict revise, score 3.0, cited_sha256 9a8bd4c96800..., hard_failures: list with HF-06/label, findings array.
+6. README.md summarizing.
+7. Checkpoint runtime/state/w078_f1_adjudication_checkpoint.json (and .jsonl append).
+8. Outbox events in comms/outbox/worker-078.jsonl (append? The predecessor's outbox file exists; new instance should probably write its own file to avoid clobbering. Hmm. The predecessor wrote comms/outbox/worker-078.jsonl with 8 events. If I append, that's consistent with "outbox/<agent>.jsonl" channel and avoids two files. But concurrent writes? The predecessor is done. I'll append new events with distinct event_ids and timestamps. Actually safer: write a separate file `comms/outbox/worker-078-f1-adjudication.jsonl`? The protocol says outbox/<agent>.jsonl. The ingest reads all files in outbox presumably. Two files for the same agent might confuse dedup, but events have unique ids. Precedent: deepseek-flash-17 has multiple files (deepseek-flash-17.jsonl, -a1b, -addendum, -final, -qnf). So a separate file is acceptable. I'll use `comms/outbox/worker-078.jsonl` appended, since it's the canonical channel... Hmm, but if the harness re-runs this instance, duplicates. Event IDs unique per timestamp.
+
+Actually, let me check how the ingest discovers outbox files. Let me grep comms.py for outbox glob.
+
+Then validate each event with research_map/schemas.py, and finally emit the checkpoint + exit.
+
+Let me also decide on the "ID" requirements from the human: "emit valid JSON with IDs evidence hash falsifier". So report.json must include task_id, check ids, evidence refs, sha256s, falsifiers.
+
+Let me get to work. First, create the artifact directory and snapshot. Also record live hash at pin time.
+dsh: reasoning:
+Snapshot pinned: 9a8bd4c96800. Live matches at 00:25:07.
+
+Now let me check the remaining evidence for F-3/F-4 mechanically before writing the harness:
+1. Does research_map/formulation_taxonomy.yaml have a top-level `class_contracts` key? Check.
+2. Does artifacts/formulation/evidence/taxonomy_consistency.json contain any sha256?
+3. Is artifacts/formulation/schemas/af_wcc_vacuum.yaml byte-identical (9a8bd4c96800)? Check.
+4. Check duplicate `revised_at` keys in pinned bytes (7x).
+5. Check `revised_at` future-dated (00:30:00 vs wall clock 00:25).
+
+Let me run these checks now as part of the harness. I'll write the harness to do all of it deterministically and emit report.json.
+
+Let me write the script. It should:
+- Take --pin (expected sha256) and --snapshot path.
+- Verify snapshot hash == pin; if live file hash != pin, record live drift and still adjudicate pinned bytes (with binding advisory).
+- Parse YAML with a duplicate-key-aware loader? PyYAML safe_load silently keeps last duplicate. To detect duplicates, I can parse with a custom loader that records duplicates (yaml.compose gives nodes and I can inspect mapping keys). Simple approach: use `yaml.compose` to get the node tree and count duplicate keys in the top-level mapping. Let me implement a duplicate-key detector via composing and walking.
+- Run checks C1..C12 with explicit evidence line refs. To get line numbers for keys, I can search raw text with regex; simpler: for each key I care about, find the line number via regex in lines list. Since values are block scalars, key line numbers suffice.
+- Compute strictness logic and output.
+- Emit JSON.
+
+Checks:
+A. Hash binding: snapshot sha256 == pin; live path sha256 == pin at review time (record drift if not); authoring mirror hash.
+B. Quantifier defect adjudication:
+  B1 quantifiers.formal negative clause whole-curve: substring "gamma subset J^-(q)" present in formal and no "t0" in formal.
+  B2 D5 uses whole-curve range "gamma([0,T))" and no t0.
+  B3 visibility.definition tail-based: contains "gamma([t0,T))" and "exists q in I+ AND t0".
+  B4 visibility.negation_conclusion tail-negated: contains "every q in I+ and every t0".
+  B5 quantifiers.negation is tail semantics: contains "is visible from I+" (which resolves to tail) — hence does not negate formal.
+  B6 ordered list lacks a t0 binder after gamma (kinds: forall gamma, not_exists q) — should be not_exists (q,t0) if tail.
+  B7 self-refutation: visibility.definition contains "requiring the whole geodesic to lie in J^-(q) would misclassify" — establishes author intent.
+  B8 conclusion statement_formal uses predicate name visible_singularity_from_I_plus (so conclusion is fine; the expansion is the defect).
+  B9 strictness witness: logical monotonicity argument; output a machine-checkable description plus the separating scenario.
+  Verdict F-1: CONFIRMED (formal is strictly weaker).
+C. Secondary checks:
+  C1 D0 typing: D0.definition has "or the smooth-with-decay default" while binder is (s,delta); D0.definition says class "is fixed at these values". Flag as confirmed ambiguity (major-clarity).
+  C2 class_contract_pointer targets authoring tree; canonical taxonomy top-level keys do not include class_contracts → pointer does not resolve in the authoritative artifact.
+  C3 consistency evidence not hash-bound: taxonomy_consistency.json has no sha256 fields.
+  C4 duplicate YAML keys + future revised_at.
+D. Aggregate verdict: revise (critical HF-06).
+
+Falsifier for my adjudication:
+- "Any one of: (F1) a line in the pinned bytes where quantifiers.formal or D5 constrains a tail gamma([t0,T)) rather than the whole curve; (F2) a monotonicity lemma in the schema showing whole-curve non-containment ⇒ tail non-containment (it would need γ ⊂ J⁻(q) whenever a tail is, which is false for the schema's own exterior-start/black-hole-end scenario); (F3) a subsequent revision hash where lines 54-55/79-81 are reworded to the tail form and the pin updated — then this adjudication binds only to 9a8bd4c96800 and is superseded, not refuted."
+
+Let me now write the harness. I'll also include a --pin re-run mode to reproduce.
+
+One important detail: the review file in reviews/ must have a `verdict` and `cited_sha256`, target_id "F1". The cov scan: for t in _targets_in_review(d): target_id "F1". Pins: cited_sha256. h = hashes[F1].sha256 = 9a8bd4c96800...; any(p.startswith(h[:12]) ...) — my cited sha starts with 9a8bd4c96800 → binds. good.
+
+Review JSON should be placed in reviews/ with a unique filename: `F1-quantifier-adjudication-078.json`.
+
+Also emit outbox events. Let me check the `comms.py ingest` handling of review events: needs target_id, reviewer, verdict, score, hard_failures, findings. And event fields: event_id, event_type, created_at, actor.
+
+Let me write everything now. First the harness script using the write tool.
+
+Regarding check counts: let me write clean Python.
+
+I need to be careful with YAML parsing of the pinned file: duplicate keys. I'll write a duplicate detector using yaml.compose.
+
+Let me write the script.
+dsh: reasoning:
+3 checks FAIL. Let me see which — expected: C00? C01? C21 (pointer didn't resolve)? C22 (consistency evidence)? C23? Let me inspect report.json.
+
+Note C20-C23 are "secondary" where PASS means defect confirmed (d0_mixed etc.) — my semantics here are inverted for the reviewer display: I used `passed` = defect-present for secondary checks, which is confusing but intentional (the check "D0 is a mixed-type domain" passes when the defect is present). 3 failed. Let me look.
+dsh: reasoning:
+The 3 FAILs are the secondary findings I intentionally confirmed as present (my PASS/FAIL semantics invert for "defect present" checks — that's confusing). I should fix the semantics so the report is unambiguous: for secondary defects, "status" should reflect whether the defect was confirmed (CONFIRMED/NOT_CONFIRMED) rather than PASS/FAIL, and the aggregate should count failures of *expected* conditions. Let me refactor slightly:
+
+- For "defect" checks (C10-C18): PASS = the claimed defect is present as described (confirmation).
+- For "secondary": status CONFIRMED means defect present; the verdict logic should be: if any primary defect check is PASS → revise.
+
+Right now `secondary_findings_confirmed = all(c["status"] == "PASS" for c in secondary)` → False because C21-C23 "FAIL" = defect confirmed. That's inverted. Let me fix: for secondary checks, use status "CONFIRMED" when defect present and "CLEAR" when not; `secondary_findings_confirmed = all(c["status"]=="CONFIRMED")`. Also aggregate `failed` count should count only defect-absent expectations.
+
+Also for C20, d0_mixed is True and I recorded PASS, meaning "confirmed". So use a uniform convention: `status: CONFIRMED | CLEAR` for defect-present checks, and `PASS | FAIL` only for binding/precondition checks. Let me fix the script and rerun.
+
+Also note C22: consistency evidence file has no 64-hex digest — confirmed.
+
+And I should double check the C23 line: "7 revised_at assignments, 1 duplicated key(s)" — my detail says len(revised_at_dups) = 1 because dups is a list of {key,count} → 1 entry for revised_at. Fine, but let me word it as "duplicate key groups". Minor.
+
+Let me refactor the check function to take `defect_present` semantics. Simpler: add a `polarity` field: "defect" for checks where True=defect present. Let me rewrite those parts.
+
+Also, the report currently has `snapshot` at line-number evidence but the report references file#line of the LIVE file (same as snapshot since no drift; lines identical). Good.
+
+Let me patch the script cleanly.
+dsh: reasoning:
+Also fix the print at the end: `failed=sum(1 for c in checks if c['status'] == 'FAIL')` is fine for binding failures. And fix the duplicate-key detail wording. Let me also add a `summary` block to the report with counts by status and the primary/secondary confirmations. Let me update the report structure.
+
+Also the `report` currently includes "secondary_findings_confirmed". Add primary_confirmed too, and counts. Let me patch.
+dsh: reasoning:
+Now it's semantically clear:
+- 9/9 primary defect checks CONFIRMED.
+- C20 CONFIRMED (secondary).
+- C21/C22/C23 CLEAR means... wait, no! The check labels are positive statements ("pointer resolves", "evidence is hash-bound", "keys are unique"). For those I passed `passed=ptr_resolves` (False) with kind="secondary". With my new mapping, kind "secondary" → status = CONFIRMED if passed else CLEAR. But passed=False means the *positive condition* fails, i.e., the defect IS present. So my polarity is wrong for C21-C23: for these the label is a positive property, and False means defect confirmed.
+
+The secondary check function calls:
+- C20: `check(..., d0_mixed, ...)` where d0_mixed=True means defect present. Label "D0 is a mixed-type domain" — defect-present statement.
+- C21: `check(..., ptr_resolves, ...)` where ptr_resolves=False means defect present. Label is positive property.
+- C22: `cons_has_hash` False → defect present. Label positive.
+- C23: `not revised_at_dups and not future_dated` False → defect present. Label positive.
+
+So mixed polarity. I need to normalize: make the `passed` argument mean "the asserted condition (bad thing) is present" for defect checks. For C21-C23 I should negate: pass `not ptr_resolves`, `not cons_has_hash`, `not (not dups and not future_dated)`.
+
+Let me fix those three calls.
+
+C21: check(..., ptr_resolves → should be `not ptr_resolves`)
+C22: `not cons_has_hash`
+C23: `revised_at_dups or future_dated`
+
+Let me apply edits.
+dsh: reasoning:
+All 9 primary defect checks confirmed, 4 secondary confirmed, 0 binding failures. Verdict: revise.
+
+Now:
+1. Run the pinned re-run test-retest (`--pin` with the exact hash) and save `report_rerun.json` to demonstrate reproducibility. Since the script writes report.json by default, I'll run with --out report_rerun.json and --pin.
+2. Write README.md.
+3. Write the review JSON to reviews/.
+4. Write the checkpoint.
+5. Append outbox events and validate with schemas.py.
+6. Verify hashes, then exit with a summary.
+
+Let me also double-check the review's hard_failures structure. The map review ingest may expect a list. Many reviews use dicts. I'll use a list with one dict describing HF-06.
+
+Also, a concern about my report's C18: it's trivially PASS (I set passed=True unconditionally) — fine as a documentation check, but let me keep it.
+
+Let me now run the test-retest.
+dsh: reasoning:
+Test-retest reproducible. Now write the review JSON with the required schema fields for the cov scan:
+
+```json
+{
+ "review_id": "W078-F1-QUANT-ADJ-01",
+ "target_id": "F1",
+ "target": {"node_id": "F1", "class_id": "AF-WCC-VAC-GEN", "path": "schemas/af_wcc_vacuum.yaml"},
+ "reviewer": "worker-078",
+ "verdict": "revise",
+ "score": 3.0,
+ "cited_sha256": "9a8bd4c9680042a40894f6085f183661500966f2d787a6bf28a7098a271ed503",
+ "artifact_sha256": "same",
+ "counts_as_full_schema_verdict": true,
+ "created_at": "...",
+ "hard_failures": [...],
+ "findings": [...],
+ "falsifier": {...},
+ ...
+}
+```
+
+Note `_explicit_pins` reads keys: artifact_sha256, reviewed_sha256, sha256, cited_sha256. And target dict can carry sha256 too. `_targets_in_review` reads target_id (string) → "F1" → alias maps to F1. Good.
+
+Score: the schema requires 0-5. I'll use 3.0 (content defect critical but structure largely good). Note the review*event* validator requires hard_failures and findings keys.
+
+Now write the review file in reviews/. Name: `F1-quantifier-adjudication-078.json`.
+
+One question: should I include `verdict: revise` despite the audit lead's accept? Yes — my independent adjudication confirms a critical content defect. Honest.
+
+Let me create it with the write tool. I need a timestamp. Let me compute now.
+
+Also write README.md for the artifact dir.
+
+Then checkpoint and events.
+dsh: reasoning:
+I left "MEASURED_BELOW" placeholders for artifact hashes. I need to write the README first, then compute hashes, then patch the review JSON with real hashes. Actually, if I patch the review JSON after computing hashes of the other artifacts, the review's own hash isn't self-referential, so it's fine. But the review references README.md which I haven't written yet. Let me write README.md now, then compute all hashes and replace the placeholders.
+
+Note: The review JSON itself will be hashed and recorded in the checkpoint/outbox events.
+
+Let me write README.md.
+dsh: reasoning:
+Now compute the hashes of all artifacts and patch the review JSON's placeholders. Let me compute hashes.
+dsh: reasoning:
+Wait — report.json hash may change if I re-run the harness (finished_at timestamp). I've already run it twice; the report.json currently is from the second run at 00:26:43. I should NOT re-run report.json after computing hashes. I'll hash it now and put the hash in the review/checkpoint. For the test-retest requirement, report_rerun.json is the pinned run. But report.json includes `finished_at` which varies per run, so its hash is stable only as long as I don't re-run. That's normal for evidence artifacts.
+
+Hmm, but the harness default output path writes report.json each run. If anyone re-runs it, report.json changes (timestamp) though checks stay the same. Fine — my recorded hash pins the exact bytes.
+
+Now patch the review JSON with real hashes. Also I should include the review's own hash? Can't (self-reference), but checkpoint can record it.
+
+Let me use edit to replace the MEASURED_BELOW values. There are 4 placeholders. Since the artifact_refs entries are in order, I'll replace each specifically. Let me do a small python/sed edit... Better to use the edit tool with exact strings. There are 4 occurrences of "MEASURED_BELOW" each with distinct preceding path. Let me do 4 edits. Actually, a single python script would be simpler and allowed? The instruction prefers edit tool for targeted changes. Let me use bash+python to rewrite just those strings — but the guidance says use edit for targeted changes to existing UTF-8 files. I'll use edit with replace_all=false per occurrence (each old_string is unique because paths differ).
+
+Actually the whole `"sha256": "MEASURED_BELOW"` line appears 4 times identically, so I need context. Let me include the path line in old_string.
+dsh: reasoning:
+Now verify the review JSON parses, has no placeholders, and that the cov scan picks it up as a revise verdict at the current hash (it should, though as "revise" not accept — good). Also confirm target_id "F1" and cited_sha256 binding.
+
+Then:
+- Checkpoint: runtime/state/w078_f1_quantifier_adjudication_checkpoint.json + append to a checkpoints jsonl.
+- Outbox events: status (task claim), artifact events (report, rerun, harness, readme, snapshot, review), review event, blocker? maybe not, final status.
+
+Let me validate the review file and run the cov scan.
+dsh: reasoning:
+Excellent — this is an important development: the lead-audit's F1 verdict has changed to `revise` (F1-review-lead-audit-r2.json now shows revise, presumably updated after seeing the critical claim — earlier my scan showed accept). So F1 now has 0 accepts and 6 revises at the pinned hash. My independent adjudication is consistent with the corrected corpus.
+
+Now write the checkpoint. Structure similar to predecessor's. Include:
+- checkpoint id, at, worker, lifecycle, assignment_taken (task id, class, node, gate, why not duplicative)
+- hours estimate
+- snapshot sha
+- result: verdict revise, primary defect confirmed, checks
+- artifacts with hashes
+- evidence: hashes of F1 live, taxonomy, relevant tools, review file hash
+- observed_drift
+- events emitted
+- falsifier
+
+Also check where checkpoints are typically written: runtime/state/w078_checkpoint_1.json for predecessor. I'll write `runtime/state/w078_f1_quantifier_adjudication_checkpoint.json` and append to `runtime/state/w078_f1_quantifier_adjudication_checkpoints.jsonl`. Maybe more consistent: `w078_checkpoints.jsonl` (predecessor used single file w078_checkpoint_1.json). To avoid clobbering predecessor naming, I'll use `w078_checkpoint_2.json` (this is worker-078's second bounded run). And append `w078_checkpoints.jsonl`. Hmm, but if multiple instances run concurrently under the same worker id, numbering could collide. The predecessor used checkpoint 1. I'll use checkpoint 2 with the distinct filename `w078_checkpoint_2_f1_quant_adjudication.json` to be safe.
+
+Let me verify what the checkpoint tool does — `research_map/checkpoint.py` creates full snapshots. But individual workers write their own checkpoint files (as predecessor did). The human instruction says "checkpoint". I'll do both: my own checkpoint JSON + run `python3 research_map/checkpoint.py`? That tool is the controller's full 15-min snapshot; it may be expensive/locked (map.lock exists). Better not to run the global checkpoint (map.lock is held by the running controller). I'll write my worker checkpoint file only.
+
+Now the outbox events. Let me construct them:
+1. status: task claim — event_id w078-20260912T0027-task-claim, node_id F1, status active, hours 0.4, summary, evidence_refs, next_falsifier.
+2. artifact events for 5 files + the snapshot (node_id F1, artifact_type: adjudication_report / rerun / harness / readme / snapshot, path, sha256, validation_status: unverified — since worker cannot set passed).
+3. review event: target_id F1, reviewer worker-078, verdict revise, score 3.0, hard_failures (list), findings (list).
+4. status final: status active? The worker cannot set "done" — protocol says worker events cannot set status=done. Predecessor's final status used "active"? Let me check predecessor's outbox last line.
+
+Let me read the predecessor's outbox to match conventions.
+dsh: reasoning:
+Good, conventions clear. I'll append my events to `comms/outbox/worker-078.jsonl` (same agent channel) with distinct ids.
+
+Let me now write the checkpoint file and the outbox events, validating each event via schemas.validate_event.
+
+I'll write a small emitter script to guarantee valid JSON and schema validation — or construct in Python inline and append. Let me write it as a script in my artifact dir for reproducibility: `emit_w078_events.py`. That's also an artifact I can hash. Good practice (worker-081 did emit_w081_events.py).
+
+Plan for events (timestamps now ~00:28):
+1. `w078-20260912T0028-task-claim` status active, node F1, hours 0.4, summary, evidence_refs, next_falsifier.
+2. artifact events x6 (harness, report, rerun, readme, snapshot, review body file).
+3. review event: target_id "schemas/af_wcc_vacuum.yaml#9a8bd4c96800", reviewer worker-078, verdict revise, score 3.0, hard_failures [...], findings [...]. But careful: the *event* review's target_id format; the cov scan only reads reviews/*.json, so the event is informational. Predecessor used "schemas/af_scc_c2_vacuum.yaml#b6123750b37d". I'll use "F1" plus artifact? Let me use "schemas/af_wcc_vacuum.yaml#9a8bd4c96800" to match convention, and include class_id/node_id fields.
+4. blocker event? The defect blocks G-FORM — but blocker events are for the worker's own task. Not needed.
+5. status final: node F1, status active (can't set done), summary, evidence_refs, next_falsifier.
+
+Also maybe a `claim` event? I'm not claiming a theorem, so no.
+
+Then checkpoint JSON.
+
+Let me write the emitter.
+dsh: reasoning:
+Wait — the ROOT resolution: script is at artifacts/worker-078/f1_quantifier_adjudication/emit_w078_events.py. parents[0]=f1_quantifier_adjudication, parents[1]=worker-078, parents[2]=artifacts, parents[3]=ai4math-swarm root. Good, `parents[3]` is correct here. But in adjudicate_f1_quantifier.py I used `HERE.parents[2]` → HERE = .../f1_quantifier_adjudication; parents[0]=worker-078, parents[1]=artifacts, parents[2]=root. That's what I used (`ROOT = HERE.parents[2]`) and it worked (LIVE path resolved). Good.
+
+Let me run the emitter. Note that the review file hash (REVIEW) is computed at emit time — I just edited it, so the hash will be current. Any further edit to the review file would invalidate the recorded hash, so I must not edit it after this. Let me run.
+dsh: reasoning:
+Events emitted and checkpoint written. Now let me verify:
+1. The outbox lines are valid JSON and schema-valid (already validated in emitter, but let me double check by re-reading and validating).
+2. The artifact hashes recorded in the checkpoint match current files (especially REVIEW which I edited before running — the hash was computed at runtime, good).
+3. Hash integrity: verify all recorded sha256 values match disk.
+4. Ensure the pinned snapshot hash still matches the live canonical (drift check before I finish).
+5. Idempotency: re-running emitter should skip duplicates. Let me test that (it changes nothing but proves idempotent). Hmm, re-running would rewrite the checkpoint with a new timestamp and new events... it would skip the 9 events, but it would rewrite the checkpoint file with a new NOW → new checkpoint hash. That's fine but unnecessary. Actually to prove idempotency without churn, I can run with a dry check... The emitter appends only new event ids; re-running would skip all and rewrite the checkpoint (same content except `at` time changes). Not needed. Skip.
+
+Let me verify integrity now. Also should I run the map's `validate_map.py`? It validates the map (controller state), not worker artifacts. Not needed and may be locked. But let me check `runtime/state/map.lock` — the controller is running. I shouldn't touch the map.
+
+Let me do final verification:
+- sha256 of review file vs recorded in checkpoint.
+- All artifact hashes.
+- Live F1 hash still equals pin.
+- Outbox events validate.
+- The review file still parseable.
+
+Also, one more consideration: the human asked "emit valid JSON with IDs evidence hash falsifier". My report.json covers that. Checkpoint covers it too.
+
+Let me run verification.
+dsh: reasoning:
+Everything verified:
+- All 6 artifact hashes match disk.
+- F1 live canonical still equals pin (no drift).
+- 17 outbox events schema-valid (8 predecessor + 9 mine).
+- Review file binds correctly.
+
+One thing: the emitter script itself isn't in the checkpoint artifact list (only in the review's artifact_refs? no, the review refs adjudicate_f1_quantifier.py, report, rerun, README, snapshot — not emit_w078_events.py). Let me add the emitter hash to the checkpoint and outbox? The checkpoint has already been written and hashed. I could add an artifact event for the emitter. That would change the outbox but the checkpoint's events_emitted list wouldn't include it. Hmm. Better: leave it, or emit one more artifact event and update the checkpoint. But then the checkpoint file changes and its recorded hash in... nothing has recorded the checkpoint hash except my stdout. That's fine. But the outbox review event doesn't reference the checkpoint either.
+
+Actually, for completeness, let me add an artifact event for emit_w078_events.py and update the checkpoint artifacts map + emitted list. But the checkpoint is written by the script (re-running rewrites it with a new `at`, same content otherwise). If I add the emitter to the script's artifacts map, re-running will skip all existing events and rewrite the checkpoint with the new artifact. That's clean and idempotent. Let me do that: add EMITTER = art(__file__ rel) to EVENTS as an artifact event and to checkpoint artifacts. But careful: the emitter's own hash must not change after run. I'll edit the script to add the emitter entry, then run it; the hash recorded will be of the edited script (self-referential but computed at runtime of the same file, fine).
+
+Wait: editing the file changes its hash; running it computes sha of the new content; recorded hash matches. Good.
+
+Let me make the edit and re-run (it will skip the 9 existing events and emit 1 new artifact event). Then re-verify.
+
+Actually, is this necessary? The review's artifact_refs and the outbox artifact events cover the main deliverables. The emitter script is auxiliary. But the project's rule is "a result is an artifact + gate evidence referenced by hash" — including the emitter strengthens reproducibility. Let me do it; it's cheap.
+
+Also one more improvement: the review file records artifact_refs hashes, and one is now stale? No — review file references report etc., which don't change. The review file itself was hashed after its final edit (863c75257135). Good.
+
+Let me add the emitter.
+dsh: reasoning:
+The emitter did NOT skip the previous events because STAMP changed from 002827 to 002847 — event IDs include the timestamp, so re-runs create duplicates! That's a bug in my idempotency claim: event_id includes STAMP derived from now(). Now the outbox has 9 duplicate-ish events with new IDs. This pollutes the event stream (double-emission). I need to fix this.
+
+Options:
+A) Remove the duplicated events from the outbox (the first 9 events at 002827). Then keep the second batch (which includes the emitter). But then the review/artifact events reference hashes — the artifacts unchanged except the emitter script (which was edited after the first batch). The second batch reflects current hashes. So delete the 002827 batch and keep 002847 batch. But that means editing the outbox file to remove lines — acceptable? The outbox is an append-only channel; deleting my own just-emitted duplicate lines before ingest is reasonable hygiene and better than double-ingesting. The controller hasn't ingested since 00:22? The latest lifecycle was 00:21:55; a new pass may be running now (map.lock present). If ingest happens between my writes, duplicates get in and I can't remove them. Let me check quickly whether the 002827 events were ingested (grep in ingested_ids.json or rejected.jsonl).
+
+B) Alternatively, keep both and emit a "note" that 002827 is superseded? That's worse — duplicate artifact/review events could double-count reviews! The review event target "schemas/af_wcc_vacuum.yaml#9a8bd4c96800" — the controller's cov scan reads reviews/*.json only, so the event duplicate won't double-count reviewer coverage. But duplicate status/artifact events pollute metrics.
+
+Best: dedupe the outbox now. Also fix the emitter to be truly idempotent: derive event IDs from a fixed stamp (e.g., date + task slug) rather than now(), or skip if an event with the same task_id (not event_id) exists. I'll change STAMP to a constant "20260912T0028" and add a guard that skips events whose event_id matches the deterministic id. Then re-run: it should skip all (if IDs stable). To make IDs stable, use STAMP = "20260912T0028" constant... but if I delete batch 1 and keep batch 2 (ids 002847), re-running with constant 002847 would skip all. Let me restructure:
+
+- Remove the first 9 events (002827) from the outbox (keep the latest batch incl. emitter).
+- Change emitter: STAMP fixed constant "20260912T002847" so reruns are idempotent; plus a pre-existing check.
+- Re-run to confirm "emitted: [], skipped: [...all 10...]".
+
+Wait, but if I keep the 002847 batch and the emitter file changes after that (I'm editing it), the recorded EMITTER hash in the checkpoint would be stale (checkpoint records the hash of the emitter at its own runtime; after edit it changes). I need the final emitter run to record the final emitter hash. So:
+1. Delete both batches? Or delete batch1 (002827) and batch2's emitter artifact event... simpler: delete ALL worker-078 events with event ids containing "20260912T0028" (both batches), fix the emitter, run once more; it writes the final batch with the final emitter hash. Then verify idempotency by running again (should skip all).
+
+But wait: is deleting already-written outbox events acceptable? They're my own events, written seconds ago, before any ingest (need to verify not ingested). Let me check ingested_ids.json for these event ids. If not ingested, clean removal is the honest fix (I'm correcting my own double-emission). If ingested, I must not delete; instead I'd emit a correction and accept the duplicates... Let me check.
+
+Also note: checkpoint file was rewritten twice; final version has events_emitted with the 002847 batch. Fine.
+
+Let me check ingested_ids.json for "w078-20260912T0028".
+dsh: reasoning:
+Both batches have already been ingested into events.jsonl (19 events). Deletion from the outbox would not remove them from events.jsonl, and I must not rewrite events.jsonl (controller-owned). So the duplicate batch is now a fact of the event stream.
+
+The right move now:
+1. Do NOT delete anything from the outbox or events.jsonl (that would desynchronize the controller's ingested state).
+2. Fix the emitter to be deterministic/idempotent for future runs (constant stamp + skip by task marker).
+3. Emit a `status` correction event (a new event, clearly labeled) that says the second batch (002847) is a benign duplicate of 002827 differing only in the added emitter-hash artifact event, with identical payload hashes for all shared artifacts; flag that the duplicate review event must not be counted twice. Actually, since both batches are already in events.jsonl, the controller's ingest already deduplicated by event_id (both are distinct ids, so no dedup). The review *event* duplicates: the controller applies reviews from events? Let me check `apply_events.py` to see how review events are applied and whether duplicate reviews from the same reviewer/target are deduped or counted. The gate coverage scan reads reviews/*.json, so this likely doesn't affect G-AUDIT counts. But `map.reviews` may now contain two review entries from worker-078.
+
+Let me check what got applied — the map may have been updated by a lifecycle pass (map.lock existed). Let me check map.reviews for worker-078 entries.
+
+Actually, the events were emitted at 00:28:27 and 00:28:47; ingested_ids.json already has them, so a lifecycle pass ran between/after (the controller is actively running). Let me check the current map reviews for duplicates and the gate audit.
+
+Then decide: my correction event should be a `status` with a clear summary (or a `blocker`? no). A `status` event with a note is appropriate. But it will also be ingested and add to the map's status stream. Fine.
+
+Also, is the review double-counted in `map.reviews`? Let me check.
+
+Let me inspect.
+dsh: reasoning:
+The map's last update was 00:25:10, so my 00:28 events are ingested into `events.jsonl` but not yet applied to the map (next lifecycle pass will apply them). When applied, both review events would be added to map.reviews (duplicate review rows). The gate coverage scan reads reviews/*.json, so coverage isn't double-counted, but map.reviews will have two entries.
+
+Action: 
+1. Fix emitter to be idempotent (constant STAMP and event-id-based skip). 
+2. Emit a correction `status` event with a distinct event id that explicitly says: 002827 batch and 002847 batch are the same content; the 002847 batch supersedes 002827 only by adding the emitter-hash artifact event; the review event must be applied once. Because I can't retract already-ingested events (workers have no retract authority), an explicit note is the honest fix.
+3. Update checkpoint to record the duplicate-incident and the correction event id.
+4. Report this in my final summary.
+
+Note: the controller's apply_events.py might dedup by (target_id, reviewer, verdict, cited_sha256)? Let me check quickly — if it does, the duplicate is harmless. Let me grep apply_events.py for review handling.
+dsh: reasoning:
+Confirmed: `apply_events.py` blindly appends review events to `m["reviews"]` — duplicates would appear as two rows. Not fatal (the gate scan reads files), but messy and it also appends to `n["review_verdicts"]`.
+
+Given that the next lifecycle pass may apply both, I should emit a correction/annotation event. Also, could I make the duplicate less harmful by having apply skip duplicates? I can't edit apply_events.py (controller tooling; also not my mandate).
+
+Best action now:
+1. Fix emitter determinism (constant stamp, skip existing ids).
+2. Emit a `status` event (distinct id) with summary documenting the double-emission and instructing the controller to count the review once. It will be applied as a status eventually (status events are just appended to portfolio/status stream presumably).
+3. Update the checkpoint to record this incident.
+
+Actually — maybe a cleaner and more protocol-native approach: emit the correction as a `review` event? No. `status` is the right upward type for a work note.
+
+Alternatively, could I remove the 002847 batch from the outbox before next ingest? Too late: ingested_ids.json already lists them, and events.jsonl has them. So no.
+
+Let me also think: is the duplicate actually harmful to the gates? The gate audit's cov scan uses reviews/*.json with `distinct_accept_reviewers` — my file is a revise, so no effect on accepts. map.reviews duplication affects counts/metrics perhaps. The correction note suffices.
+
+Now let me fix the emitter for idempotency. The event IDs should be deterministic per task run. I'll set `STAMP = "20260912T0028"` as a module constant (task-run stamp) and keep the same IDs as batch 1? If I use 002827 ids, they'd be skipped (already ingested); but then the emitter artifact event would never be emitted with id ...002827-artifact-emitter (doesn't exist yet). Better: use constant STAMP "20260912T002847" (the batch that includes emitter), so all 10 IDs already exist and a re-run skips everything. That makes reruns no-ops. The correction event gets its own fixed id, e.g. "w078-20260912T0030-dup-note".
+
+But wait: the emitter file will change (this edit), so the recorded EMITTER hash in checkpoint becomes stale relative to the edited file. If I re-run with constant stamp, it skips all events (no rewrite of the emitter artifact event) and rewrites the checkpoint with EMITTER hash computed from the *current* file... but the checkpoint's `events_emitted` would be from the last run. Hmm, the checkpoint artifact map would then record the new emitter hash while the events.jsonl emitter event records the old hash — inconsistent.
+
+Cleanest: 
+- Edit emitter to constant STAMP = "20260912T0030" (new batch id) with the final content, and add the dedup-note event into the batch with that stamp.
+- Re-run once: since ids with 0030 don't exist, it emits 11 fresh events (including a third duplicate of the 9 core events!) — no, that's worse.
+
+Alternative:
+- Do NOT edit the emitter file further. Accept that the recorded hash matches the current file (it does: checkpoint records EMITTER hash of the file as of the 002847 run = current content). Then handle the idempotency fix as a separate, final edit, and emit a new artifact event for the *fixed* emitter + dedup note in one small "correction batch" with a new constant stamp. The checkpoint from the 002847 run records the old emitter hash, which was true at that time. Then I update the checkpoint (a final write) with a `corrections` block and the new emitter+note hashes.
+
+Simplest robust approach:
+1. Edit emitter: make STAMP constant, derived from a `RUN_STAMP` env or fixed literal; add "dedup note" event with fixed id; add `--check` mode? Keep it simple: fixed STAMP = "20260912T0030" and events = note + artifact emitter-supersedes? Hmm.
+
+Let me step back. What really matters:
+(a) The outbox/event stream should not gain more duplicates.
+(b) There should be an explicit note about the duplication for the controller.
+(c) The checkpoint should reflect final state.
+
+Minimal path:
+1. Edit the emitter file: replace `STAMP = datetime.now(...)` with a constant `STAMP = "20260912T002847"` (existing batch id) so all core event ids remain those already ingested → reruns skip. Add a `NOTE` event with fixed id `w078-20260912T0030-dup-note` and include it in EVENTS. But re-running the emitter would then emit only the note (not yet existing) — a third write. That's intended: one note event. It also rewrites the checkpoint including the new emitter hash. Then running it a second time skips everything (11 ids) → idempotent proof.
+2. But the note event references the emitter's hash? I can include the new emitter hash in the checkpoint, and the note can reference the checkpoint + review file. The emitter artifact event already in the stream records the hash of the pre-edit file; that's a minor inconsistency. I can include in the note: "emitter artifact event ...002847-artifact-emitter records the pre-edit hash 5a5...; the corrected emitter is now <newhash>, recorded in checkpoint". Let me compute and include explicitly.
+
+Actually, even simpler: make the note event itself an `artifact` event for the corrected emitter? No — the note is prose. I'll emit:
+- an `artifact` event with id `w078-20260912T0030-artifact-emitter-fixed` recording the corrected emitter hash, and
+- a `status` event with id `w078-20260912T0030-dup-note` documenting the duplication and the count-once instruction.
+
+Then the checkpoint records both and the corrected emitter hash. Running again skips all.
+
+Let me implement: in emitter, set:
+```
+STAMP = "20260912T002847"  # core batch already ingested; fixed to keep event ids stable
+FIX_STAMP = "20260912T0030"
+```
+and add two events with FIX_STAMP. Also make `NOW` fixed? No, NOW is the timestamp; a rerun would rewrite the same event content with a different created_at but the same event_id → skipped, so no write. Fine.
+
+The checkpoint gets a `corrections` block: duplicate batch description, count-once instruction, note_event_id, fixed_emitter artifact event id.
+
+Let me edit the script accordingly.
+dsh: reasoning:
+Now add the two correction events to EVENTS. And update the checkpoint `corrections` block. Note EMITTER is computed at runtime from the current (edited) file, so it will be the corrected hash.
+
+Add before status-final or after. Let me append to EVENTS list after status-final:
+
+```python
+    {"event_id": f"w078-{FIX_STAMP}-artifact-emitter-fixed", ...},
+    {"event_id": f"w078-{FIX_STAMP}-dup-note", "event_type": "status", ...}
+```
+
+The note summary must explain: core batch ids `w078-20260912T002847-*` and earlier `w078-20260912T002827-*` carry identical payloads (same artifacts/hashes, same review), because the emitter's first version derived event ids from wall-clock and was re-run once; the review must be counted once for reviewer worker-078; the second batch differs only by adding the emitter artifact event. The worker cannot retract ingested events; this note is the correction. Also reference the checkpoint.
+
+Let me apply the edit.
+dsh: reasoning:
+Now the emitter is idempotent (skipped 10, emitted the 2 correction events). Let me run it once more to prove full idempotency (should emit nothing, skip 12).
+
+Then final integrity verification. Note: the checkpoint now records EMITTER hash of the corrected file — verify. Also the outbox now has 9+10+2 = 21 events.
+
+Wait: 9 (002827) + 10 (002847) + 2 (0030) = 21 events for worker-078 total (including predecessor's 8 before? Earlier verification said 17 = 8 predecessor + 9). Now 8 + 9 + 10 + 2 = 29. Let me verify.
+
+Then run once more for idempotency proof.
+dsh: reasoning:
+Idempotent now (0 emitted, 12 skipped). Note: on this last run, the checkpoint file got rewritten again (with same content except `at` timestamp and emitted=[] skipped=12 fields). Hmm — that means the checkpoint now says `events_emitted: []` and `events_skipped_idempotent: [12 ids]`, losing the record of what was emitted. That's not ideal for the checkpoint record. And the checkpoint hash changed again.
+
+The checkpoint should reflect the emitted events. Let me fix: the checkpoint should accumulate — e.g., record `events_emitted` as the full deterministic list of my event ids (constant) rather than the run-specific ones. Simplest: change the checkpoint to record `"events_emitted_total": [all event ids of the task]` computed as the fixed list, plus `"last_run": {"emitted":..., "skipped":...}`. Then re-run once more; but re-running rewrites `at` again (fine) and produces emitted=[] again, yet the fixed total list remains complete.
+
+Let me update the emitter's checkpoint block: replace `"events_emitted": emitted,` with:
+```
+"events_emitted_task_total": [ev["event_id"] for ev in EVENTS],
+"last_run": {"at": NOW, "emitted": emitted, "skipped_idempotent": skipped},
+```
+and remove the separate events_skipped field or keep. Then run again (will skip all 12, rewrite checkpoint with full list). Verify.
+
+Also the checkpoint `events_emitted` was used by predecessor; fine.
+
+Let me edit.
+dsh: reasoning:
+The checkpoint now records the full task event list (12) and the last run skipped all — idempotent proof.
+
+However, editing the emitter once more changed its hash again, so the checkpoint's `artifacts[emitter].sha256` should now match the current file (computed at this run). Let me run the full final verification:
+
+1. All hashes in checkpoint match disk (including emitter).
+2. Review file unchanged and binds.
+3. Live F1 hash still equals pin.
+4. Outbox valid & count.
+5. Emitter idempotent (done).
+6. Report integrity.
+
+One more thing: the corrected emitter's `w078-20260912T0030-artifact-emitter-fixed` event recorded the emitter hash from the run where it was emitted (before the last edit). The last edit changed the emitter hash again. So that event's recorded hash is now stale relative to disk. Ugh. I should stop editing the emitter and instead ensure the recorded hash matches. Options:
+- Revert the artifact-emitter-fixed event? Can't.
+- Emit another corrected-hash event? That spirals.
+- Better: freeze the emitter now and emit one final artifact event with the current hash (id `w078-20260912T0031-artifact-emitter-v3`)? More event noise.
+
+Alternative cleaner approach: the checkpoint is the authoritative record of final hashes (it's a worker checkpoint, not the global map). It currently records the emitter hash computed at the last run — which matches disk. The `artifact-emitter-fixed` event's hash is one revision stale, but the checkpoint supersedes and is referenced by the dup-note. I can note in the checkpoint "emitter iterated after the 0030 event; final hash in this checkpoint." Hmm, but checkpoint is already written.
+
+Actually — hold on. Let me reconsider. Do I even need the emitter's hash to be tracked? The core deliverables (report, rerun, harness, readme, snapshot, review) are all stable and correctly hashed in events and checkpoint. The emitter is auxiliary tooling. The stale hash on one auxiliary event is a minor blemish, but the project's ethos is precise provenance. Since the checkpoint (written last) records the correct final emitter hash, and the dup-note points to the checkpoint, provenance is recoverable.
+
+To close the loop cleanly, I'll make one final emitter run with NO further edits, and add to the checkpoint a field `emitter_hash_stale_events` documenting that `w078-...0030-artifact-emitter-fixed` records an intermediate hash and the final hash is in the checkpoint. But adding that field requires editing the emitter → changes hash again → recursion. 
+
+No — I can avoid recursion by making the emitter's artifact map compute the hash of the file, and simply accept the final checkpoint hash as authoritative. To document the stale intermediate, I can write a separate small addendum JSON (not the emitter) — e.g., `artifacts/worker-078/f1_quantifier_adjudication/PROVENANCE_ADDENDUM.json` — listing: final emitter sha256, the event ids whose recorded hashes are intermediate, and why. That addendum is itself not referenced by events (or I could reference it in the checkpoint... which would require editing the emitter again).
+
+OK, decision: keep it simple and honest. The final state:
+- Checkpoint records final hashes of all artifacts (including emitter) — verified against disk.
+- One auxiliary artifact event (0030-artifact-emitter-fixed) recorded an intermediate emitter hash; I'll note this in the final summary to the user, and add the addendum file. The addendum file, once written, can be mentioned in the final checkpoint? No more edits. I'll write the addendum as standalone evidence and report it in my summary. Its own hash won't be in any event — acceptable for a note.
+
+Hmm, but actually, I could also just delete nothing and make the addendum part of the artifact set; future readers can verify. Let me create PROVENANCE_ADDENDUM.json with:
+- worker, task, final emitter sha256 (measured), 
+- note: the 002847-artifact-emitter event recorded hash X (pre-fix); the 0030-artifact-emitter-fixed event recorded hash Y (after idempotency fix); final emitter hash Z (after checkpoint accumulation tweak); core deliverables' hashes are stable and match all records.
+- duplicate batch note.
+
+Actually wait — is Z actually different from Y? The last edit (checkpoint accumulation) happened before the final run, so at the final run the file hash Z was computed. Y was computed at the 0030 run, before that edit. So yes Z ≠ Y. Let me compute all: the event recorded hashes are in events.jsonl/outbox; let me extract them and compare with disk.
+
+Let me measure and write the addendum. Then final verification. This is a minor bookkeeping step; let's finish.
+dsh: reasoning:
+As expected, the emitter's recorded hashes are intermediate. The checkpoint should record 5618c387e651... for the emitter (computed at the final run). Let me verify the checkpoint's emitter entry. Then write the provenance addendum documenting the three hashes and the duplicate incident; also verify all other artifacts are stable/matching.
+
+Let me do the full final verification and write the addendum.
+dsh: reasoning:
+All verified. Now write the provenance addendum documenting the emitter hash lineage (since two event records carry intermediate hashes). I won't register it in events (no more emitter edits) — but I can mention it in my final summary. Actually, I could still register it via a tiny standalone append (a one-off python command, not the emitter) — but that would add event noise. The addendum is self-describing; the checkpoint's corrections block + dup-note cover the incident. I'll write it and hash it; it references the checkpoint hash.
+
+Actually, wait: the checkpoint hash changed on the last run (730ce6a74c29...), and the dup-note event references the checkpoint file path (not hash). The addendum can record the final checkpoint hash. Good.
+
+Let me write PROVENANCE_ADDENDUM.json and README update? Editing README would change its hash (recorded in events and checkpoint → stale). Do NOT edit README. The addendum is a new file, so no conflicts.
+
+Let me write it.
+dsh: reasoning:
+I left two placeholder-ish values:
+1. `"reviews/F1-quantifier-adjudication-078.json": "863c75257135..._MEASURED"` — I need the actual full hash.
+2. checkpoint sha256 "730ce6a74c29_PLACEHOLDER".
+
+I know the review hash from earlier verification: 863c75257135... let me get the full hash. And the checkpoint hash: 730ce6a74c29... from the last run output — need full. Let me compute both and patch the addendum.
+
+Note: patching the addendum after computing the checkpoint hash is fine as long as the checkpoint doesn't reference the addendum (it doesn't). The review hash is stable (I won't edit the review again).
+
+Let me get the full hashes and patch.
+dsh: reasoning:
+Now, final check: the addendum parses as JSON and all self-references are consistent. Also ensure no other placeholders. Let me validate and do a final end-to-end check.
+
+Also, I need to double-check one thing: the review file `reviews/F1-quantifier-adjudication-078.json` — I edited it before the emitter run, and its hash 863c75257135 was computed by the emitter then. Confirmed matching.
+
+Let me also re-run the adjudication harness one final time? NO — that would rewrite report.json (timestamps) and invalidate all recorded hashes. Don't.
+
+Final verification:
+- addendum parses, no PLACEHOLDER.
+- all recorded hashes match.
+- print final summary.
+
+Also, should I worry that my report.json's `finished_at` is dynamic and a verifier re-running the harness writes a different report? The `--out` option lets them write elsewhere. Fine.
+
+One more consideration: the human's instruction said "emit valid JSON with IDs evidence hash falsifier". The report.json is the primary emission and includes all these. The review file too. Good.
+
+Let me do the final validation.
+dsh: reasoning:
+Everything is verified and consistent. The task is complete:
+
+1. Read handoff/map and comms ✓
+2. Took one class-bound task (F1 / AF-WCC-VAC-GEN, G-FORM) — independent adjudication of the contested critical quantifier defect ✓
+3. Emitted valid JSON with IDs (report_id, check ids, review_id, evidence refs with line numbers, hashes, falsifier) ✓
+4. Checkpoint ✓ (runtime/state/w078_checkpoint_2_f1_quant_adjudication.json)
+5. Events emitted to outbox, schema-validated, idempotent emitter ✓
+6. Exit.
+
+Let me do a last sanity check that I haven't left background jobs (none) and give the final summary. Also check job_list? I started no background jobs. Not needed.
+
+Final answer should be concise: task taken, result, artifacts with hashes, evidence, falsifier, checkpoint, and the caveats (duplicate event note; F1 remains revise so G-FORM must not close; authority limits).
+
+Let me note the key result clearly.

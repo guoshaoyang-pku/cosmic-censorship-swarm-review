@@ -1,0 +1,1029 @@
+dsh: reasoning:
+Let me start by understanding the environment. The user says: "You are a bounded execution worker. Read handoff/map and comms. Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit. worker=088"
+
+I should look at the workspace for `handoff/map` and `comms`. Let me explore.
+dsh: reasoning:
+No `handoff` or `comms` at the top level. Let me look for them. There's a `workdir` directory that was modified Sep 11 23:11, and `launch_swarm.sh`, `supervise_swarm.sh`, `supervise_loop.sh`, `independent_supervisor*.sh`. These suggest a swarm setup with handoff/comms. Let me search.
+dsh: reasoning:
+Now I understand the setup. The task: "Read handoff/map and comms. Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit. worker=088"
+
+The worker=088. So I'm worker 88 (though the swarm launches workers 01-20 named deepseek-flash-N). Let me look at the ai4math-swarm directory structure.
+dsh: reasoning:
+There's a worker08 directory already. My worker id is 088 — likely worker 88. Hmm, but there are 20 workers 01-20. The prompt says worker=088. Interesting. Maybe I'm an instance in runtime/instances. Let me check runtime/instances and the control dir.
+
+Also, I should read HANDOFF.md, ASTRA_HANDOFF.md, comms/PROTOCOL.md, and the latest events/assignments. Let me do that.
+
+Let me check the runtime/instances to see if worker 088 exists with an assignment.
+dsh: reasoning:
+Now let me look at the current worker-008 instance (worker 088 might be interpreted as worker-008? Actually worker=088 suggests index 088 out of maybe 100. Let me check the instance dirs for higher numbers: worker-088 wasn't in the list; there was worker-008. Let's see the full list of instances with numbers >= 20.
+
+Let me check `ls runtime/instances | grep -E 'worker-0[0-9][0-9]' | tail`. And check for a control dir or a task queue for worker 088.
+
+Actually, let me check the `independent_supervisor_100.sh` script — probably launches 100 workers. That would be the current run, and worker=088 would be one of them.
+dsh: reasoning:
+So worker=088 corresponds to instance `worker-088-20260912T001657-968807` (the newest). Let me read that instance dir and its prompt/instructions. Then read the handoff/map, comms, and find a class-bound task.
+
+Let me check the latest instance dir, and the newest events in research_map/events.jsonl and current_checkpoint.json which may specify the current assignment state.
+
+Let me read:
+- ASTRA_HANDOFF.md
+- HANDOFF.md (key parts)
+- runtime/state/current_checkpoint.json (may be big, 31KB — ok)
+- comms/inbox for any assignments to worker-088
+- latest events
+
+Let me do this now.
+dsh: reasoning:
+No direct assignment for worker-088. The stderr.log is 2699 bytes — that's probably the harness log. Let me not worry.
+
+Now I need to read the handoff and map. Big files:
+- HANDOFF.md (16KB)
+- research_map/ASTRA_HANDOFF.md (7KB)
+- research_map/research_map.json (826KB) — too big to read fully; I'll inspect programmatically.
+- comms/PROTOCOL.md — done.
+- runtime/state/current_checkpoint.json (31KB)
+- events.jsonl 1.4MB — inspect tail.
+
+Let me read ASTRA_HANDOFF.md and HANDOFF.md first.
+dsh: reasoning:
+Now, I'm a worker 088 in the ai4math-swarm cosmic-censorship research. I need to take one class-bound task.
+
+Let me look at current state: research_map.json structure — gates, numerics_lock, assignments, open queue, classes. Also check the latest controller verification/lifecycle report and current checkpoint. Let me inspect research_map.json programmatically.
+
+Also, there might be an assignment queue specifically for workers. Let's check `map.assignments` and `map.nodes` with status queued.
+
+Let me write a Python inspection script.
+dsh: reasoning:
+88 assignments! And the last few assignments are the `astra-life01-*` and `astra-life02-*` ones. Note: assignments count is 88 — interesting, worker=088 might be intended to take the 88th assignment? Hmm, or maybe not. Actually worker 088 is just a slot in the 100-worker fleet.
+
+But wait — the newest lifecycle (astra-life02) issued assignments at 00:15:51. Worker 088 started at 00:16:57. So the intended task for worker 088 is one of the open assignments in the latest lifecycle.
+
+Let me read the latest controller verification report and current_checkpoint.json to see the pending work queue. Also check the `astra_lifecycle.py` output/report from 00:15/00:16.
+
+Let me look at the tail of events.jsonl and the latest lifecycle files, plus `runtime/state/controller_verification/`.
+dsh: reasoning:
+Workers are already active: worker-059 claimed a task. Let me read the latest lifecycle report (00:17:27) for the open queue and pending recommendations, then decide on a class-bound task that is not duplicative.
+
+Also critically: I must avoid duplication with other workers. The fleet has 100 workers spinning. Many are probably doing similar things. I should pick a task with high information gain and a distinct falsifier.
+
+Let me read lifecycle_20260912-001727.json.
+dsh: reasoning:
+Now I understand the current state well. The whole map is at all gates pending. Open assignments issued 00:05, deadline 03:15, for leads. And the latest lifecycle (astra-life02 at 00:15) issued more.
+
+I need to "take one class-bound task". The best approach: find an open assignment in the map that is class-bound and unclaimed, that a bounded execution worker can complete with an artifact + hash + falsifier, then emit valid JSON to comms/outbox, checkpoint, exit.
+
+Let me look at what the controller expects workers to do. Let's check the most recent assignments in map (astra-life01-*, astra-life02-*) with full details, and check what other workers are already claiming (to avoid duplication). Let me check `comms/outbox/worker-*.jsonl` for claims by workers 080-100, and see what tasks they took.
+
+Also check for `worker-088` in any comms.
+
+Let me dump recent worker outbox statuses to see assignments claimed.
+dsh: reasoning:
+Interesting. Workers are creating tasks. Note the timestamps in the future (clock skew is a known finding).
+
+Now I need to find a distinct, high-value class-bound task that:
+1. Is not duplicative of ongoing work.
+2. Produces an artifact with sha256.
+3. Has a decidable falsifier.
+4. Can be done as a bounded execution worker (limited time).
+5. Worker events can't set status=done or validation_status=passed — so I should emit `status` (active), `artifact` (with sha256), `claim` (with falsifier and evidence refs) — but per ASTRA_HANDOFF, worker events cannot set status=done or validation_status passed. So I emit artifact + status active + claim, and possibly a blocker.
+
+What is the highest-information-gain unclaimed task? Looking at the gate audit:
+
+- G-LIT needs >=3 independent re-fetch spot checks binding L1 sha 315c19145065; currently 2 (worker-07, worker-086). A third one would directly close the exact unmet criterion. That's a class-bound (class_ids) task, decidable falsifier (re-fetch and compare), and it's high value: it moves G-LIT one criterion closer. But is this "class-bound"? L1 has class_id GLOBAL. Hmm, the instruction says class-bound task. Strictly, class-bound means tied to a class ID (AF-WCC-VAC-GEN etc.). L1 spotcheck is GLOBAL.
+
+- G-FORM needs two independent accepts per class at the frozen hashes. But worker events can't set review verdicts? Actually workers can emit `review` events with verdict accept... but the protocol says leads/adjudication binds. Reviews from workers (deepseek-flash-17/18 etc.) exist. Hmm, "Authority: worker events cannot set status=done, validation_status=passed, or a gate verdict. Only the controller and group leads can move those" — reviews are allowed from workers though they may be advisory.
+
+- G-NUM needs a protocol verdict at current hash 1e6cdf04d7a2 (currently recorded review binds 01b2072434cd, stale). A hash-pinned independent verdict on `numerics/CONVERGENCE_PROTOCOL.md` sha 1e6cdf04... is class-bound to AF-WCC-SCALAR-SPH. That's exactly the "C8 unmet requirement". That's high value: it directly targets the single documented unmet criterion for G-NUM.
+
+Wait, criterion C8 for G-NUM: "independent verdict on numerics/CONVERGENCE_PROTOCOL.md pinned to sha256 3345e17d2be3" per assignment astra-life02-n0-c8, but gate audit says protocol rev2 measured 1e6cdf04d7a2 and the only recorded protocol verdict binds 01b2072434cd (stale), so C8 is the exact unmet requirement. So a fresh independent verdict pinned to 1e6cdf04d7a2 would satisfy C8 (subject to lead adjudication). However, the assignment astra-life02-n0-c8 is assigned to `astra-lead-audit`, not to a worker. Workers shouldn't steal a lead's assignment. But it says "two independent reviewers"... Actually assignment says "Re-issue astra-n0add-02 at the current protocol revision: an independent verdict (accept|revise|reject) on numerics/CONVERGENCE_PROTOCOL.md pinned to sha256 3345e17d2be3". Hmm.
+
+Alternatively, the L1 spot check #3 is the concrete criterion where "required >=3" and 2 exist. It's a well-bounded, verifiable task: re-fetch ≥3 ledger rows directly from DOI/arXiv locators, quote fetched text, compare to ledger excerpt verbatim, emit review event with verdict. But my tooling: do I have network access? web_fetch is available. But fetching arXiv and DOIs may be possible via web_fetch. Hmm, but the existing spotcheck artifacts (worker-07, worker-086) are in artifacts/worker-07/l1_spotcheck/. Let me look at those to follow the exact format, and see whether they're genuine.
+
+Actually wait. Let me think about what "class-bound" means here. The L1 criterion is GLOBAL class. The instruction from the supervisor: "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit." A reasonable reading: tasks in this swarm that are bound to one of the four classes with class_id + node ID. Many assignments have `class_id: GLOBAL`, which might not count as class-bound. Let me find open queue items that are class-bound and unclaimed.
+
+Let's look at the actual open queue in the map — maybe there's a `run` key with queue. Let me check `m['run']`.
+
+Also let me check `proposals/`, `proposed/`, `framework/`, `schemas/` to see what exists.
+
+Let me inspect map['run'], map['portfolio_events'], and search for "queued" nodes.
+
+Also, importantly, there may be an explicit worker assignment queue with items not yet assigned. Let me check the latest lifecycle report's full controller_findings and any "next_actions". Let me read the checkpoint current_checkpoint.json (31KB) — it may contain the queue.
+
+I'll read key parts.
+dsh: reasoning:
+Now I have a good picture. I need to choose a single class-bound task. Let me evaluate candidate tasks that are genuinely open and not being worked:
+
+1. **G-LIT third spot check** (L1, GLOBAL class): exact unmet criterion `required >=3` with 2 existing. Directly closes it. But "class-bound"? Could bind to AF-SCC-C2-VAC-GEN / AF-WCC-VAC-GEN depending on which ledger rows I check. Actually L1 citation_audit covers all classes; I could pick SCC-side rows and label class_id AF-SCC-C2-VAC-GEN. The spot check artifact would be class-bound if I verify rows for a specific class. That seems legitimately class-bound AND directly closes an exact gate criterion.
+
+2. **A fresh protocol verdict at hash 1e6cdf04d7a2 for G-NUM C8**: class-bound to AF-WCC-SCALAR-SPH, directly the exact unmet criterion. But the assignment is to astra-lead-audit (independent verdict), and workers' verdicts may be advisory. Still, an independent hash-pinned review could serve. Risk: duplicating the lead's work.
+
+3. **F1/F2a/F2b accepts at frozen hashes**: G-FORM needs "two accept verdicts per class at one frozen hash". Currently 0 distinct accepts at the current hashes. A worker could produce an independent review with verdict accept — this is high value. But workers 059 claims F1, worker-16 reviewing F2b, worker-06 doing F2b revisions. F2a at 4f97273ef440 has reviews at superseded hashes only. Hmm. But reviewing is bounded and class-bound: F2a (AF-SCC-C2-VAC-GEN). A rigorous review of the frozen F2a schema at hash 4f97273ef440 checking class leakage vs F2b, conclusion inflation vs WCC, quantifier/topology completeness, decidable falsifier would be exactly the assignment astra-recon-03/04 (deepseek-flash-18/19) which may or may not have been done. Let me check if reviews/F2a-review-*.json exist at the current hash.
+
+Actually wait — is it wise to be a reviewer? The audit lead adjudicates binding coverage. A worker review is legitimate per protocol (`review` is an upward message type). The swarm explicitly dispatches reviews to workers (astra-rev-*, astra-recon-*). So yes.
+
+But careful: The audit gate says "distinct accept reviewer(s)" — need reviews from distinct reviewers who did not author the artifact. If I (worker-088) produce an accept review of F2a at the measured hash, that's one distinct accept. That moves coverage from 0 to 1. But others (18/19) are already dispatched to do recons. Risk of duplication.
+
+Let me check which reviews exist at current hashes. Reviews in map: F2a-review-19.json etc. Let me measure their cited hashes and check which binds 4f97273ef440.
+
+4. **N0 replication** — the replication verdict is PROVISIONAL. But numerics is a big task; and N0 is active with leads on it. Risky.
+
+5. **A class-bound schema-checking artifact**: e.g., an independent machine-checkable falsifier suite for F2a vs F2b separation at frozen hashes. But worker-06 already did lots.
+
+Let me check what's actually missing by scanning reviews and their cited hashes. The most tractable high-value bounded task might be:
+
+**Option A: An independent third L1 re-fetch spot check** at L1 sha 315c19145065 → closes an exact numeric criterion (2/3 → 3/3) for G-LIT. It requires network fetch of DOI/arXiv. Do I have network? web_fetch available. But my bash sandbox may have network too. Let me test quickly. Existing spotcheck artifacts: `artifacts/worker-07/l1_spotcheck/spotcheck-l1-07.json` and `artifacts/worker-086/l1_spotcheck/spotcheck-l1-086.json`. Let me read them to replicate the format and avoid re-checking the same rows (independence requires different rows/agent anyway).
+
+**Option B: An independent F2a review at the measured hash 4f97273ef440.** No network needed; fully within my control; produces reviews/F2a-review-088.json with verdict + cited sha + hard failures. Class-bound to AF-SCC-C2-VAC-GEN. Falsifier: if any of the claimed checks can be satisfied by a C0-only witness or if the conclusions are inflated, verdict must be revise. This directly addresses G-FORM criterion "reviewers accept with cited sha256" and there are currently 0 accepts at current hash.
+
+Hmm. Which is more valuable? The gate audit lists for G-FORM: F2a [0 distinct accept reviewer(s)]. Reviews are the binding constraint for 4 of 5 gates. L1 spot check is the binding constraint for G-LIT (needs 1 more). Both are good.
+
+But there's a constraint I must respect: "worker events cannot set status=done, validation_status=passed, or a gate verdict" — a review event is not a gate verdict; it's advisory and adjudicated by the audit lead. Fine.
+
+Also the review must be honest. I need to actually read F2a (28KB YAML) carefully and check: class leakage vs F2b, conclusion inflation vs WCC, quantifier/topology completeness, decidable falsifier. That's doable in a bounded worker session. And it produces a real artifact with a hash and a falsifier. This feels like the strongest "class-bound task" — node F2a, class AF-SCC-C2-VAC-GEN.
+
+Hmm, but wait: worker-059 claimed F1 task at 00:15. Worker-16 emitted review-f2b-r3 accept at 00:18 (future-stamped). worker-06 is doing F2b revisions. The F2a recon assignments (astra-recon-03 → deepseek-flash-18, astra-recon-04 → deepseek-flash-19) may already have been executed. Let me check whether reviews/F2a-review-18.json and F2a-review-19.json exist and what hash they cite. The reviews dir listing earlier didn't show F2a-review-18.json but showed F2a-review-19.json (00:08). Let me measure.
+
+Let me check the cited hashes of all review files against the current measured hashes to find the actual coverage gaps per node:
+- F0 canonical 0fcc6a1928fd
+- F1 68392dd82050
+- F2a 4f97273ef440
+- F2b a2aef5ac7fe3
+- L0 ce42d205e761
+- L1 315c19145065
+- protocol 1e6cdf04d7a2
+
+Let me scan reviews/*.json for sha256-like strings and verdicts.
+dsh: reasoning:
+Important finding: **zero review files cite the current measured canonical hashes** (cur_hits empty for all except A1-rebind-coverage.json loosely matching L0). That means all review verdicts bind superseded hashes. So G-FORM coverage = 0 for F1, F2a, F2b.
+
+Also noteworthy: `F2a-review-lead-audit.json` has verdict=accept but presumably at a superseded hash. Same for F0 and F2b.
+
+The highest-leverage bounded task: **produce one independent review at the current frozen hash** for a class-bound node. But which? F2a at 4f97273ef440 is "aligned" canonical/authoring and needs 2 accepts. F1 at 68392dd82050 also 0 accepts. F2b at a2aef5ac7fe3 has worker-16 accept r3 (future-stamped, and doesn't cite current hash).
+
+Hmm — but as a worker with DeepSeek Flash breadth, my review can be one of the two independent accepts. The gate criterion needs TWO distinct accepts per class at one frozen hash. Currently 0. Adding one is progress but not closure.
+
+Alternatively, the **L1 spot check** closure is exact: required >=3, have 2. Adding a third at the same measured hash 315c19145065 closes the exact unmet requirement. That's a full criterion closure, not partial. And G-LIT then only needs L0 reviews (2 distinct accepts). Hmm, but the instruction says "class-bound task". Let me check the L1 spotcheck artifacts — do they bind class IDs? Let me read one.
+
+Actually, let me reconsider: maybe there's even better: G-NUM's C8 is *the exact unmet requirement* — a protocol verdict pinned to 1e6cdf04d7a2. The one recorded review `G-NUM-protocol-review.json` binds 01b2072434cd (stale). An independent verdict at the current hash would close C8. This is class-bound to AF-WCC-SCALAR-SPH (N0 node). It's a review of `numerics/CONVERGENCE_PROTOCOL.md`. Let me check the size/content of the protocol and the existing review. That might be quite technical (numerical analysis). But a bounded review with a decidable falsifier could be: check scheme-appropriate invariant functional, resolution-aware drift criterion, order fit with uncertainty, negative controls. If any is missing/incoherent → revise. It's a review artifact with hash.
+
+Which is the best "one class-bound task" for worker 088? Consider deduplication and value:
+- L1 spotcheck #3: closes exact criterion; requires network; class is GLOBAL-ish but rows can bind classes.
+- G-NUM protocol verdict: closes C8 exactly; class AF-WCC-SCALAR-SPH; no network needed (local file); but the assignment owner is astra-lead-audit and worker-13/14 were also dispatched (astra-numfix-02/03). Let me check if any new protocol reviews appeared (G-NUM-protocol-review.json at 00:07 is by astra-lead-audit, binding stale hash). Hmm, the protocol rev2 measured 1e6cdf04d7a2 — maybe it changed after the review. A fresh independent verdict is exactly what C8 wants ("independent verdict ... pinned to sha256"). The word "independent" means a reviewer distinct from the protocol author. As worker-088 I'm independent.
+
+Actually — wait. Let me check whether protocol changed and who authored it. If the protocol revision rev2 at 1e6cdf04d7a2 differs from what lead-audit reviewed, then a fresh verdict is needed. The gate says "the only recorded protocol verdict binds 01b2072434cd (stale), so criterion C8 is the exact unmet requirement". So producing a fresh hash-pinned verdict on the protocol is the single most precisely-specified unmet requirement in the whole map. And the N0 gate blocks numerics. But note: a review by a mere worker may not count as "the audit lead's independent verdict". The map requires "numerical protocol reviewed by audit". Hmm, "reviewed by audit" — a worker review is not "audit group". However astra-n0add-02 and astra-life02-n0-c8 assign it to astra-lead-audit. As worker-088 I'd be producing an advisory review; the audit lead still must bind it. Risky: could be rejected as not-audit-lead.
+
+Let me look at what the workers have been doing most recently: worker-03 doing F1 checker/publish, worker-059 claiming F1, worker-16 reviewing F2b, worker-06 doing F2b/A1. Worker-09 doing L1 reviews. So the F2a frozen revision at 4f97273ef440 appears **unclaimed** and has 0 accepts at current hash. Everyone is on F1/F2b/L1/N0. F2a has no active worker. That's a clear gap: F2a needs two independent accepts; no one is on it right now.
+
+So my choice: **independent review of F2a (schemas/af_scc_c2_vacuum.yaml) at measured canonical sha256 4f97273ef440...** with class_id AF-SCC-C2-VAC-GEN, node F2a, gate G-FORM. Deliverable: `reviews/F2a-review-088.json` with verdict, cited measured hash, checks (class leakage vs F2b, conclusion inflation vs WCC, quantifier/topology completeness, decidable falsifier, annotation/soft-flag handling), score, hard failures list. Falsifier: if any of the schema's conclusion predicates can be satisfied by a C0-only witness (leakage) or if the schema inherits WCC-strength conclusions (inflation), the verdict must be revise/reject; a listed "accept" would then be falsified by the differential test.
+
+To make it strong and machine-checkable, I should also write a small checker script + JSON result (e.g., `artifacts/worker-088/f2a_frozen_review/check_f2a.py` + `f2a_review_matrix.json`) that mechanically extracts declared fields (quantifiers, topology, regularity, genericity, I+, visibility, conclusion_type) from the canonical YAML and from F2b, and verifies: (a) separate class ids, (b) C2 regularity token present, (c) conclusion_type not equal to WCC's, (d) no "C0 or C2" merge token, (e) required fields non-empty. Then the review cites the measured hash of the file it read and the script output hash.
+
+That's a solid bounded execution worker deliverable: artifact + evidence hash + falsifier + checkpoints. And it fills a real coverage gap.
+
+But wait — need to be careful about the "statement drift" issue and class-separation soft flags on F1: the soft flag on F1 is 'AF-WCC-VAC-GEN-SET' (an annotation). F2a may have candidate variant tokens too. My review must handle those honestly (documented candidate annotations, not asserted classes) — there's a known checker blind spot (CF-9). I should check whether F2a has any such tokens and report.
+
+Also, importantly, the review must verify the authoring/canonical alignment: canonical sha 4f97273ef440 == authoring sha 4f97273ef440 (aligned per lifecycle). Good, that means review of the canonical path binds both.
+
+Let me now:
+1. Read the full F2a canonical YAML (28KB).
+2. Read F2b YAML relevant parts for leakage comparison.
+3. Read the existing F2a reviews (lead-audit accept, 19 revise, 17 revise) to know which findings were raised and whether they were addressed — that informs the review and avoids re-raising addressed points.
+4. Check the measured hash myself.
+5. Write the review JSON + a small mechanical checker artifact.
+6. Emit events to comms/outbox/worker-088.jsonl (artifact, review, status with falsifier), and record a checkpoint (runtime/state/checkpoints is controller-owned via checkpoint.py; but I can write a worker checkpoint in artifacts/worker-088/CHECKPOINTS.md and/or run checkpoint.py? The supervisor prompt says "checkpoint, then exit". The controller's checkpoint.py writes runtime/state/current_checkpoint.json — that's controller tooling; it's not prohibited for workers, but it might collide with the controller's lifecycle. Safer: write my own checkpoint entry to artifacts/worker-088/CHECKPOINTS.md and maybe append to runtime/state/checkpoint_log.jsonl? Appending to a controller-owned log risks corruption. Hmm.
+
+Let me look at how other workers "checkpoint". E.g., artifacts/flash-12/CHECKPOINTS.md and worker-06 checkpoint patterns. Let me check for a worker checkpoint convention.
+
+Also, the outbox channel for me: my agent id is "worker-088". There's no comms/inbox/worker-088.jsonl. Protocol says agent ids are astra, leads, deepseek-flash-01..20. But the independent supervisor launches workers named worker-NNN. Existing outbox has worker-06, worker-16, deepseek-flash-NN etc. I'll write to `comms/outbox/worker-088.jsonl` since that's my identity, and the controller ingest scans the outbox dir (files_seen=100). Let me verify comms.py ingest picks up arbitrary filenames in outbox.
+
+Let me check comms.py's ingest logic quickly.
+
+Then: emit `artifact` event(s) with path + sha256, `review` event with verdict/score/cited hash, and `status` event with node_id/class_id/hours/summary/evidence_refs/next_falsifier.
+
+One more consideration: the task instruction says "emit valid JSON with IDs evidence hash falsifier". So my JSON events must have event_id, event_type, created_at, actor, node/class ids, evidence refs, hash, falsifier. Good.
+
+Let me first verify comms.py ingest behavior and the events schema, then read F2a.
+dsh: reasoning:
+Note: the events schema only allows artifact/claim/review/resource_request/direction_update as top-level oneOf — but `status` and `blocker` events are being ingested (the map has 1140 events including status). Let me check schemas.py validate_event to be sure status is allowed. The schema file seems narrower than reality. Let me read schemas.py.
+
+Also, note ingest reads all *.jsonl in outbox recursively (rglob), so outbox/worker-088.jsonl works. But also `comms/outbox/<dir>/...` files. Careful: outbox also contains JSON files that are ingested (e.g., e08_*.event.json). Fine.
+
+Let me read schemas.py to understand the exact validation.
+dsh: reasoning:
+My measured hashes match the lifecycle's measured hashes exactly. Good — the map's measured values are current for F2a (4f97273ef440...), consistent.
+
+Now, decision time. Let me weigh two candidate tasks once more:
+
+**Candidate A: Third independent L1 re-fetch spot check (G-LIT).**
+- Exact criterion: "2 independent re-fetch spot check(s) bind to this hash (artifacts/worker-07/..., artifacts/worker-086/...), required >=3". Adding one binds → criterion becomes satisfied (3).
+- Class: L1 is GLOBAL; spot checks can be per-class if I choose rows from one class. Hmm.
+- Requires network fetching (DOI/arXiv). Let me test network access. If it works, this is a clean, closed criterion.
+
+**Candidate B: Independent F2a review at frozen hash (G-FORM).**
+- Criterion needs 2 distinct accepts per class at frozen hash; currently 0 → my accept yields 1 of 2. Partial.
+- Class-bound AF-SCC-C2-VAC-GEN.
+- No network needed.
+- Real risk: producing an accept requires confidence the schema is actually good. I'd have to read it thoroughly. If I find issues, verdict revise — still a valid contribution but doesn't advance the gate. An honest review is the job.
+
+**Candidate C: Fresh G-NUM protocol verdict (C8).** Exact unmet criterion; class AF-WCC-SCALAR-SPH. But "reviewed by audit" and assigned to audit lead. A worker verdict is advisory. Partial (needs lead to bind).
+
+Hmm — a fourth option: **N0 replication independent run**? The N0 verdict is PROVISIONAL. The lock requires "N0 convergence order measured and independently replicated". There are two independent schemes already; flash-13 triage fixed the cnfem issue; a clean re-run was assigned. That's numerics lead work; heavy.
+
+I think the strongest choice given "bounded execution worker" and "class-bound": **Candidate A with class binding** would close an exact criterion, but class is GLOBAL... Let me check the existing spotcheck artifacts' structure. Maybe they are per-row with class IDs. Let me read them.
+
+Actually, let me re-read the task statement: "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit." Class-bound likely means "bound to a class ID" (one of the 4 AF classes) OR "bound to a node/class in the map" as opposed to free-floating prose. The assignments in the map use `class_id` for everything, with GLOBAL for cross-cutting. To be safe, pick a task whose node has a real class id.
+
+L1 spot check rows in citation_audit.csv each have a class mapping. Rows for AF-SCC-C2-VAC-GEN → my spotcheck artifact would be class-bound (class_id AF-SCC-C2-VAC-GEN) and L1 node. That satisfies both: class-bound AND closes the exact G-LIT criterion. 
+
+But dependence on network is a risk. Let me test fetch capability right now: try fetching an arXiv abs page via web_fetch or curl. The environment has web_fetch tool; bash network may be restricted. I can use web_fetch for the actual content retrieval. Let me check the existing spotchecks to see how they recorded "fetched text".
+
+Let me read artifacts/worker-07/l1_spotcheck/ and artifacts/worker-086/l1_spotcheck/.
+dsh: reasoning:
+Interesting! worker-07's artifact says `check_number: 3` — it already provided the third spotcheck, and worker-086 too? Wait, the gate audit at 00:17 said 2 spot checks bind to the hash: artifacts/worker-07/l1_spotcheck/spotcheck-l1-07.json and artifacts/worker-086/l1_spotcheck/spotcheck-l1-086.json. But spotcheck-l1-07.json says check_number=3 and independent_of reviews/L1-spotcheck-10.json and L1-spotcheck-11.json. Hmm — maybe the controller only counts `review` event verdicts? Or maybe the gate counter counts files matching a pattern. Anyway, at 00:17 the count was 2, needing >=3. worker-086 produced one at 00:16 (after the 00:17 lifecycle? The lifecycle at 00:17:27 listed both worker-07 and worker-086 as the 2). So a third independent one would satisfy.
+
+But hold on: worker-07's file says check_number 3 and lists independence from flash-10/flash-11. Perhaps check_number counts differently (the two earlier ones were L1-spotcheck-10 and L1-spotcheck-11 which the controller may not have counted because they're "reviews/L1-spotcheck-*.json" not "artifacts/*/l1_spotcheck/*.json"?). The gate says "2 independent re-fetch spot check(s) bind to this hash (artifacts/worker-07/l1_spotcheck/spotcheck-l1-07.json, artifacts/worker-086/l1_spotcheck/spotcheck-l1-086.json), required >=3". So the counter looks at artifacts/<agent>/l1_spotcheck/*.json presumably. Adding artifacts/worker-088/l1_spotcheck/spotcheck-l1-088.json would make 3. 
+
+This is a **precisely-specified, class-bound-ish task with an exact closure criterion**, and it's the only gate criterion in the entire map that is one unit away from being met. That's extremely high value per unit of work. It requires network fetching (curl to arXiv API and Crossref API). worker-07 and worker-086 did it from this same host, so network should work.
+
+Now — class binding: the rows have `class_mapping` column (AF-WCC-VAC-GEN, AF-SCC-C2-VAC-GEN, AF-SCC-C0-VAC-GEN etc.). I can bind my spot check to a specific class by choosing rows whose class_mapping == AF-SCC-C2-VAC-GEN (or C0). Let me check the distribution of class_mapping across rows 1-97, and which rows worker-07 (41-95 sample) and worker-086 checked, so my sample is disjoint (independence). Let me read worker-086's sampled rows.
+
+worker-07 sampled rows 41,49,57,65,73,80,81,89. worker-086 — let me check. Then I'll pick a disjoint frame with C2/C0 class rows.
+
+Distribution of class_mapping: let me compute.
+
+Actually, one concern: the audit counts "independent" spot checks — I must choose rows disjoint from existing ones and use a separate fetch (not reuse their fetched data). Fine.
+
+Let me now check:
+1. worker-086 sampled rows and locators.
+2. class_mapping distribution.
+3. Network access (curl to export.arxiv.org).
+
+If network fails, fall back to Candidate B (F2a review). Let me test network now.
+dsh: reasoning:
+Important: **arXiv API (export.arxiv.org) failed** — the first curl produced no output line (timeout/no output). Crossref worked (200, 1973 bytes). The arXiv HTTP request may have failed. Let me check the exit status and try https + the abs page. worker-086 used `https://arxiv.org/abs/<id>` for arXiv rows and apparently succeeded at 00:15. Let me test https arXiv.
+
+Also, wait: worker-086 check_number=4, worker-07 check_number=3. So there are at least 4 spotchecks (including 10 and 11 by flash-10/11 in reviews/). But the gate counter only counted 2 at 00:17:27 (files in artifacts/*/l1_spotcheck/*.json). Hmm, the counter logic matters. Let me find the gate-scan code to understand exactly what makes a spotcheck "bind". It's in astra_lifecycle.py or apply_events.py. Let me grep for "l1_spotcheck" in research_map/*.py.
+
+This is crucial: I need to produce an artifact that the scanner counts. Let me find the scanner.
+dsh: reasoning:
+Network works: arXiv abs page 200, arXiv API over https 200, Crossref 200. (The earlier failure was probably http vs https or transient.)
+
+Now let me read the exact counting logic in astra_lifecycle.py lines ~195-260.
+dsh: reasoning:
+The L1 spotcheck counter just counts files matching patterns that contain the current L1 hash prefix (`315c19145065`). It counted 2 at 00:17:27. But there are more matching files? Let's enumerate what matches now:
+
+- reviews/L1-spotcheck-10.json
+- reviews/L1-spotcheck-11.json
+- artifacts/worker-07/l1_spotcheck/spotcheck-l1-07.json
+- artifacts/worker-086/l1_spotcheck/spotcheck-l1-086.json
+
+That's 4 files matching the glob patterns. But only 2 counted — because only 2 contain the prefix `315c19145065`. The reviews/L1-spotcheck-10.json and -11.json probably bind older hashes. So worker-07 and worker-086 both contain the current hash.
+
+Now, adding my file `artifacts/worker-088/l1_spotcheck/spotcheck-l1-088.json` containing the L1 hash prefix `315c19145065` would make it 3 → criterion "required >=3" met.
+
+Wait, but worker-07's file says check_number 3 and worker-086's says check_number 4, yet the gate counts 2. That suggests the counter counts files, not check numbers — and flash-10/11's reviews bind old hashes. So my "check_number" should be 5 (or I can avoid claiming a number). Actually let me think about how many distinct agents have produced spot checks binding the current hash: worker-07 and worker-086. So mine would be the third for the current revision.
+
+This is a genuinely valuable, bounded, class-bindable task, with a decidable falsifier ("if any re-fetched locator's title/author/year/identifier disagrees with the ledger row, the row is falsified and the verdict must be revise/fail"). And it's the exact G-LIT unmet requirement.
+
+Alternatively... Hmm, wait. There's a subtlety: is it good epistemic practice to add a third spot check when the criterion says "required >=3"? Yes, the controller explicitly set the requirement at >=3 independent re-fetch spot checks, presumably because 2 is too few for a 97-row ledger. Doing a genuinely independent one (different rows, different frame, fresh fetches) meets it.
+
+Let me check what rows are left and which classes. worker-07: rows 41-95 frame, sampled 41,49,57,65,73,80,81,89 (all in 41-95). worker-086: 1,4,9,16,17,25,33,96,97 (frame likely rows 1-40 and 96-97). flash-10/11 (older hash): rows 1-20 and 21-40 per worker-07's independence note.
+
+Left: rows 96,97 taken by 086; frames: 41-95 mostly untaken except worker-07 samples. To be independent I should choose a distinct frame, e.g., rows 34-40 plus 90-95? Hmm, but worker-086 took 96-97 and 1-33; worker-07 took samples in 41-95. Nothing is "exclusive"; independence is about the sampled rows being disjoint. Let me choose rows from a *different* rule, e.g., frame 42-95 but sample different rows: 43, 52, 61, 68, 76, 84, 92 — need to avoid 41,49,57,65,73,80,81,89.
+
+Better: use a stratified sample targeting class balance, with class binding. Let me choose rows whose class_mapping includes AF-SCC-C2-VAC-GEN and/or AF-SCC-C0-VAC-GEN, avoiding taken rows, and covering a couple of WCC too. Rows with C2: 25 (taken by 086), 33 (taken), 50, 58. Rows with C0: 5,6 (taken), 21 (taken), 72. Rows with "C0;C2": 12 rows — let me list them. Also rows with C2+SCALAR, etc.
+
+I want ~8-10 rows, disjoint from {1,4,9,16,17,25,33,41,49,57,65,73,80,81,89,96,97}, with a class-binding emphasis. Let me list all 97 rows with class_mapping and locators, then choose a frozen sample stratified by class (e.g., 3 rows C2, 3 rows C0, 2 rows WCC, 1 SCALAR, 1 evidence-only), declared before fetching.
+
+Then:
+1. Freeze the sample (write sampling rule + row list into the artifact before fetching, matching worker-07's style: `frozen_before_fetch: true`).
+2. Re-fetch each locator from primary API (arXiv API/Crossref API/DOI resolver) with curl, record raw body sha256, title/author/year, and quote text.
+3. Compare against ledger row fields (title, authors, year, DOI/arXiv id).
+4. Verdict: if all match → artifact supports L1 at hash; falsifier: any mismatch/404 → report.
+5. Emit events: artifact (my spotcheck json + sha256), review (target L1, verdict accept/revise based on results, score, hard_failures, findings), status (node L1, class_id AF-SCC-C2-VAC-GEN, hours, summary, evidence_refs, next_falsifier).
+6. Checkpoint: write artifacts/worker-088/CHECKPOINTS.md + a checkpoint JSON; maybe also run `python3 research_map/checkpoint.py`? That writes controller-owned state. Hmm. Let me check what checkpoint.py does and whether workers are expected to run it. The supervisor prompt says "checkpoint, then exit". Let me look at numerics/checkpoint.py vs research_map/checkpoint.py. The swarm's own prompt to workers: "Run up to four hours with checkpoints" (older) and "emit valid JSON ... checkpoint, then exit" (new). I think a worker checkpoint = a checkpoint event/note in its artifact dir + a `status` event. But there's also a global `runtime/state/checkpoint_log.jsonl` that seems controller-driven ("checkpoint every 15 minutes" is the controller's duty).
+
+Let me check what other workers did for checkpoints: artifacts/flash-12/CHECKPOINTS.md exists; runtime/state/checkpoints/*.json are controller. Let me read artifacts/flash-12/CHECKPOINTS.md quickly and see if any worker wrote to runtime/state/checkpoint_log.jsonl.
+
+Also important: Should I run `comms.py ingest`? That's the controller's job per ASTRA_HANDOFF ("Pull accepted traffic: python3 research_map/comms.py ingest"). Workers just write to outbox. The controller's lifecycle ingests. I should NOT run ingest to avoid racing the controller. Hmm, but the controller runs every ~20s via supervisor. If I write to outbox, it'll be picked up. But to be safe that my events are valid, I can `--dry-run` ingest to validate without writing. That's read-only-ish (dry-run doesn't write events but does it write SEEN? No: `if not dry_run: ... _save_seen`). Dry run doesn't persist. 
+
+Let me also double check: outbox files are read by rglob, so my file must be valid JSONL/JSON. I'll write one JSON object per line (jsonl).
+
+One more consideration on duplication: worker-086 was launched in a prior wave and wrote spotcheck-l1-086 at 00:16; workers 080-100 are now running. Others might also be doing L1 spot checks right now (e.g., another worker sampling it). The gate counter just needs 3; if several do it, no harm (more evidence), but duplication is a metric the audit tracks. To minimize duplicative risk and maximize value, maybe I should choose a task less likely to be picked by the wave. Hmm.
+
+Given workers are 100 in parallel and each told to "take one class-bound task", collisions are inherent. The dispatch mechanism has no reservation. I can claim the task via an outbox `status` event first (task-claim) — like worker-059 did — then do it. That's the best I can do; claim-then-execute.
+
+Actually, let me reconsider between:
+(A) L1 third spot check — closes exact unmet criterion (2→3), node L1, class binding possible (C0/C2 rows). Network needed (works).
+(B) F2a frozen review — 0→1 of 2 accepts at hash; node F2a, class AF-SCC-C2-VAC-GEN; no network needed; but other workers may also review (worker-16 reviewing F2b, worker-03 F1, 059 F1). F2a currently unclaimed.
+
+Value-wise, (A) closes a criterion outright. But is it "class-bound"? I'll bind it to AF-SCC-C2-VAC-GEN by making the sample C2-dominant... but honestly a spot check samples the whole ledger; I can make it a C2/C0-focused sample with explicit class_id binding. A spot check that only samples one class is weaker for L1 overall but stronger for class binding. Hmm, the criterion just needs a third independent re-fetch check. I could do a stratified sample with explicit per-row class_mapping and report class-level results, and declare primary class_id AF-SCC-C2-VAC-GEN. That's honest: the sample includes C2 rows plus controls from other classes, and I state exactly what it does not prove (non-claims).
+
+Actually, hmm, let me look again: maybe there's an even more clearly "class-bound" and equally decision-relevant task: F2a review. "Class-bound" in this swarm's parlance means "assigned to a class id of the four frozen classes" — F2a is exactly one class (AF-SCC-C2-VAC-GEN). The L1 spot check is node L1 with class GLOBAL.
+
+The safest interpretation combining both: do the **F2a review** — it is unambiguously class-bound (AF-SCC-C2-VAC-GEN), and it addresses the G-FORM covering criterion where 4 of 5 gates are stuck at 0 accepts. A second option would be F1 review (also 0 accepts) but worker-059 claimed F1 and worker-03 is working F1. F2a is cold. Also F2a-review-18/19/17/15 exist at superseded hashes with revise verdicts; reviewing the new frozen revision and checking whether prior findings were addressed is exactly the "recon" assignment (astra-recon-03/04 → flash-18/19). Did 18/19 do it? F2a-review-18.json exists (verdict revise) but binds no current hash. F2a-review-19.json (00:08) revise, no current hash. So the recon at the current frozen hash (published 00:10:15) was never done. That's the gap.
+
+But hmm, an "accept" from a worker on F2a requires me to actually validate the schema. Let me read the F2a schema and the previous F2a reviews' findings to see whether the current revision addresses them. If it does, accept with cited hash; if not, revise with specifics. Either way a real contribution. And the falsifier is crisp: a C0-only witness satisfying the C2 conclusion, or a quantifier mismatch.
+
+Let me assess expected effort: F2a is 28KB YAML — readable. F2b is 33KB. Prior reviews list specific hard failures (HF-A1 dangling extension_predicate; HF-A2 forall mismatch) — at the old hash. I can check whether those are fixed at the new hash.
+
+Actually — hold on. Let me reconsider the C8/G-NUM protocol verdict once more. The map says criterion C8 is "the exact unmet requirement" for G-NUM, class-bound to AF-WCC-SCALAR-SPH, and the only recorded verdict binds a stale hash. An independent hash-pinned verdict on a **static document** (13KB protocol) is very bounded and directly targets the lock that blocks everything numerical. But: "reviewed by audit" — the requirement is a verdict by the audit group/lead. As a worker my review would be advisory; the audit lead would still need to re-issue. Also there are already assignments to lead-audit for exactly this (astra-n0add-02, astra-life02-n0-c8). So my review would be duplicative of a lead task. Skip.
+
+Decision: **F2a frozen-revision independent review** — class-bound AF-SCC-C2-VAC-GEN, node F2a, gate G-FORM. Deliverables:
+- `artifacts/worker-088/f2a_review/check_f2a.py` (mechanical field extractor/checker; deterministic)
+- `artifacts/worker-088/f2a_review/f2a_check.json` (machine result at pinned hash)
+- `reviews/F2a-review-088.json` (review event payload with verdict, cited measured sha256, hard_failures, findings, score, counts_as_full_schema_verdict)
+- `artifacts/worker-088/CHECKPOINTS.md` (checkpoint notes)
+- `comms/outbox/worker-088.jsonl` with: status (task-claim), artifact (paths+hashes), review, status (checkpoint/summary).
+
+Before committing, let me try to be smart: maybe run the coverage scanner myself to confirm which hashes are pinned by reviews, and confirm F2a coverage is 0. Already did: no review file contains 4f97273ef440.
+
+Wait — actually, let me reconsider one more time whether an accept review I produce could be *wrong* and harmful. The swarm's rule: reviewers must be honest; the audit lead adjudicates binding coverage. A worker accept that's unjustified could pollute. So I must be rigorous. If I can't verify something (e.g., mathematical content), I should mark it as a non-claim/soft finding rather than a hard failure. The check list from the assignment:
+- class leakage vs F2b
+- conclusion inflation vs WCC (F1)
+- quantifier/topology completeness
+- decidable falsifier
+Plus known soft-flag handling (candidate annotations not asserted classes).
+
+I can do all mechanically + read carefully. Let me now read the F2a canonical schema in full. 28KB ~ maybe 700 lines. Let me read it. Also read prior F2a reviews' findings (19 and 18 and 17, lead-audit) to check addressedness, and the F2b schema's conclusion/regularity fields for the leakage comparison.
+
+Let me start by viewing the schema structure (YAML keys) programmatically, then read the file in chunks.
+dsh: reasoning:
+Very useful. Prior F2a reviews at hash `23fec0e9cd68...` (revision 3). The current frozen hash is `4f97273ef440...` — a later revision. Key prior hard failures:
+- HF-A1/HF-06: dangling `extension_predicate` reference.
+- HF-A2/HF-06: `conclusion.statement_formal` with disjunctive D0 / undefined D0.
+- HF-A3: one-data-class criterion unmet across F1/F2a/F2b.
+- HF-A4: binding gate R19 class_contract_pointer fail.
+
+So the current revision (4f97273ef440) may have fixed some of these. I need to check the current file. Interesting: the current YAML has an `extension_predicate` top-level key (1582 bytes) — HF-A1 appears fixed. The conclusion block is 2189 bytes; need to check `statement_formal` for leftover D0.
+
+Also note the prior review by lead-audit at rev3 was "accept ... condition ... RE-REVIEW PASSED: revision 3 removes the disjunctive D0 and freezes weighted Sobolev H^4_{1/2+epsilon}, shared with F1; the artifact itself records that F2b rev5 still freezes smooth-with-decay". Wait, that's confusing: F2a-review-lead-audit.json says accept at 23fec0e9 and then "REOPENED" and "RE-REVIEW PASSED: revision 3 removes the disjunctive D0". So the lead-audit file is a moving record. Whatever — at the current hash, coverage is 0.
+
+Now, the real question: does the current F2a revision pass? Let me read the current file carefully, and check all prior hard failures against the current text. Let me read the entire 320-line file.
+
+Also note the one-data-class issue (HF-A3) is cross-artifact: F1 uses H^4_{1/2+ε} and F2b uses smooth-with-decay. That's a real G-FORM blocker recorded in the map's unmet list ("no single frozen data class (s,delta,norm) is shared by F1/F2a/F2b"). So G-FORM cannot pass regardless of F2a alone. My review can accept F2a in isolation (as lead-audit did) with the cross-artifact condition documented, or revise. The assignment's acceptance says "verdict cites the hash you read; checks class leakage vs F2b, conclusion inflation vs WCC, quantifier/topology completeness, decidable falsifier".
+
+Let me read the current F2a file fully now. 320 lines — read in two chunks.
+dsh: reasoning:
+Critical observation: **the current frozen F2a revision (4f97273ef440) still has the disjunctive D0!**
+
+Line 48: `formal: forall (s,delta) in D0: ...` and line 52: `- {kind: forall, binder: "(s,delta)", domain_id: D0}`, and D0 at line 58 = "admissible regularity pairs: Sobolev variant s > 5/2 and delta in (1/2,1), **or the smooth-with-decay default**".
+
+This is exactly the defect that prior reviewers flagged (HF-A2 / HF-06: "conclusion.statement_formal still reads forall (s,delta) in D0... D0 defined nowhere / disjunctive-domain residue") — and now the defect is even in `quantifiers.formal` and `quantifiers.ordered`/`domains.D0` themselves: D0 is a disjunction of two data classes (Sobolev OR smooth-with-decay). The lead-audit review said "RE-REVIEW PASSED: revision 3 removes the disjunctive D0 and freezes weighted Sobolev H^4_{1/2+epsilon}, shared with F1". But the current revision 11 has reintroduced/retained a disjunctive D0 in the quantifier block, and the data_class.regularity_class has both `default: smooth-with-decay` and `sobolev_variant`.
+
+Hold on. Maybe this is the revision that came *after*: rev4-rev11 revisions. Let me check the file's `review_history` and rest of the file (lines 181-320) to understand. Also check whether `data_class` declares one frozen class (line 137 default smooth-with-decay is primary; sobolev_variant is secondary). The map's unmet list says: "no single frozen data class (s,delta,norm) is shared by F1/F2a/F2b, which disables the licensed C0=>C2 transfer". So currently F2a quantifies over D0 = {Sobolev} ∪ {smooth-with-decay}, i.e., two classes — that's a genuine class-disjunction: the class statement is a conjunction over two different quantifier ranges? Actually "forall (s,delta) in D0" where D0 is a union of two families means the statement ranges over both families — that's a disjunctive domain, which the file's own `class_change_warning` and `merge_forbidden` may forbid ("no disjunction"). Prior lead-audit explicitly reopened revision 2 for "quantifiers.formal still ranges over a disjunctive D0" and said revision 3 removed it and froze Sobolev H^4_{1/2+eps} shared with F1. But revision 11 has D0 = Sobolev OR smooth default. So the defect is back (or never fully fixed, just moved).
+
+Wait — need to be careful about revision numbering: the file has multiple `revised_at` keys (YAML duplicate keys — the last one wins for parsers that allow duplicates; PyYAML takes the last, line 26 `revised_at_unused`). The revision is 11. The comment lines say rev9, rev10, rev11 deltas. The lead-audit re-review passed at 23fec0e9 (some rev). Then rev4-rev11 changes came later (timestamps 23:37–00:30). Hmm, actually timestamps: authored 23:23, rev4 23:34, rev5 23:37, rev6 23:42, rev7 23:46, rev8 23:52, rev9 00:15, rev10 00:30 (future-dated), rev11... So the file evolved a lot after 23fec0e9.
+
+Let me read the remaining lines 181-320 to see conclusion, falsifier, implication_ledger, class_separation, unresolved_items, review_status, and any review_history. Then form the verdict.
+
+Key expected findings for my review at 4f97273ef440:
+1. **D0 disjunction** in quantifiers (lines 48, 52, 58) — the class quantifies over two distinct data regularity classes (Sobolev weighted OR smooth-with-decay), while data_class.regularity_class presents both as alternatives. This is a class-level disjunction that prior reviews required to be removed; if the file's own class_change_warning forbids substituting/merging notions, then a forall over a union is ambiguous: is the comeager set G_{s,delta} defined for the union? The genericity ambient space is the weighted Sobolev product (line 163), so the smooth-with-decay branch has no defined ambient space/comeagerness. That's an ill-posedness: for the smooth branch, `X^{s,delta}_vac` and `G_{s,delta}` are undefined (genericity.ambient_space is defined only in terms of H^s_delta; topology_or_measure mentions "Frechet topology for the smooth-with-decay class" without defining the ambient space). So the statement has a branch that cannot be instantiated → quantifier completeness defect (HF-06 style).
+2. **data_class shared contract**: compare with F1's data_class. Lead-audit said F2a binds to F1 canonical (s=4, delta=1/2+eps). Current F2a says sobolev_variant s > 5/2, delta in (1/2,1), status "standard_choice; UNVERIFIED citation". F1's data class? Need to check F1 (schemas/af_wcc_vacuum.yaml) — does it have s=4, delta=1/2+eps weighted Sobolev with norm? Let me check. The map's unmet says no single frozen data class shared. So cross-artifact mismatch persists → condition on accept.
+3. Check HF-A1 (dangling extension_predicate): now fixed (block at line 91 with clauses (a)-(f) referenced by D3 line 67-68). Good.
+4. Check the binding gate R19 `class_contract_pointer`: points to `artifacts/formulation/formulation_taxonomy.yaml#class_contracts...` (authoring path) — the canonical-path policy says canonical path is authoritative; R19 required the pointer to resolve? Prior HF-A4 said check_class_schema.py returned FAIL with R19 'class_contract_pointer does not resolve'. Let me run the checker myself if it exists (`artifacts/formulation/tools/check_class_schema.py`). Yes — I should run the frozen binding gate on the canonical schema and record its output. That's mechanical evidence.
+5. Class leakage vs F2b: check for C0 conclusion tokens in assertive blocks.
+6. Conclusion inflation vs WCC: check i_plus/visibility roles and forbidden strengthenings.
+7. Decidable falsifier present.
+
+This looks like a **revise** verdict, with the D0 disjunction as a hard failure. That's an honest, evidence-backed outcome. It's still a valuable contribution (independent review at the frozen hash with a cited hash and a reproducible mechanical probe), though it doesn't advance the accept count. But the swarm's stated value function prefers honest rejection over fluent accept. Good.
+
+Hmm, but hold on. Before finalizing the verdict, I must be careful about the "class-bound disjunction" reading. Let me re-read:
+- `D0: admissible regularity pairs: Sobolev variant s > 5/2 and delta in (1/2,1), or the smooth-with-decay default`.
+- `data_class.regularity_class.default: smooth-with-decay`, `sobolev_variant: {...}`.
+So the quantifier says: for every admissible regularity pair (s,delta) in D0, [statement about data in that class]. The union includes "the smooth-with-decay default" as if it were a pair (s,delta) — which it is not. So the binder `(s,delta)` ranges over D0 whose second disjunct has no (s,delta) instantiation. That's a type/domain error: the smooth-with-decay class is not parametrized by (s,delta). This is a mechanical defect, checkable.
+
+Is this what prior reviewers meant? Prior HF-A2: "conclusion.statement_formal (line 209) still reads 'forall (s,delta) in D0...' where D0 is defined nowhere ... It contradicts quantifiers.formal (line 52)". In the current revision, D0 IS defined (line 58) and quantifiers.formal uses it consistently. But the defined D0 is disjunctive (two different regularity classes). The lead-audit "RE-REVIEW PASSED" says revision 3 removed the disjunctive D0 and froze weighted Sobolev. Yet revision 11's D0 has the disjunction *again* — unless... the smooth-with-decay default is considered a special case (limit) of Sobolev — no, it's a separate topology ("Frechet topology for the smooth-with-decay class").
+
+Actually wait. Let me check the F1 (WCC) schema's quantifiers: if F1 also has D0 with the same disjunction, then this may be a deliberate shared contract: "the data class is the union of smooth-with-decay default and Sobolev variant". Let me check F1 and F2b data_class and quantifiers to compare. The "one data class" criterion says F1/F2a/F2b must share one frozen data class. Let me measure.
+
+Let me read the rest of F2a (181-320) and check F1/F2b relevant blocks.
+dsh: reasoning:
+Now I have the full F2a revision 11. Let me analyze against the review axes carefully.
+
+**Observation 1 — YAML duplicate keys:** `revised_at` is defined at lines 8, 10, 12, 14, 16, 18, 21, 23 (8 times) plus `revised_at_unused` at 26. A YAML parser (PyYAML default) keeps the last `revised_at` = "2026-09-12T00:30:00+08:00". Duplicate keys are a real conformance/serialization hazard: tools differ (PyYAML last-wins, strict parsers error, some keep first). This is a genuine machine-readability defect: the record's revision timestamp is ambiguous. It's minor-to-major. Also `revised_at_unused` is odd.
+
+**Observation 2 — D0 disjunction (critical):**
+- quantifiers.formal (line 48): `forall (s,delta) in D0: exists G_{s,delta} subset X^{s,delta}_vac(AF) ...`
+- ordered (52): forall binder (s,delta) domain D0.
+- domains.D0 (58): "admissible regularity pairs: Sobolev variant s > 5/2 and delta in (1/2,1), **or the smooth-with-decay default**".
+- data_class.regularity_class (137-138): default = smooth-with-decay; sobolev_variant = {...}.
+- genericity.ambient_space (163): defined via weighted Sobolev product H^s_delta × H^{s-1}_{delta+1}; "Frechet topology for the smooth-with-decay class" mentioned in topology_or_measure (164) but no ambient space defined for the smooth-with-decay branch.
+
+So `G_{s,delta}` and `X^{s,delta}_vac` are defined only for the Sobolev branch; the D0 binder says the statement also ranges over the smooth-with-decay default (which has no (s,delta) parameters). The formal sentence is therefore not well-typed / has an uninstantiable branch → conclusion cannot be instantiated for one disjunct. This matches the prior reviewer's "disjunctive-domain residue" finding (HF-A2, lead-audit reopen) and the map's unmet item "no single frozen data class (s,delta,norm) is shared by F1/F2a/F2b". Prior lead-audit's "RE-REVIEW PASSED" claimed rev3 froze Sobolev and removed disjunctive D0; rev11 reintroduces `or the smooth-with-decay default`. Note revision history: rev4 onward added things; the D0 text may have been carried over from the WCC companion.
+
+Let me verify F1's D0 to see whether F2a is actually mirroring F1 (shared contract) — if F1 has the same D0 form, then the "disjunction" is a shared design decision across all three, and the defect is cross-artifact (class-union contract) rather than unique to F2a. That's still a defect for G-FORM (map says so). Let me check.
+
+**Observation 3 — conclusion.statement_formal (line 218)** now uses `D0` consistently — HF-A2's literal "undefined D0" is fixed, but the D0 disjunction remains, and `statement_formal` writes `exists G_{s,delta} comeager` without the ambient space, and `not exists proper_future_extension_in_class(MGHD(D))` — fine.
+
+**Observation 4 — class leakage vs F2b:** conclusion_type `scc_c2_future_inextendibility`; i_plus role=assumption, in_conclusion=false; visibility role=not_in_conclusion. anti_scope correct. The C0/C2 chain in regularity.must_not_conflate line 158 says "a C0 result does not establish this class: it is stronger, and the implication runs C0 => C2 only" — correct direction. import_rule respected. Looks clean. But: is there any C0 conclusion token in an assertive block? `implication_ledger.one_way_entailments` lists entailments; allowed (ledger). Fine.
+
+**Observation 5 — conclusion inflation vs WCC:** clean (i_plus.in_conclusion false, forbidden_strengthenings include I+ completeness). Good.
+
+**Observation 6 — decidable falsifier:** tier_1 with explicit witness type + machine-checkable steps; good. One issue: `falsifier.tier_1.genericity_requirement` says "tier 1 refutes the class by showing the EXTENDIBLE set is non-meager (equivalently: it meets every comeager set)" — "non-meager" vs "meets every comeager set" (comeager-many) are not equivalent: a non-meager set need not meet every comeager set (e.g., a non-meager set whose complement is comeager? impossible — if complement is comeager then the set is meager. Hmm: a set S meets every comeager set iff its complement is not comeager... In a Baire space, if S is non-meager then S's complement cannot be comeager (complement comeager ⇒ S meager). Conversely if S meets every comeager set then in particular S meets the complement of... hmm, S is non-meager iff complement is not comeager? In a Baire space, X = S ∪ S^c; if S^c is comeager then S is meager. If S is meager then S^c is comeager. So S non-meager ⟺ S^c not comeager, given Baire. And "S meets every comeager set" ⟺ S^c contains no comeager set ⟺ S^c not comeager (since a set contains a comeager subset iff it is comeager... if S^c not comeager, can it still contain a comeager set C? C ⊆ S^c comeager ⇒ S^c comeager. Contradiction. So yes equivalent in a Baire space). OK so the "equivalently" is fine in Baire spaces (X_vac is Baire per line 163). Not a defect. Good catch avoided.
+
+Actually wait, there's a subtlety: "non-meager in X_vac (Baire)" — fine.
+
+**Observation 7 — f0_binding (line 297):** declares `declared_f0_sha256: 276009f4f63d...`, but the measured canonical F0 hash is `0fcc6a1928fd...`. The lifecycle says F0 canonical = 0fcc6a1928fd. So F2a's f0_binding pins a hash that **does not match the current canonical F0 artifact**. The binding_note says "refreshed to the rev4 declared-F0 hash after the astra-classscope-02 amendment (was 66bf917b)". Hmm — `276009f4f63d` vs measured `0fcc6a1928fd`. Which is right? The current F0 file (canonical) hashes to 0fcc6a1928fd. So F2a's f0_binding is stale/incorrect → a hard, machine-checkable defect: the declared F0 hash doesn't equal the measured F0 hash on disk. Let me verify by hashing the declared_f0_artifact `research_map/formulation_taxonomy.yaml` (= 0fcc6a1928fd, measured earlier). Yes! I measured it: 0fcc6a1928fd40b0... So `276009f4f63d...` is wrong at this instant. And note the F2a file's rev10 comment said "f0_binding refreshed to the rev4 declared-F0 hash 565a6e50 (was 66bf917b)" while the actual field says 276009f4. Internal inconsistency between the comment (line 22 says 565a6e50) and the field (276009f4). Let me double check: line 22 "rev10 delta: f0_binding refreshed to the rev4 declared-F0 hash 565a6e50 (was 66bf917b)." and line 297 says declared_f0_sha256: "276009f4f63dbf...". So three different values: comment 565a6e50, field 276009f4, measured 0fcc6a1928. This is a genuine, decidable defect: the F0 binding does not resolve to the artifact on disk. That's hard-failure material (R19 binding / HF-B2-style node binding mismatch).
+
+Hmm wait, maybe `declared_f0_sha256` refers to a *declared* value inside the F0 artifact (a self-declared hash of itself, which may be stale), not the measured file hash. The field name is `declared_f0_sha256` and `declared_f0_artifact: research_map/formulation_taxonomy.yaml`. So it's the hash the F2a author declares for the F0 artifact. Whether "declared" means "as declared by F0's own FROZEN.json" is unclear. Let me check the F0 artifact content: does research_map/formulation_taxonomy.yaml contain a self-hash or a FROZEN.json with hash 276009f4? Let me check artifacts/formulation/FROZEN.json and the taxonomy's own hash fields. If some FROZEN.json pins 276009f4 but the file measures 0fcc6a1928, that's the dual-tree divergence (CF-13) again: canonical F0 ≠ authoring F0. But lifecycle says canonical 0fcc6a1928 ≠ authoring 01e7f841. Neither is 276009f4 nor 565a6e50. So the F2a binding points to a hash that matches *neither* tree at 00:17. That's a real binding failure. Let me verify with the consistency evidence file too.
+
+This is very good material: a hard, falsifiable, machine-checkable finding that no prior review at the current hash has recorded (prior reviews were at 23fec0e9). Combined with the D0 disjunction, my verdict will be **revise** with 2-3 hard failures:
+- HF-088-1 (critical): D0 union of two data regularity classes in the operative quantifier block + genericity ambient space defined only for the Sobolev branch → one branch uninstantiable; also violates the map's one-frozen-data-class requirement and the file's own "one class statement" intent. Evidence: lines 48, 52, 58, 137-138, 163-164; F2b/F1 comparison.
+- HF-088-2 (hard): f0_binding.declared_f0_sha256 276009f4 does not resolve to the on-disk canonical F0 (measured 0fcc6a1928) nor to the authoring tree (01e7f841); internal comment/field disagreement (565a6e50 vs 276009f4). Machine-checkable: sha256sum.
+- HF-088-3 (hard/minor?): duplicate YAML keys (`revised_at` 8×) → ambiguous revision metadata; strict YAML parsers reject; hash-stable but not machine-unambiguous. Severity: maybe "major" as conformance.
+- Cross-artifact condition (not a failure of F2a alone): the one-data-class mismatch F1 vs F2a vs F2b remains → G-FORM cannot pass even if F2a is accepted in isolation (map unmet item).
+
+Positives: extension_predicate now defined with clauses (a)-(f) resolving D3 (HF-A1 fixed); conclusion.statement_formal now uses the defined D0 (HF-A2 literal fixed); class leakage clean; WCC inflation clean; falsifier decidable; i_plus/visibility roles correct.
+
+Before I finalize, I must verify each claim mechanically:
+1. sha256 of F0 canonical and authoring; check FROZEN.json.
+2. F1's D0/data_class to confirm the shared-contract status.
+3. F2b's data_class.
+4. Run the frozen binding gate checker (`artifacts/formulation/tools/check_class_schema.py`) on the canonical F2a and record output.
+5. Run `research_map/class_separation.py` on F2a (frozen detector) and `runtime/bin/classsep_regression.py`.
+6. Parse the YAML with strict duplicate-key detection (custom loader) to prove duplicates.
+
+Then write:
+- `artifacts/worker-088/f2a_review/check_f2a.py` — deterministic checker producing JSON with all measurements (file hash, duplicate keys, D0 disjunction detection, f0 binding resolution, class separation run, gate run, cross-schema data_class diff).
+- `artifacts/worker-088/f2a_review/f2a_check.json` — output.
+- `reviews/F2a-review-088.json` — review payload.
+- `artifacts/worker-088/CHECKPOINTS.md` — checkpoint log.
+- `comms/outbox/worker-088.jsonl` — events.
+- Validate events with `python3 research_map/comms.py ingest --dry-run`.
+
+Wait — one caution: should I *write* into `reviews/` (a shared canonical dir)? Prior workers did (reviews/F2a-review-19.json etc. authored by deepseek-flash-19). And assignment astra-recon-03 says artifact `reviews/F2a-review-18.json`. So yes, `reviews/F2a-review-088.json` is the right path. It's under the workspace, allowed by the sandbox (workspace-write). Good.
+
+Also: the review scanner (`astra_lifecycle.review_coverage`) reads reviews/*.json, finds `verdict` and `_targets_in_review` + `_explicit_pins`. For my review to be counted as binding at F2a, it must (a) target F2a/AF-SCC-C2-VAC-GEN, (b) pin the measured hash 4f97273ef440 in explicit pin fields. Let me read `_explicit_pins` and `_targets_in_review` to construct the review JSON so the controller's advisory scan actually counts it (and so the audit lead can bind it). Let me read lines 100-160 of astra_lifecycle.py.
+
+Let me also check how prior reviews structure these fields (e.g., F2a-review-19.json keys: artifact_sha256, target_id). Let me look at the top-level keys of F2a-review-19.json.
+
+Let me do these checks now.
+dsh: reasoning:
+Now let me check the FROZEN.json entry for the canonical files — does it list research_map/formulation_taxonomy.yaml and its hash? Let me grep FROZEN.json for the canonical paths and see whether 276009f4 or 0fcc6a19 appears. Also whether there's a `FROZEN.json` in artifacts/formulation with revision 25 at 00:42 (future-dated!). Note frozen_at 00:42 — that's in the future relative to now (~00:20?). Interesting — more clock skew. Wait, current time? Let me check `date`. The lifecycle ran at 00:17:27. Let me get current time.
+
+Let me now run the checks:
+1. `date`
+2. grep FROZEN.json for taxonomy hashes and for 276009f4.
+3. F1 and F2b data_class/quantifiers D0 comparison.
+4. Check for the binding gate tool.
+5. Run class_separation.py on F2a.
+
+Let me be efficient and write the checker script soon, but first gather facts interactively.
+dsh: reasoning:
+Whoa — the files have CHANGED since I measured them minutes ago! Now:
+- research_map/formulation_taxonomy.yaml = 276009f4f63d... (was 0fcc6a1928fd at 00:17)
+- schemas/af_scc_c2_vacuum.yaml = b6123750b37d... (was 4f97273ef440)
+- schemas/af_wcc_vacuum.yaml = 9a8bd4c96800... (was 68392dd82050)
+- schemas/af_scc_c0_vacuum.yaml = 1bb78ce9b357... (was a2aef5ac7fe3)
+- FROZEN.json revision 25, frozen_at 00:42 (future)
+- artifacts/formulation/* now byte-identical to canonical (aligned).
+
+So the lead-formulation published a new frozen revision (rev25) between 00:17 and now (00:20). That's exactly astra-life01-publish-frozen / astra-life02-publish-f0 executing. The map's measured hashes are now stale (measured at 00:17). The F2a file I read was the 4f97273ef440 version? I read it at ~00:18-00:19; the content I read had `declared_f0_sha256: 276009f4...` and revision 11. Now the file hashes to b6123750 — meaning it changed again after I read it (or the FROZEN.json publish wrote canonical from authoring: authoring was 01e7f841... no wait, authoring F2a schema was 68392dd82050 per publication_status pairs: authoring artifacts/formulation/schemas/af_wcc... hmm for F2a authoring = 4f97273ef440 aligned at 00:17).
+
+Wait, at 00:17 publication status: artifacts/formulation/schemas/af_scc_c2_vacuum.yaml == 4f97273ef440 (aligned with canonical). Now both canonical and authoring are b6123750. So the lead published a new revision (rev25 FROZEN) at ~00:19-00:20, changing all four files.
+
+This is great news AND a hazard: by the time I finish my review, the artifact may change again. The assignment explicitly says: "Verdict cites the hash you actually read; hash the file yourself; if the file changes mid-review (Astra freeze check will flag drift), restart against the new revision." (astra-recon-01/02).
+
+So I must re-read the NEW revision (b6123750) and review THAT. And hash it immediately before and after reading; if it drifts during my review, restart or report drift.
+
+Actually — is this churn ongoing? The supervisor relaunches leads every 20s. The formulation lead may keep revising. Let me monitor: take hash now, wait ~30s, hash again. Meanwhile, let me check whether the new revision fixed the D0 disjunction and the f0_binding.
+
+Interesting: `research_map/formulation_taxonomy.yaml` is now 276009f4 — which is exactly what F2a's `declared_f0_sha256` said. So the F2a revision I read (rev11) was already bound to the *new* F0 hash 276009f4 while the canonical F0 was still 0fcc6a19 at 00:17. That means the authoring tree (artifacts/formulation) already had 276009f4 and the canonical publish happened at ~00:19. So the F2a f0_binding was NOT stale — it was ahead of the canonical publish. Good thing I checked before writing the review! My earlier "HF-088-2 f0 binding mismatch" finding would have been wrong at the new hash. This is precisely why the protocol says "hash the file yourself" and "drift check".
+
+So: re-read the current F2a (b6123750) and re-evaluate. Note the revision may now fix D0 (given lead-formulation's rev25 was explicitly the "publish frozen revision + B/N triage" assignment from astra-conv-01). Let me look at the new F2a content: diff against what I read. I have the old content in context, but better to save a copy for diffing. I didn't save it. Let me just read the new file and check the key fields.
+
+Also, importantly, `FROZEN.json` frozen_at is 00:42 (future) — clock skew again (CF-14). Revision 25.
+
+Plan adjustment:
+1. Snapshot the current F2a bytes + hash (b6123750...), wait/verify stability, then review at that hash.
+2. If it changes again, restart against the newest hash — but bound the number of restarts (this is a churning target). Since many workers depend on it, and the lead is actively publishing, I should pin the hash at a moment and note the drift if any.
+
+Given the publish just happened, maybe the right move is to wait for stabilization? The supervisor restarts leads continuously; the formulation lead will run for its 4h lifecycle and may keep writing. But the new FROZEN rev25 at 00:42 (future-stamped) suggests the lead just finished a big publish and declared it frozen. Let me check if the file is stable over ~60s. Meanwhile I can build my checker script.
+
+Let me:
+- Copy the current F2a to artifacts/worker-088/f2a_review/pinned/af_scc_c2_vacuum.b6123750.yaml for a byte-stable review copy (review of that exact bytes; if canonical changes, my review binds the pinned copy + note drift).
+- Hash and record mtime.
+- Read the new file's key sections (quantifiers, data_class, genericity, f0_binding, conclusion).
+- Run class separation + binding gate.
+- Then decide verdict.
+
+Note about "review of a pinned copy": the protocol wants citation of the measured canonical hash. I'll cite b6123750 (measured canonical at review time) and record sha256_after_read; if it drifts, record `drifted_during_review: true` and restart. Let me get going.
+
+Also — the F2a revision 11 field `f0_binding.declared_f0_sha256: 276009f4` now MATCHES the canonical F0. Good.
+
+Let me first check stability and read the new file.
+dsh: reasoning:
+Stable for 30s: F2a canonical = b6123750b37d8bee1e92eeb025979a6afdf3b29a33331a9d8499e21398d13fb2, F0 = 276009f4.
+
+Now read the new F2a (rev25 published). Check key blocks: quantifiers (D0), data_class, genericity, conclusion, f0_binding, review_history if any. Let me diff the pinned copy vs the old content I read — I don't have the old file, but I can look at the specific lines. Let me read the new file's head and key sections via grep/read.
+dsh: reasoning:
+The new revision b6123750 still has the D0 disjunction: "admissible regularity pairs: Sobolev variant s > 5/2 and delta in (1/2,1), or the smooth-with-decay default". The revision number is still 11 but bytes changed (revised_at maybe? Let me check what changed — file size 28268 vs earlier read? The earlier file's `revised_at` last was 00:30. Let me check the new head; the difference between 4f97273ef440 and b6123750 might just be a small change. Let me diff the two pinned versions? I only have the new one pinned; but I can reconstruct? No. Actually, git! The repo is a git repo (.git at ai4math-swarm with commits at 00:15). Maybe I can use git to see the old revision. Let me check `git -C . status/log`. The project might be tracked. Let's see.
+
+Actually it doesn't matter much for the review — what matters is the current bytes. But knowing what changed helps me judge whether the change was substantive and whether the authoring/canonical alignment is now clean.
+
+Now, the critical question for my verdict: the D0 disjunction. All three schemas (F1, F2a, F2b) share the same D0 pattern — so it's a deliberate cross-artifact contract, not an F2a-specific error. But the map's controller says: "no single frozen data class (s,delta,norm) is shared by F1/F2a/F2b, which disables the licensed C0=>C2 transfer" — that's a different issue (F2b has a different data class? let me check F2b's data_class now).
+
+Hmm wait: the new F2b (C0) regularity_class says default smooth-with-decay, sobolev_variant s>5/2... same as F2a. So now all three have the same D0 disjunction. Before, F2b rev5 "freezes smooth-with-decay" and F2a "freezes Sobolev H^4_{1/2+eps}"; now they seem aligned on the same union. Let me check the full data_class of F2b and F1 for differences (norm/space definitions). Also the F1 revision now (9a8bd4c9).
+
+Let me diff data_class across the three current schemas mechanically. And check `shared_class_contract` fields.
+
+Now, is the D0 union a hard failure? Consider the class statement semantics: "forall (s,delta) in D0: exists G_{s,delta} ... : forall data in G_{s,delta}: not exists extension". If D0 is a union of the Sobolev parameter range and a "smooth-with-decay default" element, then the statement is: the conclusion holds for the Sobolev family AND for the smooth-with-decay default. That's a conjunction of two class statements (each with its own genericity structure). The file's own text says "exactly one frozen data class and no regularity-pair binder, so the sentence is a single class statement" — wait, that was in the older revision's order_note (line 78 of the 4f97273 version): "exactly one frozen data class and no regularity-pair binder". Hmm, actually that note said exactly the opposite of what the file does. Let me check the new order_note.
+
+Let me print the whole quantifiers block including order_note and any "single class" claims, plus class_boundary, and search for "disjunct", "or the smooth", "union", "one data class".
+
+Also check whether the file still declares `D0` as the binder while `genericity.ambient_space` only defines the Sobolev topology — the "Frechet topology for the smooth-with-decay class" clause in topology_or_measure partially addresses the second branch, but `X^{s,delta}_vac(AF)` is undefined for it (no (s,delta)). The formal sentence uses `X^{s,delta}_vac(AF)` with `(s,delta) in D0`, so for the smooth-with-decay disjunct there are no s,delta values → the term `X^{s,delta}_vac` is ill-formed. That's a mechanical ill-typedness, independent of intent.
+
+Let me also check the frozen binding gate. `artifacts/formulation/tools/check_class_schema.py` — let me find and run it. And `run_gate_tests.py`. And `research_map/class_separation.py`.
+
+Let me now write the mechanical checker script. But first gather: (a) new F2b/F1 data_class; (b) tools available; (c) class separation tool usage.
+dsh: reasoning:
+Now all three schemas share the same D0 disjunction and the same regularity_class representation. Note `class_separation` is null in all three (maybe renamed). Also `shared_class_contract: null` — that key was in earlier versions (per prior reviews), now removed? Hmm, maybe it moved. Let me check F2a for "shared_class" tokens and "one data class" claims; and F1 for the same.
+
+The map's G-FORM unmet says "no single frozen data class (s,delta,norm) is shared by F1/F2a/F2b". Now the three files look structurally identical in data_class (regularity_class keys identical). But there are differences: F1's sobolev_variant spaces includes "(weighted Sobolev)" and status text differs; F2a's lacks "(weighted Sobolev)". Also F1 has `excluded_data` extra key. Minor.
+
+The D0 disjunction remains the key issue. It's shared across all three, which means a worker-review hard failure on F2a would be a cross-cutting formulation issue, not just F2a. Honest review: flag it as hard failure for F2a (the file's own formal sentence is ill-typed for one disjunct), and note it is shared with F1/F2b (so it's a formulation-level fix, and the same defect will block all three).
+
+Now let me run the tools:
+1. `python3 artifacts/formulation/tools/check_class_schema.py schemas/af_scc_c2_vacuum.yaml` — see R19 etc.
+2. `python3 artifacts/formulation/tools/run_gate_tests.py` maybe takes args.
+3. `python3 research_map/class_separation.py schemas/af_scc_c2_vacuum.yaml` — need usage; earlier `--help` printed nothing (no output). Let me check its main/argparse.
+
+Let me run them.
+dsh: reasoning:
+The binding gate PASSES on the current F2a (exit 0). Good — prior HF-A4 (R19 failure) is fixed.
+
+class_separation.py has `findings_for_text` and `findings_for_map`. I can call it via import in my checker.
+
+Now, the key question: what verdict? Let me be rigorous about the D0 issue. Let me re-read the exact text and the file's own declarations. Let me grep for "disjunct", "one class", "single class", "C0 or C2", "or the smooth-with-decay".
+
+Also let me check the F2a `class_boundary` and `regularity` blocks for statements about the data class. And whether `quantifiers.domains.D0.definition` being a union contradicts any explicit "single data class" claim.
+
+Let me grep.
+dsh: reasoning:
+Class separation clean on F2a; regression PASS.
+
+Now let me decide on the D0 finding. I need to be careful and fair. Options:
+
+1. Treat it as a hard failure (quantifier completeness / ill-typed domain). Rationale: the operative formal sentence quantifies over `(s,delta) in D0` but D0 contains a disjunct ("the smooth-with-decay default") that provides no `(s,delta)` values, and the ambient space `X^{s,delta}_vac(AF)` and comeagerness are defined only for the weighted Sobolev branch (genericity.ambient_space). A reader/tool cannot instantiate the formal sentence for the smooth-with-decay branch. Also the map's G-FORM criterion requires "no C0/C2 merge; reviewers 17,18 accept" and the unmet item says "no single frozen data class (s,delta,norm) is shared by F1/F2a/F2b, which disables the licensed C0=>C2 transfer". A union domain is not a single data class.
+
+But wait — is it truly ill-typed? One could read `D0` as a set of "regularity settings" indexed by a label (s,delta) where the smooth-with-decay default is a distinguished element with formal symbol (∞,·)... The file doesn't define such an encoding. The prior lead-audit explicitly reopened for exactly this ("quantifiers.formal still ranges over a disjunctive D0 ... The same fix is required here before accept") and then claimed rev3 removed it. So the swarm's own audit history treats a disjunctive D0 as a blocking defect. The current revision has it back (or never removed in the published canonical line). That's a strong basis for `revise`.
+
+2. However, I should check whether the current revision's `genericity` explicitly handles the smooth branch to make the union well-defined: `topology_or_measure: "subspace topology on the constraint manifold; Frechet topology for the smooth-with-decay class..."` — it mentions Frechet topology for the smooth class but `ambient_space` is only the weighted Sobolev manifold. So no, the smooth branch lacks an ambient space/comeagerness definition. Also `regularity.data_regularity` (line 149) says "smooth-with-decay default, or H^s_delta with s > 5/2, delta in (1/2,1)". So the disjunction is pervasive.
+
+Given the swarm's own prior audit stance, `revise` with this as the single hard failure (plus maybe the `revised_at` duplicate-key issue as a conformance finding, and cross-artifact notes) is defensible and honest.
+
+But wait — there's a subtlety I should check first: **does the current revision differ from the 4f97273 one in a way that addressed the disjunction elsewhere?** The bytes changed between 4f97273 (00:15) and b6123750 (00:19). Since I read the 4f97273 content mostly, and the new one has the same D0, the change was probably in f0_binding (rev10) + variant token handling (rev9/rev11). The FROZEN.json rev25 at 00:42 suggests the lead did a big publish. Actually — hold on. Is the *canonical* file now the authoring rev25 line? The FROZEN.json lists canonical hashes equal to measured: F2a b6123750 in FROZEN == measured. And artifacts/formulation/schemas/af_scc_c2_vacuum.yaml also = b6123750. So aligned. Good.
+
+Now, the question of whether to give `revise` and stop, or to *also* check the other axis (data-class sharing across the three) to include in findings. Let me mechanically compare the three data_class blocks (key-by-key) and the D0 definitions. From the earlier print: F1's `data_class.asymptotic_decay` etc. might differ in norm/numeric rates. Let me do a full diff of data_class subtrees across the trio, and a diff of quantifiers.domains.D0 strings. That yields precise evidence for the review.
+
+Also, I want to check the F2a `<parent>.variant-<ID>.delta.json` references (rev11 normalization) and `class_identity_variants` / variant registry to ensure no class-id-shaped filenames remain and that referenced variant files exist (a decidable check). The rev11 comment says "variant delta-filename references normalized to <parent>.variant-<ID>.delta.json". Let me check that those referenced files exist and validate with check_variant_deltas.py / check_variant_registry.py. That's another machine-checkable axis, and a nice bounded addition.
+
+Let me look at the tail of F2a for class_identity_variants/variant refs, and run check_variant_registry.py + check_variant_deltas.py on F2a.
+
+Let me do all these checks in one script and produce the JSON evidence. Time to write the checker artifact. But first, quick exploratory runs to see tool interfaces.
+dsh: reasoning:
+Tools pass. Now let me write the mechanical checker + review. But first, decide the verdict definitively.
+
+Let me think about the D0 issue once more, from the perspective of "would two readers disagree?" The file's operative quantifier:
+
+```
+forall (s,delta) in D0: exists G_{s,delta} subset X^{s,delta}_vac(AF) with G_{s,delta} comeager: forall (Sigma,h,K) in G_{s,delta} ... not exists proper future C2 extension
+```
+with D0 = "admissible regularity pairs: Sobolev variant s>5/2 and delta in (1/2,1), or the smooth-with-decay default".
+
+Problems:
+(a) `(s,delta)` cannot bind an element described as "the smooth-with-decay default" — no (s,delta) pair exists for it; the disjunct is not a regularity *pair*.
+(b) `X^{s,delta}_vac(AF)` and comeagerness in `genericity.ambient_space` are defined only for weighted Sobolev data; the smooth class has no defined ambient space (only a passing mention of "Frechet topology" in `topology_or_measure`).
+(c) The map's G-FORM criterion and the assignment require a **single frozen data class** shared by F1/F2a/F2b; a union domain is two settings, and the controller's unmet item explicitly records "no single frozen data class (s,delta,norm) is shared by F1/F2a/F2b, which disables the licensed C0=>C2 transfer".
+(d) The file's own `class_change_warning` says the genericity notion is part of the class identity and "No strengthening may be substituted silently" — but a union over two regularity classes is not the same class as the Sobolev one; the frozen data class is ambiguous.
+
+So: verdict `revise`, hard failure HF-088-1 (quantifier domain is a union of two regularity classes; second disjunct has no (s,delta) instantiation and no ambient space; blocks the single-data-class criterion). Score: 3.0? The artifact is otherwise strong (extension_predicate fixed, class separation clean, no inflation, decidable falsifier, binding gate passes). Prior scores: 19 gave 2.0, 17 gave 3.5, lead-audit 4.0. I'd give 3.0 ("revise: one hard, localized defect; strong otherwise").
+
+Actually — hold on. Let me consider the possibility that the intended reading is: D0 is a *set of admissible regularity settings*, where "the smooth-with-decay default" is shorthand for the pair at the smooth end. The F1/F2b/F2a all use the same formula. If the whole formulation group deliberately adopted this as the shared data class, then the "single frozen data class" is the union — and the controller's unmet item says it is NOT met, because G-FORM's criterion demands a single (s,delta,norm). My review is consistent with the controller's own audit. So `revise` aligns with the map's current unmet list. Good.
+
+However, there's a nuance: the controller's unmet item said "no single frozen data class (s,delta,norm) is shared by F1/F2a/F2b" — but as of the new publish, all three now have byte-identical regularity_class blocks (default + sobolev_variant with same values) except wording differences ("(weighted Sobolev)" in F1, missing in F2a/F2b; status text differs). Is that "shared"? Superficially yes (same fields/values), but the class is still a union, and F1's spaces string differs textually. Also the map's unmet item predates the publish. My review can state precisely: the three canonical data_class blocks are now key-identical (I'll verify mechanically) but each quantifies over a **union** D0, so the "single data class" criterion is still not satisfied; plus F1's textual difference in `spaces` prevents byte-level identity of the contract. That's factual and checkable.
+
+Wait, actually, I need to double check the exact key-by-key diff. F1 has extra `excluded_data` key in data_class. So not key-identical. Fine.
+
+Second potential hard failure: **duplicate YAML keys** (`revised_at` appears 8×). Let me check the new revision — likely still there. Duplicate keys mean different YAML parsers produce different documents (PyYAML last-wins; yamllint/strict parsers error). The gate tool passes because PyYAML silently last-wins. This is a real machine-readability defect but is it "hard failure" per the A0 rubric? The rubric (evaluation_rubric.yaml) defines hard failures. Let me check the A0 hard-failure list to classify correctly. Let me grep evaluation_rubric.yaml for HF codes.
+
+Let me look at the hard-failure taxonomy to label my findings properly (HF-01..HF-06 etc.). Prior reviews used HF-01..HF-06 codes: HF-02 class leakage, HF-06 single-class binding/undefined core, HF-04?... Let me read the rubric's hard failure section.
+dsh: reasoning:
+Excellent! **HF-02's detector explicitly includes "disjunction of class_ids"** — and more precisely, class leakage. Hmm, here it's about class_ids disjunction. The D0 disjunction is a *regularity-class* disjunction, which is different from class_id disjunction. But HF-06 (assumption smuggling) is nearest for "the statement requires a regularity condition absent from/ambiguous in the schema's assumptions". Prior reviewer 19 coded the dangling extension_predicate as "HF-06 (undefined class core... A0 has no dangling-definition code, nearest is HF-06 because the statement's assumption set is incomplete)". So for the D0 union, the best code is HF-06 too (assumption/domain incompleteness: the statement binds a variable over a disjunctive domain whose second disjunct has no (s,delta) instantiation; the formal sentence cannot be instantiated).
+
+Alternatively HF-02 "disjunction of class_ids" — D0 = Sobolev ∪ smooth-with-decay are *data regularity settings*, not class_ids, so HF-02 is a stretch. I'll cite HF-06 as primary with a note that HF-02 is the nearest class-disjunction code but the disjunction is intra-class regularity, not class_id.
+
+Now let me also check the A0 rubric/scoring for review scores to pick a fair score. Not critical; 3.0 is reasonable.
+
+Now build the deliverables. Plan:
+
+**Artifact 1: `artifacts/worker-088/f2a_review/check_f2a.py`** — deterministic checker that reads a pinned YAML path and emits `f2a_check.json` containing:
+- artifact path, measured sha256, bytes, mtime
+- yaml parse (PyYAML), duplicate-key detection via custom loader
+- field-presence matrix for the assignment's required fields: quantifiers.ordered/formal/domains; topology (spacetime_dimension, slice_topology, conformal_boundary, forbidden); regularity (data/solution/i_plus/extension, must_not_conflate); genericity (kind, ambient_space, topology_or_measure, generic_set, excluded_set, transfer_failures, is_part_of_class, class_change_warning); i_plus.role/in_conclusion; visibility.role; conclusion.conclusion_type; falsifier.tier_1.
+- class-separation detector result (import research_map.class_separation)
+- binding gate run: subprocess `python3 artifacts/formulation/tools/check_class_schema.py <path>` → rc + stdout
+- D0 disjunction probe: parse `quantifiers.domains.D0.definition`, detect "or" disjunct; check every binder kind/domain resolves; check whether the smooth-with-decay disjunct is representable as an (s,delta) pair; check `genericity.ambient_space` covers only weighted Sobolev.
+- cross-schema comparison: F1/F2a/F2b data_class equality (key sets, regularity_class), D0 strings.
+- f0_binding resolution: sha256 of declared_f0_artifact vs declared_f0_sha256.
+- class-id leakage scan: token set across all string values; unknown tokens.
+- conclusion inflation: conclusion_type token, i_plus.in_conclusion, visibility.role.
+- output JSON.
+
+**Artifact 2: `artifacts/worker-088/f2a_review/f2a_check.json`** — the output.
+
+**Artifact 3: `reviews/F2a-review-088.json`** — review payload with:
+- review_id, event_id, event_type review, created_at (wall clock), actor worker-088, reviewer worker-088
+- target_id "F2a", node_id "F2a", class_id "AF-SCC-C2-VAC-GEN"
+- artifact "schemas/af_scc_c2_vacuum.yaml", artifact_sha256 = b6123750...
+- verdict "revise", score 3.0
+- hard_failures [...]
+- findings [...]
+- counts_as_full_schema_verdict: true (I am not the author)
+- independence: agent id, distinct from author (astra-lead-formulation), no use of prior review text as evidence (I can say prior findings were used only as hypotheses; my probes are mechanical)
+- machine_evidence: paths+hashes of check_f2a.py and f2a_check.json
+- evidence_refs, next_falsifier
+- drift check: sha256_after_read.
+
+**Artifact 4: `artifacts/worker-088/CHECKPOINTS.md`** — checkpoint log entries (start, checks, emission, exit).
+
+**Artifact 5: `comms/outbox/worker-088.jsonl`** — events: status (active task claim), artifact x3, review, status (checkpoint). All with event_id/event_type/created_at/actor + required per-schema fields. Must pass `comms.py ingest --dry-run`.
+
+Careful with the review event schema: required `target_id, reviewer, verdict, score, hard_failures, findings`. Extra fields fine.
+
+Also: `hours` field for status. I'll put actual hours ~0.3.
+
+One important thing: the artifacts must be written BEFORE emitting the artifact events with hashes. And the review JSON must cite the checker outputs' hashes. I'll compute hashes and embed them. Approach: write check_f2a.py, run it → f2a_check.json; then compute hashes of both; then write the review JSON with those hashes embedded; then write events referencing the review JSON's hash; then write CHECKPOINTS.md; then validate events via dry-run.
+
+Careful: writing the review JSON with embedded hash of f2a_check.json is fine (f2a_check.json is fixed). The review JSON's own hash is computed after writing; the artifact event for the review includes it.
+
+Now: should the checker script live in artifacts/worker-088/f2a_review/? Prior pattern: artifacts/worker18/f2_review/f2_class_probe.py. Yes.
+
+Also note: my checker must not import heavy stuff; pure stdlib + yaml + subprocess.
+
+Let me also double check the **drift**: before finalizing, re-hash F2a. If it changed, restart the review against the new bytes. I'll do a final hash check right before writing the review JSON.
+
+Let me now write the checker. I'll make it robust and deterministic, no network, no writes except its output JSON.
+
+Key implementation details:
+- Duplicate key detection: custom yaml.SafeLoader subclass that records duplicate mapping keys.
+- Class-id token scan: walk parsed structure; collect strings matching `AF-[A-Z0-9-]+`; compare with frozen four.
+- D0 disjunction probe: 
+  - `d0_def = yaml_doc['quantifiers']['domains']['D0']['definition']`
+  - detect the literal "or the smooth-with-decay default" and count disjuncts by splitting on ", or ".
+  - binder kind check: for each ordered entry, domain_id must be in domains.
+  - representability check: every element of D0 must supply (s,delta) — for the smooth disjunct there are no s/delta values anywhere in the doc under a smooth ambient space; check `genericity.ambient_space` contains "Sobolev" and whether any ambient space is defined for smooth-with-decay (search for "Frechet" in genericity block and check whether it defines X_vac for the smooth class). Also check `regularity.data_regularity`.
+  - Also: does the smooth disjunct appear in the binder domain of any *other* schema identically (cross-artifact)?
+- Cross-schema data_class comparison: key set diff and regularity_class equality.
+- f0 binding: sha256 of the declared artifact; compare.
+- Gate: run `sys.executable artifacts/formulation/tools/check_class_schema.py <path>` with cwd=ROOT.
+- Class separation: import module from research_map.
+- Also record `class_id` vs file class_id.
+
+Let me write it now. Then run.
+
+One more decision: review target hash = b6123750. Note the current canonical F2a and authoring artifact are both b6123750 (aligned). Good — so review binds both.
+
+Also, should I review F2a alone or also note that F1/F2b share the D0 defect? I'll note it in `cross_artifact_note` and in findings as a non-hard note (since my assignment is F2a; the same defect appears in F1/F2b → formulation-level fix; assigned owner lead-formulation).
+
+Let me write the checker file.
+dsh: reasoning:
+Now write the checker script. Let me be careful with YAML duplicate detection and the various probes.
+dsh: reasoning:
+Wait, there's a bug in my print: `"d0_disjunct_count" if False else "d0_ill_typed_for_smooth_branch"` — that's a weird leftover, it works but is ugly. Also I reference `report[k]` for "binding_gate" etc. Fine. Let me clean that.
+
+Also `smooth_ambient_defined` logic: `("Frechet" in tom and "smooth" in tom) and ("X^{s,delta}" in ambient or "constraint manifold" in ambient)` — since ambient contains "constraint manifold" and tom contains Frechet+smooth, this evaluates True. That would make `d0_ill_typed` False, which defeats my probe! I intended: the ambient space is defined only for the Sobolev class (X^{s,delta}); the Frechet mention is in topology_or_measure, not an ambient space for the smooth branch. Let me fix the logic to be precise and defensible:
+
+- `smooth_branch_ambient_space_defined` should be True only if the genericity block defines an ambient space *for the smooth-with-decay class*. The ambient_space field is a single string starting "the constraint manifold X^{s,delta}_vac(AF) ... weighted Sobolev product". It mentions Sobolev only. topology_or_measure mentions "Frechet topology for the smooth-with-decay class" but names no ambient manifold/set for that class.
+- Better probe: `ambient_space_defines_smooth_branch = ("smooth" in ambient)` → False. And `topology_or_measure_mentions_smooth_frechet = "Frechet" in tom and "smooth" in tom` → True. Then d0_ill_typed = smooth_branch and not smooth_supplies_params and not ambient_space_defines_smooth_branch.
+
+Let me rewrite those lines. Also the print statement cleanup.
+
+Also note: `walk_strings` includes dict keys? No — only values; that's fine (class tokens in keys unlikely). Also `yaml` duplicate detection: my construct_mapping uses SafeLoader.construct_mapping after constructing keys; that should work.
+
+One more issue: `DuplicateKeyLoader.add_constructor` is registered globally each call (fine, idempotent). But `construct_object(k_node)` on a key node then calling `SafeLoader.construct_mapping` will construct keys again — fine.
+
+Let me fix the script.
+dsh: reasoning:
+The probe ran. Results:
+- artifact hash b6123750 (stable during read)
+- duplicate YAML keys: `revised_at x8` — confirmed.
+- required fields: none missing.
+- D0 ill-typed for smooth branch: true.
+- unknown class tokens: none.
+- f0_binding resolves: true (276009f4 matches measured canonical F0). 
+- binding gate: PASS.
+
+Now let me inspect the full report to see cross_schema and other details, especially the F1/F2b comparison and class_separation. Then decide the final review content.
+dsh: reasoning:
+All evidence collected. Summary of the review:
+
+**Positives (verified):**
+- Artifact exists, parses, 320 lines, sha b6123750 (stable during read), aligned with authoring tree and FROZEN.json rev25.
+- All 26 required fields from the assignment's acceptance axes present.
+- All 4 binder domains resolve.
+- `extension_predicate` now defined with clauses (a)-(f) → D3 resolves (prior HF-A1 fixed).
+- Frozen class-separation detector: 0 findings; regression 17/17 leaks + 10/10 controls.
+- Binding gate `check_class_schema.py` PASS, rc=0.
+- No unknown class tokens; no WCC conclusion tokens in conclusion block; i_plus/visibility roles correct → no class leakage/inflation.
+- f0_binding resolves to measured canonical F0 276009f4 (prior risk cleared).
+- Decidable two-tier falsifier present with machine-checkable steps.
+
+**Hard failure (revise):**
+- HF-088-1 (HF-06 assumption/domain incompleteness; class-disjunction adjacent to HF-02): the operative quantifier binds `(s,delta)` over D0, whose definition is a disjunction: Sobolev pairs **or** the smooth-with-decay default. The smooth disjunct supplies no (s,delta) pair (probe: `smooth_branch_supplies_s_delta_pair=false`), and the comeagerness ambient space is defined only for the weighted Sobolev product (`ambient_space_defines_smooth_branch=false`; the Frechet mention in topology_or_measure names no ambient object). So the formal sentence has a branch that cannot be instantiated; the artifact is a family of two class statements, not one. This also keeps G-FORM's "single frozen data class" criterion unmet (controller unmet item; prior lead-audit reopened rev2 for the same pattern and required removal).
+- HF-088-2 (major, not critical): duplicate YAML key `revised_at` ×8 → revision metadata is parser-dependent (PyYAML last-wins; strict parsers error). Machine-readability/conformance defect; also means the revision timestamp is ambiguous (`revised_at` lines claim rev4..rev11 deltas). Classify as major finding rather than hard failure? The rubric's HF list has no duplicate-key code. I'll list it as a `major` finding (non-hard) with a detector. Hmm — should the verdict be `revise` anyway because of HF-088-1; yes. The duplicate key is a secondary major finding requiring a fix (make the frozen file machine-unambiguous), but I won't inflate it into a hard failure since the rubric has no matching detector. Actually, let me think — "schema conformance" is an acceptance axis, and the gate tool passes despite duplicates because PyYAML tolerates them. A reviewer could reasonably call it a hard failure under HF-06? No. I'll put it as major finding F-2 with explicit note that it is not counted as a hard failure because the A0 taxonomy has no duplicate-key detector, but it must be fixed before the file can be called machine-frozen.
+
+**Cross-artifact notes (not hard failures of F2a):**
+- F1 and F2b carry the same D0 disjunction (probe: F2b d0_equal=true; F1 d0 differs only by an extra sentence). So the fix is formulation-wide; same defect will block F1/F2b at their own reviews.
+- F1 data_class has an extra `excluded_data` key and its `regularity_class` differs textually (F1 spaces "…(weighted Sobolev)", status text mentions L1 ownership) → `regularity_class_equal=false`. So the "one shared data class" is not key/text-identical across the three. F2a↔F2b are key- and value-identical.
+
+**Score:** 3.0 (revise with one critical domain/assumption defect; strong otherwise). Prior scores 2.0 (19), 3.5 (17), 4.0 (lead-audit). 3.0 seems fair.
+
+**Falsifier for my review:** If the artifact is revised to make D0 a single instantiable regularity class (one binder domain with a defined ambient space, or an explicit disjoint-union encoding with per-branch ambient spaces and comeagerness, plus the single-data-class contract recorded and matched across F1/F2a/F2b), then HF-088-1 is falsified and the verdict should be re-issued; if a reader can instantiate the formal sentence's smooth-with-decay branch with a defined ambient space and comeagerness from the current bytes alone, then my probe's `ambient_space_defines_smooth_branch=false` reading is falsified.
+
+Also the review must state what it does NOT claim: no truth claim about the class; no proof the class is open/refuted; no check of the mathematical content of cited results; no network verification (this is a static review); no gate verdict (worker cannot move gates).
+
+Now — the review event and the review file. Let me model the review JSON on F2a-review-19.json's key set so the controller scanner and audit lead can consume it. Include:
+- schema_version, artifact_kind, event_id, event_type:"review", created_at, actor:"worker-088", reviewer:"worker-088", group_id:"formulation", node_id:"F2a", target_id:"F2a", class_id:"AF-SCC-C2-VAC-GEN", class_ids:[...], assignment_ref:"astra-recon-03","astra-recon-04","astra-life02-gate-gform"? Better: reference the standing F2a review assignments: "astra-recon-03" (deepseek-flash-18), "astra-recon-04" (deepseek-flash-19) — my review is an independent ad-hoc review, not one of those. I can put `assignment_ref: "standalone-independent-review; standing F2a review dispatch astra-recon-03/astra-recon-04 unexecuted at the frozen hash"`.
+- artifact, artifact_sha256, artifact_revision: 11, artifact_mtime, hash_note.
+- verdict, score, score_rationale.
+- hard_failures: [HF-088-1 dict with id, severity "hard"/critical, axis, rules, lines, finding, detector].
+- findings: positives + major + notes.
+- machine_evidence: paths+sha256 of check_f2a.py + f2a_check.json.
+- independence: reviewer not author; distinct from prior reviewers; probes are mechanical; prior reviews used only to frame hypotheses (and my findings differ: they reviewed 23fec0e9).
+- drift_check: sha before/after.
+- next_falsifier.
+- counts_as_full_schema_verdict: true.
+- not_claimed.
+- review event fields also include reviewer, verdict, score, hard_failures, findings (schema requirement).
+
+Line numbers: my probe doesn't record line numbers. I should include line references for the hard failure. I know from reading: D0 definition at line 58 (in the pinned copy? need to confirm new file's line numbers — the file is 320 lines and I read the b6123750 version via yaml not by line. Let me grep line numbers in the current canonical for the key strings to cite precisely).
+
+Let me get exact line numbers for: D0 definition, quantifiers.formal, ordered forall line, conclusion.statement_formal, regularity_class default/sobolev_variant, genericity.ambient_space, duplicate revised_at lines count, review_status, f0_binding.
+
+Also compute the checker file hash after final edit. Let me grep line numbers.
+dsh: reasoning:
+I have precise line numbers. Now write the review JSON. I'll craft it carefully.
+
+Let me also compute the sha256 of check_f2a.py (after edits) and f2a_check.json to embed as machine_evidence. Then write reviews/F2a-review-088.json.
+
+Let me think about the review's structure and have a script generate it so hashes are embedded correctly (write review via a Python script that computes hashes first, then writes the file). I'll write the review JSON directly with the write tool after computing the hashes manually — simpler: compute hashes with sha256sum, then write the file with those literal values.
+
+Let me compute hashes now.
+
+Then write the review. Note the review JSON itself will then be hashed for the artifact event.
+
+Content plan for reviews/F2a-review-088.json:
+
+{
+  "schema_version": "0.1",
+  "artifact_kind": "review",
+  "event_id": "w088-f2a-review-20260912T0022",
+  "event_type": "review",
+  "created_at": "<wall clock>",  (use actual time)
+  "actor": "worker-088",
+  "reviewer": "worker-088",
+  "group_id": "formulation",
+  "node_id": "F2a",
+  "target_id": "F2a",
+  "class_id": "AF-SCC-C2-VAC-GEN",
+  "class_ids": ["AF-SCC-C2-VAC-GEN"],
+  "gate": "G-FORM",
+  "assignment_ref": "independent review dispatched by standing F2a review requirement (astra-recon-03/astra-recon-04 were issued for the superseded revision); no worker-088 assignment existed, so this is a claimed queue task under the worker prompt 'take one class-bound task'",
+  "artifact": "schemas/af_scc_c2_vacuum.yaml",
+  "artifact_sha256": "b6123750...",
+  "artifact_revision": 11,
+  "artifact_bytes": 28268,
+  "artifact_mtime": "...",
+  "snapshot": "artifacts/worker-088/f2a_review/pinned/af_scc_c2_vacuum.b6123750.yaml#sha256",
+  "hash_note": "sha256 measured by this reviewer before and after reading; stable (drifted_during_read=false). Canonical == authoring == FROZEN.json rev25 pin at review time.",
+  "verdict": "revise",
+  "score": 3.0,
+  "counts_as_full_schema_verdict": true,
+  "score_rationale": "...",
+  "hard_failures": [
+    {
+      "id": "HF-088-1",
+      "severity": "critical",
+      "taxonomy": "HF-06 assumption/domain incompleteness (nearest; A0 has no dangling/ill-typed-domain code). Adjacent to HF-02 'disjunction' detector but the disjunction is intra-class regularity, not a class_id disjunction.",
+      "axis": "quantifier/domain completeness; single-data-class criterion",
+      "rules": ["R03", "R06"],
+      "lines": [47, 52, 58, 137, 138, 163, 164, 218],
+      "finding": "...",
+      "detector": "artifacts/worker-088/f2a_review/check_f2a.py -> d0_probe / d0_ill_typed_for_smooth_branch=true",
+      "falsifier": "show a defined ambient object and comeagerness notion for the smooth-with-decay branch that makes the (s,delta) binder instantiable, OR revise D0 to a single parameterised class (or an explicit disjoint-union encoding with per-branch ambient space and comeagerness)."
+    }
+  ],
+  "findings": [ {positives...}, {major duplicate keys}, {note cross-artifact} ],
+  "verified_positives": [...],
+  "machine_evidence": {
+     "probe": {"path": "...check_f2a.py", "sha256": ...},
+     "report": {"path": "...f2a_check.json", "sha256": ...},
+     "binding_gate": {...},
+     "class_separation_regression": {...}
+  },
+  "cross_artifact": {...},
+  "independence": {...},
+  "drift_check": {...},
+  "not_claimed": [...],
+  "next_falsifier": "...",
+  "evidence_refs": [...],
+  "claims_completion": false
+}
+
+Note: review schema requires target_id, reviewer, verdict, score, hard_failures, findings. All present.
+
+Then comms/outbox/worker-088.jsonl:
+1. status event (task claim): node_id F2a, class_id AF-SCC-C2-VAC-GEN, status active, hours 0.1, summary, evidence_refs [], next_falsifier.
+2. artifact event for check_f2a.py: node_id F2a, artifact_type "f2a_review_probe", path, sha256, validation_status "unverified" (workers cannot pass validation).
+3. artifact event for f2a_check.json.
+4. artifact event for reviews/F2a-review-088.json.
+5. review event (same payload as the review file, minus maybe some fields) — important: the review event must satisfy schema; include reviewer/verdict/score/hard_failures/findings.
+6. artifact event for CHECKPOINTS.md? Maybe.
+7. status event (checkpoint/summary) status active, hours total, summary, evidence_refs, next_falsifier.
+8. Possibly a blocker? Not needed — hard failure recorded in review.
+
+Note the review file itself has event_type review and event_id; when ingested, comms.py will read the review JSON file from reviews/ ... wait! outbox_files() = OUTBOX.rglob("*") — only comms/outbox. reviews/ is not scanned by ingest. Good. But careful: the review file is in reviews/, not outbox, so it won't be double-ingested. I'll emit a review event in my outbox jsonl (could be the same object as the file content, but then the event_id duplicates...). The events.jsonl ingest only writes to research_map/events.jsonl; the review file in reviews/ isn't ingested. So duplicating content is fine.
+
+But caution: `comms/outbox/worker-07/...` dirs exist; I'll use a single file comms/outbox/worker-088.jsonl. Fine.
+
+Also: should I worry that the review JSON's `findings` is a list of dicts? The normalize_event for review does `take("findings","notes","summary")` and defaults to string; a list is acceptable per schema (no type constraint). Existing reviews use lists. Good.
+
+Now, about `counts_as_full_schema_verdict`: the lifecycle scan reads `d.get("counts_as_full_schema_verdict") is not False` → True. And `_targets_in_review` reads target_id "F2a" → maps to F2a; `_explicit_pins` reads artifact_sha256. So the scan will count my review as a verdict at the measured hash — only if the scan's `hashes` dict has F2a's sha256 matching my pin. The controller's measured hashes are currently stale (4f97273ef440) until the next lifecycle pass, which will re-measure to b6123750 (assuming no further churn). Then my accept/revise verdict binds. Good: a revise verdict will show F2a: [worker-088:revise] at the frozen hash. That's useful and honest.
+
+Hmm — one concern: the controller may have a policy that reviewer ids must be in the known agent list. The scan just takes the string. Fine.
+
+Another concern: will my `revise` verdict at the CURRENT hash cause the formulation lead to revise again (more churn)? That's the system working as intended if the finding is real. The D0 issue is real and already on the controller's unmet list.
+
+Now, let me also double-check the "smooth branch has no ambient space" claim once more for fairness. `genericity.ambient_space` (line 163) is explicitly the constraint manifold X^{s,delta}_vac(AF) with the weighted Sobolev subspace topology. `topology_or_measure` (164) mentions "Frechet topology for the smooth-with-decay class". So the author is aware of two topologies. But the *set* whose comeager subsets are taken is X^{s,delta}_vac(AF) (Sobolev). For the smooth branch, no set is named. So `G_{s,delta} subset X^{s,delta}_vac(AF)` cannot be instantiated when the disjunct is "the smooth-with-decay default" (no s, delta). My probe is fair. Also `regularity.data_regularity` line 149 says "smooth-with-decay default, or H^s_delta with s > 5/2, delta in (1/2,1)" — confirming the union reading.
+
+One more consideration: maybe the intended semantics is "D0 is a set of *names* of admissible regularity settings, and for each setting there's a corresponding X_vac" — a universally quantified statement over two settings, which is technically well-defined if you accept an informal ambient space for the smooth branch. But the file doesn't define it, and the formal sentence's binder `(s,delta)` cannot range over a setting without parameters. The prior audit lead treated exactly this as blocking. My finding stands; and even on the most charitable reading it's an ambiguity that a machine-readable frozen schema must not have.
+
+Now write the review. First compute hashes of the probe and report.
+
+Also I should include the artifact mtime from the probe (report has artifact_mtime as epoch float; let me get the ISO). Let me compute both.
+dsh: reasoning:
+Now write the review JSON. Let me compose it carefully with the exact hashes.
+
+Note mtime epoch 1789143554.626692 = 2026-09-12 00:19:14.626691950 +0800.
+
+Let me write reviews/F2a-review-088.json.
+dsh: reasoning:
+Now verify the review JSON parses and re-run the controller's review scanner to confirm my review is seen and targets F2a. Also verify the artifact hash didn't drift since (b6123750 still).
+
+Then write the checkpoint file and the outbox events.
+
+Let me first validate the review file + run the scanner snippet.
+dsh: reasoning:
+The review binds F2a at the current measured hash. Now write the checkpoint file and outbox events.
+
+CHECKPOINTS.md content: a worker checkpoint log with timestamps, actions, hashes, state, falsifier, next action. Let me write it.
+
+Then the outbox events JSONL. Need to be careful to make each event schema-valid:
+- status: event_id, event_type, created_at, actor, node_id, status, hours, summary, evidence_refs, next_falsifier. (class_id optional extra)
+- artifact: event_id, event_type, created_at, actor, node_id, artifact_type, path, sha256, validation_status ∈ {unverified, passed, failed, retracted}. Workers can't set passed → "unverified".
+- review: event_id, event_type, created_at, actor, target_id, reviewer, verdict ∈ {accept,revise,reject,inconclusive}, score 0-5, hard_failures, findings.
+- claim? I could emit a claim event: class_id, statement, conclusion_type, assumptions, falsifier, evidence_refs. The task says "emit valid JSON with IDs evidence hash falsifier". A claim is a good fit: statement = "F2a frozen revision b6123750 has an uninstantiable D0 disjunct..." conclusion_type must be one of the allowed; "open_problem" or "formal_model". Hmm, a claim in this swarm is a research claim; my finding is a review finding, not a class claim. I'd rather not add a claim to avoid polluting claims. But the worker prompt says "emit valid JSON with IDs evidence hash falsifier" — the review event + artifact events + status events cover it. I'll include one `blocker`? The artifact can't be accepted until lead-formulation revises → that's a blocker for G-FORM at F2a. A `blocker` event (node_id F2a, description, needed_to_unblock, evidence_refs) is appropriate and matches the swarm protocol. Good: it makes the dependency visible.
+
+Ordering: The outbox file is a single JSONL; the controller ingests all lines. I'll write:
+1. status (task-claim, active)
+2. artifact check_f2a.py
+3. artifact f2a_check.json
+4. artifact pinned snapshot
+5. artifact reviews/F2a-review-088.json
+6. review (payload mirroring the review file's core)
+7. blocker (HF-088-1 → needed to unblock)
+8. status (checkpoint, active) — workers cannot set done.
+
+Timestamps: use current wall clock. Let me generate the file with a Python script so JSON is valid and hashes are computed from disk (avoid transcription errors). I'll write a small generator inline via bash heredoc (that writes the file). Note: the file must be valid JSONL; comms.py `_json_objects` handles line-delimited objects.
+
+Note: event_id must be unique and not collide with the seen set. Use "w088-20260912T0025-<slug>".
+
+Let me also double check that status events' `class_id` extra field is normalized: `take("class_id","class_ids","class")` — fine.
+
+Let me write the checkpoint file first, then the generator.
+
+Checkpoint content: include the required "checkpoint" concept: action log with times and hashes. I'll write artifacts/worker-088/CHECKPOINTS.md. Also maybe write a JSON checkpoint `artifacts/worker-088/f2a_review/CHECKPOINT.json`? The CHECKPOINTS.md can carry fenced json that comms.py would ingest if it were in the outbox — it's not, so no risk. Let me include a machine-readable fenced block in the md for the record.
+
+Now write CHECKPOINTS.md.
+dsh: reasoning:
+Now generate the outbox events file with a Python script (computing hashes from disk). Careful:
+- `reviews/F2a-review-088.json` hash = 95bc0c65... (computed before). Recompute anyway.
+- CHECKPOINTS.md hash compute.
+- review event payload: include the required fields. I'll embed a compact version referencing the file (not the entire 10KB review, to keep the event small but sufficient): target_id F2a, reviewer worker-088, verdict revise, score 3.0, hard_failures list (the HF-088-1 dict), findings (summarized list of dicts), artifact, artifact_sha256, class_id, node_id, gate, evidence_refs, next_falsifier, counts_as_full_schema_verdict true, review_file + hash.
+
+Then validate with `comms.py ingest --dry-run` and also with schemas.validate_event directly.
+
+Let me write the generator inline.
+dsh: reasoning:
+All 9 events passed `validate_event`. Now run `comms.py ingest --dry-run` to confirm the full pipeline accepts them (normalization + schema). Then final drift check + update todos.
+dsh: reasoning:
+Hmm — accepted 0, duplicates 1467. That's suspicious: my events should be new (not in the seen set). Unless... the controller's lifecycle already ingested my outbox file between my write and now! The supervisor relaunches the controller every ~20s; the controller's lifecycle ingest would have picked up comms/outbox/worker-088.jsonl and appended them to events.jsonl. Let me check events.jsonl for my event ids and the seen file.
+
+If accepted, great — the events are already ingested. Let me verify.
+dsh: reasoning:
+All 9 events were ingested by the controller's lifecycle pass at 00:23:46 (before my dry-run), zero rejects. The events are in the accepted stream.
+
+Wait — my created_at was 00:24:30 but _received_at 00:23:46? That means the actual time when I wrote the file was ~00:23:46, and my hardcoded `now='2026-09-12T00:24:30+08:00'` is future-dated by ~44s. Oops — that's exactly the clock-discipline finding CF-14 (future-dated created_at). I should avoid contributing to it. Hmm. The events are already ingested; I can't retract them easily. Options:
+1. Leave it; it's only 44s, minor, but it feeds a known problem (the controller measures future_dated count and my events add 9 to it).
+2. Emit a correction note event with accurate wall-clock time stating the created_at of the prior batch was written ahead of wall clock by ~44s (transparent, matches CF-14 discipline). That's honest and useful.
+
+Actually, let me check the actual current time vs 00:24:30. The `_received_at` = 00:23:46 means the ingestion happened then, so my events were written before 00:23:46. My `created_at` 00:24:30 is ~44s in the future at write time. The controller's next lifecycle will flag 9 more future-dated events (skew up to ~44s). Per CF-14, authors must stamp created_at with wall-clock at write time. I made a small version of the very error the swarm is tracking. The right move: emit a short correction status event stamped with true wall clock, acknowledging provenance: event batch created_at was ahead of wall clock by ~40s (declared for ordering only). This both fixes the record and demonstrates the discipline. Let me do it with the actual current time.
+
+Also note: the file `comms/outbox/worker-088.jsonl` still contains the future-stamped events; the ingest already deduped them, so re-ingest won't duplicate. Adding one correction line to the file is fine (new event_id).
+
+Let me get the exact time now and write the correction event appended to the outbox file, then dry-run ingest again to confirm it's accepted (not duplicate).
+
+Then final drift check of F2a and the review file, update the checkpoint file hash? Uh-oh: if I append a line to CHECKPOINTS.md or change it, the artifact event hash for CHECKPOINTS.md would no longer match. I won't change CHECKPOINTS.md. The correction event's evidence can reference the outbox file itself.
+
+Wait, also: the artifact event for CHECKPOINTS.md recorded hash ckpt_hash — and I set `created_at` 00:24:30 on all. Fine.
+
+Let me also double check the review file hash recorded in the artifact/review events (95bc0c65...) still matches the file on disk. Yes, I haven't modified it.
+
+Let me write the correction event. I'll append it to the outbox with created_at = wall clock now. Then validate + dry-run (should show accepted≥1 if the controller hasn't ingested in between; if it has, duplicates=... but I can grep events.jsonl to confirm).
+
+Actually hold on: the controller supervisor loop runs every 20s, so appending to the outbox may be ingested within seconds. Either way, I can verify presence in events.jsonl by event id.
+
+Let me do it.
+dsh: reasoning:
+Interesting: the dry-run now shows 8 accepted events — but the listed one is from `w07-artifact-F2b-checks-...`, i.e., other workers' events, not mine. My correction event was likely already ingested by the controller (time now 00:24:00, meaning my earlier "00:24:30" stamp was indeed 30s in the future). Let me verify my correction event is in events.jsonl. Also, note other workers are producing events concurrently.
+
+Let me check.
+dsh: reasoning:
+Hmm: grep -c "w088-" events.jsonl = 9, but my correction event isn't there yet (only the 9 original). The dry-run showed 8 accepted including w07 events — meaning my correction event may be among the 8 accepted? No — the dry-run prints only the first few lines (head -8), so I can't tell. Let me check specifically: `grep -c clock-correction events.jsonl` and in the pending accepted list. The controller ingest may not have run since I appended (3s sleep). Let me wait a moment and check again, or directly run a non-dry ingest? No — ingest is the controller's job; but running it myself appends to events.jsonl, which is a shared append-only stream and idempotent via seen-set. Hmm, ASTRA_HANDOFF says "Pull accepted traffic: python3 research_map/comms.py ingest" is a controller tool. Workers writing to the outbox is the norm; racing the controller is not harmful (idempotent, dedup by event_id, and the `seen` file is rewritten atomically-ish). But two concurrent ingests could interleave and double-write the same line? The seen-set check happens in-process; if the controller ingests at the same moment, both could accept the same event and both append → duplicates in events.jsonl. The controller's lifecycle dedups by event_id on apply, so it's tolerable, but better not to race.
+
+I'll wait a few seconds and check again. If it's not ingested after ~30s, I'll run ingest myself (bounded, idempotent).
+
+Also note the CHECKPOINTS.md hash computed now is c05e82db... but the artifact event recorded a different hash (from generation time). Let me check: in the generator, ckpt_hash was computed from CHECKPOINTS.md. The file hasn't changed since... wait, the printed hash in the outbox event — let me check what value was recorded. If c05e82db differs from recorded, something modified CHECKPOINTS.md. Let me check the recorded sha in the event.
+
+Hmm, actually, did I modify CHECKPOINTS.md after generating events? No. The generator ran after writing CHECKPOINTS.md. So recorded ckpt_hash should equal c05e82db. Let me verify from the outbox file.
+dsh: reasoning:
+The recorded ckpt sha matches (c05e82db). Good.
+
+The correction event hasn't been ingested after 20s. The controller's supervisor loop launches controller sessions; maybe the current controller instance has exited or is between lifecycles. Earlier my 9 events were ingested quickly (at 00:23:46). The correction was appended at 00:24:00; it's now ~00:24:3x and still not ingested. Let me check whether the controller is running (tmux) and whether a lifecycle is in progress. If the controller isn't actively ingesting, my outbox entry will be picked up on the next pass — that's fine and expected ("the next lifecycle pass must apply it"). The handoff says outbox traffic newer than the last pass is un-ingested until the next cycle. So leaving it is correct; no need to run ingest myself.
+
+But my final answer should note that the correction is pending ingestion (or check once more). Let me do a quick check of tmux/controller state and one more grep after a short wait. Also check job policy: no background jobs running. Let me check `tmux ls` for controller sessions.
+
+Also, one more verification: the G-FORM gate audit next pass will re-measure F2a to b6123750 and count my review as a revise verdict — I can simulate the coverage scan against the *current* F2a hash including all reviews to see what the controller will report. Let me do that as a final sanity check (using astra_lifecycle.review_coverage with current measured hashes).
+
+Let me run:
+- tmux ls | head
+- simulate gate audit coverage for F2a at b6123750.
+dsh: reasoning:
+Whoa — a lot happened in the last few minutes. Other workers (047, 030, 034, 011, 006, 082, 090, 094) have been producing reviews at the new hashes concurrently. Now F2a has:
+- worker-047: accept
+- worker-088 (me): revise
+- deepseek-flash-22: inconclusive
+- astra-lead-audit: accept
+- deepseek-flash-15: revise
+
+So F2a now has 2 distinct accepts (astra-lead-audit + worker-047) at the current hash — the G-FORM criterion "two accept verdicts per class" may already be met for F2a despite my revise. That's fine: my review is one independent verdict; the audit lead adjudicates. My revise is honest and adds information (the D0 defect). Note worker-047's accept presumably didn't catch the D0 issue; the audit lead's accept may have been bound to... hmm, astra-lead-audit accept at b6123750? The coverage says so. Interesting — likely the lead re-issued the accept at the new hash.
+
+F1: accepts = astra-lead-audit only (1). F2b: 4 distinct accepts. F0: 0 accepts. L0: 3 accepts. L1: 0 verdicts at the measured L1 hash (spot checks are separate).
+
+So the swarm moved fast. My contribution is a dissenting revise with mechanical evidence. That's valuable: it documents a defect that the accepts missed, and the controller's unmet list already flags the single-data-class issue.
+
+But wait — I should double check the D0 claim once more, because 2 other reviewers accepted and the lead-audit accepted. Could I be wrong? Let me re-examine.
+
+The artifact says:
+- data_class.regularity_class.default = smooth-with-decay; sobolev_variant = s>5/2, delta in (1/2,1).
+- quantifiers.domains.D0.definition = "admissible regularity pairs: Sobolev variant s > 5/2 and delta in (1/2,1), or the smooth-with-decay default".
+- formal: forall (s,delta) in D0 ...
+
+If D0 = {(s,delta): s>5/2, delta∈(1/2,1)} ∪ {smooth-default}, then "forall (s,delta) in D0" is quantifying over a set that contains an element which is not a pair. This is a type error in the formal rendering. A charitable reader might interpret "D0" as the disjoint union of the two settings and read the binder as ranging over settings; but then `G_{s,delta}` and `X^{s,delta}_vac(AF)` need definitions for the smooth setting, and the file's ambient_space defines only the Sobolev manifold. The Frechet mention is for "the smooth-with-decay class" topology, but no manifold/space is named. So at minimum it's an unresolved ambiguity that a machine-readable frozen schema must not have. The audit lead itself previously reopened rev2 for exactly this and stated "The same fix is required here before accept". So my finding has direct precedent from the audit lead's own earlier ruling. I'm on solid ground. Also the map's unmet list explicitly states the single-data-class criterion is unmet — consistent.
+
+One nuance: maybe between then and now the audit lead decided the union is fine and accepted. But my review stands as an independent verdict; the adjudication belongs to the audit lead. My job is to be honest and evidence-bound. I'm comfortable.
+
+Now, another thought: my review's `revise` might be seen as lowering F2a's coverage. But coverage requires accepts ≥2 and it already has 2. So no harm.
+
+Let me now finalize:
+1. The correction event still pending ingestion. Check again; if the controller hasn't ingested by the end, note it. Actually — I can safely run `comms.py ingest` myself? The controller is running (controller-01 session created 00:19:19). Racing risk. But ingest is idempotent per event_id within one process; concurrent processes could double-append. The controller's apply step dedups by event_id (`applied_event_ids`). The events.jsonl could get a duplicate line, and the ingest's own dedup uses the seen file. Risk is low but nonzero. Since the handoff explicitly assigns ingest to the controller and says un-ingested traffic is applied next pass, the correct behavior is to leave it. I'll leave it.
+
+2. Final drift check: F2a still b6123750? Let me check. If it changed again, my review is superseded and I must note drift. Let me check now.
+
+3. Update todos and finish with a summary. Also verify no background jobs (job_list) — I haven't started any.
+
+Let me do the final checks.
+dsh: reasoning:
+The correction event got ingested (10 w088 events in the stream now). F2a canonical unchanged at b6123750.
+
+Everything is complete:
+- Task claimed and completed: independent F2a review at the frozen hash.
+- Artifacts written with hashes:
+  - artifacts/worker-088/f2a_review/check_f2a.py (6d5d2f79...)
+  - artifacts/worker-088/f2a_review/f2a_check.json (cedc8a47...)
+  - artifacts/worker-088/f2a_review/pinned/af_scc_c2_vacuum.b6123750.yaml (b6123750...)
+  - reviews/F2a-review-088.json (95bc0c65...)
+  - artifacts/worker-088/CHECKPOINTS.md (c05e82db...)
+- Events: comms/outbox/worker-088.jsonl, 10 events, all accepted into research_map/events.jsonl with 0 rejects.
+- Checkpoint written.
+- No background jobs.
+
+Update the todo list to completed, then give the final summary with the JSON IDs/evidence/hash/falsifier.
+
+Let me also double check that no writes I made are outside the workspace: all inside /data3/guoshaoyang. Yes.
+
+Final answer should be concise: what task, what was found, the emitted JSON events with IDs, hashes, falsifier, and checkpoint status. Mention the dissent (2 accepts already exist; my revise documents HF-088-1). Mention the clock correction.
+
+Let me update todos first.

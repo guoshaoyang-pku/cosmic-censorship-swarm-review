@@ -1,0 +1,429 @@
+dsh: reasoning:
+Let me start by understanding the task. I'm worker=089, a bounded execution worker. I need to read handoff/map and comms, take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit.
+
+Let me explore the workspace.
+dsh: reasoning:
+Found the swarm directory at /data3/guoshaoyang/workdir/ai4math-swarm. Let me read HANDOFF.md and the comms directory.
+dsh: reasoning:
+Now let me read README.md, PROTOCOL.md, the research_map, comms inbox/outbox, and any ledger info. My task: "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit." So the swarm has a protocol. Let me read PROTOCOL.md first, then the research_map (probably handoff/map), and check the inbox for my worker id 089.
+dsh: reasoning:
+I'm worker=089. The agent ids in the protocol are `deepseek-flash-01` … `deepseek-flash-20` and worker-NN. There's an inbox file naming convention `comms/inbox/<agent>.jsonl`. I don't see `worker-089` or `deepseek-flash-089`. Hmm. Perhaps my assignment is in the runtime directory? Let me check for "089" across the swarm, and look at the ASTRA_HANDOFF, research_map.json, and the assignments outbox dir.
+
+Let me search for "089" and for the assignment files.
+dsh: reasoning:
+There's my instance: `runtime/instances/worker-089-20260912T001231-897883/` with meta.json, prompt.txt, trajectory.log. Let me read my prompt.txt and meta.json — that's my assignment. Also need to look at the research map for the class-bound task.
+
+Let me read those.
+dsh: reasoning:
+My prompt is the generic worker prompt. I need to find my assignment in `comms/inbox/<your-agent-id>.jsonl`. My agent id may be `worker-089` but there is no inbox file for that. Let me check the inbox for assignment messages addressed to workers. Perhaps assignments are distributed via `comms/inbox/*.jsonl` with node assignments. Let me grep the inbox files for "worker-089" or for assignment events. Also check `research_map/research_map.json` assignments section.
+
+Let me look at recent inbox messages and the map.
+dsh: reasoning:
+There is no explicit assignment for worker-089 in the map. There are assignments for leads. The workers seem to get tasks via inbox `<agent>.jsonl`. But no worker-089 inbox. Perhaps workers get their assignment from the `reviews`/`proposed` pending tasks, or from a work queue. Let me check other worker instances' prompts (worker-080, worker-035, worker-087, worker-001) to see if they got more specific prompts. All the same probably — the launch_swarm.sh spawns workers with the same prompt. Let me check.
+
+Also, there might be a queue of "class-bound tasks" in the map — e.g., claims needing verification, or the `proposed/class_separation.py`, or `schemas/f1_falsifier_tests.jsonl`. The task says "Take one class-bound task" — meaning a task bound to a class (e.g., AF-WCC-VAC-GEN). And emit valid JSON with IDs, evidence, hash, falsifier. Then checkpoint.
+
+Let me look at the supervisor scripts to understand what workers are expected to do. `supervise_swarm.sh`, `launch_swarm.sh`, `independent_supervisor_100.sh`. Those were at the home dir. Also check other workers' outbox files (worker-09-v8 etc.) to see the format they've emitted.
+
+Let me first check worker prompts for 080 etc., then look at recent worker outputs to mimic format.
+dsh: reasoning:
+So workers are supposed to work on a class-bound task assigned by a group lead; if no assignment exists, inspect the immediate queue and propose one artifact-backed task without claiming completion. My prompt is even more minimal, so I need to pick one class-bound task from the immediate queue and produce a valid JSON event (status/claim/artifact) with IDs, evidence, hash, falsifier, then checkpoint and exit.
+
+Let's look at the worker-0xx instances from the same batch (00:12:29-31, run 897883) — they are running concurrently. Let me check what they've done so far, and look at what output format is accepted. Check `comms/rejected.jsonl` (rejected events) to learn what schema is required. And events.schema.json.
+
+Also check the checkpoint command and `research_map/comms.py` to know how to write the outbox correctly. And `runtime/state/artifact_hashes.json`.
+
+Let's read:
+1. `research_map/events.schema.json`
+2. `research_map/schemas.py` (event validation)
+3. `research_map/comms.py` (ingest logic, agent id derivation)
+4. Recent worker outbox e.g. `worker-09-v8.jsonl`
+5. `comms/rejected.jsonl` tail to see failure modes.
+
+Let me do this in parallel.
+dsh: reasoning:
+Now I understand the pattern from worker-03 and worker-09. They took a class-bound task (no assignment card existed), produced artifacts under `artifacts/worker-NN/...`, emitted artifact + status JSON events into `comms/outbox/<agent>.jsonl` (for worker-03 it's `worker-03.jsonl`), with evidence refs, sha256, falsifier.
+
+My worker id is 089 → actor `worker-089`. But note the swarm's worker naming in outbox is `worker-03`, `worker-06`, `worker-09`, and `deepseek-flash-NN`. The instance ids are worker-089. I'll use actor `worker-089` and outbox `comms/outbox/worker-089.jsonl`.
+
+Now, "Take one class-bound task" — I should pick a meaningful, bounded, verifiable task tied to a class (AF-WCC-VAC-GEN, AF-SCC-C2-VAC-GEN, AF-SCC-C0-VAC-GEN, or AF-WCC-SCALAR-SPH). It must emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit.
+
+I need to be careful about:
+1. The numerics_lock — don't do N1 work.
+2. Workers cannot set status=done, validation_status=passed, or gate verdicts.
+3. Need real artifact + measured sha256.
+
+What's a high-value, bounded task I can do quickly and verifiably? Let me look for the immediate queue and what remains undone. There's a lot going on. Let me look at:
+- `research_map/research_map.json` gates and controller_findings
+- `schemas/f1_falsifier_tests.jsonl` (interesting: falsifier tests — maybe a task to run them?)
+- `proposed/class_separation.py` (class separation checks)
+- The class_coverage.csv ledger
+
+The "class-bound" phrasing suggests the task must be bound to a specific class_id. There may be a pending need: class separation checks on the FROZEN schemas, or falsifier tests for F1 schemas.
+
+Let me check what exists in artifacts/formulation and the state of gates. Also check recent controller checkpoint to see what's needed. Let me read the map's gates, controller_gate_audit, controller_findings, and check the schema files.
+
+Also check if there's a task queue with unclaimed tasks — e.g., `comms/outbox/assignments` is empty. So I define my own task (as worker-03 did).
+
+The key risk: duplicating work from other concurrent workers (worker-080, 087, 035, 001 etc. are running the same prompt with the same batch). I should pick something distinctive. Let me check what other workers in this batch (897883) have emitted so far — check `comms/outbox/worker-0*.jsonl` files modified recently, and their instance trajectory logs.
+
+Actually first, let me see which worker instances exist in this batch and what they are doing. `ls runtime/instances | grep 897883`. And check outbox files newer than 00:12.
+dsh: reasoning:
+There are 100 workers in this batch, all with the same generic prompt. They're all taking tasks. I need to pick a distinctive class-bound task that's not being duplicated and that I can complete quickly with a real artifact + measured sha256.
+
+Let me look at the "immediate queue" and what remains. The map has `unmet` gate criteria. Key open items:
+- G-F0: no accept verdicts at current hash; 9 taxonomy cases remain open and were never dispositioned by the lead.
+- G-FORM: F1/F2a/F2b revise verdicts with hard failures; no single frozen data class shared by F1/F2a/F2b; licensed C0=>C2 transfer disabled.
+- G-LIT: ledger rows have resolvable locators...
+- G-NUM: N0 adjudication follow-ups.
+- G-AUDIT presumably.
+
+A worker task must be "artifact-backed task without claiming completion" if no assignment. Good bounded tasks I could do that are class-bound and produce a verifiable artifact:
+
+Option A: Take the 9 open taxonomy cases (F0) and produce a disposition analysis — but that's lead work, and workers can't decide.
+
+Option B: Build a checker for the "no single frozen data class (s,delta,norm) shared by F1/F2a/F2b" issue — i.e., an artifact that deterministically extracts the data-class fields from the three canonical schemas and reports whether they're identical, with a falsifier. That's class-bound (all 3 classes), machine-checkable, and likely not duplicated. But flash-11 is already doing "f1_aux_class_binding" and flash-04 "f1_ambiguity", flash-10 "l1_class_coverage". Hmm, a lot of overlap.
+
+Option C: A falsifier test for the class_separation checker — already done (worker-07).
+
+Option D: Validate the "no C0/C2 merged class string" lint requirement of F2 systematically across all map artifacts, ledger, comms, and schemas; emit artifact. Could overlap with flash-10's c2_class_conformance_audit.
+
+Option E: Something in numerics allowed under lock: N0 flat-space. But numerics is crowded with flash-12/13/14 and leads; and risky.
+
+Option F: The literature gate: verify that ledger resolution — check `ledger/citation_audit.csv`. flash-09 is on it.
+
+Option G: Audit the containment/consistency of `research_map/events.jsonl` vs outbox: e.g., which events are un-ingested (ASTRA_HANDOFF says outbox traffic newer than 00:09:29 is un-ingested). But that's controller work.
+
+Option H: A bounded, novel verification: "class-bound evidence hash binding" — check that every review verdict in `reviews/` cites a sha256 that matches the file on disk it claims to review, for the four classes. Worker-03 is doing exactly VERDICT-BIND-01 (review hash binding). Definitely duplicated.
+
+Option I: Verify the 4 class ids are the only ones in use across all ledgers/schemas (CF-5 directive: ledger uses class tokens outside the frozen four). There's `ledger/theorems.jsonl` with extra tokens AF-WCC-VAC-BH-FORM, AF-WCC-VAC-NS-CONSTR. A bounded task: enumerate every class token appearing in schemas/, ledger/, artifacts/formulation/, research_map/research_map.json; check against the frozen four from `research_map/formulation_taxonomy.yaml`; produce a deterministic audit artifact with per-token counts and falsifiers. This is class-bound, cheap, machine-checkable, deterministic, and directly supports the G-F0/G-LIT gates and CF-5. It's probably not fully duplicated (flash-10's class coverage does something related but focused on C2 conformance).
+
+Hmm, but let me check what flash-10's class_coverage.csv is — it's huge (310KB). Let me check `ledger/class_coverage.csv` header and `artifacts/flash-10/l1_class_coverage/`.
+
+Option J: Check taxonomy_cases.jsonl (9 open cases) — produce a deterministic triage artifact for the 9 undispositioned taxonomy cases, i.e. classification of each case into "covered by existing class", "genuine new class", "split needed", with evidence. But that requires semantic judgement — worker can propose but not decide. Still valuable as an artifact-bound analysis. But 9 cases... Let me look at them.
+
+Let me also consider: The instruction says "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit." So the deliverable is primarily the JSON event(s), backed by a real artifact with measured hash. Bounded. Let me pick something concrete, small, deterministic, and useful, then do it carefully.
+
+I like Option I (class-token census / containment audit) — it directly addresses CF-5 and the class-separation invariant, is fully deterministic, and produces a hard falsifiable claim: "0 class tokens outside the frozen four in file X". Let me check for duplication first.
+
+Actually, wait. Let me check the `runtime/state/current_checkpoint.json` and `checkpoint.py` to understand what "checkpoint" means for me. Worker-03 used `artifacts/worker-03/CHECKPOINTS.md`? worker-09 had `artifacts/worker-09/CHECKPOINTS.md`. Let me check checkpoint.py — canonical checkpoint. Also `runtime/state/artifact_hashes.json`.
+
+Let me look at:
+- checkpoint.py
+- schemas.py validate_event (required fields)
+- artifacts/worker-03 directory structure as a template
+- ledger/class_coverage.csv head
+- taxonomy_cases.jsonl head
+
+Let me do these.
+dsh: reasoning:
+Now let me decide on the task. I want something that:
+1. Is class-bound (binds to specific class_ids).
+2. Produces a real artifact (script + report) with measured sha256.
+3. Is deterministic and falsifiable.
+4. Is not duplicate of concurrent work.
+5. Is bounded (I can finish in reasonable time).
+
+Let me check the current live activity to avoid duplication. Let me look at what recent workers 001-100 have emitted so far (their outbox files may not exist yet since they just started ~00:12 and it's now maybe ~00:20). Let me check current time and recent outbox files.
+
+Also check `artifacts/` dir listing for worker-0xx dirs created in this batch.
+
+Let me look at the class-token census idea's neighborhood: what class tokens exist in ledger/theorems.jsonl, and whether anyone has produced a census. Check `ledger/class_coverage.csv` header, and `research_map/class_separation.py` to understand what the frozen class set is.
+
+Actually, an even better idea aligned with the "immediate queue": The F1 falsifier tests. There is `schemas/f1_falsifier_tests.jsonl` (125KB) and flash-04 created versions of it (`artifacts/flash-04/f1_ambiguity/versions/f1_falsifier_tests.*.jsonl`). G-FORM's unmet includes F1 revise verdicts. A bounded useful task: run the F1 falsifier test suite against the current canonical `schemas/af_wcc_vacuum.yaml` and report pass/fail counts deterministically. But flash-04 seems to be doing exactly that ("f1_ambiguity", rebind, versions of f1_falsifier_tests). Risky duplication.
+
+Another idea: G-F0 unmet says "9 taxonomy cases remain open (new class vs split) and were never dispositioned by the lead". Someone should triage those 9 cases. An artifact "taxonomy case triage" — for each of the 9 open cases, extract the case text and classify against the four frozen class definitions with an explicit decision rule, outputting proposed dispositions + evidence. Workers cannot decide, but can propose. This directly addresses a listed unmet gate item and is class-bound (F0/4 classes). Is anyone on it? Let me check taxonomy_cases.jsonl and the reviews to see.
+
+Let me look for what's in schemas/taxonomy_cases.jsonl and check if a triage artifact already exists. Also check the flash-XX worker activity in this batch.
+
+Let me run a quick scan: current time; files in artifacts/worker-0*/ created after 00:12; and open taxonomy cases.
+dsh: reasoning:
+37 rows in taxonomy_cases.jsonl — 1 meta + presumably 36 cases (16 positive + 20 negative). G-F0 unmet says "9 taxonomy cases remain open (new class vs split) and were never dispositioned by the lead". Let me look at the structure of the case rows and find the 9 open ones.
+
+Let me print the record types and statuses.
+dsh: reasoning:
+Now let me find the 9 open cases (`open: true`) and their content. One unmet item in G-F0 is "9 taxonomy cases remain open (new class vs split) and were never dispositioned by the lead".
+
+A bounded worker task: **disposition triage for the 9 open cases** — compute, per open case, which frozen class (if any) it resolves to under the taxonomy's axis vector, which axis is unbound/provisional, and what decision the lead needs to make (assign axis value vs new class vs split), plus a falsifier. That is class-bound (F0/G-F0; class ids of the 4 frozen classes), artifact-backed, deterministic, and directly addresses a listed unmet gate criterion.
+
+But careful: the checker `artifacts/flash-02/check_taxonomy_cases.py` exists. I could reuse it if present. Let me check whether flash-02 is still active on this. flash-02 emitted open_case_disposition artifacts at 00:1x! Look at the earlier listing:
+
+```
+artifacts/flash-02/build_open_case_disposition.py
+artifacts/flash-02/check_open_case_disposition.py
+artifacts/flash-02/emit_opencase_events.py
+artifacts/flash-02/open_case_disposition_check_report.json
+artifacts/flash-02/open_case_disposition.json
+```
+
+flash-02 is doing exactly the open-case disposition task, right now. So that's out — duplication.
+
+OK. Let me pick another one. Let me survey current in-flight work to avoid duplication. Let me check what artifacts exist and recent outbox content for a list of task_ids. Search for "task_id" in outbox modified recently, and in artifacts.
+
+Let me grep recent outbox for task ids and summaries. Also check the instance trajectory logs for workers in this batch to see their chosen tasks (the trajectory.log may hold their reasoning). That's the best way to avoid collision: check `runtime/instances/worker-0*-20260912T00123*/trajectory.log` for task declarations.
+
+Actually simpler: grep for "task_id" in comms/outbox/*.jsonl newer than 00:12. And list artifacts/worker-0* dirs which didn't exist before. Let me check the trajectory logs of a few workers to see how they're choosing.
+
+Let me be efficient. I'll check recent outbox lines containing "task" and list the newest artifact files.
+dsh: reasoning:
+Interesting — there is `artifacts/flash-19/class_token_census.json` and `.py`. That's my Option I, already done by flash-19. So scratch that.
+
+This is a crowded swarm with 100 workers spawned. I need to find a genuinely unclaimed, bounded, useful task. Let me look at the map's unmet gate criteria and find one that is not currently being worked.
+
+Current in-flight: flash-02 (open case disposition), flash-04 (F1 rebind/ambiguity), flash-10 (L1 class coverage/C2 conformance), flash-11 (F1 aux class binding FD13), flash-12 (N0 rev3), flash-13 (form gate canonical recheck), flash-15 (convergence frozen rev20), flash-19 (class token census).
+
+Let me check what the newest 100 workers are doing right now — they started 2 minutes ago. The filesystem may not show their work yet. To avoid collision I should choose something specific, ideally something the map explicitly lists as unmet and that no listed flash worker is on.
+
+Let me re-read the full gate unmet lists for G-F0, G-FORM, G-LIT, G-NUM, G-AUDIT, and the remaining controller_findings. Then pick.
+
+Also the review INDEX may list open review tasks. Let me read reviews/INDEX.md and the map's unmet for G-LIT, G-NUM, G-AUDIT.
+
+Another strong candidate: The `evaluation_rubric.yaml` and `evaluation/` directory (A2: four-arm equal-budget ablation). Maybe an audit-group task. But A2 is big.
+
+Let me look at what "class-bound" could mean as a requirement: the task should bind to one or more of the four class ids. Almost any formulation/literature/numerics task does.
+
+Candidate: **Falsifier-execution for the F2a/F2b schema hard failures** (HF-A1 dangling extension_predicate, HF-A2 forall mismatch, HF-B1 composite-regularity exemption, HF-B2 node_id mismatch). A bounded, deterministic artifact: re-run a check on the current canonical `schemas/af_scc_c2_vacuum.yaml` and `schemas/af_scc_c0_vacuum.yaml` for those four named hard failures, and report whether each is still present at the current sha256. This is class-bound (AF-SCC-C2-VAC-GEN, AF-SCC-C0-VAC-GEN), directly tied to G-FORM unmet, and checks specific named failures. Is anyone else doing it? flash-13 is doing "form_gate/canonical_recheck_rev20.json" — that might cover it. Hmm.
+
+Let me check flash-13's canonical_recheck_rev20.json to see its scope. And review INDEX for open reviews.
+
+Alternatively: **reviews/ need an independent reviewer verdict on the current canonical hashes**. Workers can't be the assigned reviewer, but they can run a deterministic "review preflight" that checks whether a verdict file cites the current sha256 and whether the verdict's claimed hard failures are still reproducible. Worker-03 did review hash binding though; `artifacts/audit/a1_rebind_coverage.py` exists too.
+
+Let me look at the gate audits more fully and INDEX. Then decide.
+
+Actually, maybe I should consider a completely different area: the **ledger/citation_audit**: G-LIT unmet says "ledger rows have resolvable locators; verification_s..." — let me read it fully. And check `ledger/citation_audit.csv` for rows marked unresolved. A bounded worker task: **resolution re-check of the unresolved locators in the citation audit** — take the K unresolved rows, attempt to resolve DOIs/arXiv IDs (network access?) — risky, network may be blocked, and flash-09 is on the citation audit.
+
+Let me focus. Read full unmet lists for remaining gates and INDEX.
+dsh: reasoning:
+Now let me think about what a single bounded worker can do that is genuinely useful and not duplicate.
+
+G-AUDIT unmet: "four of five class-binding gates are uncalibrated on audited-positive fixtures". This suggests the class-binding checkers need calibration on positive fixtures. There's `artifacts/formulation/fixtures/negative/*.yaml` and `controls/*.yaml`. A bounded task: evaluate each of the class-binding gate checkers against the audited-positive fixtures and report which gates are calibrated (catch all negatives, pass all positives). That's the "tooling calibration" theme; flash-13's `form_gate` and `artifacts/audit/a1_rebind_coverage.py` might do something similar.
+
+Alternatively: G-AUDIT unmet "A0 has no recorded reviewer verdict even though the rubric file exists" — that's an assignment for a reviewer, not a worker.
+
+Another idea: the "reviewer independence" / Kish ESS issue. The handoff mentions nine LLM judges have Kish ESS ~2.2, and two reviews that share text count as one. A bounded worker task: **duplicate/template detection across the reviews/ directory** — compute pairwise text similarity (e.g., shingle Jaccard) among all review JSONs, flag clusters, compute Kish ESS for the current verdict set per target. That is class-bound (targets F0/F1/F2a/F2b/L0 → class ids), deterministic, directly relevant to the gate criterion "2 independent reviewer verdicts", and I don't see it being done. There's a `Kish ESS` mention in the INDEX ("Kish ESS is reported for any set of reviews that share a text or a template"), but I don't see an artifact computing it. Let me check for existing similarity/ESS artifacts.
+
+Actually, G-F0 requires "2 independent reviewer verdicts". If reviews are template-duplicated, the gate can't pass. A deterministic independence audit of the review corpus would be genuinely valuable and class-bound. Let me check if such an artifact exists.
+
+Search for "kish", "ess", "jaccard", "similarity", "independence" in artifacts/ and reviews/.
+
+Also, check for duplication: maybe flash-18 or worker-16 did independence analysis. Let me grep.
+
+Another candidate: **F1/F2a/F2b data-class consistency checker**: G-FORM unmet "no single frozen data class (s,delta,norm) is shared by F1/F2a/F2b, which disables the licensed C0=>C2 transfer". A deterministic extractor comparing the weighted-data-class fields across the three canonical schemas. Let me check whether the schemas actually differ. This is precisely class-bound (F1/F2a/F2b classes) and directly a gate unmet item. flash-11's FD13 is "f1_aux_class_binding" — maybe about aux/leak binding, not data class. Let me check the fd13 results and flash-13 recheck to be sure.
+
+Let me grep for the data class fields in the schemas.
+
+Plan: 
+1. grep for "kish|jaccard|independence" in artifacts.
+2. Check the three canonical schemas for data class fields.
+
+Then decide between (A) review-independence audit and (B) data-class consistency extractor. Both are valuable; B is more directly tied to a named unmet criterion; A is more novel.
+
+Actually, hold on. Let me reconsider the instruction: "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit." It's a bounded worker; the expected output is one event or a small set of JSON events. I should not over-engineer. But producing a real artifact is required ("a result is an artifact + gate evidence referenced by hash").
+
+I'll go with the data-class consistency audit because:
+- Directly addresses G-FORM unmet item #4.
+- Deterministic, machine-checkable (extract fields from YAML).
+- Small and quick.
+- Falsifier is crisp: "if a single (s,delta,norm) triple is present identically in all three schemas, the claim is false."
+- Class-bound: AF-WCC-VAC-GEN, AF-SCC-C2-VAC-GEN, AF-SCC-C0-VAC-GEN.
+
+But first verify no one else is doing it. Let me check fd13_results.json and flash-13's canonical_recheck_rev20.json.
+
+Let me also check whether PyYAML is available for parsing.
+
+Let me look at the schemas' data-class sections.
+dsh: reasoning:
+Good. The schemas have `data_class` with sobolev_variant, delta, etc. Let me check whether the three canonical schemas share the same data class. This is the G-FORM unmet item. Let me extract `data_class` from each and compare.
+
+Actually wait — a worker-produced artifact on this is useful, but is it really the best "class-bound task"? Let me think about what's most valuable and least likely duplicated among the 100 workers. Honestly with 100 workers spawned at the same time with the same prompt, all reading the same map, collisions are likely. I should pick something and do it well and quickly.
+
+Let me check the state of things: the three canonical schemas' data_class sections. If F1/F2a/F2b genuinely don't share a single frozen (s,delta,norm), then the licensed C0=>C2 transfer is disabled, and the "correct" fix is a lead decision. As a worker I can provide a precise, machine-readable diff: extract for each schema the data_class fields (sobolev_variant s, delta, norm/spaces), the transfer/containment claims, and show where the mismatch is; list the exact lead decision needed; falsifier: "any two of the three schemas declare the same s/delta/norm token and the diff highlights zero mismatches" or "the extracted fields are absent/unparseable".
+
+Actually, let me look at the actual content first to make sure the claim in the map ("no single frozen data class is shared") is even true at the current hashes. If it turns out they DO share the same data class now (rev20+), then my artifact would falsify the map's unmet item — that's a valuable finding either way. That's a good falsifiable task: measure, don't assume.
+
+Let me extract the data_class blocks from all three schemas.
+dsh: reasoning:
+Very interesting! The three canonical schemas DO share the same data class values: s > 5/2, delta in (1/2,1), spaces h - delta_ij in H^s_delta, K in H^{s-1}_{delta+1}. The map's G-FORM unmet item says "no single frozen data class (s,delta,norm) is shared by F1/F2a/F2b, which disables the licensed C0=>C2 transfer". At the CURRENT hashes (b65fcc0f, 8dae50da, a8d899d2), the data class appears shared — though with small textual differences:
+- F1 spaces: "h - delta_ij in H^s_delta, K in H^{s-1}_{delta+1} (weighted Sobolev)"
+- F2a/F2b spaces: "h - delta_ij in H^s_delta, K in H^{s-1}_{delta+1}"
+- F1 has status "standard_choice; the numeric thresholds are UNVERIFIED citations, L1 owns verification", F2a/F2b "standard_choice; UNVERIFIED citation".
+- F1 has "parity_conditions": "not imposed; imposing a parity condition would shrink the class and must be declared as a different class"; F2s say "not imposed".
+- F2b admmass has extra "hypotheses_reconciliation" note.
+
+So the map's unmet claim might be stale (referring to earlier revision hashes). This is a great bounded, falsifiable worker task: **measure whether the three canonical schemas at their current sha256 share one data-class triple (s, delta, norm)**, and if so, report the exact normalized triple and the residual second-order differences (e.g., parity_conditions annotation, status annotation, hypotheses_reconciliation note) that a strict "byte-identical frozen data class" requirement would still flag. This directly tests a G-FORM unmet item; result either way is valuable: if shared → the unmet item may be stale and the lead can update the gate; if not shared → pinpoint the mismatch down to the field.
+
+This is exactly a "measure, don't assume" task, class-bound (3 classes), deterministic, artifact-backed. And it's not what flash-11 (class binding rules), flash-13 (gate recheck), flash-4 (F1 ambiguity) are doing. It's a data-class identity/extraction audit. Let me check quickly if something similar exists: `artifacts/formulation/evidence/taxonomy_consistency.json`, `variant_delta_check.json`, `aggregator_pin_check_rev3.json`. Let me peek at these to avoid duplication.
+
+Also let me check `artifacts/audit/a1_rebind_coverage.py` (A1 rebind coverage) and `reviews/A1-rebind-coverage.json` — that's about review binding, not data class.
+
+Let me grep the artifacts dir for "data_class" mentions to see who has touched this.
+dsh: reasoning:
+The data-class question is actively contested: flash-15 says rev9 still carries the B-G2 family quantifier (D0 = admissible regularity pairs) — the canonical F2a at 8dae50da may still have the disjunctive D0 in quantifiers even though `data_class` block is single. So the map's unmet item #4 is live and hotly contested, with flash-15/16/18/19 already on it. That's a crowded area. I should not duplicate.
+
+Let me step back and choose a genuinely unclaimed area. Let me look at the full map to find nodes/artifacts with no assigned worker. The `groups` section and `assignments` list. There were 7 assignments (F0,F1,F2,L0,L1,N0,N1). Also group portfolio has other nodes: A0, A1, A2, F0-F2, L0/L1, N0/N1. The `architecture`/`groups` section lists nodes.
+
+Given 100 workers are spawned, each will pick something; collisions are unavoidable. The most defensible thing I can do is pick a small, concrete, deterministic verification whose result is clearly useful and stated with proper scope, then emit it. The system will reject duplicates by event_id anyway.
+
+Let me check the `runtime/state/artifact_hashes.json` to see what's registered, and consider the G-AUDIT unmet: "four of five class-binding gates are uncalibrated on audited-positive fixtures". That's a concrete, bounded audit task: identify the five class-binding gates and check each against the positive fixtures (are there audited-positive fixtures?). Let me see. There's `artifacts/formulation/fixtures/` with `controls/` and `negative/`; is there a `positive/` dir? Let me look. If positives are missing, a useful worker contribution is: enumerate the fixture corpus, classify fixtures into positive/negative/control, and determine for each of the five class-binding gates whether it has at least one audited-positive fixture. That's a *calibration coverage* census, deterministic, class-bound, quick, and directly addresses G-AUDIT unmet item "four of five class-binding gates are uncalibrated on audited-positive fixtures" — it would either confirm exactly which four or falsify the count.
+
+Hmm, but is this duplicated by flash-13's form_gate fixture suite report? flash-13 has `fixture_suite` with positives_pass: true... and `artifacts/flash-13/form_gate/...`. Let me check flash-13's gate report more. It may already cover it.
+
+Alternative distinct task: **"class-bound" at the level of the *claims* store**: The map's `claims` section — check that every claim with `conclusion_type: theorem` has `artifact_refs` and that the class_id is one of the four frozen, and that no claim asserts a theorem from fluent text. That's the PROTOCOL rule 1. A deterministic audit of `research_map.json#claims` + `ledger/theorems.jsonl` for: (a) class tokens outside the frozen four (CF-5), (b) theorem claims without artifact refs, (c) claims whose evidence refs point to missing files. But flash-19 did class token census (artifacts/flash-19/class_token_census.json). Let me look at flash-19's census to see its scope — if it covers all artifacts, then class-token census is done.
+
+Let me check that and the group/node structure. Then I'll decide definitively.
+
+Actually, let me think about what would be most valuable given the whole project's stated mission: "improve epistemic quality". A worker-level contribution that's small and robust: **verify that every `artifact` event in `research_map/events.jsonl` whose `validation_status` is `passed` or `unverified` points to a file whose measured sha256 matches the recorded sha256** — a hash-integrity audit over the accepted event stream. This is the single most load-bearing invariant in the whole protocol ("a result is an artifact + gate evidence referenced by hash"). If any passed artifact's hash doesn't match disk, gates are being judged on stale evidence. There's `audit_evidence.py` that audits done-node artifacts, and `runtime/state/artifact_hashes.json`. Worker-03 did review hash binding; flash-19 did class token census. Has anyone audited the event stream's artifact sha256 vs disk? Let me check `audit_evidence.py` scope and existing reports.
+
+Let me read audit_evidence.py.
+dsh: reasoning:
+The audit area is heavily developed (`artifacts/audit/build_checker_calibration.py`, `checker_agreement.py`, `fixture_adjudication.json`). So the calibration coverage idea may also be covered. Let me check `artifacts/audit/build_checker_calibration.py` and `fixture_adjudication.json` quickly... Actually, I'm spending a lot of time scouting. Let me settle on a task now.
+
+Given the instruction and the swarm's needs, here's a clean, bounded, non-duplicative task candidate that I can complete reliably: **F0 taxonomy case corpus integrity + open-case census verification at current hash**.
+
+Wait — flash-02 is doing open case disposition. Scratch.
+
+Another candidate, clearly unclaimed and valuable: **a determinism/reproducibility check of the frozen class-separation detector** — no, worker-07 did that (regression 17/17 + controls 10/10).
+
+Let me look at this from the "class-bound" angle plus "evidence hash" angle. The protocol says "Cite evidence as path#sha256-prefix or path:line". A systemic weakness: evidence_refs across the accepted event stream use sha256 prefixes that may no longer match the file on disk (drift), which silently invalidates verdicts. Worker-03 checked review verdict bindings against FROZEN. flash-19 checked map gates (flash19_check_map_gates.py). 
+
+What about the **ledger**? G-LIT: "ledger rows have resolvable locators; verification_status honest; ≥3 independent re-fetch spot checks; unresolved marked unresolved". A bounded, high-value worker task: **schema integrity audit of `ledger/theorems.jsonl`**: verify that every row's `class_id`/`class_ids` field is non-empty and ∈ frozen four (CF-5), every row has a locator (DOI/arXiv) and falsifier, and check the file's declared sha256 in the map/registry matches disk. Hmm, flash-09 and worker-08 are on citations.
+
+OK here's another thought. What about the *A2 four-arm ablation design*? `artifacts/audit/ablation_harness.py` exists, `evaluation/ablation.csv` exists (1850 bytes), `artifacts/worker-20/a2_designrun_...json`. A2's about the swarm methodology: "run four-arm equal-budget ablation: one strong model, self-consistency, independent cheap agents, cheap agents plus coordinator." The design exists. What's missing? Let me check the map's A2 node status and whether an *analysis* of the ablation results exists. Actually the HANDOFF said the factorial was never run for real. The evaluation/ablation.csv might be a design or partial.
+
+Hmm, given the "cosmic censorship" swarm context, maybe better to stay in formulation/literature/audit.
+
+Let me check what nodes exist and their statuses in the map, so I can find an unclaimed one. Let me dump groups/nodes properly (keys are 'id' not 'node_id').
+dsh: reasoning:
+Now, a very concrete and clearly unmet need: A0's gate criterion says "A0 has no recorded reviewer verdict even though the rubric file exists" — but that's a review job (needs a reviewer, worker can't self-review... but a worker could produce an independent draft review of A0! However A0's owner is lead-audit and independence matters; a worker review would be a formal review event. Actually rules: "A worker's own artifact may not be reviewed by its author" — I'm not the author of evaluation_rubric.yaml, so I *could* file a review of A0. But review events are meant for reviewers; a worker emitting a review is allowed (PROTOCOL lists review as upward). But that's a heavier semantic task.
+
+Let's think about which concrete gap I can fill with a deterministic artifact within ~30-60 min of compute:
+
+G-AUDIT unmet item 3: "four of five class-binding gates are uncalibrated on audited-positive fixtures". Let me actually measure this. The class-binding gates are probably the 5 checkers: (1) check_class_schema.py (formulation), (2) class_separation.py, (3) flash-11 check_schema.py, (4) worker-08 C2/C0 separation, (5) flash-13 gate... The `artifacts/audit/build_checker_calibration.py` might already do this. Let me check its output and `artifacts/audit/reports_calib_20260912T0005/`.
+
+OK let me just check quickly: `ls artifacts/audit/reports_calib_20260912T0005/` and read `build_checker_calibration.py` header. If calibration coverage is already computed, that idea is out too.
+
+At this point, maybe the best strategy is: pick a *specific falsifier test* that nobody has run, tied to a class, small and crisp. For instance:
+
+**Test the "no composite class string" invariants across the whole repo at current hashes** — the F2 acceptance says "a machine-checkable lint proves no merged class string". There's `class_separation.py` (frozen detector). A worker task could be: run the frozen class-separation detector on *all* formulation artifacts at current hashes and report findings, specifically checking that the retired merged artifact `schemas/af_scc_regularities.yaml` is not referenced as a class artifact anywhere. But flash-10's "l1_class_coverage/c2_class_conformance_audit" seems to do C2 conformance.
+
+Hmm. Let me check what the 100 workers actually pick — maybe their artifacts will start appearing. It's 00:16 now. But I can't wait long.
+
+Alternative approach: instead of trying to find an unclaimed gap in a crowded swarm, produce a *durable, independent verification artifact* whose value doesn't depend on being first: e.g., an independent hash-integrity snapshot of all gate-relevant artifacts at a single instant, with a manifest that lets later passes detect drift. That's what `runtime/state/artifact_hashes.json` does though.
+
+Hmm, wait. Let me reconsider: the task says "Take one class-bound task". Maybe "class-bound" is the key constraint: the task must bind to a class id and the JSON must include the class id. The swarm doesn't require me to be unique; it requires the work to be valid and evidence-backed. Duplicates are deduped by event_id.
+
+Given that, the most robust choice is something I can do *well* and verify. I'll pick the data-class identity measurement after all? No — flash-15/16/19 are hot on it.
+
+Let me instead look at the F1 canonical schema's unresolved items and the `adjudication_queue`. A bounded task: **enumerate the unresolved citations/technical gaps across the three canonical schemas and produce a cross-class blocker ledger** — each unresolved item mapped to class_id, location (line), needed_for, and whether it blocks G-FORM's "two accept verdicts" criterion. That's genuinely useful for the lead and deterministic-ish (field extraction). Nobody seems to have done a consolidated unresolved-items inventory. The G-FORM gate says "reviewers 17,18 accept" — reviewers need to know which declared gaps remain. Hmm, plausibly useful but a bit soft.
+
+Another concrete one: **cross-schema FALSIFIER executability check**. A0 rubric requires "falsifier is a finite, checkable procedure" (flash-19 F-5 finding). A worker could parse the `falsifier` blocks of the three schemas, and for each declared falsifier, verify there is a named artifact/tool/command that can execute it, or flag it as non-executable. That directly addresses the audit finding F-5 ("tier-1 falsifier is not a finite decision procedure") and generalizes it across classes. Result: per-class list of falsifiers with executable/probe/prose classification and evidence lines. This is class-bound, deterministic w.r.t. parsing, falsifiable ("a falsifier classified prose is actually backed by an executable checker in the repo"), and useful to the gate.
+
+But classification is judgment-based; the falsifier is in the classification. Hmm.
+
+Let me take yet another angle: **N0 numerics is the critical path** and G-NUM unmet includes "cnfd own-energy drift 6.6e-8 has no principled threshold justification" and "audit lead asks for a 4th resolution". A bounded worker task under the lock: **verify the flat-space convergence harness's claimed numbers are reproducible from the artifact on disk** — i.e., re-run a cheap part. But numerics is crowded (flash-12/13/14/15, lead-numerics) and may be heavy.
+
+OK, decision time. I'll go with a well-scoped **class-bound falsifier-executability + unresolved-claim inventory for the three canonical schemas**, no wait...
+
+Actually, let me look at one thing first: the `reviews/F2b-softflag-disposition-review.json` and `artifacts/audit/fixture_adjudication.json` — maybe there's a specific open soft-flag disposition I can close. Let me look at the map's `reviews` and `controller_findings` list fully to see what's explicitly open and unassigned. CF-7 was cut off. Let me read the rest of controller_findings and the `escalations`.
+dsh: reasoning:
+The audit group is very well developed. I've spent enough time scouting. Let me now commit to a task that is:
+
+1. Clearly class-bound.
+2. Deterministic and machine-checkable.
+3. Not covered by the artifacts I've seen.
+4. Small enough to finish.
+
+**Proposal: "Class-binding claim-vs-artifact independence audit of the accepted event stream for the four frozen classes"** — hmm, too vague.
+
+Let me instead do a precise, high-value, and clearly unclaimed test: **the *cross-class transfer license* check**. G-FORM says the "licensed C0=>C2 transfer" is disabled by data-class mismatch. There is an `implication_ledger` in F2b and a `shared_class_contract`/transfer rule T1 in F2a, plus `class_contract_pointer` in all three. A worker can write a deterministic checker that:
+- extracts from each of the three canonical schemas the declared `class_contract_pointer` / `shared_class_contract` / `implication_ledger` entries,
+- verifies each pointer resolves to an existing artifact on disk at a stated sha256,
+- verifies the transfer rule's precondition (same frozen data class) is *satisfied or not* at current measured hashes,
+- emits a machine-readable verdict "transfer license status = GRANTED/DISABLED/PARTIAL" with exact evidence lines and a falsifier.
+
+This is exactly "class-bound", directly a G-FORM criterion, and I haven't seen an artifact that does the pointer resolution + transfer precondition check. flash-13's gate checks schema conformance to rule_spec; flash-11's FD13 checks aux-class binding rules; worker-08 does C2/C0 separation. The transfer-license check is a distinct question: can a C0 result be transferred to C2? The answer is a *specific* gate criterion ("which disables the licensed C0=>C2 transfer").
+
+Let me examine `implication_ledger`, `class_contract_pointer`, and the transfer rule T1 in the schemas to make sure the check is tractable.
+
+Actually, hold on. Simpler and even more robust: **resolver check for every `class_contract_pointer`/`supersedes`/`sibling_disjoint_from`/`depends_on` reference across the three canonical schemas**: do the referenced paths exist, and do their stated sha256s match measured hashes? Dangling-pointer check = HF-A1 "dangling extension_predicate" generalized. That's crisp, deterministic, falsifiable, and gate-relevant. I could combine: "cross-reference integrity audit of the three canonical class schemas at their current measured hashes: every internal cross-reference (class_contract_pointer, sibling_disjoint_from, supersedes, evidence refs) resolves to an existing path and, when a hash is stated, matches the measured file hash; plus the C0=>C2 transfer precondition check."
+
+That's a good bounded task. Let me scope it strictly:
+
+Task ID: `XFER-LICENSE-01` (or `XREF-INTEGRITY-01`).
+Class ids: AF-WCC-VAC-GEN, AF-SCC-C2-VAC-GEN, AF-SCC-C0-VAC-GEN.
+Node: F2a/F2b/F1, gate G-FORM.
+Artifacts: 
+- `artifacts/worker-089/xref_integrity/check_xref_integrity.py` (deterministic script, stdlib only)
+- `artifacts/worker-089/xref_integrity/report.json` (machine-readable results)
+- `artifacts/worker-089/xref_integrity/README.md` (how to re-run; scope; falsifier)
+Then emit events `artifact` (x3 or 1) + `status` into `comms/outbox/worker-089.jsonl`, then run a checkpoint (`python3 research_map/checkpoint.py --label worker-089` — wait, checkpoint.py ingests comms and snapshots; running it is the "checkpoint" action; but concurrent 100 workers all running checkpoint.py could conflict? It writes runtime/state/current_checkpoint.json atomically-ish. It's the controller's tool but PROTOCOL lists it under controller commands. Worker-09 wrote `artifacts/worker-09/CHECKPOINTS.md` instead. The task says "checkpoint, then exit". I could do both: write my own checkpoint file `artifacts/worker-089/CHECKPOINTS.md/json` AND run the canonical `python3 research_map/checkpoint.py --label worker-089-...`. But running the canonical checkpoint could interfere with the controller's own lifecycle. Hmm. The safest: run `comms.py ingest --dry-run` to validate my events ingest cleanly WITHOUT consuming them (important: if I ingest, the controller may not see them? No — ingest appends to events.jsonl and marks seen; controller applies from events.jsonl. Actually `checkpoint.py` does ingest+validate+audit+snapshot; the controller's `astra_lifecycle.py` does ingest→apply→repair→audit→checkpoint. If I ingest my own events, they land in events.jsonl and are marked seen; the controller then applies them. That's fine and normal — comms.py ingest is idempotent and the accepted stream is shared. But running the full checkpoint.py also writes current_checkpoint.json, which the controller owns. Better to let the controller run its own checkpoint. The task says "checkpoint" — I'll write a worker-local checkpoint artifact (`artifacts/worker-089/CHECKPOINT.json`) and also run `comms.py ingest --dry-run` to prove my events validate, then optionally run the canonical `checkpoint.py` if safe.
+
+Hmm, let me look at how worker-09 did "checkpoint": `artifacts/worker-09/CHECKPOINTS.md`. And worker-03 had no checkpoint file? Let me check quickly. Also the supervisor script `independent_supervisor_100.sh` might tell what's expected. Let me read it and `supervise_swarm.sh`.
+
+Actually, let me read independent_supervisor_100.sh — it may be coordinating these 100 workers and define expectations.
+dsh: reasoning:
+The supervisor relaunches continuously. Workers run with a 4-hour-ish session; my job: one class-bound task → JSON with IDs, evidence, hash, falsifier → checkpoint → exit. Since the supervisor loops, exiting is expected; a new worker-089 will be relaunched later perhaps.
+
+Given the "one independent lifecycle then exit" for leads and "checkpoint then exit" for workers, I should finish reasonably quickly. Let me now commit and build.
+
+**Final task choice:** Cross-reference / transfer-license integrity audit of the three canonical class schemas at current measured hashes, with scope:
+(a) Every internal cross-reference in the three schemas that names a path (class_contract_pointer, sibling_disjoint_from, supersedes, contract refs, evidence refs) resolves on disk.
+(b) For the C0=>C2 transfer: extract the transfer rule and its precondition from F2a/F2b, and evaluate at current hashes whether the precondition (shared frozen data class: s, delta, norm) is satisfied — reporting the exact normalized triple per class and any field-level differences.
+(c) Each finding carries a falsifier.
+
+Deliverables:
+- `artifacts/worker-089/schema_xref/xref_audit.py` — deterministic, stdlib-only (no PyYAML? PyYAML is available; but "stdlib-only" is a nice property for reproducibility; however parsing YAML reliably needs PyYAML. PyYAML is present (I used it). I'll require PyYAML and note the version/hash? Better: use PyYAML, record `yaml.__version__`. It's available in the environment.)
+- `artifacts/worker-089/schema_xref/report.json` — measured results with sha256 of each input, per-check outcomes.
+- `artifacts/worker-089/schema_xref/README.md` — rerun command, scope, falsifiers, non-claims.
+- `artifacts/worker-089/CHECKPOINT.json` — worker checkpoint record (task, class ids, artifacts + hashes, event ids, falsifier, status).
+- Events in `comms/outbox/worker-089.jsonl`: artifact events (report, script, readme) + status event. Possibly a claim event with conclusion_type `open_problem` or `numerical_evidence`? No — for an audit measurement, `status` + `artifact` are right. Maybe a `claim` is inappropriate. The instruction says "emit valid JSON with IDs evidence hash falsifier" — the status event has next_falsifier; artifact events have sha256. Good.
+
+Wait — one concern: "class-bound task" — my events must include class_id. Artifact event schema doesn't require class_id but I can include `class_id` / `class_ids`. Status doesn't require class_id but others include it fine (extra keys allowed). Good.
+
+Now, before writing, I must verify the xref check actually has substance: inspect `class_contract_pointer`, `sibling_disjoint_from`, `implication_ledger`, and any paths/sha256 claims in the three schemas. Let me extract those blocks.
+
+Also let me check `artifacts/formulation/FROZEN.json` for current frozen hashes so the report can state whether each schema matches its frozen entry (that's the "freeze drift" theme, but as an input check it's fine).
+
+Let me dump the relevant fields.
+dsh: reasoning:
+This is rich. There are concrete cross-references to check:
+- `class_contract_pointer`: `artifacts/formulation/formulation_taxonomy.yaml#class_contracts.<CLASS_ID>` — does the path exist? Does the anchor exist in the file (i.e., does the taxonomy have class_contracts.<CLASS_ID>)? If the anchor is missing → dangling pointer (like HF-A1).
+- `sibling_disjoint_from`: class id that must be one of the frozen four and must differ; plus check whether the sibling's own `sibling_disjoint_from` is symmetric.
+- `implication_ledger.one_way_entailments`: each entry has from/to/reason/status; check logical consistency of the transfer chain, e.g., C0 => C2 entailment requires E_C2 ⊆ E_C0. And check whether the C2 doc's ledger agrees with the C0 doc's ledger on direction of containment (they do: both say E_C2 ⊂ ... ⊂ E_C0).
+- The "licensed C0=>C2 transfer" precondition: same frozen data class. My check (b) can extract the normalized data class triple from each schema and classify equality.
+
+This is a solid, deterministic audit with real content: cross-reference resolution + symmetry of sibling_disjoint_from + data-class equality for the transfer license. Findings are concrete and falsifiable.
+
+Let me also check the taxonomy file for `class_contracts` anchors to know whether the pointers resolve. And check `artifacts/formulation/formulation_taxonomy.yaml` exists.
+
+Then write the script. Design:
+
+`xref_audit.py`:
+- Inputs: three canonical schema paths (`schemas/af_wcc_vacuum.yaml`, `schemas/af_scc_c2_vacuum.yaml`, `schemas/af_scc_c0_vacuum.yaml`), taxonomy path (`research_map/formulation_taxonomy.yaml`), plus authoring mirror paths.
+- For each input: sha256, bytes, mtime? (mtime not needed), yaml parse.
+- Checks:
+  X1 `class_contract_pointer` resolves: split on '#'; path exists; anchor path exists in parsed YAML (walk dotted path); record found/absent.
+  X2 `sibling_disjoint_from` integrity: names a frozen class ≠ self; target schema exists; symmetry (target's sibling_disjoint_from == self or target declares a `sibling_disjoint_from` list containing self).
+  X3 `implication_ledger` containment-chain consistency: parse the `extension_class_containment` string for the ordering claim; check the two documents' orderings are mutually consistent (extract the sequence of E_ tokens from both and compare order; C0 doc: E_C0 ⊃ E_H2loc ⊃ E_{C^1,1} ⊃ E_C2; C2 doc: E_C2 ⊂ E_{C^1,1} ⊂ E_H2loc ⊂ E_C0). Implement a token-order comparison: normalize each chain into a list of extension-class tokens with direction; report whether chain(C0) reversed == chain(C2). And check one-way entailments are consistent with the containment direction (from stronger-inexistence (smaller extension set) to weaker). Each entailment has "from"/"to" prose. Parsing prose is fragile; keep it to a conservative rule: for each `one_way_entailments` entry, the direction must match the containment order of the extension classes named in `from`/`to` — extract regularity tokens from the prose via a controlled vocabulary map (C0, C^{1,1}/C1,1, H2_loc/H^2_loc, C2). Then entailment is valid iff E_to ⊇ E_from (i.e., the "to" class has a larger extension set). If unparseable, mark UNCHECKED rather than guessing.
+  X4 shared data class (transfer precondition): extract from each schema `data_class.regularity_class.default`, `.sobolev_variant.s`, `.delta`, `.spaces`; normalize whitespace/parenthetical suffix; report equality matrix. The "frozen data class" is the smooth-with-decay default + the Sobolev variant; report both. Transfer licensed iff all three match on (s, delta, spaces-normalized).
+  X5 freeze binding: for each schema, compare measured sha256 against `artifacts/formulation/FROZEN.json` active entry for that class path (if present) and against `runtime/state/artifact_hashes.json` (if present) — report match/drift. Hmm, FROZEN.json structure needs checking. Maybe keep this as an input fingerprint only to avoid scope creep. Actually freeze-drift is flash-15's active area; I'll include it as a read-only input fingerprint (measured vs several declared hashes found in map/frozen), clearly labeled.
+
+Wait, keep the scope tight: X1–X4 plus input fingerprint. Good.
+
+- Output: `report.json` with:
+  - `artifact_id`, `task_id`, `class_ids`, `node_id: F2`, `gate: G-FORM`
+  - `inputs`: path → {sha256, bytes}
+  - `checks`: list of {check_id, class_ids, target, status: PASS|FAIL|UNCHECKED|INFO, detail, evidence_refs: ["path:line"]}
+  - `findings`: list of {finding_id, severity, statement, evidence_refs, falsifier}
+  - `transfer_license`: {status: GRANTED|DISABLED|PARTIAL, precondition, measured}
+  - `no_completion_claimed: true`, `validation_status: unverified`
+  - `generated_at`, `generator` with script sha256 (self-hash computed after write? circular; instead compute script sha256 in a second pass and patch report? Common approach: report includes `script_sha256` computed at runtime from __file__ before writing report — but writing report doesn't change script, so fine: read the script bytes at start, hash, include it).
+- Ensure deterministic: for line numbers in evidence refs, we need to find the line of a key in the YAML text. Implement a simple line finder: search for `class_contract_pointer:` etc. Fine.
+
+Then README.md with rerun command and scope, and CHECKPOINT.json.
+
+Then outbox events. Then verify with `python3 research_map/comms.py ingest --dry-run` (must show 0 rejects for my file). Note: dry-run still reads ALL outbox files (lots of other workers' files), so output may include others' rejects; I should filter output to my file. Actually dry_run doesn't append to seen, so it will re-report others' rejects, fine. I'll grep for worker-089 and count.
+
+Then "checkpoint": write `artifacts/worker-089/CHECKPOINT.json` with the state. Also maybe run `python3 research_map/checkpoint.py --label worker-089-<stamp>`? Risk of clobbering controller state mid-lifecycle. checkpoint.py writes current_checkpoint.json + checkpoint_log.jsonl + agent_hours.json; it's designed to be run by the controller. With 100 workers it could be run concurrently, but the write is not atomic. I'll avoid mutating controller-owned state; the worker-local checkpoint artifact + outbox status event is the correct scope. Actually, hmm, the prompt says "checkpoint, then exit" — the canonical way for a worker is a checkpoint file under its artifact dir (worker-09/CHECKPOINTS.md) and/or a `status` event. I'll do both: `CHECKPOINT.json` + status event. I'll mention in the status that a controller checkpoint should ingest my events.
+
+One more consideration: should I pick an even higher-value task? Let me quickly sanity check that the taxonomy anchor

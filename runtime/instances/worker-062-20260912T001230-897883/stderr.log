@@ -1,0 +1,444 @@
+dsh: reasoning:
+Let me start by understanding the task. I'm a bounded execution worker (worker=062). I need to read handoff/map and comms, take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit.
+
+Let me explore the workspace first.
+dsh: reasoning:
+No handoff/comms at root. Let me look for them — likely in workdir, .agents, or the swarm directories. Let me search.
+dsh: reasoning:
+The ai4math-swarm directory is at /data3/guoshaoyang/workdir/ai4math-swarm. Let me look for handoff and map within it.
+dsh: reasoning:
+Let me read HANDOFF.md, README.md, PROTOCOL.md, and the research map. Also check comms/inbox and outbox for worker=062 messages.
+dsh: reasoning:
+Now let me read PROTOCOL.md, the research map, and check comms inbox/outbox for worker=062.
+dsh: reasoning:
+No worker-062 file. Let me check the outbox/assignments directory, and the runtime directory which may hold worker assignments. The task says "worker=062". Let me search for "062" or "worker-062" references.
+dsh: reasoning:
+There's a worker-062 instance. Let me read its meta.json, prompt.txt, stdout.log, trajectory.log, stderr.log.
+dsh: reasoning:
+Now check stdout.log, trajectory.log, stderr.log for worker-062 (probably empty since I am that worker). Also check the checkpoint state and research map to find class-bound tasks. Let me check runtime/state.
+dsh: reasoning:
+Now I need to understand the class-bound tasks. Let me look at the research map: assignments, groups, claims, and the ASTRA_HANDOFF.md in research_map. Also check the controller findings and what worker slots are supposed to do. Let me read ASTRA_HANDOFF.md and validate_map.py plus comms.py to understand what's expected.
+
+Let me read the research_map/ASTRA_HANDOFF.md first.
+dsh: reasoning:
+Now I need to figure out what "class-bound task" is available for worker-062. Let me look at:
+1. `comms/inbox/` — there's no worker-062.jsonl. So no direct assignment.
+2. The map's `assignments` array.
+3. The controller verification, supervisor.log to see what worker slots should do.
+4. `run_parallel.py` and `supervise_swarm.sh`/`launch_swarm.sh` to see the worker prompt generation; maybe worker tasks are assigned by slot number.
+
+The prompt: "You are a bounded execution worker. Read handoff/map and comms. Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit. worker=062"
+
+So the worker is expected to pick one class-bound task itself (from the map), emit valid JSON with IDs/evidence/hash/falsifier, write a checkpoint, and exit.
+
+Let me check `launch_swarm.sh`, `supervise_swarm.sh`, and `run_parallel.py` to understand worker slots, and look at the map's assignments to see what's open. Also check what other workers did (e.g. worker-06, worker-16, deepseek-flash-* outputs) as templates.
+
+Important: the swarm appears to be running concurrently (files with timestamps at 00:11-00:13 while I'm at 00:12:30). I should be careful not to conflict. My worker instance is worker-062 at 2026-09-12T00:12:30+08:00. Other worker instances: worker-080, worker-056, worker-087, worker-001, worker-035, worker-018, worker-045, etc., same supervisor run 897883. These are presumably sibling workers started simultaneously by a supervisor. So there may be ~100 workers all doing this task. The instruction says "Take one class-bound task" — presumably each worker picks a distinct task or takes whatever the supervisor assigned. Since there's no per-worker inbox file, likely the workers are expected to pick unclaimed work themselves.
+
+Let me look at run_parallel.py and launch_swarm.sh to see how these worker prompts are generated and whether task assignment happens.
+dsh: reasoning:
+So this is a swarm run. My worker instance is a "worker-NNN" launched by `supervise_swarm.sh` presumably (100 workers). Let me read supervise_swarm.sh, supervise_loop.sh, independent_supervisor*.sh to understand the worker prompt generation and what's expected.
+
+The prompt for worker-062 is the generic one: "You are a bounded execution worker. Read handoff/map and comms. Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit."
+
+Key: write one JSON (probably status/claim/artifact) to comms/outbox/worker-062.jsonl, then checkpoint, then exit. Since there's no assignment in inbox for worker-062, I should "inspect the immediate queue and propose one artifact-backed task without claiming completion" — but the prompt says "take one class-bound task" and "emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit".
+
+Let me look at what other workers in this same launch (897883) are doing — check worker-080, worker-056, worker-001, worker-018 etc. Have they written anything to outbox yet? And check supervisor log for how work is distributed. Also read supervise_swarm.sh / independent_supervisor_100.sh (the newest file at 00:11) which probably launched these 100 workers.
+dsh: reasoning:
+Now I understand. I'm worker-062 in a large fleet of 100 identical workers each told to "take one class-bound task". The fleet is unsupervised beyond the loop; each worker must self-assign a bounded class-bound task, produce an artifact + JSON event in comms/outbox, checkpoint, and exit.
+
+Key design considerations:
+1. Avoid duplicating other workers' work. 100 workers all self-assigning could collide. The cleanest approach: pick a task that has a deterministic, machine-checkable verification, produce a unique artifact named with my worker id, and register it via a JSONL event.
+2. The class-bound tasks are the four classes: AF-WCC-VAC-GEN, AF-SCC-C2-VAC-GEN, AF-SCC-C0-VAC-GEN, AF-WCC-SCALAR-SPH. The "class-bound" requirement means my task must bind to one of these class IDs (schema at research_map/formulation_taxonomy.yaml and artifacts/formulation/).
+
+Let me look at what artifacts exist and what work is genuinely useful and not yet done. Sections: formulation (F1, F2), literature (L0/L1), audit (A1), numerics (N0). The immediate queue in ASTRA_HANDOFF:
+- F1: rewrite AF-WCC vacuum schema with exact quantifiers, topology, weighted data class, genericity, I+, visibility, conclusion type.
+- F2: separate C2/C0 schemas.
+- L0/L1: theorem ledger.
+- A1: re-review with two independent reviewers.
+- N0: flat-space scalar-wave test (only after deps pass).
+
+But there are leads working on these. As a worker, I could do something verifiable and complementary. The audit lead is running a "four-arm matched-budget ablation" design (A2) and there's an emphasis on swarm effectiveness metrics. A bounded execution task that fits the worker role well: a machine-checked consistency checker.
+
+Actually, what's the most valuable bounded task that (a) binds to a class, (b) produces an artifact with sha256, (c) has a falsifier, (d) can be verified deterministically? Options:
+
+Option A: Build a class-separation checker that validates the canonical schemas against the frozen class taxonomy: e.g., for each class in research_map/formulation_taxonomy.yaml and schemas/*.yaml, check that (i) the schema declares exactly one class_id, (ii) the conclusion type matches the allowed conclusion family for that class, (iii) forbidden constructs ("C0 or C2" disjunction) absent, (iv) visibility/regularity tokens correct. Output a JSON report artifact with per-file checks and a verdict. Falsifier: if any canonical schema contains a class_id not in the taxonomy, or a disjunctive conclusion across classes, the report must flag FAIL; a passing report is falsified by a counterexample file + line.
+
+This is exactly "class-bound" and audit-oriented. But the audit lead may already have a class_separation.py — indeed there's research_map/class_separation.py. Let me read it first to see what it does and whether it's already complete. If it exists, I could run it (independent replication) and produce a measurement artifact with hashes. But that may duplicate.
+
+Option B: Verify the "canonical path policy": publish check that artifacts/formulation/** is byte-identical to canonical schemas/*.yaml, F2 split into F2a/F2b, etc. Produce a hash-diff report. That's an audit check with a clear falsifier: any byte difference between the canonical and authoring trees invalidates the "byte-identical" claim. This is bounded, deterministic, machine-checkable, and independent. But astra-life01-publish-frozen is already assigned to lead-formulation with deadline 01:30.
+
+Option C: Work on N0 flat-space (allowed; numerics lock only blocks N1). E.g., a numerical convergence-order test for a flat-space scalar wave equation: implement a 1D/2D finite-difference solver and measure convergence order vs analytic solution. That's a real computational artifact but somewhat heavier and needs to be reproducible; also N0 is "active/unverified" with a replication verdict PROVISIONAL on disk. An independent replication of N0 order would be genuinely valuable: "measure and independently replicated N0 order releases N1". But that's the numerics lead's domain; a worker replicating it independently is exactly what "independently replicated" requires. Still, risk: heavy compute, and the numerics group may have its own implementation and conventions. Let me look at artifacts/numerics/ to see what N0 produced.
+
+Option D: Literature-side: verify a specific citation/theorem scope. That requires retrieval (web), possibly uncertain. There's a literature ledger with unresolved citations. A bounded task: pick the highest-impact unresolved citation, fetch primary source, record exact theorem scope, assumptions, and a falsifier. But network access may be limited and other workers may do this.
+
+Option E: A1-style independent review: pick one existing artifact, review it against PROTOCOL rules 1-5 (does artifact exist? hash recorded? does the falsifier falsify? class id matches?), produce a review event with verdict and score. This is bounded, class-bound (artifact names class), and produces a review JSON. But "worker events cannot set validation_status or gate verdicts" — still, a review is a legitimate message type per PROTOCOL (review — target_id, reviewer, verdict, score, hard_failures, findings). That's useful and independent-ish.
+
+Hmm, but the strongest interpretation: the worker must actually *execute* a class-bound task and emit a claim/artifact with evidence hash and falsifier. A review is a message type, not an artifact with hash necessarily. The prompt says "emit valid JSON with IDs evidence hash falsifier" — so the JSON event must carry IDs (node/class), evidence_refs, hash, falsifier.
+
+Given 100 identical workers each self-assigning, the most robust thing I can do is pick a task with a *deterministic verifier*, create a uniquely-named artifact, run the verifier, record its sha256, and emit a JSONL event to comms/outbox/worker-062.jsonl. The event must not claim done/validated (worker authority limits): use status active or artifact with validation_status "unverified"/"proposed" and next_falsifier.
+
+Let me look at the existing artifacts and the class_separation.py tool to pick something genuinely additive. Also read the map's assignments and gates, and check what artifacts exist for the formulation classes.
+
+Let me first read the canonical taxonomy and the schemas directory. And check artifacts/ tree.
+dsh: reasoning:
+Now let me understand what other workers have done and what's missing. The map now has an `assignments` array. Let me look at it, plus gates, claims, reviews, and the newest lifecycle verification report. Also check the schemas/semantic_contract_tests directory which was just created (00:14) — hmm, that's after my start time; other workers are actively creating files.
+
+Key insight: workers in this fleet are already producing artifacts. Since I'm worker-062 in a fleet of 100, the best bounded task is one that: 
+1. is class-bound (binds to one of the 4 classes),
+2. produces a unique artifact with sha256,
+3. has a falsifier,
+4. doesn't collide with others' files (use worker-062 dir),
+5. can be completed quickly and deterministically.
+
+Let me check the current state: what have workers 001-100 produced so far? They started at the same time as me (~00:12:30), and it's now... let me check current time. Many haven't done anything yet probably. Let me check artifacts dirs for worker-NN (3-digit) and the outbox for worker-NNN.
+
+Actually — important: the supervisor uses `seq -w 1 100` which gives 001..100, so instance ids are worker-001 ... worker-100. The `launch` function writes to `$INST/$id` and the prompt. Files in comms/outbox for workers would be worker-062.jsonl etc.
+
+Let me check what tasks are unassigned in the map's assignments array, and look at the "immediate queue". Also check `runtime/state/controller_verification/lifecycle_20260912-000929.json` and the class_separation.py, and the latest artifacts (e.g. artifacts/worker-01). Then decide.
+
+Let me look at map assignments and gates.
+dsh: reasoning:
+No 3-digit workers have written outbox files yet. The 2-digit worker-01..worker-20 are from the earlier `supervise_swarm.sh` run (persistent breadth workers), with dirs like artifacts/worker-01.
+
+The fleet of 100 workers launched at 00:12:30 will each self-assign. To avoid collisions and produce genuinely useful work, I should pick something with high value and low collision probability.
+
+Let me think about what is most useful and uniquely bounded. The controller's gates are all pending. The critical blockers:
+- G-FORM needs two accept verdicts per class at a frozen hash. Reviewers are flash-16/17/18/lead-audit.
+- G-F0 needs 2 independent accept verdicts at one hash.
+- The class-separation lint and canonical/authoring byte-identity check.
+- N0 replication is PROVISIONAL — needs independent replication to release N1.
+
+Given the worker role is "bounded execution worker" and the instruction "Take one class-bound task, emit valid JSON with IDs evidence hash falsifier, checkpoint, then exit", the most defensible selection is one where:
+1. I create a new, independent, machine-checkable artifact.
+2. It binds to a class_id.
+3. Its verification is deterministic, so my claim of "checker passed" is not fluent text.
+4. It has a falsifier that could actually falsify it.
+
+A strong candidate: an *independent semantic-contract test for one class schema*, which is precisely what G-FORM requires ("all three schemas exist with exact quantifiers/topology/regularity/genericity/I+/visibility/conclusion_type; no C0/C2 merge"). If someone already wrote `schemas/semantic_contract_tests` (created 00:14, i.e., after my start), I'd collide. Let me check that dir; it may be from worker-04 (flash-04?) or a 3-digit worker.
+
+Another strong candidate that is clearly mine: an independent **round-trip falsification harness for the F1 schema's visibility predicate / conclusion type**. But again collisions.
+
+Alternative: **an independent check of the class_ids binding across all claims/artifacts**: scan every claim event in research_map/events.jsonl, check each has exactly one class_id from the frozen four (guard G1), and produce a coverage/collision report keyed by class. This is class-bound, deterministic, evidence-hashable, and directly supports G-FORM/G-F0. It also intersects with "class_separation.py" which exists — let me read it first.
+
+Let me check class_separation.py and the newest artifacts under artifacts/formulation and schemas/semantic_contract_tests. Also check what the map's `claims` look like, to know what the checker should consume.
+
+Actually, let me step back and think about what's likely to be *most valuable in this specific swarm*. The PROJECT (from ASTRA_HANDOFF) is cosmic censorship research map with 4 formulation classes. The immediate queue has F1/F2/L0/L1/A1/N0. The most impactful *worker-scale* contribution that hasn't been done: **independent verification of the F2a/F2b schemas' claim that C0 and C2 are separated**, i.e., a machine check that:
+- Each schema declares exactly one regularity_token and one conclusion_type consistent with the taxonomy.
+- No merged-regularity regex matches anywhere in any canonical schema (guard G3).
+- The C0=>C2 transfer direction is only allowed one way, and no artifact asserts the forbidden reverse direction.
+- Every `class_id` string appearing in schemas/ and artifacts/formulation/ belongs to the frozen four or is explicitly a variant pointer.
+
+That's basically a "class-leakage lint" over the canonical tree. There's `research_map/class_separation.py` — let me read it to avoid duplication, and check whether it's complete. If it exists, maybe my value-add is to *run it independently and bind results to a hash*, i.e., an independent replication. But reviewing my own run of their tool is weak.
+
+Better: write my own independent checker with a different mechanism. For instance, the "exact quantifier" acceptance requires that each canonical schema states quantifier order explicitly. A deterministic checker can parse the YAML, extract the conclusion text, and verify:
+(a) the comeager quantifier ("there is a comeager set G ... for every data set ...") appears with a fixed pattern per class family;
+(b) conclusion_type matches the class's required value exactly;
+(c) generality: `for every admissible (s,delta)` present;
+(d) SCC schemas have exactly one of C0/C2 and no merged token (normalize ^ { } _ whitespace per G3);
+(e) WCC schemas have no regularity token in the conclusion;
+(f) no `C0` string appears in the C2 schema conclusion and vice versa;
+(g) no forbidden transfer pattern strings.
+
+But the existing `semantic_contract_tests` dir suggests someone is already doing exactly this. Let me check.
+
+Also, I should consider the literature side: `ledger/theorems.jsonl` with >= 15 rows. A worker could independently verify one ledger row against the primary source (arXiv abstract) — that's a real, bounded, high-value task with a clear falsifier: "the quoted theorem statement does not appear in the cited source, or states more than the source". This requires web access; I have web_fetch/web_search. And it's uniquely attributable: I pick a specific row (e.g., the row with the highest impact for the C0 class) and produce artifacts/worker-062/lit_verify_<id>.json with the source locator, quote, hash of fetched abstract text, and verification status. That is class-bound (row has class_id), artifact-backed (hash), falsifiable, and directly supports G-LIT. Risk: another worker picks the same row. I can check `ledger/verification/` or similar for claims; and I'd name mine worker-062 and note which row.
+
+Hmm, but network fetch of arXiv could fail (offline environment?). Let me test quickly later. Also, the audit lead might already have verified citations.
+
+Actually — let me reconsider. There's a very concrete gap noted in ASTRA_HANDOFF: "The canonical path is authoritative (schemas/*.yaml, research_map/formulation_taxonomy.yaml); artifacts/formulation/** is the authoring tree and must be published byte-identically before review verdicts bind." The open assignment `astra-life01-publish-frozen` is for lead-formulation. A worker could **independently measure** the byte-identity between canonical schemas and the authoring tree, producing a hash-diff report. That's:
+- deterministic (sha256 compare),
+- bounded (small),
+- class-bound (each file maps to class AF-WCC-VAC-GEN / F2a / F2b),
+- falsifier: any byte difference, or a canonical file with no authoring counterpart, falsifies "published byte-identically"; the report itself is falsified if a file it lists as identical has differing sha256.
+- Directly needed by G-FORM's "hash binding" requirement.
+
+But it could collide with the lead's publish task; though an *independent measurement* is complementary, not duplicative. The controller says only controller/leads can move gates, but a worker can produce evidence. And the ASTRA_HANDOFF says outbox traffic newer than 00:09:29 is un-ingested; many workers are producing evidence.
+
+Hmm, but is a byte-diff report a "class-bound task"? It binds three files to three class ids; yes.
+
+Alternatively the highest-value, lowest-collision, deterministic artifact: **a cross-schema hash-and-content binding manifest for the three frozen classes**, i.e. `artifacts/worker-062/class_binding_manifest.json` containing for each of the four class ids: canonical file path, sha256, conclusion_type, regularity token, family, and a machine verdict on taxonomy consistency (G1/G2/G3/G6). Plus a checker script `verify_class_binding.py` that recomputes everything and fails closed.
+
+Let me look at what already exists so my work is additive:
+1. Read research_map/class_separation.py.
+2. List schemas/semantic_contract_tests.
+3. Check ledger/theorems.jsonl status.
+4. Check artifacts/formulation for existing checkers (e.g., validate_taxonomy.py).
+
+Let me do that now.
+dsh: reasoning:
+Lots of activity already. The formulation group has a nearly complete pipeline: tools/check_class_schema.py, check_taxonomy_consistency.py, etc. There's a semantic_contract_tests dir (created 00:14). Workers are active.
+
+Given the enormous redundancy risk with 100 identical workers, the best strategy is to pick a task that is:
+- **unclaimed and specific**,
+- **verifiable by construction** (I run a real computation whose output is the artifact),
+- **not overlapping** with existing tooling.
+
+Let me look at what the *audit* group needs: "run four-arm equal-budget ablation: one strong model, self-consistency, independent cheap agents, cheap agents plus coordinator" (A2). And "Design four-arm matched-budget ablation" — artifacts/audit/ablation_harness.py exists. A worker could actually *run* a small real ablation? That requires LLM calls (permissions/keys) — risky.
+
+Alternative valuable and deterministic: **an independent falsification test of the F1 visibility tail predicate**. The taxonomy defines visibility with a single-q TAIL predicate. A machine-checkable semantic test could construct explicit spacetime toy models (finite causal posets / discrete causal sets) and verify that the tail predicate is strictly weaker than the set-based predicate (variant SET) — i.e., produce a concrete witness structure where gamma is in the union of J^-(q) over all q but no single q sees a tail. That would be a real mathematical counterexample to the equivalence claim, supporting the taxonomy's D1 resolution. It's class-bound (AF-WCC-VAC-GEN), deterministic (explicit finite witness + exhaustive check), falsifiable (if no witness exists in the model class, or if the witness is not causally valid, the check fails).
+
+Hmm, that's attractive but the "spacetime" would need to be a toy discrete causal set, which reviewers might consider not a genuine Lorentzian spacetime. The taxonomy says "Strictly stronger than the parent class: gamma outside the union implies no single q sees a tail of gamma, but not conversely." Actually wait: it says the set-based reading is strictly stronger. Hmm, careful: "gamma([0,T)) subset union of J^-(q)" vs "exists q and t0 with tail in J^-(q)". If a single q sees a tail, then the tail ⊆ J^-(q) ⊆ union, so set-based holds. Conversely, contained in union doesn't imply tail in one J^-(q). So set-based (union) is *weaker* as a condition on gamma? Let's be careful:
+
+- Tail predicate P(gamma): ∃q ∈ I+, ∃t0: gamma([t0,T)) ⊆ J^-(q) ∩ M.
+- Union predicate U(gamma): gamma([0,T)) ⊆ ∪_{q∈I+} J^-(q) ∩ M.
+
+P ⟹ U (tail in J^-(q) implies whole curve in union since earlier part... wait no, P only constrains a tail; the union predicate covers the whole curve. Even so, P doesn't imply U on the initial segment).
+
+Hmm, actually the definition of "visible from I+" should include being contained in J^-(I+) (the causal past of I+) for the whole curve. If we define U as "gamma ⊂ J^-(I+)" (whole curve in the union), and P as "∃q, tail ⊆ J^-(q)", then:
+- U does NOT imply P (union but no single q sees a tail).
+- P does not imply U either, unless we also require gamma([0,T)) ⊆ J^-(I+)... 
+
+Actually the standard WCC "visible from I+" definition is: there's a causal curve from I+ ... hmm.
+
+The taxonomy says: "Strictly stronger than the parent class: gamma outside the union implies no single q sees a tail of gamma, but not conversely." Hmm, that phrasing: if set-based is the parent's condition replaced... Let me not go down this rabbit hole. The variant note in taxonomy says "Strictly stronger than the parent class". If U is the condition and P is the condition, then a class whose definition uses U as the criterion for visibility... A class defined by "no incomplete geodesic is visible" with visibility=U (harder to be visible) is *stronger* statement (excludes more) if U is weaker as a visibility criterion? Visibility criterion weaker → more geodesics visible → "no visible incomplete geodesic" is stronger. U is a weaker visibility criterion (wider set of geodesics counted as visible) than P? No: U requires the whole curve in the union; P requires a tail in a single J^-(q). Neither implies the other in general. If a curve's tail is in one J^-(q), the curve may leave the union earlier. Standard definition typically has the curve be contained in J^-(I+) for its whole future (as in the cosmic censorship literature: "γ ⊂ J^-(I+)"). 
+
+This is precisely the kind of ambiguity F1 is supposed to fix. A toy-model witness separating P and U is genuinely useful evidence for the F0 D1 divergence. But building a defensible causal-structure witness requires care. It could be done with a small explicit finite poset plus I+ elements; but "Lorentzian manifold" realism is an issue.
+
+Let me think about what a "class-bound task" can be that is airtight. The safest, highest-integrity option: **independent verification of a specific claim already in the map/ledger, using a different method, producing a hash-pinned report.** This is "breadth execution" and exactly what a cheap worker should do. The falsifier is crisp: find a counterexample to the claim in the artifact itself.
+
+Concretely, candidates:
+(A) Independently replicate the N0 flat-space scalar-wave convergence order. There's numerics artifacts (artifacts/numerics). Let me look at what N0 is and whether a quick independent implementation is feasible (e.g., 1D wave equation with RK4/leapfrog, measure order). This would be high value: the handoff says "Only G-FORM + G-AUDIT pass plus a measured and independently replicated N0 order releases N1". An independent replication artifact from a worker is exactly the missing evidence. But risk: numerics lead may consider only group-internal replication; and I need to know the exact N0 setup to replicate. Let me inspect artifacts/numerics and the N0 assignment in the map.
+
+(B) Independently verify one ledger row against the primary source (arXiv). High value for G-LIT. Requires network. Let me test network availability.
+
+(C) Byte-identity audit canonical vs authoring (publish check). Deterministic, useful, but likely covered by lead within the hour.
+
+(D) Independent re-review of one artifact against the protocol rules (rule 5: reject your own output before sending...). A review event is a valid upward message type. A worker producing a `review` with a checklist could help G-F0/G-FORM. But "reviewer" role belongs to leads/peer agents; a worker's review is still evidence.
+
+(E) A falsification corpus / adversarial fixture generator for the class-separation checker: e.g., generate mutated schema texts (merged C0/C2 spellings, family swaps, conclusion inflation) and measure detector recall/precision. artifacts/worker-07 already built a falsification corpus and class_separation.py was designed against it. A worker could extend with a *held-out* mutation family — but flash-04/formulation has "novel_mutants" and heldout rebased evidence. Likely covered.
+
+Given time constraints (bounded worker!), I should pick one and execute cleanly. Let me quickly inspect:
+1. artifacts/numerics (N0 setup).
+2. ledger/theorems.jsonl (a row to verify).
+3. Whether network works (web_search/web_fetch are available to me as tools; test with a fetch).
+
+Let me also check `runtime/state/w13_checkpoint_3.json` style: workers write checkpoints to runtime/state/. And `runtime/bin/` for helper scripts (checkpoint.py).
+
+Let me look at the numerics situation first — it's the highest-value blocking item (N1 locked).
+dsh: reasoning:
+The numerics N0 situation is a mess — many blockers, and there's an active conflict on paths. I should stay away from numerics to avoid adding to the mess.
+
+The literature ledger has 62 rows, 61 "abstract-read", 1 unverified. Verification statuses: abstract-read means the row was checked against the abstract, not full text. A useful bounded worker task: **full-text page-check of one high-impact ledger row** (e.g., a claimed theorem in a specific paper) using the primary source. But full text access may be limited; and the ledger lead is working on it.
+
+Let me reconsider the "class-bound task" requirement. The taxonomy now contains a `transfer_rules` section with allowed T1 (C0→C2) and forbidden X1..X5, and `guards` G1-G7. A truly useful, deterministic, and very likely **unclaimed** worker artifact: **a machine-checkable class-binding gate over the map's claims**: for every claim in `map.claims` and every artifact in the canonical tree, check G1 (exactly one class_id from the frozen four), G2 (family/regularity consistency), G6 (no conclusion inflation), G7 (theorem claims carry artifact_refs with sha256 + reviewer verdict). Produce a per-claim verdict table with sha256s. This is the audit lead's A1 remit ("enforce class binding, citation support, hard-failure..."), and there IS `artifacts/audit/a1_rebind_coverage.py`. Let me check what that does and whether it's already run.
+
+Hmm. There's a lot of overlap risk. Let me take stock of what specifically the *controller* says is missing:
+- G-F0: "no accept verdict exists at the current hash"; "reviews/INDEX.md records G-F0 fail against intermediate hash"; "9 taxonomy cases remain open and were never dispositioned by the lead".
+- G-FORM: needs two accept verdicts per class at one frozen hash; no single frozen data class shared by F1/F2a/F2b; reviews/INDEX.md records fail.
+- G-LIT: need ledger rows resolvable, verification...
+- G-AUDIT: ...
+- G-NUM: needs independent accepting review of the convergence protocol (reviews/G-NUM-protocol-review.json missing).
+
+Interesting: "G-NUM is held at pending by exactly one unmet criterion: the numerical protocol has no independent accepting review... Assignment astra-numfix-04 (astra-lead-audit) declares reviews/G-NUM-protocol-review.json; the file does not exist."
+
+An independent review of the numerical protocol (numerics/CONVERGENCE_PROTOCOL.md) by me — a worker with no stake in it — is precisely a bounded, class-bound (AF-WCC-SCALAR-SPH via N0), artifact-producing (reviews/G-NUM-protocol-review.json... though that path is assigned to lead-audit), falsifiable (find a protocol criterion that is unreachable/ambiguous/wrong) task. But it's assigned to the audit lead. A worker producing a review would be a second independent review, which is even better ("no independent accepting review" requires reviewer ≠ author; a worker review is independent). But the file path conflict: I should NOT write to reviews/G-NUM-protocol-review.json because that's the lead's declared artifact. I could write `reviews/G-NUM-protocol-review-worker-062.json` and emit a review event referencing it.
+
+However: is a *review* a "class-bound task" and does a review count as artifact + hash + falsifier? Yes — review is an explicit upward message type; artifact with sha256 can be the review JSON. The falsifier: "if the protocol's criteria C1-C7 cannot be evaluated from the named evidence, or any criterion is satisfied only by the author's own run, the accept verdict is falsified." And if I find actual defects, the review is more valuable.
+
+But wait — the "astra-numfix-04" assignment belongs to astra-lead-audit, and the G-NUM blocker says exactly one criterion unmet. A worker review that *actually* evaluates C1–C7 against evidence and returns accept/revise with cited hashes could unblock G-NUM. That's high leverage. But reviewing a numerical convergence protocol requires domain care; a sloppy accept would be harmful. I could do a careful, genuinely independent review: read numerics/CONVERGENCE_PROTOCOL.md, check each criterion against the on-disk evidence, and verdict revise/accept with specific findings. If the protocol is sound and the evidence is present, an accept with cited hashes is legitimate.
+
+Alternatively, do something more mechanically verifiable. Let me weigh time: I'm a bounded worker; I should spend ~15-30 minutes of tool time max and produce one solid artifact.
+
+Let me look at the audit group's A1 checker and the current reviews/INDEX.md, then decide between:
+(1) Independent protocol review for G-NUM (high leverage, domain-heavy),
+(2) Class-binding manifest/gate over claims (mechanical, but possibly overlapping a1_rebind_coverage.py),
+(3) Ledger full-text verification of one row (needs network),
+(4) Byte-identity publish audit (mechanical, small).
+
+Actually, wait. Let me reconsider the "class-bound" phrase. The prompt says "Take one class-bound task". The class-bound tasks are those assigned to a class_id: F1 (AF-WCC-VAC-GEN), F2a (AF-SCC-C2-VAC-GEN), F2b (AF-SCC-C0-VAC-GEN), N0 (AF-WCC-SCALAR-SPH). The worker pool's job is to execute node tasks. Since the map has assignments, let me read the full assignments list to find one that's explicitly assigned to an execution worker (deepseek-flash-NN) and unclaimed/unsatisfied — then I could take over or replicate. Let me print all assignments with assignee + deadline + acceptance summary.
+
+Let me also check what's in reviews/ and INDEX.md to see verdict state.
+dsh: reasoning:
+Interesting: `reviews/G-NUM-protocol-review.json` exists now (00:07, 8859 bytes) — that blocker may be stale. Lots is in flux.
+
+Now, what can I, worker-062, do that is bounded, class-bound, additive, and verifiable within a reasonable time? Let me look for a concrete gap that no one has. Two strong ideas:
+
+**Idea 1: Independent full-text verification of one ledger row (G-LIT).** INDEX says L0: "ledger scope metadata + dedup + broken refs" fail; 24 broken refs; 8 non-class tokens; 11 duplicate title pairs; missing scope metadata 119. A worker task: take the 24 broken refs and produce a *locator resolution report* — resolve each broken ref to a real locator (DOI/arXiv), or mark unresolvable, with evidence. That's bounded, class-bound (each row has class_ids), deterministic-ish, and useful for G-LIT. But requires network. Also the literature lead is on it (astra-life01-l0-revise).
+
+**Idea 2: A de-duplication / provenance audit of the ledger** — 11 duplicate title pairs identified in INDEX; produce a canonical dedup map with merged class coverage. Deterministic, no network needed, directly addresses a listed G-LIT failure ("dedup"). Falsifier: if two rows judged distinct actually share the same source (same DOI/arXiv id or same normalized title), the dedup verdict is falsified; if any row is dropped that has a unique class binding, the merge is falsified. This is nicely bounded and machine-checkable. Evidence: the ledger file with sha256 + a script that reproduces the report. That's a real artifact: `ledger/dedup_report.json` + `artifacts/worker-062/dedup_ledger.py`. But again the literature lead may produce exactly this.
+
+**Idea 3: Class coverage matrix for the ledger**: for each of the 4 frozen classes, ledger coverage from primary sources with verified scope — identifies which class lacks any verified theorem (likely AF-SCC-C0-VAC-GEN or AF-WCC-VAC-GEN). `ledger/class_coverage.csv` already exists (flash-10 assigned). Overlap.
+
+**Idea 4: An independent, adversarial falsification test of the *current* canonical schemas** (the newest hashes): pick one acceptance criterion from G-FORM ("no single frozen data class (s,delta,norm) shared by F1/F2a/F2b, which disables the licensed C0=>C2 transfer") and build a checker that extracts the data-class fields from all three schemas and reports whether they match. That's a concrete, listed unmet criterion; a worker can produce decisive evidence: either they now match (unblocks T1) or they don't (with exact field diffs). Deterministic, class-bound (binds three classes), tiny, and independent. Falsifier: a field the checker fails to extract (e.g. nested YAML) that would change the verdict; or the schemas changing hash after my run.
+
+Actually wait — the schemas were just rewritten (00:10) and there's `artifacts/formulation/evidence/` with acceptance pipeline reports. The lead may have fixed the data class. Let me check the three canonical schemas for data-class fields. If they now share (s,delta,norm), then the gate criterion is satisfiable and my report is positive evidence; if not, my report localizes the exact mismatch. Either way, useful and fast.
+
+But is it "class-bound"? Yes — the F1/F2a/F2b classes are bound. And the transfer rule T1 (C0→C2) is gated on it.
+
+Hmm, however: I should be careful about *claiming* things as a worker. The prompt says emit valid JSON with IDs, evidence, hash, falsifier. So my event would be an `artifact` event (node_id F2, class_ids all three, path, sha256, validation_status "unverified"/"self-checked") + maybe a `claim` with conclusion_type "observation" (not theorem) + falsifier. That fits the protocol.
+
+**Idea 5 (strongest, I think): the N0 independent replication of the flat-space convergence order.** The map says the criterion for G-NUM is "measured and independently replicated N0 order". There is `review` and replication evidence from the lead, but "independent" is questionable because the replication harness was written by the same group. A completely independent worker implementation (different scheme: e.g., spectral or method-of-lines RK4 vs leapfrog) of the flat-space scalar wave equation, measuring convergence order, would be a genuinely independent replication. The N0 node binds class AF-WCC-SCALAR-SPH. There is a canonical setup: numerics/exact.py, numerics/fd.py, numerics/CONVERGENCE_PROTOCOL.md. I could write my own from scratch (e.g., 1D wave equation u_tt = u_xx, exact solution, Dirichlet/periodic BC, second-order central differences + leapfrog... that duplicates their scheme). For independence, use a different discretization: e.g., 1D wave equation with 4th-order spatial stencil + RK4 time integration, or a spectral method. Measure L2 error vs exact at fixed time across resolutions, fit order → expect 4 (or spectral). But does that "replicate" their order claim (2nd order)? Independence is about implementation, not scheme; but a different scheme measuring a *different* order doesn't replicate *their* claim. The point of independent replication is: different code, same claim. Using the same mathematical scheme but independently written code is a valid replication. I could implement leapfrog + central differences myself from the PDE (no reading their code) and measure order ≈ 2. That's a clean, deterministic task with real computation. Falsifier: if my measured order is not ≈2 (say <1.8 or >2.2), the N0 order claim is falsified (or my implementation is wrong — I'd need a self-test: exact solution convergence + a manufactured solution).
+
+This is attractive: it's a *real execution task* (fitting the "execution worker" role), deterministic, and directly addresses a listed unmet criterion, and produces a numeric artifact with hashes. Risk: overlapping with flash-12/13/14/20 and the lead's replication runs (already lots of contention over paths). But I can put mine in `artifacts/worker-062/n0_independent_replication/` and register the event as a `review`/`artifact` on N0 with class AF-WCC-SCALAR-SPH. Name it clearly as an independent replication.
+
+Actually, let me look at what N0's canonical setup is: numerics/tests/flat_wave.py, numerics/convergence.py, numerics/CONVERGENCE_PROTOCOL.md, and the lead's 4-rung replication report. If the canonical test is well-defined (exact solution, rungs, norm, threshold), I can reimplement it independently with a different code path (not importing their modules) and compare orders. That's a genuine replication that doesn't require reading their code beyond the protocol spec. Let me inspect the protocol and the N0 report.
+
+Time budget: reading + writing ~150 lines of numpy + running 4 resolutions × 2 schemes ≈ seconds. Feasible.
+
+Let me look at numerics/CONVERGENCE_PROTOCOL.md and artifacts/numerics/n0/lead_4rung_replication.json.
+dsh: reasoning:
+The N0 calibration is already extensively covered: canonical scheme A, replication scheme B, lead reference scheme C, 4-rung order addendum, agreement pairs all pass within tolerance. My independent implementation would be a 4th/5th replication — still valuable as "independent worker replication" but the marginal value is low-ish, and the domain is crowded and contentious.
+
+Let me look at the other listed unmet criteria and gaps where a single worker artifact could move a gate:
+
+G-F0 unmet: "9 taxonomy cases remain open (new class vs split) and were never dispositioned by the lead". `schemas/taxonomy_cases.jsonl` (58KB). There's `artifacts/flash-02/open_case_disposition.json` and check script + reports. Already covered by flash-02.
+
+G-FORM unmet: "no single frozen data class (s,delta,norm) is shared by F1/F2a/F2b, which disables the licensed C0=>C2 transfer". This is a concrete, checkable criterion. Let me check the current canonical schemas for data-class fields. If the schemas now specify them and they differ, a precise mismatch report is decisive evidence for the lead to fix. Let me grep the schemas for s/delta/norm fields.
+
+Also G-LIT unmet details I haven't seen. Let me print full gates for G-LIT and G-AUDIT.
+
+Actually, let me think about the meta-situation: 100 workers launched with an identical generic prompt at 00:12:30, and the map (as of 00:13-00:14) shows tons of work already. These 100 workers will all read the same map and pick tasks; collisions are inevitable. The most useful thing I can do may be to pick a task that is *specifically* indicated as unmet and *bounded* and where a duplicate is harmless because the artifact is uniquely named and independently produced. Independent replication of a gate criterion is exactly that: duplicates are *good* (independent evidence), as long as each is genuinely independent and separately hashed.
+
+So: **Independent verification of the G-FORM data-class sharing criterion** is a good candidate. Let me check the actual schemas.
+
+Another candidate just came to mind: the taxonomy's `guards` G1–G7 and the map's claims. A worker could produce an **independent guard-checking report over the canonical schemas** using the guard definitions from the taxonomy (G2/G3/G6 at minimum), with a different implementation than research_map/class_separation.py (which is the tool of record). Independent implementation + agreement/disagreement = valuable calibration evidence. But the audit lead has `a1_rebind_coverage.json` (00:13) and checker calibration. Hmm.
+
+Let me examine the three canonical schemas' data-class fields now. Also read the full G-LIT/G-AUDIT unmet lists from the map. That will tell me where a bounded worker can decisively help.
+dsh: reasoning:
+The schemas now DO share s > 5/2, delta in (1/2,1), and "smooth-with-decay default" — the G-FORM blocker "no single frozen data class shared by F1/F2a/F2b" may now be resolved on disk (the schemas were rewritten at 00:10). But the *norm* part: F1 says X^{s,delta}_vac(AF), F2a says X^{s,delta}_vac(AF), F2b same. Let me check the norms.
+
+However, a worker producing a "data class agreement report" duplicates what the lead's acceptance pipeline likely does. 
+
+Let me step back and consider the *best* use of my bounded existence. I think the highest-integrity, lowest-collision, genuinely useful option is:
+
+**Independent verification of the data-class identity across F1/F2a/F2b and the licensed T1 transfer, with an executable checker, hashed artifact, and an explicit falsifier.** 
+
+Reasons:
+- It directly addresses the exact unmet G-FORM criterion: "no single frozen data class (s,delta,norm) is shared by F1/F2a/F2b, which disables the licensed C0=>C2 transfer".
+- It's class-bound: F1 (AF-WCC-VAC-GEN), F2a (AF-SCC-C2-VAC-GEN), F2b (AF-SCC-C0-VAC-GEN), and it tests transfer rule T1 between the two SCC classes.
+- It's deterministic and machine-checkable: parse the three YAMLs, extract data_class fields, compare exactly.
+- It produces new evidence at the current hash (schemas rewritten 00:10, so earlier checks are stale).
+- Falsifier: if any field that the checker equates actually differs (e.g., different topology, different norm, different X space), then the "shared data class" verdict is falsified; also if the checker fails to extract a field present in the YAML.
+
+But the risk remains that a 3-digit sibling worker does the same thing. Duplicate evidence on this criterion isn't harmful — independence is a virtue here.
+
+Alternatively, the **explicit T1 transfer witness**: G-FORM says the transfer is "licensed" only if data class + genericity match exactly. A checker can verify the transfer's guards against actual artifacts.
+
+Hmm, let me look at the G-FORM-relevant `artifacts/formulation/evidence/acceptance_pipeline_report.json` to see if the lead already checks this. If yes, my independent check is a calibration of their checker (also useful, but weaker).
+
+Actually — you know what? Let me reconsider. There is one thing the map explicitly asks for repeatedly and no worker-run artifact supplies: **independent re-fetch spot checks for G-LIT** ("fewer than 3 independent re-fetch spot checks are recorded as passed"). A worker with web access can do an *independent re-fetch spot check* of a ledger row: fetch the primary source (arXiv), verify the quoted statement, record locator + hash + verdict. This is:
+- explicitly listed as an unmet gate criterion (>= 3 independent re-fetch spot checks),
+- class-bound (ledger rows carry class_ids),
+- produces hash-pinned evidence (I can hash the fetched content),
+- has a crisp falsifier (source unreachable / quote absent / statement stronger than source),
+- independent by construction (I'm not the author of the ledger),
+- and a duplicate is harmless (more spot checks are strictly better; the criterion is ">= 3").
+
+The only risk: network. Let me test whether I can fetch arXiv. The literature lead has been doing this (ledger rows say "abstract-read"), so network probably works.
+
+Let me test web_fetch on arxiv for one specific ledger row. First, pick a row with a locator and class binding. Let me inspect the ledger rows with their locators, particularly those that matter for the classes (e.g., the C0/C2 SCC classic papers: Dafermos-Luk, Christodoulou, Penrose 1974, Sbierski, Ringström). I'll pick a high-impact row and verify the exact statement in the primary source, ideally page-checked. If full text is available (arXiv abs page has abstract; arXiv HTML/PDF may be fetchable), I can verify the abstract-level claim. Since the ledger says "abstract-read", moving one row to "page-checked" requires full text. That's heavier but doable for open-access papers.
+
+Hmm, "independent re-fetch spot check" might just mean: re-fetch the source and confirm the locator resolves and the quoted statement is present. For arXiv, fetching the abs page gives title/authors/abstract. A row whose `theorem_as_quoted` is from the abstract can be fully verified via the abs page → upgrade to "abstract-verified independently". Good enough for a spot check.
+
+Wait, but does the spot check need to be on the *ledger* rows? The G-LIT criterion: ">=3 independent re-fetch spot checks" of citation locators. Yes.
+
+Let me look at the ledger rows to pick 1-3 high-impact ones and check their locators. Let me first inspect the schema of a full row (keys) and find rows for the SCC classes with arXiv locators.
+
+Actually, hold on. Let me think about which choice is *most robust to the bounded-worker constraint*. I have limited time and must produce a clean artifact + JSON event + checkpoint + exit. The ledger spot-check is a clean, bounded, high-value task that doesn't require deep physics judgment beyond careful quoting — I must read the quoted statement and compare to the source. Physics judgment is needed for "does the source actually support the claim", but for locator/quote matching it's mostly mechanical.
+
+Alternatively the data-class agreement check is even more mechanical (10 minutes), fully deterministic, and addresses G-FORM. It's a smaller contribution but airtight.
+
+I could do BOTH quickly? The instruction says "Take one class-bound task" — one task. I should do one, well. But a task can have two evidence legs... no, keep it focused: one artifact, one JSON event, one checkpoint.
+
+Decision: I'll do the **G-LIT independent re-fetch spot check** on N ledger rows (target 3 to meet the criterion), because it's an explicit gate criterion with a count requirement, it's genuinely independent (I'm a different agent, no shared text with the ledger authors), and duplicates are additive. The artifact: `artifacts/worker-062/lit_spotcheck/spotcheck_<slug>.json` for each row + a combined `lit_spotcheck_report.json` with the fetched-source hashes and per-field verdicts. Class-bound via each row's class_ids. Falsifier: a locator that fails to resolve; a quoted statement not supported by the fetched source; or a source whose stated scope is narrower than the ledger row claims.
+
+Before committing, let me verify network access to arXiv and inspect the ledger to pick rows whose claims are checkable from the abstract. Let me also check `ledger/citation_audit.csv` / existing spot-check reviews (astra-glit-00/01, flash-10/11) to avoid picking rows already spot-checked. Let me look at `reviews/L1-spotcheck-10.json` and `L1-spotcheck-11.json` if they exist (not in the review dir listing—only convergence-15/18, etc. Actually INDEX mentioned spotchecks in outbox). Let me check what spot checks exist.
+
+Let me do that now: test web fetch + find ledger rows + existing spot checks.
+dsh: reasoning:
+There are existing spot checks: reviews/L1-spotcheck-10.json, L1-spotcheck-11.json, and worker-07's L1-spotcheck3. Let me read one of them to see the format and which targets were spot-checked, so I can pick *new* targets and follow the established evidence shape (or improve it). Also check the ledger's `source_ids` field to find locators.
+
+The W07 status says "L1-spotcheck3-final" — so three spot checks may already be recorded by worker-07. If so, the G-LIT criterion is already met by others; my contribution would then be a 4th+ independent check. Still additive but less critical.
+
+Hmm. Let me read the existing spot checks to see what they did, then decide. Also, note that the map's gate text (00:09) said fewer than 3; W07 finished its 3rd spot check at 00:16 (after the map snapshot). So this criterion is likely satisfied by W07 now. My duplicate would be less valuable.
+
+Let me look at what remains genuinely unmet and unclaimed. Let me re-read the full unmet lists for all gates, and also `controller_findings` for the most recent list. Then decide.
+
+Actually, a new consideration: the fleet of 100 workers is *fsync-ing* into the same repo. The most valuable role for a lone worker might be to **provide an independent second implementation of the class-separation detector** and a *disagreement analysis* against the tool of record (research_map/class_separation.py, designed against worker-07's corpus). The audit lead explicitly wants "checker calibration... four of five class-binding gates are uncalibrated on audited-positive fixtures" (G-AUDIT unmet). A worker could produce `artifacts/worker-062/classsep_calibration/` with an independently written detector and a fixture-level agreement matrix vs the tool of record on the shared corpus. But this is exactly `artifacts/audit/checker_agreement.py` and `artifacts/audit/build_checker_calibration.py` — the audit lead's own calibration pipeline (00:12-00:13). Overlap.
+
+OK here's another thought. What does the *project* most lack that a worker can produce in 20 minutes? Looking at the overall picture, the answer is probably: **nothing critical** — the swarm is saturated. In that case the best move is to pick the task with the highest *epistemic* value: an independent replication/verification whose independence is structurally valuable, and make it airtight and clearly labeled.
+
+Given that, I'll go with the **G-FORM data-class + T1 transfer precondition check** because:
+1. It is a controller-listed blocker with a precise statement ("no single frozen data class (s,delta,norm) is shared by F1/F2a/F2b, which disables the licensed C0=>C2 transfer").
+2. The schemas were rewritten at 00:10 — all prior checks are stale; a fresh hash-pinned measurement is genuinely needed.
+3. It's fully deterministic: parse YAML, extract fields, compare. No network, no LLM judgment.
+4. Falsifier is crisp and the checker fails closed.
+5. Class-bound to F1/F2a/F2b + T1.
+6. Duplicates are harmless (independent measurement at a hash).
+
+Wait, but I should double check: does the lead's own acceptance pipeline already check exactly this? `artifacts/formulation/evidence/acceptance_pipeline_report.json` — let me look. If it already reports "data class shared: yes", my independent confirmation is a calibration. If it says "no", then the criterion is still unmet and my report localizes it. Either way, fine, and I can compare against it as an independent cross-check.
+
+Actually, let me reconsider ONE more option that might be the most valuable of all, and is clearly unclaimed by the current evidence: **the gate criterion for G-FORM requires "reviewers 17,18 accept with cited sha256"** — the reviews are revise. A worker cannot issue binding verdicts, but can produce an *independent semantic review* of one schema at the current hash. Reviews by a fresh, independent worker are exactly what "two independent accept verdicts" needs (more reviewers = better). But writing a competent semantic review of the WCC schema is a substantial physics-reading task. My review would need to be genuinely thoughtful, and a low-quality LLM review adds noise. The ledger spot-check is closer to mechanical, and the data-class check is fully mechanical.
+
+Let me look at the acceptance pipeline report quickly, then commit to the data-class/transfer check. Actually, let me ALSO consider time: it's now ~00:15-00:16; the supervisor loop re-launches workers every 20s but `tmux has-session` prevents duplicates while I'm alive. There's no explicit deadline for me, but "bounded" suggests I should finish in minutes, not hours. A mechanical check fits.
+
+Plan:
+1. Inspect `acceptance_pipeline_report.json` and schema data_class blocks fully.
+2. Write `artifacts/worker-062/class_binding/data_class_agreement_check.py` — an independent checker that:
+   - loads the three canonical schemas (by path) + taxonomy,
+   - extracts class_id, conclusion_type, regularity_token, family, data_class fields (s/sobolev_variant, delta, norm/spaces, topologies addressed by T1 guards: genericity_kind, genericity_topology),
+   - computes sha256 of each schema at run time,
+   - evaluates T1 guard preconditions: (i) data_class fields match exactly across F2b(source) and F2a(target), (ii) genericity fields match exactly, (iii) source claim carries artifact_refs + reviewer verdict (from map/ledger),
+   - emits JSON report with per-field equality, evidence refs `path#sha256prefix`, verdicts, and falsifier text.
+   - Exit non-zero on any mismatch? Better: exit 0 with explicit verdict flags (so the artifact is produced either way), and print PASS/FAIL.
+3. Run it, capture output + report JSON, sha256 everything.
+4. Emit `comms/outbox/worker-062.jsonl` with:
+   - `artifact` event: node_id F2, class_ids [F1/F2a/F2b], artifact path, sha256, validation_status "unverified" (worker cannot set passed), evidence_refs.
+   - `status` event: node_id F2, status done (worker status can be done — PROTOCOL says worker events cannot set `status=done`... wait: "worker events cannot set status=done, validation_status=passed, or a gate verdict. Only the controller and group leads can move those". So my status should be `active` or `blocked`? The statuses allowed: queued|active|blocked|done|rejected|killed. I'll use `active` with a summary, or better emit `claim` with conclusion_type "observation"? The claim type requires class_id, statement, conclusion_type, assumptions, falsifier, evidence_refs. conclusion_type values in the map vocabulary: theorem, numerical_evidence, observation?, conditional_theorem... Let me check what conclusion_types are used in accepted events. I'll use `observation` if allowed by the schema; let me check research_map/events.schema.json.
+5. Checkpoint: write `runtime/state/w062_checkpoint_1.json` and append to a w062 log? Existing workers wrote `runtime/state/w13_checkpoint_1.json`, `w06_checkpoint_*.json`. I'll follow that pattern: `runtime/state/w062_checkpoint_1.json` (and maybe `w062_checkpoints.jsonl`). Let me look at one to copy the format.
+6. Exit.
+
+Actually hold on. Before writing my own checker, let me verify my premise by actually extracting the data classes from the three schemas. Let me read the full data_class blocks. If they clearly agree, then my report is a positive independent measurement that supports unblocking T1. If they disagree, my report localizes it. Let me read.
+
+Also check events.schema.json for allowed conclusion_type and required fields.
+dsh: reasoning:
+The data classes look aligned: all three use s > 5/2, delta in (1/2,1), "h - delta_ij in H^s_delta, K in H^{s-1}_{delta+1}", smooth-with-decay default; genericity kind residual_comeager; topology subspace. Note subtle differences: F1 has "(weighted Sobolev)" suffix and a `status` mentioning L1; F2a/F2b say "standard_choice; UNVERIFIED citation". So string equality would fail on `spaces` — a semantic comparison must normalize (strip parenthetical, compare the mathematical content). This is exactly the kind of thing my checker should handle carefully and transparently: report both raw and normalized comparisons, and flag "semantically equal modulo annotation" rather than blindly "equal".
+
+Also the T1 guards from the taxonomy: "data_class fields must match exactly (including s, delta once F2 fixes them)", "genericity_kind and genericity_topology must match exactly", "the source claim must carry artifact_refs and a reviewer verdict".
+
+So my checker:
+1. Pin hashes of the three schemas + taxonomy at run time.
+2. Extract, per class: node_id, class_id, conclusion_type (from conclusion.type presumably), regularity token, family, data_class core fields (matter, cosmological_constant, equations, constraints, regularity default, s, delta, spaces, symmetry, asymptotic decay), genericity (kind + ambient topology class), and the T1-relevant fields.
+3. Compare F2b (C0, source) vs F2a (C2, target) for exactness, and also F1 for the shared "one data class" claim.
+4. Emit report JSON with per-field raw/normalized values + verdict, plus overall verdicts:
+   - `data_class_shared_vacuum_trio`: true/false
+   - `t1_data_class_guard`: pass/fail
+   - `t1_genericity_guard`: pass/fail
+   - `t1_artifact_refs_guard`: check the map's claims/reviews for a C0→C2 transfer claim (none likely) → "no transfer claim on record; guard vacuous"
+5. Include the falsifier text.
+6. Deterministic: same output on same inputs; run twice, compare hashes (determinism check), excluding any timestamp. Actually I should avoid embedding a run timestamp in the report to keep it reproducible; or include it but note it's excluded from equality. Simpler: no timestamp inside the report; the event carries created_at.
+
+Where to write: `artifacts/worker-062/class_binding/`:
+- `data_class_agreement_check.py`
+- `data_class_agreement_report.json`
+- `README.md` (short, with command + falsifier)
+- `sha256.txt`
+
+Then event in `comms/outbox/worker-062.jsonl`: two lines:
+1. `artifact` event — node_id "F2", artifact_type "class_binding_check", path, sha256 of the report, validation_status "unverified", evidence_refs [schemas#hashprefix, report#hashprefix], plus class_ids, falsifier, next_falsifier.
+2. `claim` event — class_id "AF-SCC-C2-VAC-GEN;AF-SCC-C0-VAC-GEN" ... wait, baseClaim requires `class_id` (singular string). I'll make one claim for the transfer precondition with class_id "AF-SCC-C0-VAC-GEN->AF-SCC-C2-VAC-GEN"? Hmm, class_id must be one of the frozen four per guard G1 ("each claim carries exactly one class_id from class_ids"). So the claim should be bound to one class. The claim I'm making is about both. To respect G1, I'll emit the claim bound to AF-SCC-C2-VAC-GEN (the target class whose data class is the T1-relevant one) and mention the source in the statement/evidence. Or skip a claim event entirely and emit only an artifact + status. The prompt says "emit valid JSON with IDs evidence hash falsifier" — an artifact event lacks a falsifier field per schema but additionalProperties are allowed; I'll include `falsifier` and `next_falsifier` anyway.
+
+Hmm, but a `claim` is more aligned with "emit valid JSON with IDs evidence hash falsifier". Let me emit:
+- artifact event (report),
+- claim event: class_id "AF-SCC-C2-VAC-GEN", statement: "At schema hashes <h1>/<h2>/<h3>, the declared data_class core fields of AF-SCC-C2-VAC-GEN and AF-SCC-C0-VAC-GEN are equal after annotation-stripping (normalized), and the genericity_kind='residual_comeager' plus subspace-topology are equal; therefore the T1 data-class and genericity guard preconditions hold on these artifacts. No C0->C2 transfer claim with artifact_refs is on record, so the artifact_refs guard of T1 is not yet exercisable.", conclusion_type "observation" — is "observation" allowed? The taxonomy's field_vocabulary.conclusion_type only lists the three censorship values, but that's for class schemas, not claim events. The map's claims use various conclusion_types. Let me check the map's claims conclusion_type values to pick a legitimate one ("observation" or "evidence" or "methodological"). Let me check.
+
+Also the event needs to be ingested by comms.py; before sending I should validate my JSON against the schema and PROTOCOL rule 5 (reject own output before sending): does the artifact exist? does the falsifier actually falsify? does the class id match the file?
+
+Wait — one more thought on the event format: PROTOCOL says upward messages go to `comms/outbox/<agent>.jsonl`. My agent id is worker-062. Good: `comms/outbox/worker-062.jsonl`.
+
+And checkpoint: `runtime/state/w062_checkpoint_1.json` — following w13's format. Let me read w13_checkpoint_3.json to copy the shape.
+
+Before writing, double-check the T1-relevant data: are there any real differences? The `spaces` strings differ by "(weighted Sobolev)" and status text. `adm_mass` in F1 has "rigidity" while F2a/F2b have "locator" and F2b has "hypotheses_reconciliation". The taxonomy guard says "data_class fields must match exactly (including s, delta once F2 fixes them)". Hmm — F1's adm_mass has a rigidity field, F2b's has an extra hypotheses_reconciliation note. Strictly "exact match" of the whole data_class block would FAIL. But the guard's parenthetical "(including s, delta once F2 fixes them)" suggests the load-bearing fields are the regularity/data-space fields, not every annotation. A careful report should:
+- compare the *core mathematical* fields (matter, Lambda, equations, constraints, regularity default, s, delta, spaces (normalized), symmetry, decay rates),
+- list *annotation-only* differences (status notes, locators, parentheticals) as non-load-bearing but flagged,
+- give a verdict for both a strict and a normalized reading, and let the lead decide.
+
+This is honest and useful: it tells the lead exactly where "exact match" is ambiguous, and it provides machine-checkable normalized equality.
+
+Actually, the more I think: the deliverable's real value is the *precise diff*. Let me write the checker to produce:
+- `strict_equal`: raw equality of each core field (excluding annotation fields? no—) 
+
+Let me define two comparison modes explicitly in the report:
+- **Mode S (strict, whole-block)**: canonical JSON of the entire `data_class` block after key sorting, equality per class pair. This will be False due to annotation fields (`status`, `locator`, `hypotheses_reconciliation`, `rigidity`) and the "(weighted Sobolev)" suffix.
+- **Mode N (normalized core)**: compare the load-bearing field set F
