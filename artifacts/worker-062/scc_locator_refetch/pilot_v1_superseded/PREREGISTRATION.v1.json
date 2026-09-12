@@ -1,0 +1,117 @@
+{
+  "schema_version": "w062-prereg-1",
+  "artifact_id": "W062-SCC-LOCATOR-REFETCH-01",
+  "task": "Independent live re-fetch of every SCC-side locator in ledger/citation_audit.csv at the frozen L1 hash, testing the repair proposals emitted by W062-SCC-LOCATOR-RESOLVABILITY-01",
+  "actor": "worker-062",
+  "role": "bounded execution worker (not the ledger author, not the G-LIT gate owner)",
+  "node_id": "L1",
+  "gate": "G-LIT",
+  "class_id": "AF-SCC-C0-VAC-GEN",
+  "class_ids": ["AF-WCC-VAC-GEN", "AF-SCC-C2-VAC-GEN", "AF-SCC-C0-VAC-GEN", "AF-WCC-SCALAR-SPH"],
+  "created_at": "2026-09-12T00:42:10+08:00",
+  "frozen_before_fetch": true,
+  "inputs_pinned": {
+    "ledger/citation_audit.csv": "315c19145065a5f9c95d64461eae760b4c296b06d1f2f09bc5847ac1a7064ce9",
+    "artifacts/worker-062/scc_locator_resolution/resolution.json": "2a093033370fa2ec04de2330be6a16b4a4f5cb458007d0e7c79fc491cc8d1669",
+    "artifacts/worker-050/wcc_locator_resolution/resolution.json": "8ce6895f05248df337ed94a7257de62f81c2d056758ef7f98f7389b4181e045b"
+  },
+  "population": {
+    "rule": "rows of ledger/citation_audit.csv whose class_mapping contains AF-SCC-C0-VAC-GEN or AF-SCC-C2-VAC-GEN",
+    "expected_rows": 34,
+    "cross_check": "the citation_id set must equal the 34-row set in the pinned resolution.json; any difference aborts the run (exit 6)"
+  },
+  "targets_per_row": {
+    "current_exact_locator": "the exact_locator cell as published (all 34 rows)",
+    "proposed_replacement": "resolution.json proposed_exact_locator for the 26 weak rows; NOT_APPLICABLE for the 8 direct rows"
+  },
+  "source_routing": {
+    "note": "routing is fixed before any fetch; the specific source used is recorded per fetch",
+    "arxiv_abs": "https://arxiv.org/abs/<id> -> primary arXiv API https://export.arxiv.org/api/query?id_list=<id>; fallback https://arxiv.org/abs/<id>",
+    "arxiv_api_query": "http(s)://export.arxiv.org/api/query?... -> fetch as-is; record the number of <entry> elements",
+    "inspirehep_literature": "https://inspirehep.net/api/literature/<recid> -> fetch as-is (JSON)",
+    "inspirehep_query": "https://inspirehep.net/api/literature?q=... -> fetch as-is (JSON); record hits.total",
+    "openalex_work": "https://api.openalex.org/works/... -> fetch as-is (JSON)",
+    "doi": "https://doi.org/<doi> or bare DOI -> Crossref https://api.crossref.org/works/<doi>",
+    "fallback_order": ["primary_routed_source", "crossref_by_doi", "openalex_by_doi_or_arxiv", "arxiv_abs_html"]
+  },
+  "record_extraction": {
+    "arxiv_api": "feed <entry> count; title from <title>, year from <published>",
+    "arxiv_abs_html": "meta citation_title; meta citation_date",
+    "crossref": "message.title[0], message.issued.date-parts[0][0]",
+    "openalex": "title, publication_year",
+    "inspirehep_record": "metadata.titles[0].title, metadata.earliest_date",
+    "inspirehep_query": "hits.hits[].metadata.titles[0].title, hits.total",
+    "other_html": "document <title>, og:title or citation_title if present"
+  },
+  "verdict_rule": {
+    "title_normalisation": "lowercase; drop $...$ math; remove LaTeX backslash commands; keep [a-z0-9] tokens; collapse whitespace",
+    "containment": "|tokens(ledger_title) INTERSECT tokens(resolved_title)| / min(|tokens(ledger_title)|, |tokens(resolved_title)|); ledger-side parenthetical annotations are absorbed because the denominator is the smaller token set",
+    "match_threshold": 0.75,
+    "partial_threshold": 0.45,
+    "year_rule": "when both years are available: |ledger_year - resolved_year| <= 1 required for MATCH, <= 2 allowed for PARTIAL, > 2 forces MISMATCH; year absence is recorded as year_unavailable and does not by itself block MATCH",
+    "MATCH": "single resolved record AND containment >= 0.75 AND year rule satisfied",
+    "PARTIAL": "single resolved record AND (containment in [0.45,0.75) OR year delta in [2,2])",
+    "MISMATCH": "single resolved record AND (containment < 0.45 OR year delta > 2)",
+    "MULTI_RECORD": "response is a result list or feed with >= 2 records",
+    "ZERO_RECORD": "HTTP 2xx but 0 records extracted",
+    "HTTP_ERROR": "status >= 400 or bounded retries exhausted",
+    "PARSE_ERROR": "2xx but the body cannot be parsed into records"
+  },
+  "row_outputs": {
+    "current_exact_locator_verdict": ["SINGLE_RECORD_MATCH", "SINGLE_RECORD_PARTIAL", "SINGLE_RECORD_MISMATCH", "MULTI_RECORD", "ZERO_RECORD", "HTTP_ERROR", "PARSE_ERROR"],
+    "replacement_verdict": ["VERIFIED_MATCH", "VERIFIED_PARTIAL", "VERIFIED_MISMATCH", "FETCH_FAILED", "NOT_APPLICABLE"],
+    "table_verdict": "all 26 replacements VERIFIED_MATCH and all 8 direct locators SINGLE_RECORD_MATCH -> PASS; any VERIFIED_MISMATCH/HTTP_ERROR/SINGLE_RECORD_MISMATCH -> FAIL; otherwise PARTIAL"
+  },
+  "controls": {
+    "C1_positive_penrose_1965": {
+      "fetch": "Crossref DOI 10.1103/PhysRevLett.14.57",
+      "expected": "single record, title containment >= 0.75 against 'Gravitational collapse and space-time singularities'"
+    },
+    "C2_negative_mutants": {
+      "fetch": ["Crossref DOI 10.4007/annals.2025.202.2.9999", "arXiv API id_list=1710.01723"],
+      "expected": "neither returns a record matching its reference title; both must classify HTTP_ERROR or ZERO_RECORD, never MATCH"
+    },
+    "C3_cross_source": {
+      "rows": "the 3 lowest citation_id SCC rows with non-empty doi and arxiv_id and empty mirror_of",
+      "fetch": "both the arXiv id and the Crossref DOI per row",
+      "expected": "both sources independently MATCH the ledger title for all 3 rows"
+    },
+    "C4_hash_guard_teeth": {
+      "test": "a byte-mutated ledger copy must make the runner exit 3 before any fetch",
+      "expected": "exit code 3"
+    },
+    "C5_scope_and_disjointness": {
+      "test": "exactly 34 SCC rows, every one carries an SCC token, intersection with worker-050's 12 exact-match WCC locators is empty",
+      "expected": "34 / true / empty"
+    },
+    "C6_replay_determinism": {
+      "test": "re-run from cached raw bodies (--replay, no network) and compare all verdict fields",
+      "expected": "identical verdicts, zero diff"
+    },
+    "all_controls_must_pass": true,
+    "failure_exit_code": 4
+  },
+  "budget": {
+    "max_http_requests": 90,
+    "global_deadline_seconds": 900,
+    "per_request_timeout_seconds": 30,
+    "retries": 2,
+    "backoff_seconds": [5, 15],
+    "min_interval_seconds_per_host": {"export.arxiv.org": 3.2, "arxiv.org": 3.2, "api.crossref.org": 1.2, "inspirehep.net": 1.5, "api.openalex.org": 1.2, "doi.org": 1.2}
+  },
+  "stopping_rule": {
+    "complete": "every row has a verdict from at least one fetched source and all controls pass",
+    "incomplete": "more than 20% of rows are FETCH_FAILED for network reasons other than 404/410; report INCOMPLETE (exit 5) and do not issue a table verdict",
+    "void": "ledger or resolution.json bytes drift from the pins during the run; abort (exit 6)"
+  },
+  "falsifiers": [
+    "F1: any current exact_locator classified MULTI_RECORD/ZERO_RECORD that in fact resolves to exactly one record matching the cited work voids the 'weak' classification of that row.",
+    "F2: any proposed replacement classified VERIFIED_MISMATCH or FETCH_FAILED falsifies that repair proposal; a single VERIFIED_MISMATCH turns the table verdict to FAIL.",
+    "F3: any drift of ledger/citation_audit.csv away from sha256 315c19145065a5f9c95d64461eae760b4c296b06d1f2f09bc5847ac1a7064ce9 voids the whole table.",
+    "F4: any control (C1-C6) failing invalidates the instrument and voids the table verdict.",
+    "F5: an offline replay that produces different verdicts from the same raw bodies falsifies determinism.",
+    "F6: an independent comparator applied to the retained raw bodies that disagrees on a row verdict falsifies that row's verdict (raw bodies and hashes are retained for exactly this)."
+  ],
+  "authority": "Worker evidence only. Not a ledger edit, not a G-LIT gate verdict, not an L1 node completion, not a validation_status. The canonical ledger remains owned by astra-lead-literature; any repair requires a controller freeze decision because it moves the L1 hash.",
+  "next_falsifier": "The frozen ledger itself is not edited by this task: after a controller freeze decision, apply the 26 verified replacements and re-run both this re-fetch and the frozen-hash spot checks against the new L1 hash."
+}

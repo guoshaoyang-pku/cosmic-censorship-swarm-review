@@ -1,0 +1,94 @@
+--- research_map/class_separation.py
++++ artifacts/worker-080/classsep_disj/class_separation_disj_candidate.py
+@@ -112,6 +112,69 @@
+             out.append(f"CLASSSEP: single class token merges C0 and C2 in {where}: {tok!r}")
+         elif u not in KNOWN_CLASSES and u.startswith("AF-"):
+             out.append(f"CLASSSEP: unknown class token in {where}: {tok!r}")
++
++
++# --- W080-CLASSSEP-DISJ-01 candidate: rubric HF-02 "disjunction of class_ids" ----------
++# Coverage gap (worker-036, 2026-09-12T00:38): _scan_class_ids above flags a *single* token
++# that contains both C0 and C2, and unknown AF- tokens, but is silent on a container that
++# binds >=2 *distinct known frozen classes* -- the live L0 HF-02 condition (8 ledger rows at
++# ledger/theorems.jsonl a1674f094979).  The rule below is deliberately scoped to ASSERTED
++# containers (structured rows / asserted class_id[:] lines); map scope/coverage lists are not
++# routed through it.  The measured reason for that scope is in report.json
++# (naive "any class_ids container" rule fires on 349 class_id/class_ids key instances in the
++# live map, nearly all of them node/claim/review scope metadata, not disjunctive assertions).
++def _known_class_tokens(value) -> list:
++    """Distinct frozen class tokens declared in one class_id/class_ids container."""
++    if isinstance(value, str):
++        toks = [t for t in re.split(r"[;,]", value) if t.strip()]
++    elif isinstance(value, list):
++        toks = [str(x) for x in value]
++    else:
++        return []
++    known: list = []
++    for tok in toks:
++        u = tok.strip().strip("'\"").upper()
++        if u in KNOWN_CLASSES and u not in known:
++            known.append(u)
++    return known
++
++
++def _scan_class_ids_disjunction(value, where: str, out: list):
++    """HF-02 disjunction: >=2 distinct frozen class ids bound to one asserted container."""
++    known = _known_class_tokens(value)
++    if len(known) >= 2:
++        out.append(f"CLASSSEP: disjunction of class_ids in {where}: {known!r}")
++
++
++def disjunction_findings(obj, where: str) -> list:
++    """Structured-row scan (ledger row, claim-like record). Row-local class binding."""
++    out: list = []
++    if not isinstance(obj, dict):
++        return out
++    for key in ("class_id", "class_ids"):
++        if key in obj:
++            _scan_class_ids_disjunction(obj[key], f"{where}.{key}", out)
++    return out
++
++
++def findings_for_ledger(rows, where_prefix: str = "ledger") -> list:
++    """Scan a list of ledger/theorem rows; the HF-02 container is the row's class binding."""
++    out: list = []
++    for i, row in enumerate(rows):
++        if not isinstance(row, dict):
++            continue
++        rid = row.get("theorem_id") or row.get("id")
++        where = f"{where_prefix}[{i}]" + (f":{rid}" if rid else "")
++        out += disjunction_findings(row, where)
++    return out
++
++
++def _asserted_class_id_tokens(raw: str) -> list:
++    """Tokens of an asserted artifact line `class_id[s]: <raw>` (flow list or scalar)."""
++    v = raw.strip()
++    if v.startswith("[") and v.endswith("]"):
++        v = v[1:-1]
++    return [t.strip().strip("'\"") for t in re.split(r"[;,]", v) if t.strip()]
+ 
+ 
+ def _scan_family(text: str, where: str, class_id: str, out: list):
+@@ -201,13 +264,20 @@
+ 
+ def findings_for_text(text: str, where: str) -> list:
+     """Artifact content scan. Prose mode: only merge assertions and semantic
+-    key:value lines violate; unknown class tokens are reported as soft."""
++    key:value lines violate; unknown class tokens are reported as soft.
++
++    W080 candidate delta: an asserted `class_id:` / `class_ids:` line carrying >=2
++    distinct frozen classes is an HF-02 disjunction (same scoping as _scan_composite)."""
+     out: list = []
+     _scan_composite(text, where, out, mode="prose")
+     for i, line in enumerate(text.splitlines(), 1):
+         m = re.match(r"\s*[\"']?([A-Za-z_]+)[\"']?\s*[:=]\s*(.+)$", line)
+         if m and m.group(1) in ASSERTED_LINE_KEYS:
+             _scan_composite(m.group(2), f"{where}:{i} ({m.group(1)})", out, mode="declaration")
++            if m.group(1) in ("class_id", "class_ids"):
++                _scan_class_ids_disjunction(
++                    _asserted_class_id_tokens(m.group(2)),
++                    f"{where}:{i} ({m.group(1)})", out)
+     for tok in _class_tokens(text):
+         if tok not in KNOWN_CLASSES:
+             out.append(f"CLASSSEP-SOFT: unknown class token in {where}: {tok!r}")

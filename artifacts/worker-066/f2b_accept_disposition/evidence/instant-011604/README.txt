@@ -1,0 +1,1 @@
+Later-instant (01:16) copies of the base artifacts, preserved when the pin-instant evidence was restored from the pinned corpus. The addendum claim cites report.json#03e5c2de; that content is this directory's report.json.
