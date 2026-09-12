@@ -1,0 +1,107 @@
+dsh: reasoning:
+Let me start by reading the handoff files mentioned.
+dsh: reasoning:
+Let me read the handoff and research_map.json.
+dsh: reasoning:
+The handoff is long. Let me understand my role: "Astra controller. Read ASTRA_HANDOFF.md and research_map.json. Consume comms and artifacts, maintain DAG and gates, issue bounded assignments, record hashes and validation. Keep numerics gated. One independent lifecycle then exit. probe=quota"
+
+So I need to run one independent lifecycle (like astra-indep-2 / pass 09), then exit. The probe=quota likely refers to something about quota probing. Let me look at the current state: the map was updated at 06:26 (events.jsonl and research_map.json), which is later than pass 09 at 01:22. So presumably there's been more traffic since.
+
+Let me check:
+1. comms/inbox/astra.jsonl — my assignment
+2. comms/PROTOCOL.md
+3. The current map state
+4. runtime/state/controller_verification/
+5. The lifecycle scripts
+
+Let me start reading. Also check what "probe=quota" means — maybe there's a quota probe mechanism in the harness. Let me search.
+dsh: reasoning:
+There's a lot going on. Note: files modified at 06:26, 11:43, 12:00 — after pass 09. Also there are controller-01.jsonl and controller-final-review.jsonl in outbox at 06:24, 06:26. Apparently a previous controller pass happened between 01:25 and 06:26? Let me check the state.
+
+Let me read:
+- comms/inbox/astra.jsonl (my assignment)
+- comms/PROTOCOL.md
+- research_map/ARCHITECTURE.md
+- The latest checkpoints
+- controller_verification dir contents
+- events.jsonl tail (recent events)
+
+Also probe=quota: maybe a probe for quota. Let me search for "quota" in the repo.
+dsh: reasoning:
+There's much more activity: checkpoints up to 06:24, and also things modified at 11:43/12:00 (supervisor.log, overnight_watch.jsonl). Let me check the current time and the latest pass state. Also read my inbox: comms/inbox/astra.jsonl. Read the tail of it. Also read the recent controller outbox files (controller-01.jsonl, controller-final-review.jsonl) to understand what happened after pass 09.
+
+Let me also check astra-indep-2.md to understand the independent lifecycle format, and check the probe=quota meaning. Let me grep for "probe" in recent files.
+dsh: reasoning:
+So the state: It's 12:01 on Sep 12. The last checkpoint is ckpt-20260912-062451. There's a "controller-01" that ran at ~04:17–06:26 and did map maintenance. Now I'm "Astra controller" with probe=quota, meaning I need to probe the quota (DeepSeek API quota?) and do one independent lifecycle then exit.
+
+Let me understand the "quota circuit": runtime/state/quota_circuit_until. Let me check that file and the supervisor scripts. Also look at the harness/supervisor_100_v3.sh which mentions quota.
+
+Also let me read the comms/outbox/controller-01.jsonl and controller-final-review.jsonl to see the last controller pass results.
+
+Let me check what "probe=quota" means in the supervisor script and see if I need to run a probe.
+dsh: reasoning:
+Now I understand the setup. `probe=quota` is a prompt passed to the controller on the first launch after a quota circuit opens — the intent is that the controller probes whether the API quota has recovered. If the probe hits "QUOTA: Insufficient Balance" in stderr within 2 minutes, the supervisor re-opens the circuit and kills controller-01.
+
+So my job as Astra controller for this pass: One independent lifecycle, then exit. The "probe=quota" means I should check whether the DeepSeek API quota is available (probe), and if not, avoid launching expensive work. But more importantly, I am the controller: consume comms/artifacts, maintain DAG and gates, issue bounded assignments, record hashes/validation, keep numerics gated.
+
+Given "One independent lifecycle then exit", I should:
+1. Run the existing lifecycle tooling: `python3 research_map/astra_lifecycle.py --label <label>` (locked ingest → apply → repair → audit → checkpoint).
+2. Possibly emit pass-10 events (gate/assignment/notice) via a new pass script, but likely I should create a pass-10 events script following the pattern.
+3. Probe quota: check `~/.dsh` or the DeepSeek endpoint with a minimal call? Let's see how the quota circuit is detected: stderr contains "QUOTA: Insufficient Balance". As the controller, I can check the quota via a minimal API request. But careful with "Keep numerics gated" and "One independent lifecycle then exit".
+
+Let me understand what tooling exists and what state the map is in. First check:
+- research_map/astra_lifecycle.py usage
+- validate map currently
+- current map sha
+- the checkpoint state
+- the current gates/assignments in map
+- recent events since pass 09 (map moved from 45acd9d9 to something at 06:26)
+
+Also check the supervisor: the tmux sessions are all gone (project_tmux 0) since ~10:23? Actually counts.tsv shows quota circuit continuously open. The probe=quota launch happened at some point. Let me check supervisor.log tail and whether controller-01 tmux is alive now. Actually the header of this session came from supervisor launching controller-01 with "probe=quota". It said "One independent lifecycle then exit. probe=quota".
+
+Wait — actually the prompt I received is exactly the controller prompt plus "probe=quota". The supervisor's quota_seen() checks stderr for "QUOTA: Insufficient Balance" within 2 minutes of launch. My session's stderr — the harness might capture it. Hmm, but I'm running as a DSH session, not dsh_fixed.sh. The supervisor would check `runtime/instances/*/stderr.log` modified in last 2 min.
+
+Let me check runtime/instances to see the current instance and the stderr.
+
+Also, the quota circuit until value: 1789185652 → let me convert: that's epoch. Current time ~? Let me compute. 1789185652 = ... let me just run date +%s.
+
+Key question: what does "probe=quota" require of me concretely? Likely: perform a cheap quota probe (a minimal DeepSeek API call) and record the result; if quota is still insufficient, do not launch workers, record the circuit, and exit after the lifecycle. The previous controller-01 pass at 06:24 hardened the probe to use per-instance exit codes. Let me read the probe hardening artifact.
+
+Let me gather:
+1. `cat artifacts/formulation/evidence/runtime_probe_hardening_20260912T0625.json`
+2. `tail -50 runtime/state/supervisor.log`
+3. `ls runtime/instances | tail`
+4. `date +%s` and quota circuit file.
+
+Let me do these.
+dsh: reasoning:
+Interesting! The current instance (12:00:52) has no exit_code and stderr is being written. The probe semantics now: supervisor checks for exit_code, trajectory exit record, and quota stderr within 35 seconds. The previous instances all "probe_failed" at ~35s — meaning the process exited (exit_code present) with quota error in stderr. So they're failing fast.
+
+But wait — I received the prompt and I'm running, and I'm the 12:00:52 instance (started at 12:00:52, and my session's prompt is "probe=quota"). My earlier bash calls show stderr has content from the harness at some point. So the supervisor will check at ~12:01:27 for exit_code in my instance dir. If I haven't exited, it just proceeds? Let me re-read the probe-hardened supervisor logic in the actual live script — the harness file I read (`harness/supervisor_100_v3.sh`) may not be the live one. The supervisor log says `probe_failed id=...` — a message not in the script I read. So there's a newer live script, likely `/tmp/supervisor_100_v3.sh` or elsewhere. Let me find the live supervisor's script via ps.
+
+Actually the log line format "launch cosmic-controller-01 ..." vs script's "launch $key $id" — matches. But "probe_failed" isn't in the v3 script I read. So there's a v4 or the live script is at another path. Let me check `ps aux | grep supervisor`.
+
+Also this is important: my session must eventually exit so the supervisor detects probe success. Hmm, wait: if the probe "fails only when exit_code exists AND (quota stderr OR ...)". Let me read the live script to know exactly. If I'm still running at +35s, the supervisor might consider probe passed and launch leads/workers. But quota might still be exhausted — my own session is running though, meaning quota IS available for this instance (I got a completion... actually I'm running through the harness with a model, so the model API works for me).
+
+Hold on — is the harness the same DeepSeek API? My session is "Astro/Astra controller powered by deepseek-flash" via DSH. The dsh_fixed.sh profile headless uses the DeepSeek endpoint with credentials in ~/.dsh/.credentials.yaml. Same quota presumably. Since I'm generating tokens, quota is available now. The prior probes failed with "Insufficient Balance". Maybe the balance was topped up.
+
+So "probe=quota" — my job is to serve as the quota probe AND do one independent controller lifecycle. The supervisor is watching: if I exit within 35s with quota stderr, it opens circuit. Since I'm running long, it likely proceeds to launch leads and workers after the probe window.
+
+Let me look at the live supervisor script to understand exactly. Find its PID and cmdline.
+dsh: reasoning:
+The live supervisor is `/tmp/supervisor_100_v3.sh` (PID 2831271, started 06:07). Let me read /tmp/supervisor_100_v3.sh to see the live probe logic. This is critical: I need to know what happens while I run and when I exit.
+
+Also note: I'm running via dsh_fixed.sh — the harness runs me as deepseek-flash. The probe checks stderr for quota error. Since I'm alive and generating, quota is presumably OK; but if quota runs out mid-session, my stderr will contain it.
+
+Let me read the live script.
+dsh: reasoning:
+Now I understand the probe logic:
+
+- When the quota circuit exists, the supervisor removes it and launches controller with `probe=quota`, waits 35 seconds.
+- If the probe instance is NOT complete (no exit_code) OR the probe failed (exit_code exists AND stderr has "QUOTA: Insufficient Balance"), it logs `probe_failed`, reopens the circuit, kills the controller session, and continues.
+- `probe_complete` = exit_code exists AND trajectory has "exit id=". 
+- `probe_failed` returns 0 if: no exit_code (not failed yet → return 0 means "failed"...) wait carefully:
+  - `probe_failed(){ d="$1"; [ -f "$d/exit_code" ] || return 0; grep -q "QUOTA..." ...; }` — if exit_code does NOT exist, returns 0 (success/true = "probe_failed" function returns true). Hmm, that means if no exit_code (process still running), probe_failed returns true (0).
+  - Condition: `if ! probe_complete "$probe_dir" || probe_failed "$probe_dir"; then ... probe_failed ...`. With process still running: probe_complete = false (no exit_code) → `! false` = true → so probe is marked failed after 35s if the process hasn't exited! That seems backwards — a fast exit is required for probe pass? Let's evaluate: prior probes had exit_code written (process exited with quota error) and stderr with quota → probe_complete true, probe_failed true → overall true → probe_failed. If a process is still running at 35s → not complete → probe_failed → circuit reopened and session killed. Hmm, that means a long-running successful controller probe would be marked failed and killed! That seems to be a bug: the intended logic likely was "if probe has completed AND (quota error OR abnormal exit) → failed; else pass". Actually `probe_failed` semantics: returns true if it *can determine failure*. If exit_code absent, it can't determine failure → should return 1. The `|| return 0` is inverted... Actually wait: `[ -f "$d/exit_code" ] || return 0` means "if no exit_code, return 0 (true)". In the intended reading "return 0" = "yes, failed"? No. Bash 0 = success = true. If the function is used as `probe_failed "$d"` in a condition, returning 0 = "the probe failed". So no exit_code → probe failed. That's inverted from the natural semantics but it makes the combined condition: `! probe_complete || probe_failed`. 
+
+With a running process (no exit_code): `! probe_complete` = ! false = true → condition true → probe_failed logged, circuit reopened, session killed at 35s. So ANY controller that takes >35s to finish gets killed?! Let me check evidence: at 09:25:01 launch, probe_failed at 09:25:36 — exactly 35s. And all of them at +35s. Did any previous probe pass
