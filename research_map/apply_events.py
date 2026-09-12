@@ -350,6 +350,12 @@ def apply_one(m, ev, idx, applied):
                     gate["evidence_refs"] = sorted(set(gate.get("evidence_refs", []) + ev.get("evidence_refs", [])))
                     gate["last_verdict_event"] = eid
                     gate["updated_at"] = now()
+                    # Controller repair REC-40 (pass 08): an authority gate event may refresh the
+                    # gate's own text fields too, so `unmet`/`criteria` text written at an older
+                    # hash cannot survive a verdict event. Optional and backwards-compatible.
+                    for key in ("criteria", "unmet", "controller_note", "eta", "owner"):
+                        if key in ev:
+                            gate[key] = ev[key]
     elif t == "direction_update":
         for g in m["groups"]:
             if g["id"] == ev["group_id"]:

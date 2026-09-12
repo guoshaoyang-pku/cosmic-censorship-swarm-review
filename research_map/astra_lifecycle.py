@@ -520,24 +520,33 @@ def findings_merge(m: dict, pub: dict, hashes: dict, soft: list, cov: dict,
                     "superseded-hash verdicts are advisory only."),
          "evidence": ["research_map/research_map.json", "reviews/",
                       "runtime/state/artifact_hashes.json"]},
-        {"id": "CF-16", "severity": "minor", "status": "calibration-assigned",
+        {"id": "CF-16", "severity": "minor", "status": "adjudicated-decision-c-review-pending",
          "finding": ("audit_evidence.py reports hard CLASSSEP failures on claims whose statements "
-                     "quote, negate, split or audit the merged-case token (claims[36,94,96,97,101,"
-                     "112,127,144,152,180,187,192] as of pass 05, 17 hits). The claims state those "
-                     "cases are merged-case probes that 'need no new class' and their class_ids are "
-                     "the frozen four: a metalinguistic mention, not a composite class assertion. "
-                     "Traffic ABOUT the finding reproduces the token, so per-author rewording is an "
-                     "unbounded loop."),
-         "action": ("Adjudicated false positive pattern; the raw hard-failure count stays visible in "
-                    "the checkpoint until the detector is calibrated or the claim prose is retired. "
-                    "astra-life05-classsep-calibration (audit lead) must deliver a measured TP/FP/FN "
-                    "census and an adopt/reject decision for the staged candidate detector "
-                    "(proposed/class_separation.py e2d24b927ee8) plus a claims-retirement policy; "
-                    "the controller does not edit another agent's claim text (CF-4 policy)."),
-         "evidence": ["research_map/class_separation.py",
-                      "artifacts/worker-085/candidate_diff/report.json",
-                      "artifacts/formulation/proposals/classsep_prose_precision_patch.md",
-                      "runtime/state/controller_verification/astra-lifecycle-05-decisions.json"]},
+                     "quote, negate, split or audit the merged-case token: the claims' class_ids are "
+                     "the frozen four, so this is a metalinguistic mention, not a composite class "
+                     "assertion, and traffic ABOUT the finding reproduces the token (per-author "
+                     "rewording is an unbounded loop). The r3 adjudication landed 01:03-01:05 "
+                     "(reviews/CLASSSEP-calibration-adjudication.json 7714ffd5b467, decision (c)): a "
+                     "four-arm, five-corpus census at cited hashes finds NO adoptable arm - APPLIED "
+                     "a8c04fc3 19 hard (17 labeled metalinguistic FP + 2 DETECTOR_SELF meta-claims), "
+                     "sensitivity 4/6, specificity 3/10, battery 13/23, 1 HIGH cue-induced FN (A04 "
+                     "clause boundary); PRE c266dbec 24 hard, spec 1/10; STAGED e2d24b92 25 hard, "
+                     "sens 5/6, spec 1/10; PROSEFIX dc8aa0de spec 10/10 and battery 23/23 but 10 HIGH "
+                     "cue-induced FN. Assertion-vs-mention is not lexically separable at this window; "
+                     "no adoption, no rollback-by-audit, no claim retirement (raw count stands)."),
+         "action": ("Ruled (REC-30): the decision is operative only after exactly one independent "
+                    "non-author review at the frozen hashes (astra-life07-classsep-adjudication-review, "
+                    "deadline 02:30) reproduces the census and the FN attribution correction "
+                    "(dc8aa0de carries the 10/10 suppression, not e2d24b92). Detector writes stay "
+                    "frozen; the active frozen pin stays c266dbecaa87 and e36b0d644ca-bound "
+                    "measurements are void (CF-29). The controller does not edit another agent's "
+                    "claim text (CF-4 policy); G-AUDIT stays pending."),
+         "evidence": ["research_map/class_separation.py#a8c04fc31e4a",
+                      "reviews/CLASSSEP-calibration-adjudication.json#7714ffd5b467",
+                      "artifacts/worker-049/classsep_fn_audit/results.json#9e1bf2043934",
+                      "artifacts/worker-098/classsep_prose_shadow/drift_recheck.json#ffabb753313f",
+                      "proposed/class_separation.py#e2d24b927ee8",
+                      "runtime/state/controller_verification/astra-lifecycle-06-decisions.json"]},
         {"id": "CF-17", "severity": "major", "status": "adjudicated",
          "finding": ("F0 publication adjudication (REC-3). Assignment astra-life02-publish-f0 required "
                      "byte-identical publication of research_map/formulation_taxonomy.yaml and "
@@ -595,23 +604,31 @@ def findings_merge(m: dict, pub: dict, hashes: dict, soft: list, cov: dict,
                       "artifacts/literature/tools/build_literature.py",
                       "artifacts/literature/reviews/rev3-axis-split.json",
                       "research_map/research_map.json#controller_gate_audit"]},
-        {"id": "CF-20", "severity": "major", "status": "repair-assigned",
-         "finding": ("Evidence-binding chain is stale at the frozen formulation bytes: "
-                     "schemas/taxonomy_cases.jsonl has 36/36 rows still bound to the superseded "
-                     "taxonomy hash 66bf917bd368 while its meta points at rev5, and all three rev12 "
-                     "schemas declare consistency_evidence_sha256 675a99d0 while the live "
-                     "artifacts/formulation/evidence/taxonomy_consistency.json is 9e335e9ba1bf. "
-                     "The schemas' own binding rule forbids a gate verdict until the evidence is "
-                     "refreshed, so a rev12 accept would not be reproducible gate evidence."),
-         "action": ("astra-life05-evidence-binding-repair (formulation lead, bounded to four items, "
-                    "no class-semantics change, F0 canonical untouchable) must publish rev13 + "
-                    "FROZEN rev29 and emit artifact events; astra-life05-verify-gform-r3 then binds "
-                    "fresh verdicts at the rev29 pins. The rev12 pins of astra-life04-verify-gform-r2 "
-                    "are void on repair."),
-         "evidence": ["schemas/taxonomy_cases.jsonl",
-                      "artifacts/formulation/evidence/taxonomy_consistency.json",
-                      "reviews/closefind-verify-094.json",
-                      "artifacts/worker-095/f2b_rev12_binding_integrity/verdict.json"]},
+        {"id": "CF-20", "severity": "major", "status": "repair-landed-review-pending",
+         "finding": ("Evidence-binding chain was stale at the frozen formulation bytes: "
+                     "schemas/taxonomy_cases.jsonl had 36/36 rows bound to the superseded taxonomy "
+                     "hash 66bf917bd368 while its meta pointed at rev5, and all three rev12 schemas "
+                     "declared consistency_evidence_sha256 675a99d0 while the live "
+                     "artifacts/formulation/evidence/taxonomy_consistency.json was 9e335e9ba1bf; the "
+                     "schemas' own binding rule forbade a gate verdict until the evidence was "
+                     "refreshed. The repair landed before this pass: the case corpus is rebound "
+                     "(schemas/taxonomy_cases.jsonl ccf7041bd0ff) and the schemas are rev13 "
+                     + h("F1") + " / " + h("F2a") + " / " + h("F2b") + " under FROZEN rev29, all "
+                     "three mirror pairs aligned. Review coverage at the rev13 hashes is 0 accepts "
+                     "per class: the rev12 verdicts are void with their pins, so G-FORM is withheld "
+                     "on fresh review, not on a known defect."),
+         "action": ("astra-life05-verify-gform-r3 (audit lead, deadline 02:45) is the only binding "
+                    "path: two independent non-author reviewers per class at the rev29 pins, each "
+                    "verdict measuring and citing the file sha256, no target write during the round. "
+                    "The controller does not re-pin review verdicts and does not move G-FORM on a "
+                    "landed repair alone; see CF-27 for the FROZEN meta move inside this window."),
+         "evidence": ["schemas/taxonomy_cases.jsonl#ccf7041bd0ff",
+                      "artifacts/formulation/evidence/taxonomy_consistency.json#9e335e9ba1bf",
+                      "artifacts/formulation/FROZEN.json",
+                      "schemas/af_wcc_vacuum.yaml#" + h("F1"),
+                      "schemas/af_scc_c2_vacuum.yaml#" + h("F2a"),
+                      "schemas/af_scc_c0_vacuum.yaml#" + h("F2b"),
+                      "runtime/state/controller_verification/astra-lifecycle-06-decisions.json"]},
         {"id": "CF-21", "severity": "minor", "status": "recorded-open",
          "finding": ("AF-WCC-SCALAR-SPH axes.genericity_kind is 'unresolved' / "
                      "genericity_value_status 'unresolved_pending_L1' while its rev5 conclusion "
@@ -641,18 +658,23 @@ def findings_merge(m: dict, pub: dict, hashes: dict, soft: list, cov: dict,
          "evidence": ["comms/outbox/worker-081.jsonl",
                       "numerics/results/flat_wave_convergence_rev3.json",
                       "research_map/research_map.json#controller_repairs"]},
-        {"id": "CF-23", "severity": "minor", "status": "assigned",
+        {"id": "CF-23", "severity": "minor", "status": "artifact-landed-verification-pending",
          "finding": ("A0 detector scope defect (literature lead, 00:44): the HF-14/HF-03 detectors "
-                     "report corpus-level hits on archive/, incoming/ and worker snapshot paths that "
-                     "are historical records, not live artifacts (8 files after the rev-3 repair). "
-                     "A measurement ambiguity in A0, not a ledger defect."),
-         "action": ("astra-life05-a0-detector-scope (audit lead) must scope the detectors to "
-                    "canonical artifacts + live build inputs or define an explicit historical-marker "
-                    "exclusion, with a measured before/after list at pinned hashes; archives are not "
-                    "patched."),
-         "evidence": ["artifacts/audit/reports/audit-20260912T003820.json",
-                      "evaluation_rubric.yaml:244-252",
-                      "comms/outbox/astra-lead-literature.jsonl"]},
+                     "reported corpus-level hits on archive/, incoming/ and worker snapshot paths "
+                     "that are historical records, not live artifacts (8 files after the rev-3 "
+                     "repair). A measurement ambiguity in A0, not a ledger defect. The scoped "
+                     "adjudication landed this pass at "
+                     "evaluation/A0_detector_scope_adjudication.json (a26be4b85706, 00:53:51): an "
+                     "exclusion predicate classify(rel) in {historical, snapshot_copy}, explicit "
+                     "class lists, and a measured before/after file census at pinned hashes. It "
+                     "carries no independent verdict yet."),
+         "action": ("astra-life04-verify-a0 (audit lead, deadline 02:00) must bind the rubric and "
+                    "state, for each prior finding, whether the scope artifact resolves it, with a "
+                    "cited sha256; no rubric edit, no gate self-pass. Verification must confirm no "
+                    "live-artifact hit is hidden by the exclusion."),
+         "evidence": ["evaluation/A0_detector_scope_adjudication.json#a26be4b85706",
+                      "artifacts/audit/reports/audit-20260912T003820.json",
+                      "evaluation_rubric.yaml:244-252"]},
         {"id": "CF-24", "severity": "info", "status": "recorded",
          "finding": ("G-F0 is the first gate to pass: declared F0 taxonomy 0abb9ed8a961 rev5 with "
                      "companion supplement d7419b4e8963 under FROZEN rev28 2f358f6722d9, four "
@@ -679,6 +701,190 @@ def findings_merge(m: dict, pub: dict, hashes: dict, soft: list, cov: dict,
                     "artifact, hash or gate verdict changed."),
          "evidence": ["research_map/apply_events.py", "research_map/run_cycle.py",
                       "research_map/research_map.json#controller_repairs"]},
+        {"id": "CF-26", "severity": "major", "status": "adjudicated-decision-c-instrument-moved-again",
+         "finding": ("Class-separation instrument drifted mid-review with no recorded authority: "
+                     "research_map/class_separation.py moved c266dbecaa87 -> a8c04fc31e4a at "
+                     "00:52:00 (mtime), 36 s after the pass-05 lifecycle exit. No controller repair, "
+                     "gate event, assignment card or author artifact declares the write; the pass-05 "
+                     "summary lists only tool repairs. audit_evidence.py hard-fails 'frozen artifact "
+                     "drifted during review' against the active frozen_artifacts pin (frozen 23:30:20, "
+                     "reason: class-separation gate used for G-FORM/G-AUDIT). The applied guard was "
+                     "contested (worker-098 revise 3.0 vs worker-049 pre-registered adversarial FN "
+                     "audit). The r3 adjudication returned decision (c) at 01:03-01:05: not lexically "
+                     "separable, no adoption, no rollback-by-audit, pin stays c266dbec. The instrument "
+                     "then moved a THIRD time, a8c04fc31e4a -> e36b0d644ca at 01:06:12, during the "
+                     "REC-22 freeze and with no authorizing event (see CF-29)."),
+         "action": ("No adoption and no frozen-pin refresh: the c266dbec pin stays active as the "
+                    "recorded baseline. The e36b0d644ca revision is void, preserved as evidence and "
+                    "the live bytes were restored to the adjudicated r3 APPLIED bytes a8c04fc31e4a "
+                    "from a hash-verified pin so the independent review runs at unchanged hashes "
+                    "(REC-29/CF-29). Every verdict that used the detector must cite the hash it "
+                    "measured; c266dbec-bound and e36b0d644ca-bound reviews are void at the restored "
+                    "bytes. Any further detector write voids the round and is a new finding."),
+         "evidence": ["research_map/class_separation.py#a8c04fc31e4a",
+                      "runtime/state/controller_verification/cf29-detector-write-forensics.json",
+                      "runtime/state/controller_verification/class_separation.e36b0d644ca.evidence.py",
+                      "reviews/CLASSSEP-calibration-adjudication.json#7714ffd5b467",
+                      "artifacts/worker-049/classsep_fn_audit/pinned/class_separation_c266_recovered.py#c266dbceca87",
+                      "runtime/state/controller_verification/astra-lifecycle-06-decisions.json"]},
+        {"id": "CF-27", "severity": "minor", "status": "recorded-for-review-round",
+         "finding": ("Binding document moved inside the G-FORM r3 review window under the same "
+                     "revision number: artifacts/formulation/FROZEN.json measured 3d9e3d77fd87 in "
+                     "the pass-06 pre-flight (00:54) and 815e08079aefbc at 00:57:27, with the "
+                     "declared revision still 29. The rev13 schema bytes themselves were stable "
+                     "across the same window (d9cebb9404b2 / e9a27996dfd3 / b2ab6acb2bbe, all three "
+                     "mirror pairs aligned), so this is meta-document drift, not a schema move."),
+         "action": ("astra-life05-verify-gform-r3 reviewers must measure and cite the FROZEN bytes "
+                    "(815e08079aefbc) plus each per-file pin before binding; the card's moving-target "
+                    "stop rule applies. If any per-file pin changed inside the round, stop and "
+                    "report rather than re-reviewing a moving target. No gate movement on the meta "
+                    "move alone."),
+         "evidence": ["artifacts/formulation/FROZEN.json#815e08079aefbc",
+                      "schemas/af_wcc_vacuum.yaml#d9cebb9404b2",
+                      "schemas/af_scc_c2_vacuum.yaml#e9a27996dfd3",
+                      "schemas/af_scc_c0_vacuum.yaml#b2ab6acb2bbe"]},
+        {"id": "CF-28", "severity": "minor", "status": "recorded-quarantined-extended",
+         "finding": ("Controller inbox integrity: comms/inbox/astra.jsonl line 2 is not valid JSON "
+                     "- a stray prefix 'event_id:human-pi-overnight-20260912T0042n' is glued to an "
+                     "assignment object (event_id human-pi-detector-fix-20260912T0100, actor "
+                     "'astra', created_at 01:00, future-dated, assignee lead-audit) that duplicates "
+                     "the standing A0 detector-scope card with a different, code-changing "
+                     "acceptance and arrived after the detector had already been rewritten (00:52). "
+                     "No human-pi event exists in the accepted stream; the line cannot be ingested "
+                     "and is not authority for any action. EXTENDED at pass 07 (CF-30): the same "
+                     "injection batch also planted well-formed cards in the audit-lead inbox and a "
+                     "new line in this controller inbox."),
+         "action": ("Quarantined byte-verbatim and recorded, not actioned: no card was issued from it "
+                    "and no canonical path was duplicated (CF-12). The standing + amended detector "
+                    "cards govern. Any genuine Human-PI directive must be re-sent as a well-formed "
+                    "event through the protocol; writers must not hand-edit inbox JSONL."),
+         "evidence": ["comms/inbox/astra.jsonl",
+                      "runtime/state/comms_quarantine/astra-inbox-line2-20260912T0100.jsonl",
+                      "runtime/state/comms_quarantine/astra-inbox-line3-20260912T0112.jsonl",
+                      "comms/PROTOCOL.md",
+                      "runtime/state/controller_verification/astra-lifecycle-06-decisions.json"]},
+        {"id": "CF-29", "severity": "major", "status": "voided-restored-frozen",
+         "finding": ("Unauthorized third write to the frozen class-separation instrument during the "
+                     "REC-22/astra-life06 round: research_map/class_separation.py measured "
+                     "a8c04fc31e4a (the r3 adjudication's APPLIED bytes) through 01:04 and was "
+                     "rewritten to e36b0d644ca75b1e at 01:06:12 (mtime), after the adjudication "
+                     "artifact landed. No accepted-stream event references e36b0d644ca, no "
+                     "assignment card authorizes it, and the change is a one-line widening of the "
+                     "mention guard ('0 genuine assertions' + optional 'or describes the' "
+                     "suppression), i.e. the exact class of false-negative risk the adjudication "
+                     "left open. The write raced the independent-review phase the decision requires."),
+         "action": ("Ruled (REC-29): e36b0d644ca is not adopted and every e36b0d644ca-bound "
+                    "measurement is void; the active frozen pin stays c266dbecaa87. The unauthorized "
+                    "bytes are preserved byte-verbatim at "
+                    "runtime/state/controller_verification/class_separation.e36b0d644ca.evidence.py "
+                    "with a forensic manifest, and the live instrument was mechanically restored to "
+                    "the hash-verified adjudicated bytes a8c04fc31e4a before the independent review. "
+                    "This is a byte-identity restoration of a pinned artifact, not a code edit or an "
+                    "adoption. Any further write to the detector voids the round and aborts the "
+                    "review."),
+         "evidence": ["runtime/state/controller_verification/cf29-detector-write-forensics.json",
+                      "runtime/state/controller_verification/class_separation.e36b0d644ca.evidence.py",
+                      "research_map/class_separation.py#a8c04fc31e4a",
+                      "artifacts/worker-073/classsep_union_separability/pinned/class_separation.live.a8c04fc31e4a.py",
+                      "runtime/state/controller_verification/astra-lifecycle-06-decisions.json#REC-22"]},
+        {"id": "CF-30", "severity": "major", "status": "recorded-quarantined-not-authority",
+         "finding": ("Downward-channel injection: cards attributed to actor 'astra' appeared in "
+                     "comms/inbox/astra.jsonl line 3 and comms/inbox/astra-lead-audit.jsonl lines "
+                     "24, 25, 27 with no corresponding accepted-stream event and no controller "
+                     "lifecycle emission - 'human-pi-detector-fix-20260912T0100' (the well-formed "
+                     "twin of the CF-28 malformed payload), 'astra-detector-fix-0105' (created_at "
+                     "01:05:00 but written by 01:00:35) and 'astra-detector-patch-result-0112' "
+                     "(created_at 01:12:00, written 01:06:56, reporting the e36b0d644ca state that "
+                     "appeared at 01:06:12). Each directs a detector write or freeze action, "
+                     "conflicting with REC-22 and the no-self-pass rule. The audit lead correctly "
+                     "refused to author the fix it measures (blocker "
+                     "audit-l07-b4-audit-author-conflict-20260912T010517)."),
+         "action": ("Ruled (REC-31): the cards are quarantined byte-verbatim, are not authority, and "
+                    "are not actioned; the audit lead's conflict refusal is upheld and the detector "
+                    "edit is not reassigned to it. Their state claim is independently corroborated by "
+                    "measurement (CF-29) and is recorded as evidence, not as instruction. A genuine "
+                    "Human-PI directive must be re-sent as a well-formed accepted event through "
+                    "comms/outbox; writers must not hand-edit inbox JSONL."),
+         "evidence": ["runtime/state/comms_quarantine/astra-inbox-line3-20260912T0112.jsonl",
+                      "runtime/state/comms_quarantine/astra-lead-audit-inbox-lines24-25-27-20260912T0112.jsonl",
+                      "runtime/state/controller_verification/cf29-detector-write-forensics.json",
+                      "comms/outbox/astra-lead-audit.jsonl",
+                      "comms/PROTOCOL.md"]},
+        {"id": "CF-31", "severity": "major", "status": "adjudication-required",
+         "finding": ("G-FORM F2b coverage-count divergence at one hash. The controller's hash-bound "
+                     "scan of reviews/*.json at measured F2b b2ab6acb2bbe reports 4 distinct full "
+                     "accepts (worker-052, worker-071, worker-072, worker-090) while the formulation "
+                     "lead's independent per-file census at the same bytes reports 0 accept / 7 revise "
+                     "(worker-066 x2, worker-035, worker-017, worker-075, worker-018, worker-053). The "
+                     "two counts share no reviewer, so at least one method is wrong, and review files "
+                     "are mutable under fixed names (worker-045 accept->revise 29s after a scan; "
+                     "worker-075 accept->revise 2m19s after it). Passing G-FORM on either count alone "
+                     "would bind unverified evidence."),
+         "action": ("Ruled (REC-39): G-FORM coverage is withheld. astra-life05-verify-gform-r3 must "
+                    "publish a per-file binding table at the measured hash - filename, reviewer, "
+                    "verdict, reviewed_sha256, verdict mtime, full-schema flag, independence basis - "
+                    "and state which count is correct and why the other is wrong. Coverage is "
+                    "re-measured from disk at use time; the controller_gate_audit scan is an index, "
+                    "not evidence. Bytes move after rev14: all current verdicts are then void and r3 "
+                    "re-runs at the new pins."),
+         "evidence": ["research_map/research_map.json#controller_gate_audit",
+                      "runtime/state/controller_verification/lifecycle_20260912-011239.json",
+                      "comms/outbox/astra-lead-formulation.jsonl#lead-form-20260912T0113-107",
+                      "schemas/af_scc_c0_vacuum.yaml#b2ab6acb2bbe"]},
+        {"id": "CF-32", "severity": "major", "status": "repair-authorized",
+         "finding": ("The G-FORM evidence pipeline is not reproducible at the rev29/rev13 pins and "
+                     "the held-out corpora are invalid by construction: (i) "
+                     "artifacts/formulation/tools/run_acceptance.py exits 3 at preflight because the "
+                     "rebased semantic-escape corpus binds base_sha256 1bb78ce9b357 (rev11 C0) while "
+                     "canonical C0 measures b2ab6acb2bbe, yet evidence/acceptance_pipeline_report.json "
+                     "still records 3/3 canonical pass and union_caught 31/31 - it cannot be "
+                     "regenerated from live bytes; (ii) stage-B artifacts/worker-06/"
+                     "spec_conformance_audit.py rejects the UNTOUCHED frozen F1 canonical "
+                     "d9cebb9404b2 on rule R03 (literal-substring binder defect), so FORM-HELDOUT-10 "
+                     "is terminally invalid and its escape numbers (C2/C0 arms union escape 1.0, 7 "
+                     "R03-only WCC catches) certify nothing."),
+         "action": ("Ruled (REC-36/REC-41): rev14 folds the acceptance-corpus rebind (re-run "
+                    "measure_semantic_escape.py + run_acceptance.py to exit 0 and re-pin, or record "
+                    "the pinned report non-reproducible and exclude it from gate evidence); the "
+                    "stage-B R03 binder is repaired by its owner with a mutation control and the "
+                    "held-out corpora re-run before any escape number is cited as gate evidence."),
+         "evidence": ["artifacts/formulation/evidence/semantic_escape_rebased.json",
+                      "artifacts/formulation/tools/run_acceptance.py:54-63",
+                      "artifacts/worker-06/spec_conformance_audit.py",
+                      "artifacts/formulation/evidence/acceptance_pipeline_report.json",
+                      "comms/outbox/astra-lead-formulation.jsonl#lead-form-20260912T0113-108"]},
+        {"id": "CF-33", "severity": "major", "status": "recorded-quarantined-not-authority",
+         "finding": ("Downward-channel injection recurrence (CF-30 family): a well-formed assignment "
+                     "card 'astra-classsep-stabilize-0118' attributed to actor 'astra' was planted "
+                     "byte-identically in comms/inbox/astra-lead-audit.jsonl line 31 and "
+                     "comms/inbox/astra.jsonl line 4 (line sha256 9ff2edc1e684, verbatim file sha256 "
+                     "3167994548db). It has no accepted-stream self-emission, no astra outbox record, "
+                     "no lifecycle emission, a future-dated created_at (01:18:00) against its inbox "
+                     "mtimes (01:12:31 / 01:16:23, +329s / +96s), and its referenced artifact "
+                     "reviews/CLASSSEP-stabilization-0118.json does not exist. It directs a detector "
+                     "write, detector-of-record reselection and a FROZEN manifest edit - directly "
+                     "against CF-29/REC-29 (detector frozen at the restored a8c04fc31e4a) and REC-38 "
+                     "(CLASSSEP adjudication review already satisfied). Independent provenance censuses "
+                     "classify it CONTROLLER_CARD_UNBACKED / SUSPECTED_FORGED (worker-033 "
+                     "inbox_backing_census: 6 suspected-forged / 4 quarantined; worker-093 "
+                     "cf30_inbox_provenance: UNBACKED_CONTROLLER x2, emitter_backed=0)."),
+         "action": ("Ruled (REC-43): the card is not authority and is not actioned; it is quarantined "
+                    "byte-verbatim at runtime/state/comms_quarantine/astra-inbox-line4-20260912T0120.jsonl "
+                    "(astra) and .../astra-lead-audit-inbox-line31-20260912T0117.jsonl (audit lead), and "
+                    "recorded with the measured timeline and backing checks at "
+                    "runtime/state/controller_verification/cf33-injection-provenance.json. No detector "
+                    "write, FROZEN edit or G-AUDIT movement is authorized by it; the standing audit "
+                    "cards and the CF-29 freeze govern. One bounded read-only containment scan is "
+                    "assigned to worker-093 (astra-indep2-cf33-containment). A genuine Human-PI "
+                    "directive must be re-sent as a well-formed event through the protocol; writers "
+                    "must not hand-edit inbox JSONL."),
+         "evidence": ["runtime/state/controller_verification/cf33-injection-provenance.json",
+                      "runtime/state/comms_quarantine/astra-inbox-line4-20260912T0120.jsonl#3167994548db",
+                      "runtime/state/comms_quarantine/astra-lead-audit-inbox-line31-20260912T0117.jsonl#3167994548db",
+                      "research_map/events.jsonl",
+                      "artifacts/worker-033/inbox_backing_census/report.json#9978615e5c07",
+                      "artifacts/worker-093/cf30_inbox_provenance/census.json#868f5d7b2f46",
+                      "research_map/class_separation.py#a8c04fc31e4a"]},
     ]
     for f in want:
         old = by_id.get(f["id"], {})

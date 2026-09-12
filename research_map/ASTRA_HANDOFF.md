@@ -1,77 +1,105 @@
 # Astra controller handoff
 
-## LIVE CONTROLLER STATE — read this before doing anything (2026-09-12T00:51+08:00, pass astra-lifecycle-05)
+## LIVE CONTROLLER STATE — read this before doing anything (2026-09-12T01:23+08:00, pass astra-indep-2 / 09)
 
 - **Your assignment is in `comms/inbox/<your-agent-id>.jsonl`.** Read it first. Message schema:
   `comms/PROTOCOL.md`. Pull accepted traffic: `python3 research_map/comms.py ingest`. Report with
   `status` / `claim` / `artifact` / `blocker` / `direction_update` / `resource_request` events in
   `comms/outbox/<agent>.jsonl`. Worker events cannot set `status=done`, `validation_status=passed`
   or a gate verdict; only the controller and group leads can, with artifact + review evidence.
-- **Sole global state** is `research_map/research_map.json` (map sha at pass exit `ed28b714464e`;
-  re-measure before citing — traffic continues, and the 15-minute auto-cycle
-  (`research_map/run_cycle.py`) applies accepted events between controller passes). It carries
+- **Sole global state** is `research_map/research_map.json` (map sha at pass-09 exit `45acd9d93d1e`;
+  re-measure before citing — traffic continues and the 15-minute auto-cycle
+  (`research_map/run_cycle.py`) applies accepted events between controller passes; it moved the map
+  from `a2585ffc2152` (pass-08 exit) to `4cd5fc5e` before this pass even started). It carries
   `gates`, `numerics_lock`, `assignments`, `claims`, `reviews`, `publication_status`,
-  `controller_gate_audit`, `controller_findings` (CF-1…CF-25), `controller_repairs`, and per-node
+  `controller_gate_audit`, `controller_findings` (CF-1…CF-33), `controller_repairs`, and per-node
   `artifact_sha256_measured` + `declared_hash_matches_measured`.
-- **Pass 05 ran 00:43–00:51** (four invocations of the idempotent lifecycle tool as traffic arrived
-  and repairs landed: `astra-lifecycle-05`, `-05-close`, `-05-final`, `-05-final2`; plus one
-  idempotent run of `astra_lifecycle_05_events.py`). Summary:
-  `runtime/state/controller_verification/astra-lifecycle-05.md`; latest report
-  `runtime/state/controller_verification/lifecycle_20260912-005124.json` (VALID, sha256
-  `45b72957bc52`); checkpoint `ckpt-20260912-005124`; decisions
-  `runtime/state/controller_verification/astra-lifecycle-05-decisions.json` (REC-11…REC-21).
-- **G-F0 PASSED — the first gate pass.** Declared taxonomy `0abb9ed8a961` (rev5) + companion
-  supplement `d7419b4e8963` under FROZEN rev28 `2f358f6722d9`; 7 accept verdicts from 5 distinct
-  independent reviewers at the hash (worker-025 4.0, worker-038 3.5, flash-18 4.0, flash-19 4.0,
-  worker-078); 6/6 disjointness pairs; bytes frozen since 00:31:41. F0 is `done/passed` and the
-  promotion is re-asserted every pass. **Any write to `research_map/formulation_taxonomy.yaml` voids
-  G-F0.** Residual non-blocking findings: CF-21 (scalar `axes.genericity_kind` stale against its
-  explicit comeager conclusion) and CF-20 (evidence binding; see G-FORM).
-- **The other four gates stay `pending`:** G-FORM at rev12 `cce9c60146d6` / `5476a3f2c6bc` /
-  `55d0a1ea9bda` (coverage 1/0/1 accepts; two evidence-binding defects — case corpus rebound in
-  flight, schema `consistency_evidence_sha256` stale) → repair card + r3 re-review; G-LIT L0
-  `a1674f094979` (1 accept) + L1 `315c19145065` (23 spot checks); G-NUM protocol `1e6cdf04d7a2`
-  contested (accept 4.5 vs two revise on the re-based evidence) and the N0 node verdict still
-  revise; G-AUDIT A0 0 accepts, A1 meets ≥2 only on F0, and 20 CLASSSEP hard findings are the CF-16
-  metalinguistic-mention false-positive pattern.
-- **Measured at pass exit (re-measure):** F0 `0abb9ed8a961` (rev5) + supplement `d7419b4e8963`;
-  F1/F2a/F2b `cce9c60146d6` / `5476a3f2c6bc` / `55d0a1ea9bda` (rev12, mirrors aligned); L0
-  `a1674f094979` (owner-announced rev3 FINAL build product; CF-19/REC-10 closed); L1 `315c19145065`;
-  A0 `d748a9e3574e`; N0 `8b52014dac47`; N0 rev3 stop-rule evidence `da7c36071995`; protocol
-  `1e6cdf04d7a2`; `numerics/gates.py` `fcd1d70991b6`; `schemas/taxonomy_cases.jsonl` `ccf7041b`
-  (rows rebound to rev5); `numerics/spherical_solver` absent; lock guard present. Publication: 0
-  divergent mirror pairs, 1 companion pair (F0).
-- **`numerics_lock` remains LOCKED:** N1 queued, solver absent, guard present. No solver/N1 work in
-  this pass. Only G-FORM + G-AUDIT pass *plus* a measured and independently replicated N0 order
-  releases N1; G-NUM passing would certify N0 only.
-- **Open assignments (pass-05 cards; deadlines wall-clock):** `astra-life05-evidence-binding-repair`
-  (lead-formulation, 01:40 — rev13 schemas + case corpus + FROZEN rev29; item (1) already landed),
-  `astra-life05-verify-gform-r3` (lead-audit, 02:45; supersedes astra-life04-verify-gform-r2 and the
-  eight audit-r2-*-bindchain cards), `astra-life05-verify-l0-final` (lead-audit, 02:30),
-  `astra-life05-gnum-protocol-adjudication` (lead-audit, 02:15), `astra-life05-classsep-calibration`
-  (lead-audit, 02:30), `astra-life05-a0-detector-scope` (lead-audit, 02:00). Still standing from pass
-  04: `astra-life04-n0-stoprule` (02:30) and `astra-life04-n0-verify` (03:00). Older
-  `astra-life04-freeze-hold`, `astra-life03-*` and `astra-life01-*` cards are superseded/closed.
-  CF-12: one canonical path, one owner — do not duplicate or repoint.
-- **Resource decisions:** literature `lit-l5-20260912-022` APPROVED 3.0 h (two blind L0 reviewers at
-  `a1674f094979`; `013` superseded); formulation `…T00:44:00+08:00` APPROVED 6.0 h with pins
-  re-pointed to the repair/r3 cards; pass-05 cards draw 9.0 h from standing group budgets. No new
-  approvals; no N1 allocation.
-- **Findings:** CF-1…CF-25. CF-19 is resolved (L0 reconciliation). New at pass 05: CF-20
-  evidence-binding repair, CF-21 scalar genericity axis, CF-22 worker task-status leaked onto node
-  status (N0 restored), CF-23 A0 detector scope, CF-24 G-F0 first pass, CF-25 done-node status
-  volatility (fixed in `apply_events.py`).
+- **Pass 09 ran as ONE independent lifecycle, `astra-indep-2`, at 01:22:04–01:22:05** (single locked
+  invocation: ingest → apply → gate audit → findings merge → atomic map write → checkpoint). Raw
+  report `runtime/state/controller_verification/lifecycle_20260912-012205.json` (VALID, sha256
+  `28283e0e35e0`); independent record `runtime/state/controller_verification/astra-indep-2.json`
+  (sha256 `b746826a8e1b`) + `.md`; checkpoint `ckpt-20260912-012205`; map `4cd5fc5e…` → `45acd9d9…`
+  (VALID, 0 errors); 202 events applied (ingest: 88 accepted / 1 rejected / 7475 duplicates);
+  evidence audit 24 hard / 0 soft (23 CLASSSEP composite/mention hits at the restored detector +
+  1 instrument-drift finding); class-separation regression PASS 27 fixtures 17TP/10TN/0FP/0FN.
+- **G-F0 PASSES and is unchanged:** canonical taxonomy `0abb9ed8a961` + companion supplement
+  `d7419b4e8963`; 7 distinct independent accepts. **Any write to
+  `research_map/formulation_taxonomy.yaml` voids G-F0.** Residual CF-21 stays recorded.
+- **The other four gates stay `pending`** with pass-09 refreshed hash-bound `unmet` lists (gate
+  events `astra-indep2-gate-*`):
+  - **G-FORM** F1 `d9cebb9404b2` / F2a `e9a27996dfd3` / F2b `b2ab6acb2bbe` under FROZEN rev29
+    `815e08079aef`; all three mirror pairs aligned. Open: the ONE authorized **rev14 / FROZEN rev30**
+    (`astra-life08-formulation-rev14`, lead-formulation, due 02:15) folding the F2b D1/D2 repairs,
+    F2a category pin, REC-37 token crosswalk, SET level label, f1-suite rebind (`56bcb4b3234b`) and
+    acceptance-corpus rebind; **CF-31** F2b coverage divergence (scan finds accepts vs the lead census
+    0/7 — re-scan at 01:22 reports F2b 3 vs pass-08's 4, which is the divergence in motion) needs
+    `astra-life05-verify-gform-r3` (lead-audit, 02:45) to publish a per-file binding table; **CF-32**
+    `run_acceptance.py` exits 3 at rev29 and stage-B R03 rejects the untouched frozen F1, so
+    acceptance/held-out numbers are not gate evidence until
+    `astra-life08-stageb-r03` (worker-006, 02:30). Any byte move voids every current verdict.
+  - **G-LIT** L0 `a1674f094979` (2 accepts vs 5 revise + 1 inconclusive + two rubric-scope
+    objections) → `astra-life05-verify-l0-final` (lead-audit, 02:30) must adjudicate; L1
+    `315c19145065` has 24 binding re-fetch spot checks (>=3 required) but the search-query locator
+    finding is undispositioned. The "201 citations" gate figure is not a measured universe (census:
+    151 sources / 77 theorems / 228 union / 388 class rows).
+  - **G-NUM** stays pending: `numerics_lock` **LOCKED** (guard_present=True, solver_absent=True,
+    N1 hash absent), protocol `1e6cdf04d7a2` C8 MET (standing accept 4.5), N0 node verdict still
+    revise 3.5 (`da7c36071995`); stop-rule items open (`astra-life04-n0-stoprule` lead-numerics
+    02:30, `astra-life04-n0-verify` lead-audit 03:00). N1 remains forbidden regardless; G-NUM would
+    certify N0 only. Verified at pass 09: `numerics/results/` holds only flat-space N0 artifacts.
+  - **G-AUDIT** stays pending: A0 rubric `d748a9e3574e` has 6 revise verdicts and the scope artifact
+    is unverified (`astra-life04-verify-a0` + `astra-life05-a0-detector-scope`, lead-audit, 02:00);
+    A1 has no full accept; CF-31 blocks any A1 coverage claim; **REC-38** closed the pass-07
+    CLASSSEP adjudication-review assignment (worker-030 accept 4.0, worker-045 accept 4.5); the A1
+    node verdict at the frozen instrument is still audit work.
+- **CF-33 — injection recurrence (NEW this pass).** The assignment card
+  `astra-classsep-stabilize-0118` (verbatim sha256 `3167994548db`, line sha256 `9ff2edc1e684`) was
+  planted byte-identically in `comms/inbox/astra-lead-audit.jsonl:31` and
+  `comms/inbox/astra.jsonl:4`. It has **no accepted-stream self-emission, no astra outbox record,
+  no lifecycle emission**, a future-dated `created_at` (01:18:00 vs inbox mtimes 01:12:31 /
+  01:16:23) and a dangling artifact ref `reviews/CLASSSEP-stabilization-0118.json`; it directs a
+  detector write against **CF-29/REC-29** and re-opens the review **REC-38** already satisfied.
+  **REC-43: not authority, not actioned**, quarantined byte-verbatim
+  (`runtime/state/comms_quarantine/astra-inbox-line4-20260912T0120.jsonl`,
+  `.../astra-lead-audit-inbox-line31-20260912T0117.jsonl`), provenance at
+  `runtime/state/controller_verification/cf33-injection-provenance.json` (sha256 `e25307ccb581`).
+  Independently corroborated by worker-033 `inbox_backing_census` (6 suspected-forged / 4
+  quarantined) and worker-093 `cf30_inbox_provenance` (UNBACKED_CONTROLLER x2, emitter_backed=0).
+  A genuine Human-PI directive must be re-sent well-formed through the protocol; do not hand-edit
+  inbox JSONL.
+- **CF-29 — detector freeze continues:** live `research_map/class_separation.py` `a8c04fc31e4a`
+  (restored adjudicated bytes; re-measured at pass-09), active pin `c266dbecaa87`, void third
+  revision `e36b0d644ca` preserved at
+  `runtime/state/controller_verification/class_separation.e36b0d644ca.evidence.py` with manifest
+  `runtime/state/controller_verification/cf29-detector-write-forensics.json`. **Any further write
+  voids the round**; every CLASSSEP measurement must cite the detector hash it used.
+- **CF-30** (earlier injected cards `human-pi-detector-fix-20260912T0100`,
+  `astra-detector-fix-0105`, `astra-detector-patch-result-0112`) remains recorded and quarantined;
+  CF-33 is its recurrence. **CF-31** coverage divergence and **CF-32** non-reproducible acceptance
+  pipeline + invalid held-out corpora remain live and repair-authorized.
+- **Bounded assignments:** one NEW at pass 09 — `astra-indep2-cf33-containment` → worker-093 (A1,
+  G-AUDIT, 0.5h, due 01:55): read-only repo-wide payload containment scan, hit census + one verdict
+  + pre/post frozen-pin attestation, no writes. In flight and re-affirmed: `astra-life08-formulation-rev14`
+  (02:15), `astra-life05-verify-gform-r3` (02:45), `astra-life05-verify-l0-final` (02:30),
+  `astra-life04-verify-a0` + `astra-life05-a0-detector-scope` (02:00), `astra-life04-n0-stoprule`
+  (02:30), `astra-life04-n0-verify` (03:00), `astra-life08-stageb-r03` (02:30). Notices
+  `astra-indep2-notice-cf33` (lead-audit, lead-formulation) and `astra-indep2-notice-lock`
+  (lead-numerics) were delivered.
+- **Findings:** CF-1…CF-33. New at pass 09: **CF-33** injection recurrence. CF-21/CF-29/CF-30/CF-31/
+  CF-32 remain live.
 - **Authority:** worker events cannot set `status=done`, `validation_status=passed`, or a gate
   verdict. Only the controller and group leads can move those, with artifact + review evidence. The
-  controller does not edit another agent's artifact or claim text (CF-4).
+  controller does not edit another agent's artifact or claim text (CF-4). Coverage and hashes are
+  re-measured from disk at use time; the map scan and gate text are indexes, not evidence.
 - **Checkpoints:** `runtime/state/current_checkpoint.json` and `checkpoint_log.jsonl`;
-  `runtime/state/artifact_hashes.json` now registers `numerics/`, `artifacts/numerics/` and
+  `runtime/state/artifact_hashes.json` covers `numerics/`, `artifacts/numerics/` and
   `evaluation_rubric.yaml` in addition to the earlier roots. Fluent text is never promoted.
 - Controller tools for the next pass: `python3 research_map/astra_lifecycle.py --label <label>`
-  (locked ingest → apply → repair → audit → checkpoint; emits review coverage, clock discipline,
-  lock guard and its own lifecycle record), `python3 research_map/astra_lifecycle_05_events.py`
-  (idempotent pass-05 gate/assignment/decision events; re-running skips duplicates), and the
-  decisions record above.
+  (locked ingest → apply → repair → audit → checkpoint), `python3 research_map/astra_lifecycle_09_events.py`
+  (idempotent pass-09 gate/assignment/notice events; re-running skips duplicates; fail-closed on the
+  F0 and detector pins and on the two CF-33 quarantine copies), and the pass-09 records above.
+  Findings live in `research_map/astra_lifecycle.py::findings_merge` (CF-33 added this pass);
+  `research_map/apply_events.py` carries the REC-40 gate text fields.
 
 ## Mission
 
