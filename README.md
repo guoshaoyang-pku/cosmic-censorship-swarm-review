@@ -1,110 +1,43 @@
-# 可容许元组最小直径 H(k) 的 Lean 证书化证明与复现计算
+# Cosmic Censorship Swarm Review
 
-本仓库是对 **有界素数间隔问题（Polymath8b 纪录 H₁ ≤ 246）** 的组合学侧补充：
-**可容许 k 元组最小直径 H(k) 的证明证书化（proof-carrying computation）**——
-把 1593 个 (k,d) 下界目标（k=2..50 全覆盖，小 k 有 Lean 穷举）的完备证明
-压缩为 Lean 4 可机器检查的证书。
+<p align="center"><img src="assets/swarm-dag.svg" alt="Research plan DAG" width="100%"></p>
 
-> **项目定位（诚实声明）**：本项目**不是**新的素数间隔纪录，也**没有**证明
-> "246 是 Maynard–Polymath8b 框架的理论极限"。它提供的是：
-> (1) H(k) 关键最小直径值的**可重新验证的机器检查证明链**；
-> (2) 对 Polymath8b 的 246 结果补充 **H(50) 最小性的证书化证明**；
-> (3) M 泛函侧的严格数值工具与**明确标注的开放缺口**。
+<p align="center"><img src="assets/progress-timeline.svg" alt="Swarm progress timeline" width="100%"></p>
 
----
+> **Review status · 2026-09-12** Evidence-first review snapshot of the cosmic-censorship research swarm. The map, pilot, independent reviews, runtime evidence, and handoff risks are archived here. It is ready for a capped supervised collaborator pilot; it is not yet an unattended multi-provider production service.
 
-## 1. 三部分结论的精确区分
+## Start here
 
-| 类别 | 内容 | 状态 |
+1. Open the [interactive review dashboard](docs/cosmic_censorship/pilot/review_dashboard.html).
+2. Read the [partner-scale readiness note](docs/cosmic_censorship/pilot/partner_scale_readiness_20260912.md).
+3. Verify the [evaluation report](docs/cosmic_censorship/pilot/evaluation_report.md), [gate checklist](docs/cosmic_censorship/pilot/gate_checklist.md), [role outputs](docs/cosmic_censorship/pilot/runs/), and [independent reviews](docs/cosmic_censorship/pilot/reviews/).
+
+## What the swarm has done
+
+- Split cosmic censorship into auditable classes: AF-WCC vacuum, AF-SCC-C2/C0, low-regularity extensions, spherical Einstein–scalar calibration, Kerr/Cauchy-horizon, charged, de Sitter, AdS, and higher-dimensional variants.
+- Frozen the formulation fields: equations, dimension/topology, initial-data space, asymptotics, gauge, singularity, visibility, extension regularity, genericity, conclusion type, reproducibility, and evidence grade.
+- Defined the research teams and dependency DAG: formulation, literature, geometry/PDE, numerics, counterexamples, symbolic/formal work, and reproducibility/review.
+- Completed the first five-role DeepSeek Flash pilot (5/5), followed by four independent review roles (4/4).
+- Rejected the first fluent formulation because it conflated WCC/SCC and C0/C2 and lacked sufficiently specified genericity, visibility, and citations.
+- Recorded 592 finished group instances: formulation 145, literature 148, numerics 150, audit 149. These are execution traces, not accepted theorems.
+- Captured the DeepSeek quota stop, quota circuit, stale-metadata correction, project namespace filtering, and recovery-probe hardening.
+
+## Current scientific and operational state
+
+| Area | State | Review meaning |
 |---|---|---|
-| **已严格证明（本项目）** | H(20..42) 与 H(43..50) 的下界（1593 个 (k,d) 目标，Lean 4 证书验证；k=43..50 另有 529 个 + 早期 C 穷举互证）+ 显式 SAT 见证 + 三算法交叉验证 | ✅ 机器检查 |
-| **继承自文献（非本项目）** | 存在无穷多素数间隔 ≤ 246（Maynard 2013/2014; Polymath8b 2014, arXiv:1407.4897） | ✅ 已发表同行评审 |
-| **尚未证明（开放）** | 对所有 k < 50 的真实全空间 M_{k,ε} < 4（M 泛函侧） | ❌ 开放缺口 |
+| Formulation taxonomy | Established | Classes, fields, versions, and dependencies are reviewable |
+| Scientific review | Working | Fluent but invalid scope was rejected |
+| Literature/citations | Continuing | Primary-source verification remains required |
+| Flat-space numerics | Calibration only | Self-gravitating production remains locked |
+| Runtime lifecycle | Real evidence, needs hardening | Independent instances and trajectories are recorded |
+| Multi-provider failover | Not complete | Adapter, account rotation, retry ledger, and drills remain |
+| Unattended scale | No-go | First pass provider A→B and 5xx/timeout drills |
 
-**关键边界**：受限函数族（幂和多项式）内的严格上界 **不能**推出真实全空间
-M_{k,ε} 的上界（受限族 supremum 是真实值的下界）。因此"246 无法被 Maynard–
-Polymath8b 框架改进"**不是本项目的结论**——目前 k=47,48,49 的真实 M_{k,ε} > 4
-未被排除（解析上界在 ε=1/50 分别为 4.0125 / 4.0326 / 4.0524）。
+## Next research path
 
-## 2. H(k) 精确值（与 OEIS A008407 一致）
+WP0 freezes terminology and formulation. WP1 builds the theorem ledger with source locations. WP2–WP3 complete spherical calibration, geometry, visibility, and convergence checks. WP4 handles low-regularity extension questions. WP5–WP6 begin axisymmetric/3D candidates only after formulation, literature, and audit gates are green. WP7–WP8 cover formalization, independent reruns, synthesis, and go/no-go.
 
-| k | H(k) | 下界（1593 目标 UNSAT） | 上界（SAT 见证） |
-|---|---|---|---|
-| 43 | 200 | ✅ d=84..198 全 UNSAT | ✅ 直径 200 见证 |
-| 44 | 210 | ✅ d=86..208 全 UNSAT | ✅ 直径 210 见证 |
-| 45 | 212 | ✅ d=88..210 全 UNSAT | ✅ 直径 212 见证 |
-| 46 | 216 | ✅ d=90..214 全 UNSAT | ✅ 直径 216 见证 |
-| 47 | 226 | ✅ d=92..224 全 UNSAT | ✅ 直径 226 见证 |
-| 48 | 236 | ✅ d=94..234 全 UNSAT | ✅ 直径 236 见证 |
-| 49 | 240 | ✅ d=96..238 全 UNSAT | ✅ 直径 240 见证 |
-| 50 | 246 | ✅ d=98..244 全 UNSAT | ✅ 直径 246 见证（Polymath8b 元组复现） |
+## Evidence boundary
 
-这些数值是公开已知结果（[OEIS A008407](https://oeis.org/A008407)、
-[Engelsma 的计算记录](https://math.mit.edu/~primegaps/)、Polymath8b 2014）。
-本项目的贡献是**下界侧的独立、自足、机器检查证明链**，而非新数值。
-
-## 3. Lean 4 证书工程（lean_cert/）
-
-对 1593 个 (k,d) 目标（k=2..50）：
-
-1. **证书生成**（`cert_gen.py`，算法 C 剩余类分配 DFS）：每个目标一棵"剩余类分配
-   失败树"——叶子 = 部分分配下幸存位置 < k，分支 = 素数类枚举。
-   生成约 15 秒；
-2. **验证器**（`CertVerify.lean`）：对证书树结构递归验证；
-3. **可靠性证明**（`Sound.lean`，约 700 行，无 `sorry`）：证明
-   "证书通过 ⟹ 不存在直径 ≤ d 的可容许 k 元组"（幸存单调性、判定等价、平移不变性）；
-4. **1593 个定理**（`lean_theorems/`）：`H50_gt_244 : ¬ ∃ t, admissible 50 t ∧ diameter t ≤ 244`
-   等，每条 `exact certValidRoot_sound ... (by native_decide)`；
-5. **1593 个纯内核定理**（`lean_kernel/`）：全部目标的 `by decide` 版本（纯内核归约，
-   **无 native_decide 信任边界**；最大目标 k=50 d=244 需 `maxHeartbeats 20000000`，约 1 小时）。
-
-**信任边界披露**：
-- 无用户自定义 `axiom` 或 `sorry`；
-- `lean_theorems/` 使用 `native_decide`（VM 执行 + 内核检查 `ofReduceBool`）；
-- **`lean_kernel/` 的全部 1593 个定理使用纯内核 `by decide`**——不依赖 VM/编译器信任，
-  是 kernel-only 证明（代价是编译时间：小目标秒级，最大目标约 1 小时）。
-
-## 4. 构建
-
-**Lean 4.33.0**（仅依赖核心库 `Init`，无 Mathlib）。在 `lean_cert/` 下：
-
-```bash
-lean CertVerify.lean        # 定义 + 验证器
-lean Sound.lean             # 可靠性证明（0 sorry）
-lean lean_certs/cert_50_244.lean     # 证书（1593 个）
-lean lean_theorems/T_50_244.lean     # 下界定理（1593 个）
-```
-
-`build_all.sh` 并行编译全部 1593 证书 + 1593 定理（需要 `lean` 在 `PATH` 中，
-或设置 `LEAN_BIN` 环境变量指向 lean 可执行文件）。
-
-C/Python 工具链：`gcc -O2`、Python 3.10+（无第三方依赖）。
-
-## 5. 数据与复现说明
-
-- **原始并行运行数据未随仓库发布**（约 42.4 万个结果文件、1.6 GB，见 `.gitignore`）——
-  **正式审计入口是 `lean_cert/` 的 1593 个 Lean 证书与定理**；
-- 文本证书（`lean_cert/certs/`、`certs_num/`）与 Lean 证书定义（`lean_certs/`）
-  均由生成器确定性产出，可复现；
-- 三算法交叉验证：`verify_admissible_independent.py`（算法 A/B/C + OEIS 对拍）。
-
-## 6. 工具链与报告
-
-| 文件 | 说明 |
-|---|---|
-| `lean_cert/` | Lean 证书工程（验证器、可靠性证明、1593 证书、1593 定理） |
-| `admissible_par*.c` | 大规模并行 UNSAT 穷举求解器（六层子空间划分） |
-| `verify_admissible_independent.py` | 三套独立算法交叉验证 |
-| `TwinPrimeAdmissible.lean` | SAT 侧形式化（见证可容许性，96 定理，EXIT 0） |
-| `M_exclusion_analysis_k47_49.md` | M 泛函侧严格分析（含开放缺口声明） |
-| `最终报告_素数间隔246.md` | 完整证明报告 |
-| `blog_素数间隔246.html/md` | 项目说明 |
-
-## 许可与引用
-
-- License: Apache-2.0（见 `LICENSE`）
-- 引用：见 `CITATION.cff`
-
-**一句话总结**：这是一个"可容许元组最小直径的形式化验证/可复现计算"项目——
-H(k) 侧（1593 个下界）已机器检查、可信度高；M 泛函侧保持开放；它不是新纪录，
-也不是"246 为框架极限"的证明。
+This repository does not claim a proof or refutation of cosmic censorship. Counts such as 592, 5/5, and 4/4 describe execution and review records; they do not replace theorem verification, citation checks, invariant diagnostics, convergence tests, or independent reproduction.
