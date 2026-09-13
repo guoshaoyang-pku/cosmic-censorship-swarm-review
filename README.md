@@ -11,6 +11,7 @@
 1. Open the [interactive review dashboard](docs/cosmic_censorship/pilot/review_dashboard.html).
 2. Read the [partner-scale readiness note](docs/cosmic_censorship/pilot/partner_scale_readiness_20260912.md).
 3. Verify the [evaluation report](docs/cosmic_censorship/pilot/evaluation_report.md), [gate checklist](docs/cosmic_censorship/pilot/gate_checklist.md), [role outputs](docs/cosmic_censorship/pilot/runs/), and [independent reviews](docs/cosmic_censorship/pilot/reviews/).
+4. Read the [legacy swarm evidence audit](docs/cosmic_censorship/pilot/legacy_swarm_evidence_audit_20260913.md) for the honest classification of what is worth showing and what remains blocked.
 
 ## What the swarm has done
 
