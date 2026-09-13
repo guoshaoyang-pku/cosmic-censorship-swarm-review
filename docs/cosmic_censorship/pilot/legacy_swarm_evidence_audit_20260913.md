@@ -29,8 +29,8 @@ At the latest remote observation, the old supervisor was alive but repeatedly fa
 
 ## What a collaborator can inspect now
 
-1. Read the [review dashboard](../docs/cosmic_censorship/pilot/review_dashboard.html) for the visual overview.
-2. Read the [F0 taxonomy and DAG](../docs/cosmic_censorship/SWARM_RESEARCH_PLAN.md) for the research decomposition.
+1. Read the [review dashboard](review_dashboard.html) for the visual overview.
+2. Read the [F0 taxonomy and DAG](../SWARM_RESEARCH_PLAN.md) for the research decomposition.
 3. Inspect the hash-pinned formulation and review records in the remote project handoff; the public snapshot preserves the gate summaries and runtime hardening records.
 4. Treat G-F0, the class-separation regression, and N0 flat-wave calibration as the three strongest current evidence items. Treat CF-29/31/32/33 as the four most important audit findings.
 
