@@ -4,7 +4,7 @@
 
 <p align="center"><img src="assets/progress-timeline.svg" alt="Swarm progress timeline" width="100%"></p>
 
-> **Review status · 2026-09-12** Evidence-first review snapshot of the cosmic-censorship research swarm. The map, pilot, independent reviews, runtime evidence, and handoff risks are archived here. It is ready for a capped supervised collaborator pilot; it is not yet an unattended multi-provider production service.
+> **Review status · 2026-09-13** Evidence-first review snapshot of the cosmic-censorship research swarm. The map, pilot, independent reviews, runtime evidence, and handoff risks are archived here. It is ready for a capped supervised collaborator pilot; the Astra-only remote launcher is armed but remains fail-closed until its credential probe passes.
 
 ## Start here
 
@@ -12,6 +12,7 @@
 2. Read the [partner-scale readiness note](docs/cosmic_censorship/pilot/partner_scale_readiness_20260912.md).
 3. Verify the [evaluation report](docs/cosmic_censorship/pilot/evaluation_report.md), [gate checklist](docs/cosmic_censorship/pilot/gate_checklist.md), [role outputs](docs/cosmic_censorship/pilot/runs/), and [independent reviews](docs/cosmic_censorship/pilot/reviews/).
 4. Read the [legacy swarm evidence audit](docs/cosmic_censorship/pilot/legacy_swarm_evidence_audit_20260913.md) for the honest classification of what is worth showing and what remains blocked.
+5. Read the [Astra-only migration status](docs/cosmic_censorship/pilot/astra_only_migration_20260913.md) for the new controller/lead/execution topology and the current credential gate.
 
 ## What the swarm has done
 
