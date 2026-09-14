@@ -1,3 +1,6 @@
+# Historical pilot runner.
+# Not an active launcher. The current snapshot is frozen; this file preserves the old pilot only.
+
 import json, os, subprocess, tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path

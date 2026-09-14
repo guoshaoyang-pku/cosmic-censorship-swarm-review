@@ -4,15 +4,28 @@
 
 <p align="center"><img src="assets/progress-timeline.svg" alt="Swarm progress timeline" width="100%"></p>
 
-> **Review status · 2026-09-13** Evidence-first review snapshot of the cosmic-censorship research swarm. The map, pilot, independent reviews, runtime evidence, and handoff risks are archived here. It is ready for a capped supervised collaborator pilot; the Astra-only remote launcher is armed but remains fail-closed until its credential probe passes.
+> **Frozen collaborator review snapshot · 2026-09-15** The remote swarm is stopped. This repository preserves the evidence map, pilot traces, reviews, validation artifacts, and mathematical claim boundaries for a human collaborator. No WCC or SCC theorem has been promoted.
 
 ## Start here
 
-1. Open the [interactive review dashboard](docs/cosmic_censorship/pilot/review_dashboard.html).
-2. Read the [partner-scale readiness note](docs/cosmic_censorship/pilot/partner_scale_readiness_20260912.md).
-3. Verify the [evaluation report](docs/cosmic_censorship/pilot/evaluation_report.md), [gate checklist](docs/cosmic_censorship/pilot/gate_checklist.md), [role outputs](docs/cosmic_censorship/pilot/runs/), and [independent reviews](docs/cosmic_censorship/pilot/reviews/).
-4. Read the [legacy swarm evidence audit](docs/cosmic_censorship/pilot/legacy_swarm_evidence_audit_20260913.md) for the honest classification of what is worth showing and what remains blocked.
-5. Read the [Astra-only migration status](docs/cosmic_censorship/pilot/astra_only_migration_20260913.md) for the new controller/lead/execution topology and the current credential gate.
+1. Read the [初步 blog](docs/cosmic-censorship-swarm-review-20260915.html) for a visual, self-contained account of what the swarm learned and what it did not prove.
+2. Open the [interactive review dashboard](docs/cosmic_censorship/pilot/review_dashboard.html).
+3. Read the [mathematical progress explainer](docs/cosmic_censorship/pilot/mathematical_progress_explained_20260913.md) and the [Astra progress paper](docs/cosmic_censorship/pilot/astra_progress_paper_20260913.md).
+4. Inspect the [evaluation report](docs/cosmic_censorship/pilot/evaluation_report.md), [gate checklist](docs/cosmic_censorship/pilot/gate_checklist.md), [role outputs](docs/cosmic_censorship/pilot/runs/), and [independent reviews](docs/cosmic_censorship/pilot/reviews/).
+5. For provenance and integration details, read the [ai4math integration snapshot](docs/cosmic_censorship/pilot/ai4math_integration_snapshot_20260914.md).
+
+## Current disposition
+
+| Signal | Frozen value | Interpretation |
+|---|---:|---|
+| Recorded events | **9,367** | Last accepted event count in the project checkpoint |
+| Registered artifacts | **656** | Files or evidence objects in the registry; not theorem count |
+| Map validator | **VALID** | Research-map schema and references pass validation |
+| Active remote sessions | **0** | No controller, supervisor, or worker is running |
+| N1 self-gravitating numerics | **LOCKED** | Calibration is allowed; production search is gated |
+| Promoted theorem | **0** | No WCC/SCC claim passed the scientific gates |
+
+The remote run ended at the last checkpoint on 2026-09-14 22:59:46 +0800. There is no automatic refill, provider failover, or automatic push. Historical artifacts remain available for audit.
 
 ## What the swarm has done
 
@@ -23,6 +36,19 @@
 - Rejected the first fluent formulation because it conflated WCC/SCC and C0/C2 and lacked sufficiently specified genericity, visibility, and citations.
 - Recorded 592 finished group instances: formulation 145, literature 148, numerics 150, audit 149. These are execution traces, not accepted theorems.
 - Captured the DeepSeek quota stop, quota circuit, stale-metadata correction, project namespace filtering, and recovery-probe hardening.
+
+The old DeepSeek runners are retained only as historical reproducibility artifacts; they are not active launchers.
+
+## Mathematical claim boundary
+
+The useful output is a research map and an evidence protocol. It identifies which statement is being discussed, under which regularity and asymptotic assumptions, and what observation would count as evidence. It does not settle the conjecture. In particular:
+
+- a visible causal boundary is not automatically a curvature blow-up;
+- a C0 extension question is not a C2 inextendibility theorem;
+- a spherical calibration is not evidence for generic 3+1 behavior;
+- a numerical trend is not a proof without convergence, invariant diagnostics, and an independent rerun.
+
+The 27-fixture regression suite is a software check, not a physical theorem. Its frozen result is TP=17, FP=0, TN=10, FN=0 for the fixed fixtures only.
 
 ## Current scientific and operational state
 
@@ -42,4 +68,4 @@ WP0 freezes terminology and formulation. WP1 builds the theorem ledger with sour
 
 ## Evidence boundary
 
-This repository does not claim a proof or refutation of cosmic censorship. Counts such as 592, 5/5, and 4/4 describe execution and review records; they do not replace theorem verification, citation checks, invariant diagnostics, convergence tests, or independent reproduction.
+This repository does not claim a proof or refutation of cosmic censorship. Counts such as 9,367 events, 656 artifacts, 592 historical instances, 5/5 roles, and 4/4 reviewers describe execution and review records; they do not replace theorem verification, citation checks, invariant diagnostics, convergence tests, or independent reproduction.
