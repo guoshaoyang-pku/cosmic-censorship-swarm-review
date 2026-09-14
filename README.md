@@ -237,3 +237,9 @@ Mermaid rendering via external JS).
 *The generic verifier-gated search framework and the Erdős-program measurements that forced this
 design live on `main`. This branch is self-contained: the map, the protocol, the harness, and the
 full evidence tree for the cosmic-censorship campaign.*
+
+## Public review companion
+
+This branch is the evidence-bearing ai4math-swarm integration branch. The companion public review snapshot is maintained at https://github.com/guoshaoyang-pku/cosmic-censorship-swarm-review. Start with the dashboard, Astra progress paper, and mathematical progress explainer in docs/cosmic_censorship/pilot/.
+
+The claim ceiling remains evidence and research-map progress; no cosmic-censorship theorem is promoted. N1 stays locked until formulation, audit, and numerical gates are independently accepted.
