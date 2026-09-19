@@ -6,13 +6,30 @@
 
 > **Frozen collaborator review snapshot · 2026-09-15** The remote swarm is stopped. This repository preserves the evidence map, pilot traces, reviews, validation artifacts, and mathematical claim boundaries for a human collaborator. No WCC or SCC theorem has been promoted.
 
+_Repository audit checked 2026-09-19; the execution snapshot itself remains frozen at 2026-09-15._
+
+## Which repository is authoritative?
+
+This public repository is the **collaborator-facing review surface**. The recommended snapshot is the [`integrated-with-ai4math-swarm` branch](https://github.com/guoshaoyang-pku/cosmic-censorship-swarm-review/tree/integrated-with-ai4math-swarm), currently at commit `72b3155`. It contains the curated README, DAG, dashboard, explainer, progress paper, and review artifacts needed for a mathematical audit.
+
+The `main` branch is the earlier public review line. The larger research repository has a separate source branch, [`swarm-research/ai4math-swarm@shaoyang/cosmic-censorship`](https://github.com/swarm-research/ai4math-swarm/tree/shaoyang/cosmic-censorship), currently at `c40854892`. That branch preserves the raw runtime, audit, ledger, checkpoint, and trajectory inventory. The two repositories are related, but they are not byte-for-byte mirrors: this repository is intentionally a readable, bounded review package rather than a dump of every raw execution file.
+
+| Surface | Role | Current status |
+|---|---|---|
+| This repo · `integrated-with-ai4math-swarm` | Human-readable collaborator review | **Canonical review snapshot** |
+| `ai4math-swarm` · `shaoyang/cosmic-censorship` | Full integrated source and raw evidence inventory | **Canonical provenance line** |
+| This repo · `main` | Earlier public review line | Historical entry point; follow the branch above for the frozen snapshot |
+
+No theorem, checkpoint, or raw trajectory should be inferred from a file count. The review branch links to the source line so a collaborator can move from a concise argument to the underlying evidence when needed. The full raw branch is intentionally not mirrored file-for-file: it contains large runtime trajectories, checkpoints, and audit scratch material. The public review package includes the stable summaries and links needed to locate those raw records.
+
 ## Start here
 
 1. Read the [初步 blog](docs/cosmic-censorship-swarm-review-20260915.html) for a visual, self-contained account of what the swarm learned and what it did not prove.
 2. Open the [interactive review dashboard](docs/cosmic_censorship/pilot/review_dashboard.html).
 3. Read the [mathematical progress explainer](docs/cosmic_censorship/pilot/mathematical_progress_explained_20260913.md) and the [Astra progress paper](docs/cosmic_censorship/pilot/astra_progress_paper_20260913.md).
 4. Inspect the [evaluation report](docs/cosmic_censorship/pilot/evaluation_report.md), [gate checklist](docs/cosmic_censorship/pilot/gate_checklist.md), [role outputs](docs/cosmic_censorship/pilot/runs/), and [independent reviews](docs/cosmic_censorship/pilot/reviews/).
-5. For provenance and integration details, read the [ai4math integration snapshot](docs/cosmic_censorship/pilot/ai4math_integration_snapshot_20260914.md).
+5. Read the [frozen final snapshot](docs/cosmic_censorship/pilot/final_snapshot_20260914.md) for the checkpoint-level inventory.
+6. For provenance and integration details, read the [ai4math integration snapshot](docs/cosmic_censorship/pilot/ai4math_integration_snapshot_20260914.md).
 
 ## Current disposition
 
@@ -26,6 +43,90 @@
 | Promoted theorem | **0** | No WCC/SCC claim passed the scientific gates |
 
 The remote run ended at the last checkpoint on 2026-09-14 22:59:46 +0800. There is no automatic refill, provider failover, or automatic push. Historical artifacts remain available for audit.
+
+## Mathematical spine: the nodes worth checking
+
+The formulas below are the compact mathematical spine of the project. They organize the questions and diagnostics; they are **not new theorems proved by the swarm**. Every formula must still be read together with its class id, hypotheses, regularity threshold, and evidence grade.
+
+### 1. Field equations and the formulation tuple
+
+The ambient problem starts from
+
+$$
+G_{\mu\nu}(g)+\Lambda g_{\mu\nu}=8\pi T_{\mu\nu},
+$$
+
+but a usable research claim is the entire tuple
+
+$$
+\mathfrak C=(\text{equations},\dim\,M,\text{topology},\text{data class},\text{asymptotics},\text{visibility},\text{regularity},\text{genericity},\text{conclusion}).
+$$
+
+Changing any coordinate of `𝔠` can change the theorem being discussed. This is why `AF-WCC-VAC-GEN`, `AF-SCC-C2-VAC-GEN`, `AF-SCC-C0-VAC-GEN`, and the spherical scalar calibration lane are kept as different classes.
+
+### 2. WCC and SCC are different logical targets
+
+A schematic WCC visibility condition is
+
+$$
+J^{-}(\mathscr I^{+})\cap\mathcal S=\varnothing,
+$$
+
+where the definition and regularity of `𝓘⁺`, the singular set `𝓢`, and the genericity topology must be declared. A schematic SCC statement instead asks for inextendibility in a specified class `𝓧`:
+
+$$
+\nexists\,\widetilde g\supsetneq g\quad\text{with}\quad\widetilde g\in\mathcal X,\qquad \mathcal X\in\{C^{0},C^{2},\text{weak Einstein--Christoffel-}L^{2},\ldots\}.
+$$
+
+The regularity label is part of the conclusion. In particular,
+
+$$
+C^{2}\subset C^{1,1}\subset C^{0},
+$$
+
+so a `C⁰` extension result does not by itself settle a `C²` SCC claim, and curvature blow-up does not by itself establish WCC visibility.
+
+### 3. Focusing and trapped-surface diagnostics
+
+For a null congruence with tangent `kᵃ`, the twist-free Raychaudhuri equation is
+
+$$
+\frac{d\theta}{d\lambda}=-\frac12\theta^{2}-\sigma_{ab}\sigma^{ab}-R_{ab}k^{a}k^{b}.
+$$
+
+This is the local focusing mechanism. In spherical diagnostics, with area radius `r` and null directions `ℓ₊,ℓ₋`,
+
+$$
+\theta_{\pm}=\frac{1}{4\pi r^{2}}\mathcal L_{\ell_{\pm}}(4\pi r^{2})=\frac{2}{r}\ell_{\pm}(r).
+$$
+
+A trapped-surface or marginal-expansion signal is a diagnostic that must still be tied to causal propagation and invariant checks; it is not automatically an event horizon or a naked singularity.
+
+### 4. Misner–Sharp mass and numerical convergence
+
+In spherical symmetry, the Misner–Sharp relation is
+
+$$
+1-\frac{2m}{r}=g^{ab}\nabla_{a}r\nabla_{b}r.
+$$
+
+For a refinement step `h → h/2`, the observed convergence order is
+
+$$
+p_{\mathrm{obs}}(h)=\log_{2}\frac{E(h)}{E(h/2)}.
+$$
+
+These expressions validate geometry and numerics only after resolution, boundary, gauge, constraint, and independent-rerun checks. They cannot promote a calibration lane into a generic `3+1` vacuum theorem.
+
+### 5. The numerical gate is intentionally conjunctive
+
+The locked self-gravitating lane follows the explicit gate
+
+$$
+\operatorname{Unlock}(N_{1})\Longleftrightarrow G_{\mathrm{FORM}}\land G_{\mathrm{AUDIT}}\land G_{\mathrm{NUM}}=\mathrm{pass}.
+$$
+
+At the frozen snapshot, this condition is false: `N1` remains locked and `N0` is calibration only.
 
 ## What the swarm has done
 
