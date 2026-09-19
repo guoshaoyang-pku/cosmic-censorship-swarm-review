@@ -10,7 +10,7 @@ _Repository audit checked 2026-09-19; the execution snapshot itself remains froz
 
 ## Which repository is authoritative?
 
-This public repository is the **collaborator-facing review surface**. The recommended snapshot is the [`integrated-with-ai4math-swarm` branch](https://github.com/guoshaoyang-pku/cosmic-censorship-swarm-review/tree/integrated-with-ai4math-swarm), currently at commit `72b3155`. It contains the curated README, DAG, dashboard, explainer, progress paper, and review artifacts needed for a mathematical audit.
+This public repository is the **collaborator-facing review surface**. The recommended snapshot is the [`integrated-with-ai4math-swarm` branch](https://github.com/guoshaoyang-pku/cosmic-censorship-swarm-review/tree/integrated-with-ai4math-swarm), currently at commit `6f82087`. It contains the curated README, DAG, dashboard, explainer, progress paper, and review artifacts needed for a mathematical audit.
 
 The `main` branch is the earlier public review line. The larger research repository has a separate source branch, [`swarm-research/ai4math-swarm@shaoyang/cosmic-censorship`](https://github.com/swarm-research/ai4math-swarm/tree/shaoyang/cosmic-censorship), currently at `c40854892`. That branch preserves the raw runtime, audit, ledger, checkpoint, and trajectory inventory. The two repositories are related, but they are not byte-for-byte mirrors: this repository is intentionally a readable, bounded review package rather than a dump of every raw execution file.
 
