@@ -12,7 +12,7 @@ _Repository audit checked 2026-09-19; the execution snapshot itself remains froz
 
 This public repository is the **collaborator-facing review surface**. The recommended snapshot is the [`integrated-with-ai4math-swarm` branch](https://github.com/guoshaoyang-pku/cosmic-censorship-swarm-review/tree/integrated-with-ai4math-swarm), currently at commit `69ed753`. It contains the curated README, DAG, dashboard, explainer, progress paper, and review artifacts needed for a mathematical audit.
 
-The `main` branch is the earlier public review line. The larger research repository has a dedicated collaborator development branch, [`swarm-research/ai4math-swarm@collaborator/full-swarm-development`](https://github.com/swarm-research/ai4math-swarm/tree/collaborator/full-swarm-development), currently at `82eff412d`. It is based on the integrated source commit `c40854892`. That branch preserves the raw runtime, audit, ledger, checkpoint, and trajectory inventory. The two repositories are related, but they are not byte-for-byte mirrors: this repository is intentionally a readable, bounded review package rather than a dump of every raw execution file.
+The `main` branch is the earlier public review line. The larger research repository has a dedicated collaborator development branch, [`swarm-research/ai4math-swarm@collaborator/full-swarm-development`](https://github.com/swarm-research/ai4math-swarm/tree/collaborator/full-swarm-development), currently at `82eff412d`. It is based on the integrated source commit `c40854892`. That branch preserves the raw runtime, audit, ledger, checkpoint, and trajectory inventory. The two repositories retain separate roles, but this branch now carries the complete swarm development tree as well as the curated collaborator-facing README, formulas, dashboard, and reports. The raw runtime and audit inventory is included for reproducibility; start with the curated links before drilling into it.
 
 | Surface | Role | Current status |
 |---|---|---|
@@ -20,7 +20,7 @@ The `main` branch is the earlier public review line. The larger research reposit
 | `ai4math-swarm` · `collaborator/full-swarm-development` | Full integrated source, raw evidence, and active development | **Canonical development line** |
 | This repo · `main` | Earlier public review line | Historical entry point; follow the branch above for the frozen snapshot |
 
-No theorem, checkpoint, or raw trajectory should be inferred from a file count. The review branch links to the development line so a collaborator can move from a concise argument to the underlying evidence when needed. The full raw branch is intentionally not mirrored file-for-file: it contains large runtime trajectories, checkpoints, and audit scratch material. The public review package includes the stable summaries and links needed to locate those raw records.
+No theorem, checkpoint, or raw trajectory should be inferred from a file count. This branch is now the public collaborator development and review surface: it contains the full swarm source tree, infrastructure, runtime trajectories, checkpoints, audits, and the curated reading layer. Use the README and dashboard first, then work directly in the development directories.
 
 ## Start here
 
